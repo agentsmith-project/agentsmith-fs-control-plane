@@ -1,0 +1,29 @@
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and local state
+*.log
+.env
+.env.*
+!.env.example
+tmp/
+var/
+
+# Build artifacts, language-specific directories can be expanded once runtime is selected
+dist/
+build/
+coverage/
+node_modules/
+target/
+bin/
+
+# Secrets and credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.kubeconfig
