@@ -76,15 +76,15 @@ Suggested path shape:
     <tenant_workspace_id>/
       repos/
         <storage_repo_id>/
-          workspace/
           .jvs/
+          <user files>
       templates/
         <template_repo_id>/
-          workspace/
           .jvs/
+          <template files>
 ```
 
-Callers must never pass raw filesystem paths. AFSCP resolves paths from structured IDs and workspace context.
+`<storage_repo_id>/` is the JVS `main` workspace real folder. Callers must never pass raw filesystem paths. AFSCP resolves paths from structured IDs and workspace context.
 
 ## Data Authority
 

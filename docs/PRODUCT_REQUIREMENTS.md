@@ -16,12 +16,13 @@ AgentSmith needs a workspace-aware file library control plane that can use one s
 ## Core Requirements
 
 - Admins can configure a workspace storage profile when creating or managing an AgentSmith workspace.
-- Different AgentSmith workspaces can use different AFSCP instances, storage pools, filesystem IDs, path prefixes, quota defaults, and export policies.
+- Different AgentSmith workspaces can use different AFSCP instances, storage pools, filesystem IDs, AFSCP-computed workspace roots, quota defaults, and export policies.
 - New file libraries default to a shared JuiceFS filesystem/storage pool selected by the workspace profile.
 - File libraries are represented as repos with stable IDs and controlled repo paths.
 - AFSCP runs JVS operations for save points, restore, history, repo clone, and repo lifecycle.
 - Users can save a notebook task result as a workspace-scoped template.
 - Users in the same AgentSmith workspace can clone a template into their own independent repo.
+- Saving a template clones the source task/file-library repo into a template repo. Using a template clones that template repo into a new target file-library repo.
 - Cross-workspace template sharing and clone are not allowed.
 - User PCs can access authorized repos through controlled exports, initially WebDAV.
 - Sandboxes can mount authorized repos through controlled subdirectory mounts.

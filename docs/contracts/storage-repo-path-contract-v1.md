@@ -23,5 +23,7 @@ AFSCP resolves repo paths from structured IDs.
 - Callers do not pass raw paths.
 - Display names do not affect paths.
 - Paths are stable for repo lifetime unless a lifecycle operation explicitly moves them.
+- `repo_path` is the JVS `main` workspace real folder.
+- In P0, `payload_subdir` is the same directory as `repo_path`.
 - `.jvs` is never exposed through user/export payload paths.
-- Workspace path prefix mismatch is an authorization boundary violation.
+- Canonical workspace root mismatch is an authorization boundary violation.

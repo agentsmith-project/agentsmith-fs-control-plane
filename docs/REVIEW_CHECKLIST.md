@@ -9,6 +9,7 @@ Use this checklist before beginning implementation.
 - [ ] Ordinary concurrent read/write behavior is accepted without merge semantics.
 - [ ] Desktop ordinary path uses WebDAV/export rather than raw JuiceFS.
 - [ ] Legacy file library compatibility and migration sequencing are accepted.
+- [ ] P0 repo layout is accepted: `repo_path` is the JVS `main` workspace real folder, with no child `workspace/` payload directory.
 
 ## Architecture
 
@@ -18,6 +19,7 @@ Use this checklist before beginning implementation.
 - [ ] AFSCP owns storage execution and operation records.
 - [ ] sandbox-manager remains Kubernetes execution layer.
 - [ ] No direct dependency on `agentsmith-oss` exists.
+- [ ] Workspace storage profile does not contain an authoritative raw filesystem path supplied by AgentSmith API.
 
 ## Security
 
@@ -27,6 +29,7 @@ Use this checklist before beginning implementation.
 - [ ] Path resolver rejects traversal and workspace mismatch.
 - [ ] Template clone is checked in both AgentSmith API and AFSCP.
 - [ ] Mutating JVS operations use durable operation records and locks.
+- [ ] Mutating AFSCP requests include the authorized end actor, separate from the calling service identity.
 
 ## Handoff
 

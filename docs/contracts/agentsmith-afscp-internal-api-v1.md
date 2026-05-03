@@ -10,6 +10,8 @@ AFSCP internal APIs are called by AgentSmith API and privileged admin jobs only.
 - `Idempotency-Key`: required for mutating requests.
 - `X-Correlation-Id`: required.
 - `X-AgentSmith-Workspace-Id`: required where applicable.
+- `X-AgentSmith-Actor-Type`: required for mutating requests; examples: `user`, `system`, `admin_job`.
+- `X-AgentSmith-Actor-Id`: required for mutating requests; the authorized end actor, not the AgentSmith API service identity.
 
 ## Endpoint Groups
 
@@ -27,6 +29,7 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
 ## Required Invariants
 
 - Every request includes tenant workspace context.
+- Every mutating request includes the authorized end actor for audit.
 - AFSCP validates workspace/repo consistency.
 - Mutations create operation records before executing.
 - Response payloads never include JuiceFS root credentials.

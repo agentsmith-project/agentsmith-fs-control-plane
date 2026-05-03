@@ -40,11 +40,23 @@ See:
 
 Saving a notebook task as a template should:
 
-1. Resolve the source file library repo.
-2. Create a save point.
-3. Create or update a workspace-scoped template catalog record in AgentSmith.
-4. Clone the source repo into a template repo or clone from a template repo into a target repo, depending on final product flow.
-5. Ensure the cloned target has a new JVS repo identity.
+1. AgentSmith authorizes the request and calls AFSCP with source repo, target template identity, workspace context, actor, correlation ID, and idempotency key.
+2. AFSCP resolves the source file library repo and validates the workspace boundary.
+3. AFSCP creates a save point in the source repo.
+4. AFSCP allocates a new template repo path under the same workspace root.
+5. AFSCP clones the source repo into the template repo with `jvs --repo <source_repo_path> repo clone <template_repo_path> --save-points all --json`.
+6. AFSCP returns the template repo identity and JVS repo identity.
+7. AgentSmith creates or updates the workspace-scoped template catalog record.
+
+Using a template should:
+
+1. AgentSmith validates the requester and rejects cross-workspace clone.
+2. AFSCP validates that source template repo and target repo are in the same AgentSmith workspace.
+3. AFSCP creates a new target file-library repo path.
+4. AFSCP runs `jvs --repo <template_repo_path> repo clone <target_repo_path> --save-points all --json`.
+5. AFSCP returns the new target repo metadata to AgentSmith.
+
+Both clone steps create independent JVS repo identities. Modifying a cloned repo must not affect the source task repo or template repo.
 
 Template clone is not Git clone. Do not add remote/push/pull/origin concepts.
 

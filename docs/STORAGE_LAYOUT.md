@@ -12,19 +12,21 @@ Suggested layout under the JuiceFS root:
     <tenant_workspace_id>/
       repos/
         <storage_repo_id>/
-          workspace/
           .jvs/
+          <user files and directories>
       templates/
         <template_repo_id>/
-          workspace/
           .jvs/
+          <template user files and directories>
       trash/
         <storage_repo_id>/
 ```
 
-`workspace/` is the payload directory mounted into sandbox workloads and exported to Desktop/Web.
+`<storage_repo_id>/` is both the AFSCP `repo_path` and the JVS `main` workspace real folder. AFSCP runs `jvs init <repo_path>` and `jvs --repo <repo_path> ...` against this directory.
 
-`.jvs/` is control metadata owned by AFSCP/JVS and must not be visible or writable through ordinary user paths.
+Sandbox workloads and Desktop/Web exports mount or export the same `repo_path` as the user payload root. `.jvs/` is JVS control metadata inside that root. WebDAV/export must hide or block it; sandbox mounts must at minimum prevent workload containers from reading or writing it, and should hide it if the chosen mount/filter technology supports that.
+
+Do not add an extra `workspace/` directory between `repo_path` and user files in P0. JVS registers the initialized folder itself as workspace `main`; adding a separate payload folder would make save, restore, and repo clone operate on the wrong level unless JVS later adds explicit support for out-of-root control metadata.
 
 ## StorageRepo Fields
 
@@ -40,7 +42,9 @@ Required fields:
 - `jvs_repo_id`
 - `status`
 
-`repo_path` should be treated as internal implementation state. Product APIs should use IDs.
+`repo_path` is the canonical JVS repo root and the `main` workspace real path. `payload_subdir` is the AFSCP-generated JuiceFS subdirectory that sandbox-manager mounts; in P0 it is the same directory as `repo_path`, not `repo_path/workspace`.
+
+`repo_path` and `payload_subdir` should be treated as internal implementation state. Product APIs should use IDs.
 
 ## Path Resolver Rules
 

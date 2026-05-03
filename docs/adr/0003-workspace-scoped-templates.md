@@ -14,7 +14,7 @@ Rules:
 
 - `template.tenant_workspace_id` is required.
 - AgentSmith API rejects clone requests where template workspace differs from request workspace.
-- AFSCP also rejects clone requests when source and target paths do not resolve under the same workspace prefix.
+- AFSCP also rejects clone requests when source and target paths do not resolve under the same canonical workspace root.
 - Cloning creates an independent repo with a new JVS repo identity.
 
 ## Consequences

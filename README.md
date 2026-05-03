@@ -9,7 +9,7 @@ This repository is initialized for the development team that will implement the 
 ## Current Decision
 
 - Build AFSCP as a new independent application module and deployment.
-- MVP may live in the existing AgentSmith/mbos workspace as an independent package or service directory, but this repository is the handoff target for the standalone project.
+- This repository is the implementation home for AFSCP. Integration adapters may land in sibling AgentSmith repositories, but the AFSCP runtime should not be implemented as an AgentSmith API helper.
 - Deploy AFSCP as an independent container with its own Kubernetes Deployment, Service, ServiceAccount, Secrets, and operation store.
 - AgentSmith API remains the product and permission authority.
 - AFSCP owns JuiceFS root credentials, repo path allocation, JVS execution, WebDAV export runtime, and sandbox mount specs.

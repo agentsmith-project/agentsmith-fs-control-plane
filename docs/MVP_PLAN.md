@@ -10,7 +10,7 @@ Deliver:
 - Durable operation store.
 - Workspace storage profile support in AgentSmith.
 - Shared JuiceFS filesystem/storage pool support for new file libraries.
-- Repo path allocation under workspace-controlled prefixes.
+- Repo path allocation under AFSCP-controlled workspace roots.
 - JVS init/save/history/restore execution.
 - Sandbox binding v2 for repo subdirectory mount.
 - WebDAV export for Desktop/Web without JuiceFS credentials.
@@ -69,7 +69,7 @@ Deliver:
 ### Milestone 5: Templates
 
 - Save notebook task as workspace template.
-- Clone template into same-workspace repo.
+- Clone source repo into a workspace template repo, then clone template repo into a same-workspace target repo.
 - Reject cross-workspace clone at both AgentSmith API and AFSCP.
 - Verify cloned repo gets a new JVS identity.
 

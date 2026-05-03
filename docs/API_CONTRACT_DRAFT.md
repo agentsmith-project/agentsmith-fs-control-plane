@@ -9,6 +9,23 @@ AFSCP APIs are internal only.
 - Caller: AgentSmith API or privileged admin/migration jobs.
 - Auth: service token or mTLS, to be decided before implementation.
 - External users, Desktop, and sandbox workloads must not call AFSCP directly.
+- Mutating calls must include the authorized end actor, not just the calling service identity. AFSCP audit records must distinguish `AgentSmith API called AFSCP` from `user/system actor requested the product operation`.
+
+### InternalRequestContext
+
+```json
+{
+  "tenant_workspace_id": "ws_123",
+  "authorized_actor": {
+    "type": "user",
+    "id": "user_123"
+  },
+  "correlation_id": "corr_123",
+  "idempotency_key": "idem_123"
+}
+```
+
+P0 canonical transport should be the required headers in `docs/contracts/agentsmith-afscp-internal-api-v1.md`. The JSON example above is the logical context that must be recoverable from each mutating request.
 
 ## Core Types
 
@@ -22,7 +39,6 @@ Owned by AgentSmith API, executed by AFSCP.
   "afscp_endpoint_id": "afscp_default",
   "default_filesystem_id": "jfs_default",
   "default_storage_pool_id": "pool_default",
-  "path_prefix": "/agentsmith/workspaces/ws_123",
   "quota_bytes_default": 107374182400,
   "export_policy": {
     "webdav_enabled": true,
@@ -37,6 +53,8 @@ Owned by AgentSmith API, executed by AFSCP.
 
 Do not add `allow_cross_workspace_clone`.
 
+AgentSmith API must not provide an authoritative raw filesystem path in the workspace storage profile. AFSCP computes the canonical workspace root from `tenant_workspace_id`, `filesystem_id`, `storage_pool_id`, and its own storage pool configuration.
+
 ### StorageRepo
 
 ```json
@@ -47,11 +65,13 @@ Do not add `allow_cross_workspace_clone`.
   "storage_pool_id": "pool_default",
   "repo_kind": "file_library",
   "repo_path": "/agentsmith/workspaces/ws_123/repos/repo_123",
-  "payload_subdir": "workspace",
+  "payload_subdir": "/agentsmith/workspaces/ws_123/repos/repo_123",
   "jvs_repo_id": "jvs_repo_abc",
   "status": "active"
 }
 ```
+
+`repo_path` is the JVS `main` workspace real folder. `payload_subdir` is the AFSCP-generated JuiceFS subdirectory mounted/exported for users; in P0 it is the same directory as `repo_path` and must be protected with `.jvs` filtering/permissions.
 
 ### ExportAccess
 
@@ -78,7 +98,7 @@ Do not include `metadata_url`, bucket URL, access key, or secret key.
   "tenant_workspace_id": "ws_123",
   "filesystem_id": "jfs_default",
   "storage_pool_id": "pool_default",
-  "payload_subdir": "/agentsmith/workspaces/ws_123/repos/repo_123/workspace",
+  "payload_subdir": "/agentsmith/workspaces/ws_123/repos/repo_123",
   "mount_path": "/workspace",
   "read_only": false,
   "secret_ref": {
@@ -130,6 +150,14 @@ source_template.tenant_workspace_id == target_workspace_id
 ```
 
 AFSCP must validate this even if AgentSmith already validated it.
+
+Saving a notebook task as a template uses a separate product flow:
+
+```http
+POST /internal/v1/repos/{sourceRepoId}:clone-to-template
+```
+
+The clone-to-template operation creates a workspace-scoped template repo from the source task/file-library repo after AFSCP creates a save point.
 
 ### Exports
 

@@ -25,7 +25,7 @@ Draft:
   "storage_repo_id": "repo_123",
   "filesystem_id": "jfs_default",
   "storage_pool_id": "pool_default",
-  "payload_subdir": "/agentsmith/workspaces/ws_123/repos/repo_123/workspace",
+  "payload_subdir": "/agentsmith/workspaces/ws_123/repos/repo_123",
   "mount_path": "/workspace",
   "read_only": false,
   "secret_ref": {
@@ -45,6 +45,7 @@ AFSCP:
 - chooses filesystem/storage pool
 - chooses Secret reference
 - validates workspace/repo consistency
+- ensures `.jvs` is protected before enabling writable sandbox mounts
 
 sandbox-manager:
 
@@ -57,6 +58,7 @@ workload Pod:
 - sees only mounted payload path
 - receives no JuiceFS root credentials
 - should run non-root by default
+- must not be able to read or write `.jvs`
 
 ## Compatibility
 

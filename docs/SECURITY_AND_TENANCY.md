@@ -27,7 +27,7 @@ Each workspace storage profile may choose:
 - AFSCP endpoint.
 - Default filesystem.
 - Default storage pool.
-- Path prefix.
+- Logical path namespace policy. AFSCP computes the canonical raw filesystem root; AgentSmith does not provide it.
 - Quota defaults.
 - Export policy.
 - Template policy.
@@ -41,7 +41,7 @@ Template sharing and clone are workspace-scoped only.
 Required checks:
 
 - AgentSmith API checks user permission and `template.tenant_workspace_id == request.workspace_id`.
-- AFSCP checks source and target repo paths resolve under the same workspace path prefix.
+- AFSCP checks source and target repo paths resolve under the same canonical workspace root.
 - Even if one user belongs to two workspaces, cross-workspace template clone must be rejected.
 - Even if two workspaces use the same storage pool, cross-workspace template clone must be rejected.
 

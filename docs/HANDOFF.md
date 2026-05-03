@@ -6,11 +6,13 @@ AFSCP is a new internal application module for AgentSmith. It should manage shar
 
 ## Source Of Truth
 
+Current handoff source of truth is the root-level documentation in this repository, especially `docs/HANDOFF.md`, `docs/PRODUCT_REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/STORAGE_LAYOUT.md`, `docs/API_CONTRACT_DRAFT.md`, and `docs/contracts/`.
+
 The planning work that produced this handoff was committed in:
 
 - Local planning repo: `/home/percy/works/mbos-v1/improve-agentsmith-fs`
 - Planning commit: `9a3e127 docs: plan AgentSmith workspace storage control plane`
-- Main design: `docs/research/agentsmith-workspace-storage-technical-design.md`
+- Research snapshot: `docs/research/agentsmith-workspace-storage-technical-design.md`
 - Discussion scratchpad: `docs/research/scratch.md`
 
 Important: do not use `agentsmith-oss` for current-state analysis. It is an old version and was explicitly excluded.
@@ -32,7 +34,7 @@ The target design is:
 
 ## The New Module
 
-Build `agentsmith-fs-control-plane` as an independent application module.
+Build `agentsmith-fs-control-plane` as an independent application module in this repository.
 
 MVP deployment shape:
 
@@ -43,7 +45,7 @@ MVP deployment shape:
 - Persistent operation store.
 - Internal HTTP API reachable by AgentSmith API and privileged admin jobs only.
 
-MVP code organization may initially live in an existing AgentSmith/mbos workspace if that lowers delivery risk, but this repository is the standalone project target and handoff home.
+Integration adapters and compatibility changes may land in sibling AgentSmith repositories. The AFSCP runtime, operation store, path resolver, JVS runner, and export gateway should live in this repository and should not be implemented as helper modules inside AgentSmith API.
 
 ## Authority Boundaries
 

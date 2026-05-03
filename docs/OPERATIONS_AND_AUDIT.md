@@ -11,6 +11,7 @@ Recommended fields:
 - `correlation_id`
 - `requesting_actor_type`
 - `requesting_actor_id`
+- `calling_service_identity`
 - `tenant_workspace_id`
 - `storage_repo_id`
 - `operation_type`
@@ -51,6 +52,8 @@ Require durable operation records:
 ## Audit
 
 AFSCP should emit low-level audit events to AgentSmith. AgentSmith should produce user-visible audit summaries.
+
+`requesting_actor_type` and `requesting_actor_id` must identify the authorized end actor supplied by AgentSmith, such as the user or system job that requested the operation. The internal service credential only identifies the calling service and should be recorded separately as `calling_service_identity`.
 
 Each event should include:
 
