@@ -51,6 +51,8 @@ Statuses:
 - `expired`
 - `failed`
 
+`revoked` is terminal only after the orchestrator confirms that the runtime mount is stopped or otherwise unable to write. A control-plane revoke request that has not yet stopped the runtime remains `releasing` and continues to block restore-run.
+
 P0 requires:
 
 - status update endpoint for the orchestrator
@@ -59,7 +61,7 @@ P0 requires:
 - revoke endpoint for AFSCP/operator initiated teardown
 - `lease_expires_at` on every binding
 
-Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions. Expired read-write bindings block restore-run until reconciliation marks a terminal state.
+Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions. Expired read-write bindings block restore-run until reconciliation marks a terminal state. `revoked` may unblock restore-run only when it means confirmed-unmounted, not merely requested.
 
 ## Rules
 
@@ -70,5 +72,6 @@ Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with 
 - All workload mounts are P0-gated on verified `.jvs` protection, including read-only mounts.
 - Permission-only protection is insufficient by itself. The runtime must use a filtered view or equivalent gate that blocks lookup, read, write, create, rename, unlink, chmod, chown, hardlink, and symlink operations targeting root-level `.jvs`.
 - If `.jvs` cannot be hidden or blocked by mount technology, workload mounts must be rejected until a filtered mount/view is implemented.
+- Stock JuiceFS CSI subdirectory mounting and Kubernetes `subPath` select a mount root; they do not hide root-level `.jvs` inside that mounted root.
 - Read-write binding issuance must be serialized with restore-run by a per-repo writer-session fence.
 - AFSCP audits mount binding issuance, orchestrator plan issuance, denial, revoke, and expiry.

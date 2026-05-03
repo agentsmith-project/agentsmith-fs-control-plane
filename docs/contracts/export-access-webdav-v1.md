@@ -39,5 +39,6 @@ Status: P0 review draft
 - `.jvs` is hidden or blocked for every WebDAV method.
 - Read-only exports allow `OPTIONS`, `HEAD`, `GET`, and `PROPFIND` only, with `.jvs` still blocked.
 - Read-only exports deny `PUT`, `DELETE`, `MKCOL`, `MOVE`, `COPY`, `PROPPATCH`, `LOCK`, and `UNLOCK` unless the gateway implements a no-op lock required for read-only client compatibility.
+- AFSCP must enforce this through its own WebDAV policy gateway or an equivalent wrapper. Stock `juicefs webdav` alone is not the P0 policy boundary.
 - No JuiceFS metadata URL, bucket URL, object store credential, raw mount command, or Secret reference appears in the response.
 - Export create, credential issuance, revoke, expiry, and denied path attempts are audited.

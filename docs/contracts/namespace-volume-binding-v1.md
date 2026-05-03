@@ -55,3 +55,4 @@ AFSCP must check `caller_service` and role before each namespace-bound operation
 - Template policy may enable namespace templates but not cross-namespace templates in P0.
 - Template clone must not cross volumes in P0. If source/template volume differs from the namespace default volume, AFSCP rejects with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
 - Mount/export requests must be checked against volume capabilities and namespace policy before issuing credentials or mount plans.
+- `mount_policy.workload_mount_enabled=true` is only a namespace permission. AFSCP must still reject workload mounts when the selected volume/runtime lacks verified `.jvs` protection.

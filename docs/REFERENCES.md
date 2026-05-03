@@ -69,7 +69,15 @@ Suggested AFSCP local targets:
 
 - CSI PV and credentials: https://juicefs.com/docs/csi/guide/pv/
 - CSI configuration and subdirectory mount options: https://juicefs.com/docs/csi/guide/configurations/
+- JuiceFS command reference: https://juicefs.com/docs/community/command_reference/
 - WebDAV server: https://juicefs.com/docs/community/deployment/webdav/
 - Quota: https://juicefs.com/docs/community/guide/quota/
 - POSIX compatibility: https://juicefs.com/docs/community/posix_compatibility/
 - Cache and close-to-open consistency: https://juicefs.com/docs/community/guide/cache/
+
+## Kubernetes
+
+- Volumes and `subPath`: https://kubernetes.io/docs/concepts/storage/volumes/
+- Persistent volumes and storage object in-use protection: https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+- Secrets: https://kubernetes.io/docs/concepts/configuration/secret/
+- RBAC good practices: https://kubernetes.io/docs/concepts/security/rbac-good-practices/

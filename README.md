@@ -32,7 +32,8 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 ## Repository Contents
 
 - [docs/HANDOFF.md](docs/HANDOFF.md): start here.
-- [docs/TEAM_REVIEW_2026-05-03.md](docs/TEAM_REVIEW_2026-05-03.md): latest product/architecture/security review closure.
+- [docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md](docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md): current technical blocker and feasibility review.
+- [docs/TEAM_REVIEW_2026-05-03.md](docs/TEAM_REVIEW_2026-05-03.md): product/architecture/security review closure.
 - [docs/DECOUPLING_REVIEW.md](docs/DECOUPLING_REVIEW.md): decoupling analysis and revised boundary.
 - [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md): product-agnostic requirements.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): component boundaries and target architecture.

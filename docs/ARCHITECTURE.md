@@ -86,6 +86,8 @@ Suggested path shape:
 
 `<repo_id>/` is the JVS `main` workspace real folder. Callers must never pass raw filesystem paths. AFSCP resolves paths from structured IDs and namespace context.
 
+Workload mounting this root requires a runtime that hides or blocks `.jvs`. A shared JuiceFS volume can still be valid for provisioning, JVS operations, templates, and WebDAV exports even when workload mounts are disabled until that protection exists.
+
 ## Data Authority
 
 | Data | Owner |

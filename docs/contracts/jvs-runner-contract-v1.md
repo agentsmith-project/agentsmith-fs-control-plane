@@ -8,6 +8,8 @@ AFSCP integrates with JVS through CLI JSON output in P0.
 
 Before endpoint implementation, the team must pin the supported JVS version or commit and record the tested CLI spec. The runner contract should be updated whenever JVS JSON schemas or exit codes change.
 
+The packaged JVS binary must be built from the pinned commit. CI must smoke-test the required command surface and a minimal `init -> save -> repo clone -> doctor --strict` flow.
+
 ## Rules
 
 - AFSCP invokes JVS with canonical internal repo paths.
@@ -17,6 +19,7 @@ Before endpoint implementation, the team must pin the supported JVS version or c
 - `jvs doctor --strict` is part of repo create, restore-run, and clone validation.
 - Dirty source state must be surfaced as a stable caller-visible error unless the operation first creates an explicit save point.
 - Template clone history mode must be pinned to the supported JVS version. `--save-points all` is allowed only after durable imported-save-point protection is supported; otherwise P0 uses `--save-points main`.
+- JVS commands should run from a clean working directory outside another JVS repo, or the runner must prove CWD cannot affect target resolution.
 
 ## Required Commands
 
@@ -25,6 +28,7 @@ Before endpoint implementation, the team must pin the supported JVS version or c
 - history/list
 - restore preview
 - restore-run
+- recovery status/resume/rollback or explicit operator-intervention state
 - repo clone
 - doctor
 

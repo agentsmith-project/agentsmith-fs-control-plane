@@ -58,6 +58,12 @@ Do not return JuiceFS metadata URL, bucket URL, access key, or secret key.
 - Redact credentials from logs.
 - Audit export create, credential issuance, revoke, expiry, and denied path attempts.
 
+## Gateway Requirement
+
+P0 WebDAV export must be served by an AFSCP-controlled policy gateway. Stock `juicefs webdav` can be a reference or backend capability, but it is not enough by itself because AFSCP must apply the canonical path resolver and `.jvs` filter across every method, including `MOVE` and `COPY` destination paths.
+
+Do not rely on a directory listing deny list, a reverse proxy path prefix check, or a method allowlist as the complete `.jvs` protection mechanism.
+
 ## Method Policy
 
 All methods use the same path resolver and `.jvs` filter.

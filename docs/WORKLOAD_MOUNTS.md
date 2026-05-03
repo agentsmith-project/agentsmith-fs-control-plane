@@ -17,7 +17,7 @@ Product callers receive a caller-visible mount binding:
   "mount_binding_id": "wmb_123",
   "namespace_id": "ns_123",
   "repo_id": "repo_123",
-  "volume_id": "vol_default",
+  "volume_id": "vol_filtered",
   "mount_path": "/workspace",
   "read_only": false,
   "status": "issued",
@@ -30,13 +30,13 @@ Only the dedicated orchestrator receives the privileged mount plan:
 ```json
 {
   "mount_binding_id": "wmb_123",
-  "volume_id": "vol_default",
+  "volume_id": "vol_filtered",
   "volume_subdir": "afscp/namespaces/ns_123/repos/repo_123",
   "mount_path": "/workspace",
   "read_only": false,
   "secret_ref": {
     "namespace": "storage-system",
-    "name": "juicefs-vol-default"
+    "name": "juicefs-vol-filtered"
   },
   "security_policy": {
     "run_as_non_root": true,
@@ -46,6 +46,8 @@ Only the dedicated orchestrator receives the privileged mount plan:
   }
 }
 ```
+
+This example assumes a selected volume/runtime that has verified `.jvs` protection. A volume without that capability must return a capability error instead of issuing this binding.
 
 The final field names should be agreed with the orchestrator that consumes this plan. `volume_subdir` is relative to the JuiceFS filesystem root and has no leading slash. The AFSCP-managed subroot is `afscp/`, so repo subdirs include that prefix.
 
@@ -100,14 +102,27 @@ Rules:
 - The orchestrator updates status when it starts, completes, releases, or fails a runtime mount.
 - The orchestrator heartbeats before `lease_expires_at`.
 - A read-write binding in `issued`, `pending`, `active`, or `releasing` with a live lease counts as an active writer session.
-- An expired read-write binding still blocks restore-run until reconciliation marks it `expired`, `released`, `revoked`, or `failed`.
+- An expired read-write binding still blocks restore-run until reconciliation marks it `expired`, `released`, confirmed-unmounted `revoked`, or `failed`.
 - AFSCP can revoke a binding; the orchestrator must unmount or stop using it and report final status.
+- `revoked` is terminal only after the orchestrator confirms that the runtime can no longer write. A revoke request waiting for runtime teardown remains `releasing` and continues to block restore-run.
 
 ## `.jvs` Protection
 
 P0 workload mounts must not expose `.jvs` for read or write, even when the mount is read-only.
 
 Permission-only protection on `.jvs` is not sufficient by itself because a writable parent directory may still allow rename/unlink/link/chmod/chown attempts against the entry. P0 requires a filtered view or equivalent filesystem/runtime gate that blocks lookup, read, write, create, rename, unlink, chmod, chown, and hardlink/symlink operations targeting root-level `.jvs`.
+
+## JuiceFS CSI Feasibility Note
+
+JuiceFS CSI can mount a selected filesystem subdirectory as the volume root, and Kubernetes `volumeMounts.subPath` can mount a subpath from an already-bound volume. Those mechanisms select the root of the mount. They do not hide a child path such as `.jvs` inside that selected root.
+
+Therefore, a plan that mounts the current JVS repo root through stock JuiceFS CSI must set `jvs_metadata_protected=false` and fail closed. It may become valid only when one of these is true:
+
+- JVS control metadata is outside the workload-visible payload root.
+- The orchestrator provides a verified filtered filesystem view.
+- An equivalent runtime gate blocks all `.jvs` operations listed above.
+
+The orchestrator must also map `volume_subdir` to a JuiceFS CSI-supported form, such as `mountOptions: ["subdir=afscp/..."]` or a controlled Kubernetes `subPath`. Do not assume `volumeAttributes["subdir"]` is portable without verifying the pinned CSI driver version.
 
 ## Compatibility
 

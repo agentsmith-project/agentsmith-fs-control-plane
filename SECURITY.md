@@ -17,7 +17,7 @@ For now, report vulnerabilities through the maintainers in the `agentsmith-proje
 - Ordinary clients must not receive `metadata_url`, bucket URL, access key, or secret key.
 - Workload containers must not receive JuiceFS root credentials in env vars, mounted files, or service account tokens.
 - WebDAV/export must hide or block `.jvs`.
-- Workload mounts must prevent read/write access to `.jvs`.
+- Workload mounts must block lookup, read, write, create, rename, unlink, chmod, chown, hardlink, and symlink operations targeting root-level `.jvs`, or be rejected until a verified protected view exists.
 - AFSCP path resolution must reject absolute paths, `..` traversal, symlink escape, and caller-provided raw filesystem paths.
 - Template clone must be rejected across namespaces by default in P0.
 - JVS mutating operations require operation records, idempotency keys, audit logs, and per-repo operation locks.

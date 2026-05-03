@@ -45,7 +45,7 @@ The P0 transport uses the required headers in [contracts/afscp-internal-api-v1.m
   "credential_ref": "secret://afscp/juicefs-default",
   "capabilities": {
     "webdav_export": true,
-    "workload_mount": true,
+    "workload_mount": false,
     "filtered_mount": false,
     "directory_quota": false,
     "csi_driver": "juicefs.csi.io",
@@ -56,6 +56,8 @@ The P0 transport uses the required headers in [contracts/afscp-internal-api-v1.m
 ```
 
 `credential_ref` is internal. It must not be returned to ordinary clients, workloads, or non-admin caller responses.
+
+`workload_mount=true` requires a verified `.jvs` protection strategy for JVS repos. Stock JuiceFS CSI subdirectory mounts do not hide root-level `.jvs` inside the mounted repo. A shared JuiceFS volume with `filtered_mount=false` may still support repo provisioning, JVS operations, templates, and WebDAV exports, but must reject workload mount bindings until the runtime can protect `.jvs` or JVS metadata is outside the workload-visible payload root.
 
 ### NamespaceVolumeBinding
 
@@ -92,6 +94,8 @@ The P0 transport uses the required headers in [contracts/afscp-internal-api-v1.m
 ```
 
 Calling products must not provide authoritative raw filesystem paths. AFSCP computes canonical namespace roots from `namespace_id`, `volume_id`, and its own volume configuration.
+
+`mount_policy.workload_mount_enabled=true` is a namespace permission, not proof that the selected volume/runtime can mount JVS repos safely. AFSCP must also check `Volume.capabilities.workload_mount` and the `.jvs` protection gate before issuing a mount binding or orchestrator plan.
 
 ### Repo
 
@@ -165,7 +169,7 @@ Product callers create a mount binding and receive an opaque identifier suitable
   "mount_binding_id": "wmb_123",
   "namespace_id": "ns_123",
   "repo_id": "repo_123",
-  "volume_id": "vol_default",
+  "volume_id": "vol_filtered",
   "mount_path": "/workspace",
   "read_only": false,
   "status": "issued",
@@ -178,13 +182,13 @@ The privileged orchestrator service obtains an `OrchestratorMountPlan` for a bin
 ```json
 {
   "mount_binding_id": "wmb_123",
-  "volume_id": "vol_default",
+  "volume_id": "vol_filtered",
   "volume_subdir": "afscp/namespaces/ns_123/repos/repo_123",
   "mount_path": "/workspace",
   "read_only": false,
   "secret_ref": {
     "namespace": "storage-system",
-    "name": "juicefs-vol-default"
+    "name": "juicefs-vol-filtered"
   },
   "security_policy": {
     "run_as_non_root": true,
@@ -194,6 +198,8 @@ The privileged orchestrator service obtains an `OrchestratorMountPlan` for a bin
   }
 }
 ```
+
+This example assumes the selected volume/runtime has `workload_mount=true` and verified `.jvs` protection. The `vol_default` example above has `workload_mount=false`; a workload binding request against it must fail with a capability error while export and JVS operations may still proceed.
 
 `volume_subdir` is relative to the JuiceFS filesystem root and must have no leading slash. The AFSCP-managed subroot is `afscp/`, so repo subdirs include that prefix. `secret_ref` is visible only to the dedicated orchestrator identity.
 
@@ -303,7 +309,7 @@ GET  /internal/v1/workload-mount-bindings/{mountBindingId}/orchestrator-plan
 
 Only caller services with the `orchestrator_mount` role may call `orchestrator-plan`.
 
-P0 mount bindings must be lease-based. Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions for restore-run. Expired leases are treated as active until reconciliation marks them `expired` or `failed`, because stale writable mounts are a safety risk.
+P0 mount bindings must be lease-based. Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions for restore-run. Expired leases are treated as active until reconciliation marks them terminal, because stale writable mounts are a safety risk. `revoked` is terminal only after the orchestrator confirms the runtime mount is stopped or unable to write; a requested revoke remains `releasing`.
 
 ### Operations
 

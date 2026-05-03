@@ -30,9 +30,10 @@ Use this checklist before beginning implementation.
 - [ ] Workload containers receive no JuiceFS root credentials.
 - [ ] Ordinary product callers never receive JuiceFS Secret references.
 - [ ] Orchestrator-only mount plans are protected by a dedicated caller role.
-- [ ] WebDAV blocks `.jvs`.
-- [ ] Workload mounts prevent read/write access to `.jvs` or are rejected.
-- [ ] Mount binding lease/status lifecycle is defined and integrated with restore-run.
+- [ ] WebDAV is served by an AFSCP-controlled policy gateway or equivalent wrapper; stock `juicefs webdav` alone is not accepted.
+- [ ] WebDAV blocks `.jvs` across every method, including `MOVE` and `COPY` destination paths.
+- [ ] Workload mounts block lookup, read, write, create, rename, unlink, chmod, chown, hardlink, and symlink operations targeting root-level `.jvs`, or are rejected.
+- [ ] Mount binding lease/status lifecycle defines revoke-request versus confirmed-unmounted terminal states and is integrated with restore-run.
 - [ ] Path resolver rejects traversal and namespace mismatch.
 - [ ] Template clone is checked by namespace, resource, and P0 volume rules in AFSCP.
 - [ ] Mutating JVS operations use durable operation records, phases, and resource locks.
@@ -42,6 +43,7 @@ Use this checklist before beginning implementation.
 ## Handoff
 
 - [ ] Runtime language decision is captured in a new ADR.
+- [ ] JVS commit/binary is pinned, required command smoke tests pass, and the runner CWD cannot affect repo resolution.
 - [ ] Generic internal API contract is reviewed with the first calling product team.
 - [ ] Workload mount binding/orchestrator plan split is reviewed with orchestrator owners.
 - [ ] Writer-session fence is reviewed with export and orchestrator owners.

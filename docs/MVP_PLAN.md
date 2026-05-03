@@ -14,7 +14,7 @@ Deliver:
 - Shared JuiceFS-backed volume support for new repos.
 - Repo path allocation under AFSCP-controlled namespace roots.
 - JVS init/save/history/restore execution.
-- Workload mount binding generation and orchestrator-only mount plans for repo root mounts.
+- Workload mount binding generation and orchestrator-only mount plans only after the `.jvs` mount protection strategy is proven.
 - WebDAV export without JuiceFS credentials.
 - Repo clone into namespace-scoped immutable template repo.
 - Same-namespace template clone into an independent repo.
@@ -43,6 +43,14 @@ Deliver:
 - Runtime language optimization work.
 
 ## Suggested Milestones
+
+### Milestone 0: Feasibility Gates
+
+- Pin and package a JVS binary that includes the required CLI commands.
+- Choose the `.jvs` workload protection strategy: JVS metadata outside workload payload root, or a verified filtered mount/view.
+- Confirm the orchestrator can stop/unmount active read-write workload bindings for revoke and restore fencing.
+- Confirm WebDAV export will be served by an AFSCP policy gateway, not stock `juicefs webdav` alone.
+- Confirm the sandbox v2 contract consumes AFSCP orchestrator plans instead of caller-provided `metadata_url`.
 
 ### Milestone 1: Contracts And Skeleton
 
@@ -92,6 +100,6 @@ Deliver:
 - Workload mount bindings, orchestrator plans, and workload environments contain no JuiceFS root credentials.
 - Ordinary product callers cannot see JuiceFS Secret references.
 - WebDAV cannot read or write `.jvs`.
-- Workload mounts cannot read or write `.jvs`, or are rejected when the runtime cannot enforce protection.
+- Workload mounts cannot lookup, read, write, create, rename, unlink, chmod, chown, hardlink, or symlink root-level `.jvs`; otherwise workload mount binding creation returns a capability error.
 - JVS `doctor --strict` passes after repo create, save, restore, and clone.
 - Calling products can map their own business objects to AFSCP primitives without AFSCP knowing those business object types.

@@ -6,7 +6,7 @@ AFSCP should manage volumes, namespaces, repos, repo templates, exports, workloa
 
 ## Source Of Truth
 
-Current handoff source of truth is the root-level documentation in this repository, especially `docs/HANDOFF.md`, `docs/PRODUCT_REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/STORAGE_LAYOUT.md`, `docs/API_CONTRACT_DRAFT.md`, and `docs/contracts/`.
+Current handoff source of truth is the root-level documentation in this repository, especially `docs/HANDOFF.md`, `docs/PRODUCT_REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/STORAGE_LAYOUT.md`, `docs/API_CONTRACT_DRAFT.md`, `docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md`, and `docs/contracts/`.
 
 The planning work that produced this handoff was committed in:
 
@@ -19,13 +19,14 @@ Important: do not use `agentsmith-oss` for current-state analysis. It is an old 
 
 ## Day 1 Sequence
 
-1. Read `docs/TEAM_REVIEW_2026-05-03.md` and confirm the P0 gates are still accepted.
+1. Read `docs/TEAM_REVIEW_2026-05-03.md` and `docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md`, then confirm the P0 gates are still accepted.
 2. Record the runtime language/framework in a new ADR.
 3. Start only the neutral service skeleton: package layout, health endpoint, config loading, logging, test harness, and empty route registration.
 4. Freeze internal auth and caller-service authorization.
 5. Convert `docs/API_CONTRACT_DRAFT.md` into JSON schemas and the P0 internal OpenAPI.
-6. Freeze the `.jvs` mount protection strategy with orchestrator owners.
-7. Freeze operation store schema, writer-session fence, and recovery matrix before implementing storage handlers.
+6. Pin the JVS binary/commit and add CLI smoke tests for the commands AFSCP depends on.
+7. Freeze the `.jvs` mount protection strategy with orchestrator owners before enabling workload mounts.
+8. Freeze operation store schema, writer-session fence, and recovery matrix before implementing storage handlers.
 
 ## Revised Boundary
 
@@ -130,5 +131,5 @@ Client/desktop connector owns:
 3. Finalize internal service auth, caller identity, and namespace caller authorization.
 4. Generate P0 OpenAPI before implementing handlers.
 5. Finalize operation store schema, writer-session fence, and recovery matrix.
-6. Finalize `.jvs` protection strategy before enabling exports or workload mounts.
+6. Finalize `.jvs` protection strategy before enabling workload mounts; stock JuiceFS CSI subdir alone is not sufficient.
 7. Confirm first-consumer mapping in `docs/INTEGRATION_GUIDE.md` without moving those concepts into core AFSCP.

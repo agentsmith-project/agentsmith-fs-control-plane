@@ -20,10 +20,11 @@ P0 should not force-migrate existing caller data.
 8. Initialize JVS repo or import baseline metadata.
 9. Create a `migration-baseline` save point.
 10. Run `jvs doctor --strict`.
-11. Update the calling product's backend reference.
-12. Test export and workload mount.
-13. Preserve rollback metadata, source generation, and cutover timestamp.
-14. Archive old backend only after operator approval.
+11. Test WebDAV export access and confirm the calling product no longer needs direct JuiceFS credentials for ordinary user access.
+12. Test workload mount only when the target runtime has verified `.jvs` protection; otherwise confirm the expected capability error.
+13. Update the calling product's backend reference.
+14. Preserve rollback metadata, source generation, and cutover timestamp.
+15. Archive old backend only after operator approval.
 
 ## Rollback Conditions
 

@@ -61,6 +61,8 @@ Required changes:
 - Hide JuiceFS metadata URL and bucket details from ordinary users.
 - Keep raw JuiceFS direct mount only behind an admin/debug feature flag if needed.
 
+Current direct JuiceFS Desktop flows are not compatible with AFSCP-backed repos because they bypass export TTL, revoke, audit, and restore writer-session fencing. The Desktop integration should be treated as a WebDAV/export rewrite, not a thin field rename.
+
 Current paths to inspect:
 
 - `/home/percy/works/mbos-v1/agentsmith-desktop/src/lib/mounts/service.ts`
@@ -81,6 +83,8 @@ Required changes:
 - Ensure workload Pods do not receive JuiceFS credentials.
 - Ensure AgentSmith API services do not receive or reference JuiceFS root Secrets.
 - Keep non-root workload defaults and service account token restrictions.
+- Add mount binding heartbeat, release, revoke, and reconciliation semantics. Pod keepalive is not the same as a storage mount binding lease.
+- Prove `.jvs` protection before enabling AFSCP-backed writable workload homes. Stock JuiceFS CSI subdirectory mounting does not satisfy this by itself.
 
 Current paths to inspect:
 
@@ -114,11 +118,12 @@ Current paths to inspect:
 1. Add AFSCP service skeleton and operation store.
 2. Add AgentSmith mapping from workspace to AFSCP namespace.
 3. Configure namespace volume binding for selected AgentSmith workspaces.
-4. Provision new file library backends as AFSCP repos.
-5. Add workload mount binding/orchestrator adapter for sandbox-manager.
-6. Add WebDAV export flow for Desktop/Web.
-7. Route save/history/restore through AFSCP.
-8. Save notebook task result by asking AFSCP to clone source repo into a repo template, then let AgentSmith store catalog metadata.
-9. Clone template by asking AFSCP to clone same-namespace template into a new repo.
-10. Gate new behavior behind AgentSmith workspace/profile feature flags.
-11. Plan legacy migration separately.
+4. Add AgentSmith mapping from file-library records to AFSCP repo IDs without exposing AFSCP to file-library vocabulary.
+5. Provision new file library backends as AFSCP repos.
+6. Add WebDAV export flow for Desktop/Web and disable ordinary direct JuiceFS access for AFSCP-backed repos.
+7. Add workload mount binding/orchestrator adapter for sandbox-manager after the `.jvs` protection strategy is proven.
+8. Route save/history/restore through AFSCP.
+9. Save notebook task result by asking AFSCP to clone source repo into a repo template, then let AgentSmith store catalog metadata.
+10. Clone template by asking AFSCP to clone same-namespace template into a new repo.
+11. Gate new behavior behind AgentSmith workspace/profile feature flags.
+12. Plan legacy migration separately.

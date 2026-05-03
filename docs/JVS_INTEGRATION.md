@@ -17,6 +17,7 @@ AFSCP should support:
 - save point history/list
 - restore preview
 - restore-run
+- recovery status/resume/rollback or an explicit operator-intervention state for failed restore runs
 - repo clone
 - `jvs doctor --strict`
 
@@ -37,6 +38,8 @@ See:
 - AFSCP should map JVS errors into stable caller-visible error codes.
 - `doctor --strict` should be run after repo create, restore, and clone in P0 smoke paths.
 - The supported JVS version or commit must be pinned before endpoint implementation.
+- The packaged JVS binary must be built from the pinned commit; CI should smoke-test the required commands instead of trusting a stale local artifact.
+- AFSCP should run JVS commands from a clean working directory outside another JVS repo, or explicitly validate that the runner CWD cannot affect target resolution.
 - Cross-resource operations must use deterministic lock ordering.
 
 ## Resource Locks
@@ -92,3 +95,9 @@ Template clone is not Git clone. Do not add remote/push/pull/origin concepts.
 ## Dirty State
 
 JVS repo clone can reject dirty source state depending on command semantics. AFSCP must use an explicit source save point before template creation so the product behavior is explicit and repeatable.
+
+Template creation must also prevent source writes between the fresh save point and clone publication, or detect the race and fail closed with cleanup. `doctor --strict` is not a substitute for proving the source stayed clean relative to the template save point.
+
+Restore preview/run must model JVS dirty-state decisions explicitly. P0 should fail closed on dirty repos unless the API exposes a supported `discard_unsaved` or `save_first` mode and audits that choice.
+
+`jvs repo clone` requires the target folder to not exist. AFSCP should allocate the target path but must not pre-create the clone target directory before invoking JVS.

@@ -59,13 +59,13 @@ P1:
 1. Deploy AFSCP with no external caller traffic.
 2. Register a default volume.
 3. Add namespace volume binding.
-4. Route only feature-flagged callers or namespaces to AFSCP.
-5. Route new repos to AFSCP.
-6. Keep legacy repos on old paths.
-7. Add WebDAV export for AFSCP-backed repos.
-8. Add workload mount binding/orchestrator integration.
-9. Add JVS save/restore.
-10. Add repo templates and same-namespace clone.
+4. Add and validate the AFSCP WebDAV policy gateway.
+5. Add JVS save/restore with pinned binary smoke tests and recovery handling.
+6. Add repo templates and same-namespace clone.
+7. Route only feature-flagged callers or namespaces to AFSCP after their ordinary client path no longer depends on direct JuiceFS credentials.
+8. Route new repos to AFSCP only after export access is validated for that caller.
+9. Add workload mount binding/orchestrator integration only after `.jvs` protection is proven; otherwise return capability errors.
+10. Keep legacy repos on old paths.
 11. Plan legacy migration as a separate release.
 
 ## Legacy Migration
