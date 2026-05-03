@@ -3,10 +3,10 @@
 ## Assets
 
 - JuiceFS metadata and object store credentials.
-- Shared JuiceFS filesystem root.
+- Managed volume root.
 - Repo payload data.
 - JVS `.jvs` metadata.
-- Workspace storage profile.
+- Namespace volume bindings.
 - Export credentials.
 - Operation records and audit logs.
 
@@ -14,46 +14,46 @@
 
 ### Credential Exposure
 
-Risk: Desktop, Web, or sandbox workload receives JuiceFS root credential material.
+Risk: client or workload receives JuiceFS root credential material.
 
 Controls:
 
 - AFSCP owns credentials.
-- AgentSmith API returns `ExportAccess` only.
-- K8s Secrets are scoped to CSI/Mount Pods.
+- Calling products return `ExportAccess` only.
+- K8s Secrets or equivalent secret refs are scoped to CSI/Mount Pods.
 - Logs redact secrets.
 
 ### Path Escape
 
-Risk: caller accesses another workspace/repo or filesystem root through path traversal or symlink escape.
+Risk: caller accesses another namespace/repo or filesystem root through path traversal or symlink escape.
 
 Controls:
 
 - canonical path resolver
 - no caller-provided raw paths
-- workspace/repo consistency checks
+- namespace/repo consistency checks
 - traversal and symlink tests
 
 ### `.jvs` Tampering
 
-Risk: user, Desktop, or agent modifies JVS metadata.
+Risk: client or workload modifies JVS metadata.
 
 Controls:
 
 - WebDAV filter
-- non-root sandbox workload
+- non-root workload
 - restrictive `.jvs` ownership
 - `jvs doctor --strict`
 
-### Cross-Workspace Template Leak
+### Cross-Namespace Template Leak
 
-Risk: template clone exposes data across AgentSmith workspaces.
+Risk: template clone exposes data across namespaces.
 
 Controls:
 
-- AgentSmith API authorization check
-- AFSCP source/target workspace path check
-- test users with membership in multiple workspaces
+- AFSCP source/target namespace check
+- default cross-namespace clone rejection
+- test actors with access to multiple namespaces
 
 ### Operation Loss
 

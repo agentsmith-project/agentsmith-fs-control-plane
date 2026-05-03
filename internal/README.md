@@ -7,14 +7,15 @@ Suggested future package areas:
 - api
 - auth
 - config
-- storagepools
+- volumes
+- namespaces
 - repos
 - pathresolver
 - jvsrunner
 - operations
 - templates
 - exports
-- sandbox
+- mounts
 - audit
 - store
 - secrets

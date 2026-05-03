@@ -11,3 +11,4 @@ The first implementation PR should include:
 - Structured logging.
 - Operation store migration or schema.
 - No storage mutation until security and API contracts are reviewed.
+- No caller-specific business concepts in core packages.

@@ -7,5 +7,5 @@ Expected future schemas:
 - operation envelope
 - JVS JSON envelope
 - export access
-- sandbox mount spec
-- workspace storage profile projection
+- workload mount spec
+- namespace volume binding projection

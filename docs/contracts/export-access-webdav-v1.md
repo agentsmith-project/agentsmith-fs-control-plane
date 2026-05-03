@@ -2,7 +2,7 @@
 
 Status: draft
 
-`ExportAccess` replaces ordinary Desktop direct JuiceFS mount access.
+`ExportAccess` replaces ordinary direct JuiceFS mount access for clients.
 
 ## Fields
 

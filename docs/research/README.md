@@ -6,8 +6,10 @@ The root-level handoff docs are now authoritative. Treat files in this directory
 
 Known superseding decisions in the root docs:
 
+- AFSCP core is product-agnostic; AgentSmith-specific notebook task, file library, project, and workspace semantics belong only in integration mapping.
+- `namespace` is the AFSCP isolation concept. AgentSmith may map one workspace to one namespace, but AFSCP does not store AgentSmith workspace semantics.
 - `repo_path` is the JVS `main` workspace real folder; P0 does not add a child `workspace/` payload directory.
-- AgentSmith workspace storage profile does not provide an authoritative raw `path_prefix`; AFSCP computes canonical paths from structured IDs and storage pool configuration.
+- Namespace volume binding does not provide an authoritative raw `path_prefix`; AFSCP computes canonical paths from structured IDs and volume configuration.
 - This GitHub repository is the AFSCP implementation home.
 
 - [agentsmith-workspace-storage-technical-design.md](agentsmith-workspace-storage-technical-design.md)

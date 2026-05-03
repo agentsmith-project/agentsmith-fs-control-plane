@@ -4,11 +4,11 @@ Status: accepted for handoff
 
 ## Context
 
-Users may access the same file library from Desktop, Web, and agent sandboxes. The product requirement is to avoid constraining ordinary simultaneous reads and writes.
+The same repo may be accessed by clients, file APIs, and workloads. The product requirement is to avoid constraining ordinary simultaneous reads and writes.
 
 ## Decision
 
-AgentSmith and AFSCP will not enforce a single-writer model for ordinary file IO. JuiceFS is responsible for filesystem-level consistency and locking semantics.
+AFSCP will not enforce a single-writer model for ordinary file IO. JuiceFS is responsible for filesystem-level consistency and locking semantics.
 
 AFSCP will serialize mutating JVS operations per repo, including save, restore, clone, archive, delete, and lifecycle operations.
 
@@ -20,7 +20,7 @@ Positive:
 
 - Simpler user model.
 - Better fit for filesystem semantics.
-- Avoids unnecessary task scheduling restrictions.
+- Avoids unnecessary workflow restrictions in calling products.
 
 Tradeoffs:
 

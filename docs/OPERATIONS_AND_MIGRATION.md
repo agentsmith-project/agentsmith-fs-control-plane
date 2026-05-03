@@ -8,9 +8,12 @@ The operation store should record:
 
 - operation ID
 - idempotency key
+- correlation ID
 - caller service identity
-- tenant workspace ID
-- storage repo ID
+- authorized actor type
+- authorized actor ID
+- namespace ID
+- repo ID or template ID
 - operation type
 - input summary
 - state
@@ -42,44 +45,44 @@ P1:
 
 - Split export gateway pool if WebDAV load grows.
 - Split worker queue if JVS operations become heavy.
-- Add multiple storage pool controllers if sharding grows.
+- Add multiple volume controllers if sharding grows.
 
 ## Rollout Strategy
 
-1. Deploy AFSCP with no user traffic.
-2. Register a default storage pool.
-3. Add AgentSmith workspace storage profile support.
-4. Route only new workspaces or feature-flagged workspaces to AFSCP.
-5. Route new file libraries to AFSCP.
-6. Keep legacy file libraries on old path.
-7. Add Desktop/WebDAV export for AFSCP-backed libraries.
-8. Add sandbox binding v2 for AFSCP-backed libraries.
+1. Deploy AFSCP with no external caller traffic.
+2. Register a default volume.
+3. Add namespace volume binding.
+4. Route only feature-flagged callers or namespaces to AFSCP.
+5. Route new repos to AFSCP.
+6. Keep legacy repos on old paths.
+7. Add WebDAV export for AFSCP-backed repos.
+8. Add workload mount spec integration.
 9. Add JVS save/restore.
-10. Add templates and same-workspace clone.
+10. Add repo templates and same-namespace clone.
 11. Plan legacy migration as a separate release.
 
 ## Legacy Migration
 
-Legacy libraries may have per-library metadata DB and bucket. Do not migrate implicitly.
+Legacy repos may have per-resource metadata DB and bucket. Do not migrate implicitly.
 
 Explicit migration flow should be:
 
-1. Verify source library is healthy.
-2. Create target repo through AFSCP under the workspace storage profile.
+1. Verify source legacy repo health.
+2. Create target repo through AFSCP under the namespace volume binding.
 3. Copy/import payload data.
 4. Initialize or import JVS metadata.
 5. Run `jvs doctor --strict`.
-6. Switch AgentSmith file library backend record.
+6. Switch the calling product's backend reference.
 7. Preserve rollback metadata.
 8. Archive legacy backend only after verification.
 
 ## Restore Safety
 
-MVP may allow restore while ordinary writers exist, but the product should clearly document that AgentSmith does not merge concurrent writes.
+MVP may allow restore while ordinary writers exist, but callers should clearly document that AFSCP does not merge concurrent writes.
 
-P1 should add stricter restore fencing:
+P1 should add stricter restore fencing primitives:
 
-- notify active sandbox sessions
+- notify active mount/export sessions
 - pause or drain WebDAV write sessions
 - acquire repo-level restore lock
 - run restore preview
@@ -92,7 +95,7 @@ P1 should add stricter restore fencing:
 AFSCP operators must be able to recover:
 
 - operation store
-- storage profile projections
+- namespace volume binding records
 - JuiceFS credential references
 - repo path records
 - JVS metadata

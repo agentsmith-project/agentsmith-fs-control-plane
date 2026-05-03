@@ -1,32 +1,32 @@
-# ADR 0003: Keep Templates Workspace-Scoped
+# ADR 0003: Keep Repo Templates Namespace-Scoped In P0
 
 Status: accepted for handoff
 
 ## Context
 
-Users want to save a notebook task as a reusable template and let other users start from it. The product also requires storage profiles to be owned by AgentSmith workspaces, and explicitly disallows cross-workspace template sharing.
+Calling products need a way to create reusable repo templates and clone them into independent repos. Cross-tenant or cross-product sharing carries data leakage and policy risks.
 
 ## Decision
 
-Templates are scoped to one AgentSmith workspace.
+Repo templates are scoped to one AFSCP namespace in P0.
 
 Rules:
 
-- `template.tenant_workspace_id` is required.
-- AgentSmith API rejects clone requests where template workspace differs from request workspace.
-- AFSCP also rejects clone requests when source and target paths do not resolve under the same canonical workspace root.
+- `template.namespace_id` is required.
+- AFSCP rejects clone requests where template namespace differs from target namespace.
 - Cloning creates an independent repo with a new JVS repo identity.
+- Calling products may add their own product-level visibility metadata, but that metadata does not change AFSCP namespace boundaries.
 
 ## Consequences
 
 Positive:
 
-- Clear tenant boundary.
-- Simpler authorization.
+- Clear tenancy boundary.
+- Simpler authorization contract.
 - No global template marketplace needed in MVP.
-- No cross-storage-pool clone policy needed in MVP.
+- No cross-volume clone policy needed in MVP.
 
 Tradeoffs:
 
-- Users cannot share templates across workspaces.
-- Future cross-workspace sharing, if ever required, must be designed as a separate product with explicit admin and compliance controls.
+- Callers cannot share templates across namespaces through ordinary clone APIs.
+- Future cross-namespace sharing, if ever required, must be designed as a separate admin/import product with explicit controls.

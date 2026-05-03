@@ -9,11 +9,12 @@ Recommended fields:
 - `operation_id`
 - `idempotency_key`
 - `correlation_id`
-- `requesting_actor_type`
-- `requesting_actor_id`
-- `calling_service_identity`
-- `tenant_workspace_id`
-- `storage_repo_id`
+- `caller_service_identity`
+- `authorized_actor_type`
+- `authorized_actor_id`
+- `namespace_id`
+- `repo_id`
+- `template_id`
 - `operation_type`
 - `operation_state`
 - `input_summary`
@@ -39,27 +40,30 @@ Minimum:
 
 Require durable operation records:
 
+- volume ensure/update
+- namespace binding update
 - repo create
 - repo archive/delete
 - save point create
 - restore preview/run
 - repo clone
-- template clone
+- template create/clone
 - export create/revoke
-- sandbox mount spec generation if it triggers provisioning
+- workload mount spec generation if it triggers provisioning
 - lifecycle move/rename/detach
 
 ## Audit
 
-AFSCP should emit low-level audit events to AgentSmith. AgentSmith should produce user-visible audit summaries.
+AFSCP should emit low-level audit events to callers or an event sink. Calling products can project those events into user-visible audit records.
 
-`requesting_actor_type` and `requesting_actor_id` must identify the authorized end actor supplied by AgentSmith, such as the user or system job that requested the operation. The internal service credential only identifies the calling service and should be recorded separately as `calling_service_identity`.
+`authorized_actor_type` and `authorized_actor_id` must identify the authorized end actor supplied by the trusted caller, such as the user or system job that requested the operation. The internal service credential only identifies the calling service and should be recorded separately as `caller_service_identity`.
 
 Each event should include:
 
-- workspace ID
+- namespace ID
 - repo/template ID
-- actor
+- authorized actor
+- caller service
 - operation ID
 - correlation ID
 - result

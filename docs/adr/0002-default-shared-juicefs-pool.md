@@ -1,24 +1,24 @@
-# ADR 0002: Use A Default Shared JuiceFS Pool For New Repos
+# ADR 0002: Use A Default Shared JuiceFS Volume For New Repos
 
 Status: accepted for handoff
 
 ## Context
 
-Creating a separate JuiceFS metadata DB and bucket per notebook task is too expensive operationally. It increases database, bucket, policy, Secret, and mount management overhead.
+Creating a separate JuiceFS metadata DB and bucket per product resource is too expensive operationally. It increases database, bucket, policy, Secret, and mount management overhead.
 
 ## Decision
 
-New file libraries should default to a shared JuiceFS filesystem/storage pool managed by AFSCP. Isolation should be provided through AgentSmith authorization, AFSCP path resolution, controlled exports, and sandbox subdirectory mounts.
+New repos should default to a shared JuiceFS-backed volume managed by AFSCP. Isolation should be provided through caller authorization, AFSCP namespace boundaries, path resolution, controlled exports, and workload mount specs.
 
-The data model must keep `filesystem_id` and `storage_pool_id` so future sharding by workspace, tenant, region, or compliance profile remains possible.
+The data model must keep `volume_id` and namespace bindings so future sharding by tenant, region, or compliance profile remains possible.
 
 ## Consequences
 
 Positive:
 
 - Much lower provisioning overhead.
-- JVS repo clone/template flows can stay within one filesystem.
-- Easier Desktop/WebDAV and sandbox integration.
+- JVS repo clone/template flows can stay within one volume.
+- Easier WebDAV/export and workload mount integration.
 
 Tradeoffs:
 

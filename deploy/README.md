@@ -9,4 +9,4 @@ Expected MVP deployment shape:
 - Dedicated ServiceAccount.
 - Dedicated Secret references for JuiceFS root credentials.
 - Optional WebDAV sidecar or same-image subprocess.
-- Network policy allowing AgentSmith API and privileged admin jobs only.
+- Network policy allowing trusted calling product services and privileged admin jobs only.

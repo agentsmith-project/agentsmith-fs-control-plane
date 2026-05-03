@@ -1,6 +1,10 @@
 # Team Review Summary
 
-This summary captures the product and architecture review conclusions used to create the handoff scaffold.
+This summary captures the product and architecture review conclusions used to create the original handoff scaffold. It is historical context; root-level docs now supersede AgentSmith-specific core modeling.
+
+## Superseding Decoupling Decision
+
+AFSCP core should be product-agnostic. AgentSmith-specific concepts such as notebook task, file library, project, workspace, and template catalog are integration mappings, not AFSCP core data model concepts.
 
 ## Product Review
 

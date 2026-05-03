@@ -11,9 +11,11 @@ Copied into this repo:
 - `docs/research/agentsmith-workspace-storage-technical-design.md`
 - `docs/research/scratch.md`
 
-## Current AgentSmith Paths
+## AgentSmith Integration Reference Paths
 
 Do not use `agentsmith-oss`.
+
+These paths are references for the first expected caller integration. They are not AFSCP core dependencies.
 
 - `/home/percy/works/mbos-v1/agentsmith/packages/contracts/src/index.ts`
 - `/home/percy/works/mbos-v1/agentsmith/packages/api-entry-node/src/internal-agent-workspace-provisioner.ts`

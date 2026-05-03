@@ -1,4 +1,4 @@
-# Contract: Storage Repo Path V1
+# Contract: Repo Path V1
 
 Status: draft
 
@@ -6,11 +6,10 @@ AFSCP resolves repo paths from structured IDs.
 
 ## Inputs
 
-- `tenant_workspace_id`
-- `storage_repo_id`
+- `namespace_id`
+- `repo_id`
 - `repo_kind`
-- `filesystem_id`
-- `storage_pool_id`
+- `volume_id`
 
 ## Outputs
 
@@ -26,4 +25,4 @@ AFSCP resolves repo paths from structured IDs.
 - `repo_path` is the JVS `main` workspace real folder.
 - In P0, `payload_subdir` is the same directory as `repo_path`.
 - `.jvs` is never exposed through user/export payload paths.
-- Canonical workspace root mismatch is an authorization boundary violation.
+- Canonical namespace root mismatch is an authorization boundary violation.

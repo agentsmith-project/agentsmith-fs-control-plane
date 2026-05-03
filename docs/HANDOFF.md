@@ -1,8 +1,8 @@
 # Handoff
 
-This repository is the handoff package for building the AgentSmith FS Control Plane, abbreviated AFSCP.
+This repository is the handoff package for building AFSCP, a product-agnostic file storage control plane.
 
-AFSCP is a new internal application module for AgentSmith. It should manage shared JuiceFS storage pools, execute JVS operations, expose controlled user exports, and generate sandbox mount specifications. It should not become a user-facing product surface.
+AFSCP should manage volumes, namespaces, repos, repo templates, exports, workload mount specs, durable operations, logs, and audit events. It should not understand product workflows from any one caller.
 
 ## Source Of Truth
 
@@ -17,24 +17,39 @@ The planning work that produced this handoff was committed in:
 
 Important: do not use `agentsmith-oss` for current-state analysis. It is an old version and was explicitly excluded.
 
-## Product Goal
+## Revised Boundary
 
-AgentSmith needs persistent, versioned file libraries for agent sandboxes and user desktops without creating one JuiceFS metadata DB and bucket per notebook task.
+AFSCP is a functional storage substrate.
 
-The target design is:
+AFSCP should know:
 
-- A default shared JuiceFS filesystem/storage pool for new file libraries.
-- AgentSmith workspace-level storage profiles so different tenant workspaces can bind to different AFSCP instances or storage pools.
-- AgentSmith-controlled access to each file library/repo.
-- JVS-managed save points, restores, repo lifecycle, and repo clone.
-- User PC access through controlled exports such as WebDAV, without exposing JuiceFS credentials.
-- Sandbox access through controlled subdirectory mounts.
-- Notebook tasks can be saved as templates and cloned by users in the same AgentSmith workspace.
-- No cross-workspace template sharing or clone.
+- volumes
+- namespaces
+- repos
+- repo templates
+- exports
+- workload mount specs
+- JVS operations
+- path resolution
+- quota hooks
+- operation state
+- logs and audit events
 
-## The New Module
+AFSCP should not know:
 
-Build `agentsmith-fs-control-plane` as an independent application module in this repository.
+- notebook task
+- file library
+- project
+- AgentSmith workspace
+- template catalog UX
+- user-facing product permissions
+- business workflow state
+
+Calling products map their own concepts to AFSCP primitives. For example, AgentSmith can map an AgentSmith workspace to an AFSCP namespace and a file library to an AFSCP repo.
+
+## Module Shape
+
+Build AFSCP as an independent application module in this repository.
 
 MVP deployment shape:
 
@@ -43,61 +58,62 @@ MVP deployment shape:
 - Dedicated ServiceAccount.
 - Dedicated Secret access for JuiceFS root credentials.
 - Persistent operation store.
-- Internal HTTP API reachable by AgentSmith API and privileged admin jobs only.
+- Internal API reachable by trusted application control planes and privileged admin jobs only.
 
-Integration adapters and compatibility changes may land in sibling AgentSmith repositories. The AFSCP runtime, operation store, path resolver, JVS runner, and export gateway should live in this repository and should not be implemented as helper modules inside AgentSmith API.
+Integration adapters and compatibility changes may land in sibling repositories. The AFSCP runtime, operation store, path resolver, JVS runner, and export gateway should live here.
 
 ## Authority Boundaries
 
-AgentSmith API owns:
+Calling application owns:
 
-- User, workspace, project, file library, and template authorization.
-- Workspace storage profile product configuration.
-- File library and template catalog records.
-- User-visible audit projection.
-- API entrypoints for Web, Desktop, and notebook task flows.
-- Rejecting cross-workspace template clone before calling AFSCP.
+- end-user authentication and product authorization
+- product catalog records
+- product workflow decisions
+- product-level audit projection
+- user-visible UI and API vocabulary
+- mapping business resources to AFSCP namespaces/repos/templates
 
 AFSCP owns:
 
-- JuiceFS root credentials and root mount access.
-- Storage pool bootstrap and health checks.
-- Repo path allocation and path resolution.
-- Directory creation, permission setup, and quota hooks.
-- JVS `init`, `save`, `history`, `restore`, `repo clone`, and lifecycle execution.
-- WebDAV/export runtime and short-lived export credentials.
-- Sandbox mount spec generation.
-- Operation journal, idempotency, retries, and low-level audit events.
+- volume credentials and health
+- namespace boundaries
+- repo path allocation and path resolution
+- JVS `init`, `save`, `history`, `restore`, `repo clone`, and lifecycle execution
+- repo template storage and clone execution
+- WebDAV/export runtime and short-lived export credentials
+- workload mount spec generation
+- operation journal, idempotency, retries, logs, and low-level audit events
 
-Sandbox-manager owns:
+External orchestrator owns:
 
-- Kubernetes Secret, PV, PVC, and Pod mount execution.
-- CSI and workload binding status.
+- Kubernetes Secret, PV, PVC, and Pod mount execution, or equivalent runtime mounting.
+- Workload binding status.
 - No product permission decisions.
 
-Desktop owns:
+Client/desktop connector owns:
 
-- Consuming AgentSmith `ExportAccess`.
+- Consuming application-issued export access.
 - Local mount UX and diagnostics.
 - No raw JuiceFS credential handling for ordinary users.
 
 ## MVP Must Not Expand Into
 
-- Cross-workspace templates.
-- Git remote semantics.
-- Merge/conflict resolution.
-- Real-time collaborative editing.
-- Per-file ACL UI.
-- Per-task JuiceFS DB/bucket provisioning.
-- Ordinary user JuiceFS direct mount.
-- A full NAS account system.
+- product workflow engine
+- product authorization service
+- notebook task lifecycle
+- file-library catalog
+- global template marketplace
+- Git remote workflows
+- merge/conflict resolution
+- real-time collaborative editing
+- per-file ACL UI
+- raw JuiceFS direct mount for ordinary users
 
 ## First Engineering Checkpoints
 
 1. Confirm runtime language and framework in an ADR.
-2. Finalize workspace storage profile schema with AgentSmith API owners.
-3. Finalize AFSCP internal API contract.
-4. Finalize sandbox binding v2 with sandbox-manager owners.
-5. Finalize Desktop `ExportAccess` contract.
-6. Build AFSCP skeleton with operation store before mutating storage.
-7. Add `.jvs` protection tests before enabling sandbox or WebDAV write access.
+2. Finalize generic volume, namespace, repo, template, export, and mount contracts.
+3. Finalize internal service auth and caller identity model.
+4. Finalize operation store schema.
+5. Finalize `.jvs` protection strategy before enabling writable exports or workload mounts.
+6. Confirm AgentSmith-specific mapping in `docs/INTEGRATION_GUIDE.md` without moving those concepts into core AFSCP.

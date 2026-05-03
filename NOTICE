@@ -1,5 +1,5 @@
-AgentSmith FS Control Plane
-Copyright 2026 AgentSmith contributors
+AFSCP Storage Control Plane
+Copyright 2026 AFSCP contributors
 
-This product includes planning and documentation for integrating AgentSmith,
-JuiceFS, and JVS. It is licensed under the Apache License, Version 2.0.
+This product includes planning and documentation for a JuiceFS and JVS backed
+storage control plane. It is licensed under the Apache License, Version 2.0.
