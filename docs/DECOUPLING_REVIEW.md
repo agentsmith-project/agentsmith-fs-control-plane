@@ -47,7 +47,7 @@ If AFSCP does not depend on AgentSmith semantics, it can support other internal 
 | `repo` | file library backend repo |
 | `repo_template` | template repo referenced by AgentSmith template catalog |
 | `export` | Desktop/WebDAV access session |
-| `workload_mount_spec` | sandbox-manager binding input |
+| `workload_mount_binding` / `orchestrator_mount_plan` | sandbox-manager binding input |
 | `operation` | save/restore/clone/export job visible in AgentSmith audit |
 
 The mapping belongs in AgentSmith integration code, not inside AFSCP core.

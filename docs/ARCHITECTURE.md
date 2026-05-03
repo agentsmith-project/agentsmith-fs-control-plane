@@ -20,7 +20,7 @@ Calling Product / Admin Job / Operator Tool
 | - operation store           |
 +------+---------------+------+
        |               |
-       | JVS/JuiceFS   | mount spec
+       | JVS/JuiceFS   | mount plan
        v               v
 +--------------+   +----------------------+
 | Volume       |   | External orchestrator |
@@ -42,21 +42,23 @@ AFSCP is the storage execution authority. It receives authorized internal reques
 
 Internal modules:
 
-- `api`: internal API and service authentication.
-- `volumes`: JuiceFS filesystem/pool bootstrap, health, credential references.
-- `namespaces`: namespace-to-volume binding, isolation checks, quota hooks.
-- `repos`: repo creation, archive/delete, path resolver, lifecycle hooks.
-- `jvs`: CLI wrapper or library adapter, JSON parsing, operation lock.
+- `api`: internal API, service authentication, caller-service authorization.
+- `volumes`: JuiceFS filesystem/pool bootstrap, health, credential references, capability checks.
+- `namespaces`: namespace-to-volume binding, allowed caller policy, isolation checks, quota hooks.
+- `repos`: repo creation, path resolver, P1 lifecycle hooks.
+- `jvs`: CLI wrapper or library adapter, JSON parsing, resource locks.
 - `templates`: namespace-scoped repo template clone executor.
 - `exports`: WebDAV export, short-lived credentials, `.jvs` filtering.
-- `mounts`: workload mount spec builder.
+- `mounts`: workload mount binding and orchestrator-only plan builder.
 - `operations`: operation store, idempotency, retry, audit/event outbox.
 
 ### External Orchestrator
 
-The orchestrator, such as a Kubernetes sandbox-manager, consumes AFSCP workload mount specs. It creates or updates K8s Secret/PV/PVC/Pod mounts or equivalent runtime mounts and reports status.
+The orchestrator consumes AFSCP workload mount plans. It creates or updates K8s Secret/PV/PVC/Pod mounts or equivalent runtime mounts and reports status.
 
 It should not make product authorization decisions.
+
+It is the only ordinary integration component allowed to see JuiceFS Secret references, and only through the orchestrator-specific API role.
 
 ### Client Connector
 
@@ -89,17 +91,19 @@ Suggested path shape:
 | Data | Owner |
 | --- | --- |
 | Product permissions and product catalog | Calling product |
-| Namespace-to-volume policy | AFSCP, optionally configured by admin/trusted caller |
+| Namespace-to-volume and allowed caller policy | AFSCP, optionally configured by admin/trusted caller |
 | Volume runtime state | AFSCP |
 | JuiceFS root credentials | AFSCP/K8s Secret |
 | Repo path and JVS repo ID | AFSCP |
 | Repo template path and JVS repo ID | AFSCP |
 | JVS operation status | AFSCP |
-| Workload runtime mount status | External orchestrator |
+| Workload runtime mount status and Secret/PV/PVC execution | External orchestrator |
 | User-visible audit projection | Calling product, using AFSCP events |
 
 ## Concurrency Model
 
-Ordinary file reads and writes are not serialized by AFSCP. JuiceFS provides filesystem-level consistency and locking semantics. AFSCP must serialize mutating JVS operations per repo, such as save, restore, clone, archive, and delete.
+Ordinary file reads and writes are not serialized by AFSCP. JuiceFS provides filesystem-level consistency and locking semantics. AFSCP must serialize mutating JVS operations per repo, such as save, restore-run, and clone.
+
+Restore-run is not ordinary file IO. P0 restore-run must acquire a per-repo writer-session fence, block new read-write export or workload mount issuance, and reject existing active read-write sessions by default. This preserves ordinary concurrent file access while preventing version mutations from racing active writers.
 
 No version merge behavior should be added in MVP.

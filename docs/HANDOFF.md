@@ -2,7 +2,7 @@
 
 This repository is the handoff package for building AFSCP, a product-agnostic file storage control plane.
 
-AFSCP should manage volumes, namespaces, repos, repo templates, exports, workload mount specs, durable operations, logs, and audit events. It should not understand product workflows from any one caller.
+AFSCP should manage volumes, namespaces, repos, repo templates, exports, workload mount bindings, orchestrator mount plans, durable operations, logs, and audit events. It should not understand product workflows from any one caller.
 
 ## Source Of Truth
 
@@ -17,6 +17,16 @@ The planning work that produced this handoff was committed in:
 
 Important: do not use `agentsmith-oss` for current-state analysis. It is an old version and was explicitly excluded.
 
+## Day 1 Sequence
+
+1. Read `docs/TEAM_REVIEW_2026-05-03.md` and confirm the P0 gates are still accepted.
+2. Record the runtime language/framework in a new ADR.
+3. Start only the neutral service skeleton: package layout, health endpoint, config loading, logging, test harness, and empty route registration.
+4. Freeze internal auth and caller-service authorization.
+5. Convert `docs/API_CONTRACT_DRAFT.md` into JSON schemas and the P0 internal OpenAPI.
+6. Freeze the `.jvs` mount protection strategy with orchestrator owners.
+7. Freeze operation store schema, writer-session fence, and recovery matrix before implementing storage handlers.
+
 ## Revised Boundary
 
 AFSCP is a functional storage substrate.
@@ -28,7 +38,8 @@ AFSCP should know:
 - repos
 - repo templates
 - exports
-- workload mount specs
+- workload mount bindings
+- orchestrator mount plans
 - JVS operations
 - path resolution
 - quota hooks
@@ -45,7 +56,7 @@ AFSCP should not know:
 - user-facing product permissions
 - business workflow state
 
-Calling products map their own concepts to AFSCP primitives. For example, AgentSmith can map an AgentSmith workspace to an AFSCP namespace and a file library to an AFSCP repo.
+Calling products map their own concepts to AFSCP primitives. Product-specific examples belong in `docs/INTEGRATION_GUIDE.md`, not in AFSCP core contracts.
 
 ## Module Shape
 
@@ -58,7 +69,7 @@ MVP deployment shape:
 - Dedicated ServiceAccount.
 - Dedicated Secret access for JuiceFS root credentials.
 - Persistent operation store.
-- Internal API reachable by trusted application control planes and privileged admin jobs only.
+- Internal API reachable by trusted application control planes, privileged admin jobs, migration jobs, operator tools, and the dedicated orchestrator service only.
 
 Integration adapters and compatibility changes may land in sibling repositories. The AFSCP runtime, operation store, path resolver, JVS runner, and export gateway should live here.
 
@@ -77,11 +88,13 @@ AFSCP owns:
 
 - volume credentials and health
 - namespace boundaries
+- caller-service authorization for namespace-bound storage operations
 - repo path allocation and path resolution
-- JVS `init`, `save`, `history`, `restore`, `repo clone`, and lifecycle execution
+- JVS `init`, `save`, `history`, `restore`, and `repo clone` execution
 - repo template storage and clone execution
 - WebDAV/export runtime and short-lived export credentials
-- workload mount spec generation
+- workload mount binding generation
+- orchestrator-only mount plan generation
 - operation journal, idempotency, retries, logs, and low-level audit events
 
 External orchestrator owns:
@@ -108,12 +121,14 @@ Client/desktop connector owns:
 - real-time collaborative editing
 - per-file ACL UI
 - raw JuiceFS direct mount for ordinary users
+- repo archive/delete/rename/detach lifecycle APIs in P0
 
 ## First Engineering Checkpoints
 
 1. Confirm runtime language and framework in an ADR.
-2. Finalize generic volume, namespace, repo, template, export, and mount contracts.
-3. Finalize internal service auth and caller identity model.
-4. Finalize operation store schema.
-5. Finalize `.jvs` protection strategy before enabling writable exports or workload mounts.
-6. Confirm AgentSmith-specific mapping in `docs/INTEGRATION_GUIDE.md` without moving those concepts into core AFSCP.
+2. Finalize generic volume, namespace, repo, template, export, mount binding, and orchestrator plan contracts.
+3. Finalize internal service auth, caller identity, and namespace caller authorization.
+4. Generate P0 OpenAPI before implementing handlers.
+5. Finalize operation store schema, writer-session fence, and recovery matrix.
+6. Finalize `.jvs` protection strategy before enabling exports or workload mounts.
+7. Confirm first-consumer mapping in `docs/INTEGRATION_GUIDE.md` without moving those concepts into core AFSCP.

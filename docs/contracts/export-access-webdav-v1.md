@@ -1,16 +1,32 @@
 # Contract: Export Access WebDAV V1
 
-Status: draft
+Status: P0 review draft
 
-`ExportAccess` replaces ordinary direct JuiceFS mount access for clients.
+`ExportAccessCredential` replaces ordinary direct JuiceFS mount access for clients. AFSCP also stores a durable `ExportSession` for revocation, TTL, and audit.
 
-## Fields
+## ExportSession Fields
+
+- `export_id`
+- `namespace_id`
+- `repo_id`
+- `protocol`
+- `mode`
+- `status`
+- `created_by_caller_service`
+- `authorized_actor_type`
+- `authorized_actor_id`
+- `expires_at`
+- `revoked_at`
+- `last_accessed_at`
+
+## Credential View
 
 - `export_id`
 - `protocol`
 - `url`
-- `username`
-- `password`
+- `auth.type`
+- `auth.username`
+- `auth.password`
 - `mode`
 - `expires_at`
 
@@ -19,5 +35,9 @@ Status: draft
 - `protocol` is `webdav` for P0.
 - `mode` is `read_only` or `read_write`.
 - Credentials are short-lived and revocable.
-- `.jvs` is hidden or blocked.
-- No JuiceFS metadata URL or object store credential appears in the response.
+- Expired or revoked credentials must fail future requests and close or reject active sessions where supported by the gateway.
+- `.jvs` is hidden or blocked for every WebDAV method.
+- Read-only exports allow `OPTIONS`, `HEAD`, `GET`, and `PROPFIND` only, with `.jvs` still blocked.
+- Read-only exports deny `PUT`, `DELETE`, `MKCOL`, `MOVE`, `COPY`, `PROPPATCH`, `LOCK`, and `UNLOCK` unless the gateway implements a no-op lock required for read-only client compatibility.
+- No JuiceFS metadata URL, bucket URL, object store credential, raw mount command, or Secret reference appears in the response.
+- Export create, credential issuance, revoke, expiry, and denied path attempts are audited.

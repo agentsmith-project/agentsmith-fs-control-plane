@@ -13,7 +13,8 @@ AFSCP should expose:
 - save point
 - restore
 - export
-- workload mount spec
+- workload mount binding
+- orchestrator mount plan
 - operation
 - audit event
 
@@ -35,6 +36,8 @@ AFSCP executes storage operations after a trusted caller supplies a namespace, r
 
 AFSCP validates storage boundaries. It should reject namespace/resource mismatches, path traversal, cross-namespace template clone, invalid volume access, and unsafe paths. It should not ask or answer product-specific authorization questions.
 
+AFSCP also validates whether the calling service principal is allowed to operate in a namespace. That is storage-control authorization, not end-user product authorization.
+
 ## Hard Product Decisions
 
 - The default new storage model is managed JuiceFS-backed volumes plus controlled repo paths.
@@ -44,7 +47,8 @@ AFSCP validates storage boundaries. It should reject namespace/resource mismatch
 - Template clone creates an independent repo, not a shared collaborative directory.
 - Ordinary file reads and writes can happen concurrently.
 - AFSCP does not provide version merge or conflict resolution.
-- JVS save, restore, clone, and lifecycle operations must be serialized per repo.
+- JVS save, restore-run, and clone operations must be serialized per repo.
+- Restore-run rejects active read-write export/workload sessions in P0.
 - Ordinary client access uses controlled exports, initially WebDAV.
 
 ## MVP Guardrails
@@ -60,4 +64,5 @@ Do not expand MVP into:
 - per-file ACL UI
 - Git remote workflows
 - automatic legacy migration
+- repo archive/delete/rename/detach lifecycle APIs
 - billing or quota UI

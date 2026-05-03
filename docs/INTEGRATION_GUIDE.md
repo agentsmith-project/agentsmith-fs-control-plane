@@ -14,7 +14,7 @@ Core rule: AgentSmith owns product workflow and authorization. AFSCP owns generi
 | notebook task working home | product workflow that selects or creates a `repo` |
 | AgentSmith template catalog record | product metadata pointing to AFSCP `repo_template` |
 | Desktop/Web file access | `export` |
-| sandbox workspace binding | `workload_mount_spec` |
+| sandbox workspace binding | `workload_mount_binding` plus orchestrator-only mount plan |
 | AgentSmith audit entry | projection of AFSCP operation/audit events |
 
 AFSCP should store the right-hand concepts only. Left-hand concepts stay in AgentSmith.
@@ -56,7 +56,7 @@ Desktop should stop ordinary raw JuiceFS mount flows.
 
 Required changes:
 
-- Consume AgentSmith-returned `ExportAccess`, backed by AFSCP export sessions.
+- Consume AgentSmith-returned WebDAV access credentials, backed by AFSCP export sessions.
 - Mount or open WebDAV endpoints using short-lived credentials.
 - Hide JuiceFS metadata URL and bucket details from ordinary users.
 - Keep raw JuiceFS direct mount only behind an admin/debug feature flag if needed.
@@ -70,15 +70,16 @@ Current paths to inspect:
 
 ## Sandbox/Orchestrator Mapping
 
-AFSCP should generate a generic workload mount spec. AgentSmith's sandbox-manager can consume that spec through a compatibility adapter or v2 binding endpoint.
+AFSCP should generate a generic workload mount binding for product callers and an orchestrator-only mount plan for the sandbox-manager. AgentSmith's sandbox-manager can consume that plan through a compatibility adapter or v2 binding endpoint.
 
 Required changes:
 
 - Add a v2 binding endpoint or compatible evolution.
-- Accept `namespace_id`, `repo_id`, `volume_id`, `payload_subdir`, `mount_path`, and `read_only`.
+- Accept `mount_binding_id`, `namespace_id`, `repo_id`, `volume_id`, `volume_subdir`, `mount_path`, `read_only`, and orchestrator-only `secret_ref`.
 - Stop accepting arbitrary `metadata_url` as the business API contract for new repos.
 - Continue v1 compatibility for legacy file libraries until explicit migration.
 - Ensure workload Pods do not receive JuiceFS credentials.
+- Ensure AgentSmith API services do not receive or reference JuiceFS root Secrets.
 - Keep non-root workload defaults and service account token restrictions.
 
 Current paths to inspect:
@@ -97,7 +98,7 @@ Required capabilities:
 - save point creation and history
 - restore preview and restore
 - repo clone
-- repo lifecycle management
+- repo lifecycle management only in P1/future flows
 - `doctor --strict` for validation
 
 Current paths to inspect:
@@ -114,7 +115,7 @@ Current paths to inspect:
 2. Add AgentSmith mapping from workspace to AFSCP namespace.
 3. Configure namespace volume binding for selected AgentSmith workspaces.
 4. Provision new file library backends as AFSCP repos.
-5. Add workload mount spec adapter for sandbox-manager.
+5. Add workload mount binding/orchestrator adapter for sandbox-manager.
 6. Add WebDAV export flow for Desktop/Web.
 7. Route save/history/restore through AFSCP.
 8. Save notebook task result by asking AFSCP to clone source repo into a repo template, then let AgentSmith store catalog metadata.

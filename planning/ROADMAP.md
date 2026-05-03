@@ -6,17 +6,19 @@
 - Implement AFSCP skeleton with internal auth and health endpoints.
 - Implement durable operation store.
 - Implement volume registry and health.
-- Implement namespace volume binding.
+- Implement namespace volume binding and caller-service authorization.
 - Implement repo create and path resolver.
 - Integrate JVS init/save/history/restore.
-- Generate generic workload mount specs.
+- Generate generic workload mount bindings and orchestrator-only mount plans.
+- Implement mount binding status, heartbeat, release, revoke, and stale-lease reconciliation.
 - Implement WebDAV export flow.
 - Implement namespace-scoped repo template clone.
 - Add security tests for credentials, path traversal, namespace mismatch, and `.jvs`.
+- Add restore-run writer-session fence and active read-write session rejection.
 
 ## P1
 
-- Strict restore fencing primitives.
+- Operator break-glass restore and richer drain UX.
 - Directory quota automation.
 - Shared PVC and `subPath` mount optimization if appropriate.
 - Separate export gateway pool.

@@ -4,7 +4,7 @@ AFSCP should manage one or more JuiceFS-backed volumes. MVP should bootstrap a d
 
 ## Logical Layout
 
-Suggested layout under each volume root:
+Suggested layout under each JuiceFS filesystem root:
 
 ```text
 /afscp/
@@ -22,9 +22,9 @@ Suggested layout under each volume root:
         <repo_id>/
 ```
 
-`<repo_id>/` is both the AFSCP `repo_path` and the JVS `main` workspace real folder. AFSCP runs `jvs init <repo_path>` and `jvs --repo <repo_path> ...` against this directory.
+`<repo_id>/` is both the internal AFSCP `repo_path` and the JVS `main` workspace real folder. AFSCP runs `jvs init <repo_path>` and `jvs --repo <repo_path> ...` against this directory.
 
-Workload mounts and WebDAV exports mount or export the same `repo_path` as the user payload root. `.jvs/` is JVS control metadata inside that root. WebDAV/export must hide or block it; workload mounts must at minimum prevent workload containers from reading or writing it, and should hide it if the chosen mount/filter technology supports that.
+Workload mounts and WebDAV exports expose the same repo root as the user payload root. `.jvs/` is JVS control metadata inside that root. WebDAV/export and workload mounts must hide or block it for read and write.
 
 Do not add an extra `workspace/` directory between `repo_path` and user files in P0. JVS registers the initialized folder itself as workspace `main`; adding a separate payload folder would make save, restore, and repo clone operate on the wrong level unless JVS later adds explicit support for out-of-root control metadata.
 
@@ -37,13 +37,19 @@ Required fields:
 - `volume_id`
 - `repo_kind`
 - `repo_path`
-- `payload_subdir`
+- `volume_subdir`
 - `jvs_repo_id`
 - `status`
 
-`repo_path` is the canonical JVS repo root and the `main` workspace real path. `payload_subdir` is the AFSCP-generated JuiceFS subdirectory that an external orchestrator mounts; in P0 it is the same directory as `repo_path`, not `repo_path/workspace`.
+`repo_path` is the internal canonical JVS repo root and the `main` workspace real path. `volume_subdir` is the AFSCP-generated JuiceFS subdirectory relative to the JuiceFS filesystem root that a privileged orchestrator may consume; in P0 it points at the same directory as `repo_path`, not `repo_path/workspace`.
 
-`repo_path` and `payload_subdir` should be treated as internal implementation state. Product APIs should use IDs.
+For the layout above, `volume_subdir` includes the managed subroot prefix:
+
+```text
+afscp/namespaces/<namespace_id>/repos/<repo_id>
+```
+
+`repo_path` and `volume_subdir` should be treated as implementation state. Ordinary product APIs should use IDs. Only the privileged orchestrator plan may include `volume_subdir`, and it must never include a leading slash or full host path.
 
 ## Path Resolver Rules
 
@@ -51,7 +57,7 @@ AFSCP should have one canonical path resolver used by:
 
 - JVS operations
 - WebDAV/export
-- workload mount spec generation
+- workload mount plan generation
 - file APIs, if added later
 - migration/import tools
 
@@ -62,7 +68,23 @@ The resolver must reject:
 - symlink escape
 - display-name-derived paths
 - mismatched namespace/repo IDs
-- direct access to `.jvs` from user/export contexts
+- direct access to `.jvs` from user/export/workload contexts
+- percent-encoded separators or double-decoded traversal
+- root-level `.jvs` create, rename, copy, move, or propfind attempts
+
+Filesystem implementations should use dirfd/openat-style traversal with symlink protection where possible. The same resolver test corpus should cover WebDAV, migration/import, file APIs, and workload mount plan generation.
+
+## `.jvs` Protection Gate
+
+P0 exports and workload mounts must pass a `.jvs` protection gate before enablement.
+
+Acceptable P0 strategies:
+
+- protocol gateway filters `.jvs` for WebDAV and rejects all methods that target it
+- filtered mount/view hides `.jvs` from workload containers
+- equivalent filesystem/runtime gate blocks lookup, read, write, create, rename, unlink, chmod, chown, hardlink, and symlink operations targeting root-level `.jvs`
+
+Permission-only controls on `.jvs` are not sufficient by themselves because the repo root is writable user payload. If the runtime cannot enforce one of the strategies above, AFSCP must reject workload mounts for that volume/namespace until a filtered view is implemented.
 
 ## Volume Sharding
 

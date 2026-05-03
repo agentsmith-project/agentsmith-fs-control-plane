@@ -21,8 +21,10 @@ Suggested local development assumptions once implementation begins:
 1. Confirm runtime language in ADR.
 2. Confirm internal auth model.
 3. Confirm operation store database.
-4. Confirm workload mount spec fields.
-5. Confirm `ExportAccess` fields.
-6. Confirm `.jvs` protection plan.
-7. Confirm AFSCP core uses product-agnostic `volume`, `namespace`, `repo`, `template`, `export`, and `mount` terms.
-8. Confirm that `agentsmith-oss` is not used for current-state analysis.
+4. Confirm workload mount binding and orchestrator plan fields.
+5. Confirm mount binding lease/status lifecycle.
+6. Confirm export session and access credential fields.
+7. Confirm writer-session fence behavior.
+8. Confirm `.jvs` protection plan.
+9. Confirm AFSCP core uses product-agnostic `volume`, `namespace`, `repo`, `template`, `export`, and `mount` terms.
+10. Confirm that `agentsmith-oss` is not used for current-state analysis.

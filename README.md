@@ -4,7 +4,7 @@ Status: handoff scaffold, no implementation yet.
 
 `agentsmith-fs-control-plane` hosts AFSCP: a product-agnostic file storage control plane for managed volumes, JVS repos, repo templates, exports, workload mounts, and durable storage operations.
 
-AgentSmith is expected to be the first consumer, but AFSCP itself should not know about AgentSmith business objects such as notebook tasks, file libraries, projects, or product workspaces. Those concepts belong in the calling product. AFSCP should expose robust functional primitives and enforce storage boundaries.
+AgentSmith is expected to be the first consumer, but AFSCP itself should not know about any caller's business objects. Product concepts belong in the calling product and integration guide. AFSCP should expose robust functional primitives and enforce storage boundaries.
 
 ## Current Decision
 
@@ -12,7 +12,7 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 - This repository is the implementation home for the AFSCP runtime.
 - Deploy AFSCP as an independent container with its own Kubernetes Deployment, Service, ServiceAccount, Secrets, and operation store.
 - Calling applications remain responsible for product authorization, catalog UX, and business workflows.
-- AFSCP owns volume credentials, namespace boundaries, repo path allocation, JVS execution, repo template clone, WebDAV/export runtime, workload mount specs, operations, logs, and audit events.
+- AFSCP owns volume credentials, namespace boundaries, repo path allocation, JVS execution, repo template clone, WebDAV/export runtime, workload mount bindings, orchestrator mount plans, operations, logs, and audit events.
 - New repos should use a managed shared JuiceFS-backed volume by default, with room for future volume sharding by tenant, region, compliance profile, or isolation class.
 - Do not expose JuiceFS metadata URLs, bucket credentials, access keys, or secret keys to ordinary clients or workloads.
 - Do not implement product-specific workflow concepts in AFSCP.
@@ -21,16 +21,18 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 ## Core Model
 
 - `Volume`: managed backing filesystem/storage pool, initially JuiceFS.
-- `Namespace`: isolation boundary inside a volume. A calling product may map an AgentSmith workspace, tenant, org, or environment to a namespace.
+- `Namespace`: storage isolation and policy boundary inside a managed volume.
 - `Repo`: JVS-managed filesystem root inside a namespace.
 - `RepoTemplate`: namespace-scoped clone source managed by AFSCP.
 - `Export`: short-lived user/client access, initially WebDAV.
-- `WorkloadMountSpec`: controlled mount descriptor for an external orchestrator.
+- `WorkloadMountBinding`: caller-visible mount authorization and lifecycle record.
+- `OrchestratorMountPlan`: privileged mount assembly plan for the external orchestrator.
 - `Operation`: durable record for mutating storage actions.
 
 ## Repository Contents
 
 - [docs/HANDOFF.md](docs/HANDOFF.md): start here.
+- [docs/TEAM_REVIEW_2026-05-03.md](docs/TEAM_REVIEW_2026-05-03.md): latest product/architecture/security review closure.
 - [docs/DECOUPLING_REVIEW.md](docs/DECOUPLING_REVIEW.md): decoupling analysis and revised boundary.
 - [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md): product-agnostic requirements.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): component boundaries and target architecture.

@@ -8,7 +8,7 @@ Creating a separate JuiceFS metadata DB and bucket per product resource is too e
 
 ## Decision
 
-New repos should default to a shared JuiceFS-backed volume managed by AFSCP. Isolation should be provided through caller authorization, AFSCP namespace boundaries, path resolution, controlled exports, and workload mount specs.
+New repos should default to a shared JuiceFS-backed volume managed by AFSCP. Isolation should be provided through caller authorization, AFSCP namespace boundaries, path resolution, controlled exports, workload mount bindings, and orchestrator-only mount plans.
 
 The data model must keep `volume_id` and namespace bindings so future sharding by tenant, region, or compliance profile remains possible.
 

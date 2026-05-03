@@ -1,6 +1,6 @@
 # Team Review Summary
 
-This summary captures the product and architecture review conclusions used to create the original handoff scaffold. It is historical context; root-level docs now supersede AgentSmith-specific core modeling.
+This summary captures the product and architecture review conclusions used to create the original handoff scaffold. It is historical context; root-level docs and [../TEAM_REVIEW_2026-05-03.md](../TEAM_REVIEW_2026-05-03.md) now supersede AgentSmith-specific core modeling and older mount/restore assumptions.
 
 ## Superseding Decoupling Decision
 
@@ -41,7 +41,7 @@ Implementation priorities:
 2. Path resolver.
 3. Durable operation store.
 4. JVS runner.
-5. Sandbox mount spec adapter.
+5. Sandbox mount binding/orchestrator plan adapter.
 6. WebDAV export with `.jvs` filtering and credential TTL.
 
 ## Critical Risks

@@ -19,7 +19,7 @@ AFSCP owns storage execution:
 - JVS operation execution
 - repo template clone
 - export runtime
-- workload mount spec generation
+- workload mount binding and orchestrator mount plan generation
 - operation store and retries
 
 Calling products remain product and authorization authorities.

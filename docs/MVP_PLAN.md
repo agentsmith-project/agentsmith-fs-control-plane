@@ -10,15 +10,18 @@ Deliver:
 - Durable operation store.
 - Volume registry and health checks.
 - Namespace-to-volume binding.
+- Namespace caller-service authorization.
 - Shared JuiceFS-backed volume support for new repos.
 - Repo path allocation under AFSCP-controlled namespace roots.
 - JVS init/save/history/restore execution.
-- Workload mount spec generation for repo root mounts.
+- Workload mount binding generation and orchestrator-only mount plans for repo root mounts.
 - WebDAV export without JuiceFS credentials.
-- Repo clone into namespace-scoped template repo.
+- Repo clone into namespace-scoped immutable template repo.
 - Same-namespace template clone into an independent repo.
 - Cross-namespace template clone rejection by default.
-- `.jvs` protection for WebDAV and workload mounts.
+- `.jvs` protection gate for WebDAV and workload mounts.
+- Workload mount binding lease/status lifecycle.
+- Restore-run writer-session fencing that blocks new read-write sessions and rejects active read-write export/workload sessions by default.
 - Low-level audit event emission.
 
 ## P0 Non-Scope
@@ -31,6 +34,8 @@ Deliver:
 - Multi-region or multi-cloud storage policy.
 - Global template marketplace.
 - Cross-namespace sharing.
+- Repo archive/delete/rename/detach lifecycle APIs.
+- Creating templates from older historical save points.
 - SMB/NFS export.
 - Per-file ACL UI.
 - Billing and quota enforcement UI.
@@ -43,9 +48,10 @@ Deliver:
 
 - Pick runtime language/framework in ADR.
 - Add service skeleton.
-- Add internal auth placeholder.
+- Add internal service-auth interface and caller-service authorization gate.
 - Add operation store schema.
-- Finalize volume, namespace, repo, template, export, and mount contracts.
+- Finalize volume, namespace, repo, template, export, mount binding, and orchestrator plan contracts.
+- Generate initial internal OpenAPI before endpoint implementation.
 
 ### Milestone 2: Provisioning Path
 
@@ -57,7 +63,8 @@ Deliver:
 
 ### Milestone 3: Mounts And Export
 
-- Generate workload mount spec.
+- Generate workload mount bindings and orchestrator-only mount plans.
+- Implement mount binding status, heartbeat, release, and revoke.
 - Create WebDAV export sessions.
 - Ensure credentials are short-lived and scoped.
 - Block `.jvs`.
@@ -68,6 +75,7 @@ Deliver:
 - History.
 - Restore preview.
 - Restore.
+- Writer-session fence and active read-write export/workload session rejection for restore-run.
 - Operation journal and retry behavior.
 
 ### Milestone 5: Templates
@@ -81,8 +89,9 @@ Deliver:
 
 - All P0 acceptance criteria in `docs/PRODUCT_REQUIREMENTS.md` pass.
 - No ordinary API response contains JuiceFS root credential material.
-- Workload mount specs and workload environments contain no JuiceFS root credentials.
+- Workload mount bindings, orchestrator plans, and workload environments contain no JuiceFS root credentials.
+- Ordinary product callers cannot see JuiceFS Secret references.
 - WebDAV cannot read or write `.jvs`.
-- Writable workload mounts cannot read or write `.jvs`.
+- Workload mounts cannot read or write `.jvs`, or are rejected when the runtime cannot enforce protection.
 - JVS `doctor --strict` passes after repo create, save, restore, and clone.
 - Calling products can map their own business objects to AFSCP primitives without AFSCP knowing those business object types.
