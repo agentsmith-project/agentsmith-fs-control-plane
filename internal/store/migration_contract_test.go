@@ -1,0 +1,405 @@
+package store
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+	"unicode"
+)
+
+func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
+	contract := loadMigrationContract(t)
+
+	t.Run("operations table", func(t *testing.T) {
+		table := contract.requireTable(t, "operations")
+
+		table.requireColumn(t, "operation_id", "text", "primary key")
+		table.requireColumn(t, "operation_type", "text", "not null")
+		table.requireColumn(t, "operation_state", "text", "not null")
+		table.requireColumn(t, "phase", "text", "not null")
+		table.requireColumn(t, "attempt", "integer", "not null", "default 0")
+		table.requireColumn(t, "lease_owner", "text")
+		table.requireColumn(t, "lease_expires_at", "timestamp with time zone")
+		table.requireColumn(t, "idempotency_scope", "text", "not null")
+		table.requireColumn(t, "idempotency_key", "text", "not null")
+		table.requireColumn(t, "request_hash", "text", "not null")
+		table.requireColumn(t, "correlation_id", "text", "not null")
+		table.requireColumn(t, "caller_service", "text", "not null")
+		table.requireColumn(t, "authorized_actor_type", "text", "not null")
+		table.requireColumn(t, "authorized_actor_id", "text", "not null")
+		table.requireColumn(t, "resource_type", "text", "not null")
+		table.requireColumn(t, "resource_id", "text", "not null")
+		table.requireColumn(t, "namespace_id", "text", "not null")
+		table.requireColumn(t, "repo_id", "text")
+		table.requireColumn(t, "template_id", "text")
+		table.requireColumn(t, "export_id", "text")
+		table.requireColumn(t, "mount_binding_id", "text")
+		table.requireColumn(t, "session_fence_id", "text")
+		table.requireColumn(t, "external_resource_ids", "jsonb", "not null", "default '{}'::jsonb")
+		table.requireColumn(t, "input_summary", "jsonb", "not null", "default '{}'::jsonb")
+		table.requireColumn(t, "jvs_json_output", "jsonb")
+		table.requireColumn(t, "verification_result", "jsonb")
+		table.requireColumn(t, "compensation_status", "text")
+		table.requireColumn(t, "error_json", "jsonb")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "started_at", "timestamp with time zone")
+		table.requireColumn(t, "finished_at", "timestamp with time zone")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireCheckMentions(t, "operation_state", "queued", "running", "succeeded", "failed", "cancel_requested", "cancelled", "operator_intervention_required")
+	})
+
+	t.Run("idempotency is atomic and namespace explicit", func(t *testing.T) {
+		table := contract.requireTable(t, "operations")
+		table.requireUniqueColumns(t, "caller_service", "namespace_id", "operation_type", "idempotency_key")
+		table.requireColumn(t, "namespace_id", "text", "not null")
+	})
+
+	t.Run("audit outbox table", func(t *testing.T) {
+		table := contract.requireTable(t, "audit_outbox")
+
+		table.requireColumn(t, "audit_event_id", "text", "primary key")
+		table.requireColumn(t, "event_type", "text", "not null")
+		table.requireColumn(t, "event_time", "timestamp with time zone", "not null")
+		table.requireColumn(t, "payload_json", "jsonb", "not null")
+		table.requireColumn(t, "delivery_status", "text", "not null", "default 'pending'")
+		table.requireColumn(t, "delivery_attempt", "integer", "not null", "default 0")
+		table.requireColumn(t, "next_retry_at", "timestamp with time zone")
+		table.requireColumn(t, "last_error", "text")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "delivered_at", "timestamp with time zone")
+		table.requireCheckMentions(t, "delivery_status", "pending", "delivering", "delivered", "retry_wait", "failed")
+	})
+
+	t.Run("repo scoped fences", func(t *testing.T) {
+		table := contract.requireTable(t, "repo_fences")
+
+		table.requireColumn(t, "fence_id", "text", "primary key")
+		table.requireColumn(t, "repo_id", "text", "not null")
+		table.requireColumn(t, "fence_kind", "text", "not null")
+		table.requireColumn(t, "holder_operation_id", "text", "not null", "references operations")
+		table.requireColumn(t, "status", "text", "not null")
+		table.requireColumn(t, "expires_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "released_at", "timestamp with time zone")
+		table.requireColumn(t, "recovery_operation_id", "text", "references operations")
+		table.requireColumn(t, "recovery_reason", "text")
+		table.requireColumn(t, "recovery_started_at", "timestamp with time zone")
+		table.requireColumn(t, "recovered_at", "timestamp with time zone")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireCheckMentions(t, "fence_kind", "writer_session", "lifecycle")
+		table.requireCheckMentions(t, "status", "active", "released", "expired", "recovery_required", "recovered")
+		table.requireBodyFragments(t,
+			"status in ('active', 'expired', 'recovery_required') and released_at is null and recovered_at is null",
+			"status = 'released' and released_at is not null and recovered_at is null",
+			"status = 'recovered' and released_at is not null and recovered_at is not null",
+		)
+		contract.requirePartialUniqueIndex(t, "repo_fences", []string{"repo_id", "fence_kind"}, "released_at is null")
+	})
+}
+
+func TestPostgreSQLMigrationsDoNotEncodeStorageMutationMaterial(t *testing.T) {
+	contract := loadMigrationContract(t)
+
+	forbidden := []string{
+		"webdav",
+		"host_path",
+		"credential",
+		"secret",
+		"token",
+		"password",
+		"private_key",
+		"command",
+		"argv",
+		"subprocess",
+		"storage_mutation",
+	}
+	for _, word := range forbidden {
+		if strings.Contains(contract.raw, word) {
+			t.Fatalf("migration SQL contains forbidden storage-mutation/material term %q", word)
+		}
+	}
+}
+
+type migrationContract struct {
+	raw           string
+	tables        map[string]tableContract
+	uniqueIndexes []indexContract
+}
+
+type tableContract struct {
+	name    string
+	body    string
+	columns map[string]string
+	entries []string
+}
+
+type indexContract struct {
+	name    string
+	table   string
+	columns []string
+	where   string
+}
+
+func loadMigrationContract(t *testing.T) migrationContract {
+	t.Helper()
+
+	paths, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.sql"))
+	if err != nil {
+		t.Fatalf("glob migrations: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("no SQL migration files found in migrations/")
+	}
+	sort.Strings(paths)
+
+	var builder strings.Builder
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		builder.WriteByte('\n')
+		builder.Write(body)
+	}
+
+	raw := normalizeSQL(builder.String())
+	return migrationContract{
+		raw:           raw,
+		tables:        parseTables(raw),
+		uniqueIndexes: parseUniqueIndexes(raw),
+	}
+}
+
+func (contract migrationContract) requireTable(t *testing.T, name string) tableContract {
+	t.Helper()
+
+	table, ok := contract.tables[name]
+	if !ok {
+		t.Fatalf("missing table %q; found tables %v", name, sortedTableNames(contract.tables))
+	}
+	return table
+}
+
+func (contract migrationContract) requirePartialUniqueIndex(t *testing.T, tableName string, columns []string, whereFragment string) {
+	t.Helper()
+
+	wantColumns := normalizeColumnList(columns)
+	wantWhere := compactSpace(strings.ToLower(whereFragment))
+	for _, index := range contract.uniqueIndexes {
+		if index.table != tableName {
+			continue
+		}
+		if !sameStrings(index.columns, wantColumns) {
+			continue
+		}
+		if strings.Contains(compactSpace(index.where), wantWhere) {
+			return
+		}
+	}
+	t.Fatalf("missing partial unique index on %s(%s) where %s", tableName, strings.Join(columns, ", "), whereFragment)
+}
+
+func (table tableContract) requireColumn(t *testing.T, name string, fragments ...string) {
+	t.Helper()
+
+	definition, ok := table.columns[name]
+	if !ok {
+		t.Fatalf("table %s missing column %q; found columns %v", table.name, name, sortedColumnNames(table.columns))
+	}
+	for _, fragment := range fragments {
+		if !strings.Contains(definition, strings.ToLower(fragment)) {
+			t.Fatalf("table %s column %s = %q, want fragment %q", table.name, name, definition, fragment)
+		}
+	}
+}
+
+func (table tableContract) requireUniqueColumns(t *testing.T, columns ...string) {
+	t.Helper()
+
+	want := normalizeColumnList(columns)
+	for _, entry := range table.entries {
+		if !strings.Contains(entry, "unique") {
+			continue
+		}
+		got := columnsInsideFirstParens(entry)
+		if sameStrings(got, want) {
+			return
+		}
+	}
+	t.Fatalf("table %s missing unique constraint on (%s)", table.name, strings.Join(columns, ", "))
+}
+
+func (table tableContract) requireCheckMentions(t *testing.T, column string, values ...string) {
+	t.Helper()
+
+	for _, value := range values {
+		if !strings.Contains(table.body, column) || !strings.Contains(table.body, "'"+value+"'") {
+			t.Fatalf("table %s missing check value %q for %s", table.name, value, column)
+		}
+	}
+}
+
+func (table tableContract) requireBodyFragments(t *testing.T, fragments ...string) {
+	t.Helper()
+
+	for _, fragment := range fragments {
+		if !strings.Contains(table.body, compactSpace(fragment)) {
+			t.Fatalf("table %s missing SQL fragment %q in %q", table.name, fragment, table.body)
+		}
+	}
+}
+
+func parseTables(sql string) map[string]tableContract {
+	tablePattern := regexp.MustCompile(`(?is)create\s+table\s+(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_\.]*)\s*\((.*?)\);`)
+	matches := tablePattern.FindAllStringSubmatch(sql, -1)
+	tables := make(map[string]tableContract, len(matches))
+	for _, match := range matches {
+		name := unqualify(match[1])
+		body := compactSpace(match[2])
+		entries := splitTopLevelCommas(match[2])
+		table := tableContract{
+			name:    name,
+			body:    body,
+			columns: make(map[string]string),
+			entries: entries,
+		}
+		for _, entry := range entries {
+			column, ok := columnName(entry)
+			if !ok {
+				continue
+			}
+			table.columns[column] = compactSpace(entry)
+		}
+		tables[name] = table
+	}
+	return tables
+}
+
+func parseUniqueIndexes(sql string) []indexContract {
+	indexPattern := regexp.MustCompile(`(?is)create\s+unique\s+index\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)\s+on\s+([a-z_][a-z0-9_\.]*)\s*(?:using\s+[a-z_][a-z0-9_]*\s*)?\((.*?)\)(?:\s+where\s+(.*?))?;`)
+	matches := indexPattern.FindAllStringSubmatch(sql, -1)
+	indexes := make([]indexContract, 0, len(matches))
+	for _, match := range matches {
+		indexes = append(indexes, indexContract{
+			name:    match[1],
+			table:   unqualify(match[2]),
+			columns: columnsInsideFirstParens("(" + match[3] + ")"),
+			where:   compactSpace(match[4]),
+		})
+	}
+	return indexes
+}
+
+func normalizeSQL(sql string) string {
+	lineComment := regexp.MustCompile(`--[^\n]*`)
+	blockComment := regexp.MustCompile(`(?is)/\*.*?\*/`)
+	sql = lineComment.ReplaceAllString(sql, "")
+	sql = blockComment.ReplaceAllString(sql, "")
+	return strings.ToLower(sql)
+}
+
+func splitTopLevelCommas(body string) []string {
+	var entries []string
+	start := 0
+	depth := 0
+	inSingleQuote := false
+	for index, r := range body {
+		switch {
+		case r == '\'':
+			inSingleQuote = !inSingleQuote
+		case inSingleQuote:
+		case r == '(':
+			depth++
+		case r == ')':
+			if depth > 0 {
+				depth--
+			}
+		case r == ',' && depth == 0:
+			entries = append(entries, compactSpace(body[start:index]))
+			start = index + len(string(r))
+		}
+	}
+	if tail := compactSpace(body[start:]); tail != "" {
+		entries = append(entries, tail)
+	}
+	return entries
+}
+
+func columnName(entry string) (string, bool) {
+	fields := strings.Fields(entry)
+	if len(fields) < 2 {
+		return "", false
+	}
+	first := strings.Trim(fields[0], `"`)
+	switch first {
+	case "constraint", "primary", "unique", "foreign", "check", "exclude":
+		return "", false
+	default:
+		return strings.ToLower(first), true
+	}
+}
+
+func columnsInsideFirstParens(value string) []string {
+	start := strings.Index(value, "(")
+	end := strings.Index(value[start+1:], ")")
+	if start < 0 || end < 0 {
+		return nil
+	}
+	return normalizeColumnList(strings.Split(value[start+1:start+1+end], ","))
+}
+
+func normalizeColumnList(columns []string) []string {
+	normalized := make([]string, 0, len(columns))
+	for _, column := range columns {
+		column = strings.TrimFunc(strings.ToLower(column), func(r rune) bool {
+			return unicode.IsSpace(r) || r == '"'
+		})
+		if column != "" {
+			normalized = append(normalized, column)
+		}
+	}
+	return normalized
+}
+
+func sortedTableNames(tables map[string]tableContract) []string {
+	names := make([]string, 0, len(tables))
+	for name := range tables {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func sortedColumnNames(columns map[string]string) []string {
+	names := make([]string, 0, len(columns))
+	for name := range columns {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func unqualify(name string) string {
+	parts := strings.Split(name, ".")
+	return parts[len(parts)-1]
+}
+
+func compactSpace(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(value)), " ")
+}
