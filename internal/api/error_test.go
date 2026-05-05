@@ -2,9 +2,57 @@ package api
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {
+	want := []ErrorCode{
+		CodeAuthenticationFailed,
+		CodeCallerNotAllowed,
+		CodeRoleNotAllowed,
+		CodeNamespaceNotFound,
+		CodeNamespaceDisabled,
+		CodeResourceNamespaceMismatch,
+		CodeInvalidID,
+		CodePathDenied,
+		CodeCapabilityDenied,
+		CodeIdempotencyConflict,
+		CodeActiveWriterSessions,
+		CodeWriterSessionFenceHeld,
+		CodeStaleWriterSessionUncertain,
+		CodeRestoreDirtyState,
+		CodeJVSCommandFailed,
+		CodeJVSDoctorFailed,
+		CodeSourceDirtyAfterTemplateSave,
+		CodeVolumeMismatchRequiresImport,
+		CodeExportExpired,
+		CodeExportRevoked,
+		CodeMountBindingTerminal,
+		CodeRepoLifecycleInvalidState,
+		CodeRepoLifecycleFenceHeld,
+		CodeActiveSessionsBlockLifecycle,
+		CodeStaleSessionBlocksLifecycle,
+		CodeRepoArchived,
+		CodeRepoTombstoned,
+		CodeRepoPurged,
+		CodePurgeConfirmationRequired,
+		CodePurgeRetentionNotMet,
+		CodePurgeRequiresOperatorApproval,
+		CodeOperationRecoveryRequired,
+	}
+
+	got := ErrorCodes()
+	if !slices.Equal(got, want) {
+		t.Fatalf("ErrorCodes() = %#v, want %#v", got, want)
+	}
+
+	got[0] = CodeCapabilityDenied
+	if ErrorCodes()[0] != CodeAuthenticationFailed {
+		t.Fatal("ErrorCodes returned mutable backing storage")
+	}
+}
 
 func TestErrorEnvelopeJSONStableAndComplete(t *testing.T) {
 	operationID := "op_123"

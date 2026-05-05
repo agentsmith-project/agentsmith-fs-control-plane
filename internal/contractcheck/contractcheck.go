@@ -12,6 +12,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 )
 
 const (
@@ -31,10 +34,15 @@ const (
 	CodeSchemaOperationRecordPropertyMissing               = "schema.operation_record_property_missing"
 	CodeSchemaOperationRecordAdditionalPropertiesInvalid   = "schema.operation_record_additional_properties_invalid"
 	CodeSchemaOperationRecordNullableInvalid               = "schema.operation_record_nullable_invalid"
+	CodeSchemaErrorCodeEnumGoDrift                         = "schema.error_code_enum_go_drift"
+	CodeSchemaCallerRoleEnumGoDrift                        = "schema.caller_role_enum_go_drift"
 	CodeSchemaInvalidJSON                                  = "schema.invalid_json"
 
-	CodeDocsOperationBoundaryMissing = "docs.operation_boundary_missing"
-	CodeDocsNamespaceHeaderMissing   = "docs.namespace_header_missing"
+	CodeDocsOperationBoundaryMissing       = "docs.operation_boundary_missing"
+	CodeDocsNamespaceHeaderMissing         = "docs.namespace_header_missing"
+	CodeDocsCallerRoleMissing              = "docs.caller_role_missing"
+	CodeDocsOperationInspectorScopeMissing = "docs.operation_inspector_scope_missing"
+	CodeDocsOperatorAdminScopeMissing      = "docs.operator_admin_scope_missing"
 
 	CodeGoOperationsOperationEnvelopeAmbiguous = "go.operations_operation_envelope_ambiguous"
 	CodeGoAPIOperationEnvelopeMissing          = "go.api_operation_envelope_missing"
@@ -169,6 +177,9 @@ func verifySchema(path, body string) []Finding {
 	}
 
 	defs, _ := root["$defs"].(map[string]any)
+
+	findings = append(findings, verifySchemaEnumParity(path, body, defs, "ErrorCode", apiErrorCodeStrings(), CodeSchemaErrorCodeEnumGoDrift)...)
+	findings = append(findings, verifySchemaEnumParity(path, body, defs, "CallerRole", authRoleStrings(), CodeSchemaCallerRoleEnumGoDrift)...)
 
 	exportSession, _ := defs["ExportSession"].(map[string]any)
 	exportSessionFields := []string{
@@ -334,6 +345,98 @@ func verifySchema(path, body string) []Finding {
 	return findings
 }
 
+func verifySchemaEnumParity(path, body string, defs map[string]any, defName string, want []string, code string) []Finding {
+	def, _ := defs[defName].(map[string]any)
+	got := schemaEnumStrings(def)
+	if reflect.DeepEqual(got, want) {
+		return nil
+	}
+
+	return []Finding{{
+		Code:    code,
+		File:    path,
+		Line:    findLine(body, `"`+defName+`"`),
+		Message: defName + " enum must match Go constants: " + enumMismatchMessage(got, want),
+	}}
+}
+
+func schemaEnumStrings(def map[string]any) []string {
+	if def == nil {
+		return nil
+	}
+
+	values, _ := def["enum"].([]any)
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		item, ok := value.(string)
+		if ok {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func apiErrorCodeStrings() []string {
+	codes := api.ErrorCodes()
+	values := make([]string, len(codes))
+	for i, code := range codes {
+		values[i] = string(code)
+	}
+	return values
+}
+
+func authRoleStrings() []string {
+	roles := auth.CallerRoles()
+	values := make([]string, len(roles))
+	for i, role := range roles {
+		values[i] = string(role)
+	}
+	return values
+}
+
+func enumMismatchMessage(got, want []string) string {
+	missing, extra := stringListDiff(got, want)
+	var parts []string
+	if len(missing) > 0 {
+		parts = append(parts, "missing "+strings.Join(missing, ", "))
+	}
+	if len(extra) > 0 {
+		parts = append(parts, "extra "+strings.Join(extra, ", "))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "order differs")
+	}
+	return strings.Join(parts, "; ")
+}
+
+func stringListDiff(got, want []string) ([]string, []string) {
+	gotSet := stringSet(got)
+	wantSet := stringSet(want)
+
+	var missing []string
+	for _, value := range want {
+		if !gotSet[value] {
+			missing = append(missing, value)
+		}
+	}
+
+	var extra []string
+	for _, value := range got {
+		if !wantSet[value] {
+			extra = append(extra, value)
+		}
+	}
+	return missing, extra
+}
+
+func stringSet(values []string) map[string]bool {
+	set := make(map[string]bool, len(values))
+	for _, value := range values {
+		set[value] = true
+	}
+	return set
+}
+
 func verifyGoDTOBoundary(repoRoot string) []Finding {
 	var findings []Finding
 
@@ -410,7 +513,43 @@ func verifyDocs(apiContractPath, apiDraftPath, apiContract, apiDraft string) []F
 			Message: "docs must mention the namespace header for namespace-bound requests",
 		})
 	}
+	if missing := missingDocRoles(apiContract, auth.CallerRoles()); len(missing) > 0 {
+		findings = append(findings, Finding{
+			Code:    CodeDocsCallerRoleMissing,
+			File:    apiContractPath,
+			Message: "API contract role matrix must mention caller role(s): " + strings.Join(missing, ", "),
+		})
+	}
+	if !(strings.Contains(corpus, "`operation_inspector`") &&
+		strings.Contains(lower, "namespace-scoped operation inspection") &&
+		strings.Contains(lower, "redacted")) {
+		findings = append(findings, Finding{
+			Code:    CodeDocsOperationInspectorScopeMissing,
+			File:    apiContractPath + "," + apiDraftPath,
+			Message: "docs must describe operation_inspector as namespace-scoped redacted operation inspection",
+		})
+	}
+	if !(strings.Contains(corpus, "`operator_admin`") &&
+		strings.Contains(lower, "global/operator inspection") &&
+		strings.Contains(lower, "repair")) {
+		findings = append(findings, Finding{
+			Code:    CodeDocsOperatorAdminScopeMissing,
+			File:    apiContractPath + "," + apiDraftPath,
+			Message: "docs must distinguish operator_admin as global/operator inspection and repair",
+		})
+	}
 	return findings
+}
+
+func missingDocRoles(body string, roles []auth.Role) []string {
+	var missing []string
+	for _, role := range roles {
+		value := string(role)
+		if !strings.Contains(body, "`"+value+"`") && !strings.Contains(body, value) {
+			missing = append(missing, value)
+		}
+	}
+	return missing
 }
 
 type openAPIOperation struct {

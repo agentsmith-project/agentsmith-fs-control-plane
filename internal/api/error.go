@@ -16,10 +16,81 @@ type ErrorCode string
 
 const (
 	CodeAuthenticationFailed      ErrorCode = "AUTHENTICATION_FAILED"
+	CodeCallerNotAllowed          ErrorCode = "CALLER_NOT_ALLOWED"
+	CodeRoleNotAllowed            ErrorCode = "ROLE_NOT_ALLOWED"
+	CodeNamespaceNotFound         ErrorCode = "NAMESPACE_NOT_FOUND"
+	CodeNamespaceDisabled         ErrorCode = "NAMESPACE_DISABLED"
 	CodeResourceNamespaceMismatch ErrorCode = "RESOURCE_NAMESPACE_MISMATCH"
-	CodeCapabilityDenied          ErrorCode = "CAPABILITY_DENIED"
+	CodeInvalidID                 ErrorCode = "INVALID_ID"
 	CodePathDenied                ErrorCode = "PATH_DENIED"
+	CodeCapabilityDenied          ErrorCode = "CAPABILITY_DENIED"
+	CodeIdempotencyConflict       ErrorCode = "IDEMPOTENCY_CONFLICT"
+
+	CodeActiveWriterSessions        ErrorCode = "ACTIVE_WRITER_SESSIONS"
+	CodeWriterSessionFenceHeld      ErrorCode = "WRITER_SESSION_FENCE_HELD"
+	CodeStaleWriterSessionUncertain ErrorCode = "STALE_WRITER_SESSION_UNCERTAIN"
+	CodeRestoreDirtyState           ErrorCode = "RESTORE_DIRTY_STATE"
+
+	CodeJVSCommandFailed              ErrorCode = "JVS_COMMAND_FAILED"
+	CodeJVSDoctorFailed               ErrorCode = "JVS_DOCTOR_FAILED"
+	CodeSourceDirtyAfterTemplateSave  ErrorCode = "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE"
+	CodeVolumeMismatchRequiresImport  ErrorCode = "VOLUME_MISMATCH_REQUIRES_IMPORT"
+	CodeExportExpired                 ErrorCode = "EXPORT_EXPIRED"
+	CodeExportRevoked                 ErrorCode = "EXPORT_REVOKED"
+	CodeMountBindingTerminal          ErrorCode = "MOUNT_BINDING_TERMINAL"
+	CodeRepoLifecycleInvalidState     ErrorCode = "REPO_LIFECYCLE_INVALID_STATE"
+	CodeRepoLifecycleFenceHeld        ErrorCode = "REPO_LIFECYCLE_FENCE_HELD"
+	CodeActiveSessionsBlockLifecycle  ErrorCode = "ACTIVE_SESSIONS_BLOCK_LIFECYCLE"
+	CodeStaleSessionBlocksLifecycle   ErrorCode = "STALE_SESSION_BLOCKS_LIFECYCLE"
+	CodeRepoArchived                  ErrorCode = "REPO_ARCHIVED"
+	CodeRepoTombstoned                ErrorCode = "REPO_TOMBSTONED"
+	CodeRepoPurged                    ErrorCode = "REPO_PURGED"
+	CodePurgeConfirmationRequired     ErrorCode = "PURGE_CONFIRMATION_REQUIRED"
+	CodePurgeRetentionNotMet          ErrorCode = "PURGE_RETENTION_NOT_MET"
+	CodePurgeRequiresOperatorApproval ErrorCode = "PURGE_REQUIRES_OPERATOR_APPROVAL"
+	CodeOperationRecoveryRequired     ErrorCode = "OPERATION_RECOVERY_REQUIRED"
 )
+
+var allErrorCodes = []ErrorCode{
+	CodeAuthenticationFailed,
+	CodeCallerNotAllowed,
+	CodeRoleNotAllowed,
+	CodeNamespaceNotFound,
+	CodeNamespaceDisabled,
+	CodeResourceNamespaceMismatch,
+	CodeInvalidID,
+	CodePathDenied,
+	CodeCapabilityDenied,
+	CodeIdempotencyConflict,
+	CodeActiveWriterSessions,
+	CodeWriterSessionFenceHeld,
+	CodeStaleWriterSessionUncertain,
+	CodeRestoreDirtyState,
+	CodeJVSCommandFailed,
+	CodeJVSDoctorFailed,
+	CodeSourceDirtyAfterTemplateSave,
+	CodeVolumeMismatchRequiresImport,
+	CodeExportExpired,
+	CodeExportRevoked,
+	CodeMountBindingTerminal,
+	CodeRepoLifecycleInvalidState,
+	CodeRepoLifecycleFenceHeld,
+	CodeActiveSessionsBlockLifecycle,
+	CodeStaleSessionBlocksLifecycle,
+	CodeRepoArchived,
+	CodeRepoTombstoned,
+	CodeRepoPurged,
+	CodePurgeConfirmationRequired,
+	CodePurgeRetentionNotMet,
+	CodePurgeRequiresOperatorApproval,
+	CodeOperationRecoveryRequired,
+}
+
+func ErrorCodes() []ErrorCode {
+	codes := make([]ErrorCode, len(allErrorCodes))
+	copy(codes, allErrorCodes)
+	return codes
+}
 
 type ErrorEnvelope struct {
 	Error StandardError `json:"error"`

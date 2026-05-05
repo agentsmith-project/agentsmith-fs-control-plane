@@ -46,8 +46,8 @@ func AuthGate(next http.Handler, principalResolver PrincipalResolver, routeResol
 			return
 		}
 
-		if denied, labels := requiredRoleDenied(r, requestContext, route, callerPolicy); denied {
-			writeValidationError(w, r, route, CodeCapabilityDenied, http.StatusForbidden, "caller is not allowed for required route role", labels)
+		if denied, code, message, labels := requiredRoleDenied(r, requestContext, route, callerPolicy); denied {
+			writeValidationError(w, r, route, code, http.StatusForbidden, message, labels)
 			return
 		}
 
@@ -69,23 +69,28 @@ func resolvePrincipal(resolver PrincipalResolver, r *http.Request) (auth.Authent
 	return resolver.ResolvePrincipal(r)
 }
 
-func requiredRoleDenied(r *http.Request, requestContext auth.RequestContext, route RouteMetadata, policy AllowedCallerPolicy) (bool, []string) {
+func requiredRoleDenied(r *http.Request, requestContext auth.RequestContext, route RouteMetadata, policy AllowedCallerPolicy) (bool, ErrorCode, string, []string) {
 	if route.RequiredRole == "" {
-		return false, nil
+		return false, "", "", nil
 	}
 	if policy == nil {
-		return true, []string{"allowed_caller_policy_missing"}
+		return true, CodeCallerNotAllowed, "caller service is not allowed for route", []string{"allowed_caller_policy_missing"}
 	}
 
 	allowedCallers, err := policy.AllowedCallers(r)
 	if err != nil {
-		return true, []string{"allowed_caller_policy_failed"}
+		return true, CodeCallerNotAllowed, "caller service is not allowed for route", []string{"allowed_caller_policy_failed"}
 	}
-	if auth.CallerNotAllowed(requestContext.CallerService, route.RequiredRole, allowedCallers) {
-		return true, []string{"required_role_not_allowed"}
+	switch auth.CallerRoleDenialReasonFor(requestContext.CallerService, route.RequiredRole, allowedCallers) {
+	case auth.CallerRoleAllowed:
+		return false, "", "", nil
+	case auth.CallerServiceNotAllowed:
+		return true, CodeCallerNotAllowed, "caller service is not allowed for route", []string{"caller_not_allowed"}
+	case auth.CallerRoleNotAllowed:
+		return true, CodeRoleNotAllowed, "caller role is not allowed for route", []string{"required_role_not_allowed"}
+	default:
+		return true, CodeRoleNotAllowed, "caller role is not allowed for route", []string{"required_role_not_allowed"}
 	}
-
-	return false, nil
 }
 
 func writeAuthGateValidationError(w http.ResponseWriter, r *http.Request, route RouteMetadata, err error) {

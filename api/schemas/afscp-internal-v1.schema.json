@@ -368,6 +368,7 @@
         "template_admin",
         "export_admin",
         "mount_admin",
+        "operation_inspector",
         "orchestrator_mount",
         "migration_admin",
         "operator_admin",

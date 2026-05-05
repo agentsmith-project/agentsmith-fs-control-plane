@@ -38,6 +38,7 @@ AFSCP must reject and audit:
 - caller role missing for requested operation
 - caller attempts to access a repo/template/export outside the namespace context
 - caller attempts to fetch orchestrator-only secret references without the orchestrator role
+- caller attempts global/operator inspection or repair with only a namespace-scoped role
 
 ## Endpoint Groups
 
@@ -97,12 +98,13 @@ operation inspection must not wrap the record in an `OperationEnvelope`.
 | `template_admin` | repo template create/clone |
 | `export_admin` | export create/get/revoke |
 | `mount_admin` | workload mount binding create/get/revoke |
+| `operation_inspector` | namespace-scoped operation inspection of redacted operation records |
 | `orchestrator_mount` | orchestrator plan, mount status, heartbeat, release |
 | `migration_admin` | future migration tooling |
-| `operator_admin` | operation inspection and operational repair |
+| `operator_admin` | global/operator inspection and operational repair |
 | `break_glass_admin` | explicitly approved break-glass flows only |
 
-Deployments may split these roles further, but they must not merge ordinary product caller roles with `orchestrator_mount` or `break_glass_admin`.
+Deployments may split these roles further, but they must not merge ordinary product caller roles with `orchestrator_mount`, `operator_admin`, or `break_glass_admin`. `operation_inspector` is the minimum namespace-scoped role for redacted operation inspection; `operator_admin` is reserved for global/operator inspection and repair.
 
 ## Stable Error Families
 

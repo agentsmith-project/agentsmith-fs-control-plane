@@ -28,11 +28,41 @@ const (
 	RoleBreakGlassAdmin    Role = "break_glass_admin"
 )
 
+var allCallerRoles = []Role{
+	RoleVolumeAdmin,
+	RoleNamespaceAdmin,
+	RoleRepoAdmin,
+	RoleRepoLifecycleAdmin,
+	RoleRestoreAdmin,
+	RoleTemplateAdmin,
+	RoleExportAdmin,
+	RoleMountAdmin,
+	RoleOperationInspector,
+	RoleOrchestratorMount,
+	RoleMigrationAdmin,
+	RoleOperatorAdmin,
+	RoleBreakGlassAdmin,
+}
+
+func CallerRoles() []Role {
+	roles := make([]Role, len(allCallerRoles))
+	copy(roles, allCallerRoles)
+	return roles
+}
+
 type AllowedCaller struct {
 	CallerService string
 	Kind          CallerKind
 	Roles         []Role
 }
+
+type CallerRoleDenialReason string
+
+const (
+	CallerRoleAllowed       CallerRoleDenialReason = ""
+	CallerServiceNotAllowed CallerRoleDenialReason = "caller_not_allowed"
+	CallerRoleNotAllowed    CallerRoleDenialReason = "role_not_allowed"
+)
 
 func NamespaceMismatch(requestNamespaceID, resourceNamespaceID string) bool {
 	requestNamespaceID = normalize(requestNamespaceID)
@@ -57,34 +87,49 @@ func NamespaceBoundMismatch(requestNamespaceID, resourceNamespaceID string) bool
 }
 
 func CallerNotAllowed(callerService string, requiredRole Role, allowedCallers []AllowedCaller) bool {
+	return CallerRoleDenialReasonFor(callerService, requiredRole, allowedCallers) != CallerRoleAllowed
+}
+
+func CallerRoleDenialReasonFor(callerService string, requiredRole Role, allowedCallers []AllowedCaller) CallerRoleDenialReason {
 	callerService = normalize(callerService)
 	if callerService == "" {
-		return true
+		return CallerServiceNotAllowed
 	}
 
+	callerFound := false
 	for _, allowed := range allowedCallers {
 		if normalize(allowed.CallerService) != callerService {
 			continue
 		}
+		callerFound = true
 		if allowed.hasRole(requiredRole) {
-			return false
+			return CallerRoleAllowed
 		}
 	}
+	if callerFound {
+		return CallerRoleNotAllowed
+	}
 
-	return true
+	return CallerServiceNotAllowed
 }
 
 func (c AllowedCaller) hasRole(required Role) bool {
-	if !kindCanUseRole(c.Kind, required) {
-		return false
-	}
-
 	for _, role := range c.Roles {
-		if role == required {
+		if roleSatisfiesRequiredRole(c.Kind, role, required) {
 			return true
 		}
 	}
 
+	return false
+}
+
+func roleSatisfiesRequiredRole(kind CallerKind, granted Role, required Role) bool {
+	if granted == required && kindCanUseRole(kind, required) {
+		return true
+	}
+	if required == RoleOperationInspector && granted == RoleOperatorAdmin {
+		return kind == CallerKindAdmin || kind == CallerKindOperator
+	}
 	return false
 }
 

@@ -40,12 +40,14 @@ Example roles:
 - `export_admin`
 - `template_admin`
 - `mount_admin`
+- `operation_inspector`
 - `orchestrator_mount`
 - `migration_admin`
 - `operator_admin`
 - `break_glass_admin`
 
 AFSCP must check `caller_service` and role before each namespace-bound operation. Denied checks are audited.
+`operation_inspector` grants namespace-scoped operation inspection of redacted records. `operator_admin` grants global/operator inspection and repair and must not replace the namespace-scoped inspection role in ordinary product caller policy.
 
 ## Rules
 

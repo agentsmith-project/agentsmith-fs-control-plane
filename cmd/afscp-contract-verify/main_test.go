@@ -225,6 +225,61 @@ const cliValidSchema = `
         "result": { "type": ["object", "null"] },
         "error": { "type": ["object", "null"] }
       }
+    },
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "AUTHENTICATION_FAILED",
+        "CALLER_NOT_ALLOWED",
+        "ROLE_NOT_ALLOWED",
+        "NAMESPACE_NOT_FOUND",
+        "NAMESPACE_DISABLED",
+        "RESOURCE_NAMESPACE_MISMATCH",
+        "INVALID_ID",
+        "PATH_DENIED",
+        "CAPABILITY_DENIED",
+        "IDEMPOTENCY_CONFLICT",
+        "ACTIVE_WRITER_SESSIONS",
+        "WRITER_SESSION_FENCE_HELD",
+        "STALE_WRITER_SESSION_UNCERTAIN",
+        "RESTORE_DIRTY_STATE",
+        "JVS_COMMAND_FAILED",
+        "JVS_DOCTOR_FAILED",
+        "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE",
+        "VOLUME_MISMATCH_REQUIRES_IMPORT",
+        "EXPORT_EXPIRED",
+        "EXPORT_REVOKED",
+        "MOUNT_BINDING_TERMINAL",
+        "REPO_LIFECYCLE_INVALID_STATE",
+        "REPO_LIFECYCLE_FENCE_HELD",
+        "ACTIVE_SESSIONS_BLOCK_LIFECYCLE",
+        "STALE_SESSION_BLOCKS_LIFECYCLE",
+        "REPO_ARCHIVED",
+        "REPO_TOMBSTONED",
+        "REPO_PURGED",
+        "PURGE_CONFIRMATION_REQUIRED",
+        "PURGE_RETENTION_NOT_MET",
+        "PURGE_REQUIRES_OPERATOR_APPROVAL",
+        "OPERATION_RECOVERY_REQUIRED"
+      ]
+    },
+    "CallerRole": {
+      "type": "string",
+      "enum": [
+        "volume_admin",
+        "namespace_admin",
+        "repo_admin",
+        "repo_lifecycle_admin",
+        "restore_admin",
+        "template_admin",
+        "export_admin",
+        "mount_admin",
+        "operation_inspector",
+        "orchestrator_mount",
+        "migration_admin",
+        "operator_admin",
+        "break_glass_admin"
+      ]
     }
   }
 }
@@ -236,4 +291,20 @@ const cliValidDocs = `
 ` + "`X-AFSCP-Namespace-Id`" + ` is required for namespace-bound requests.
 
 The flat ` + "`OperationEnvelope`" + ` API response is separate from the durable ` + "`OperationRecord`" + ` boundary.
+
+| Role | Endpoint Groups |
+| --- | --- |
+| ` + "`volume_admin`" + ` | volume ensure/health |
+| ` + "`namespace_admin`" + ` | namespace create/disable and volume binding update |
+| ` + "`repo_admin`" + ` | repo create/get/list |
+| ` + "`repo_lifecycle_admin`" + ` | repo lifecycle |
+| ` + "`restore_admin`" + ` | restore preview/run |
+| ` + "`template_admin`" + ` | repo template create/clone |
+| ` + "`export_admin`" + ` | export create/get/revoke |
+| ` + "`mount_admin`" + ` | workload mount binding create/get/revoke |
+| ` + "`operation_inspector`" + ` | namespace-scoped operation inspection of redacted records |
+| ` + "`orchestrator_mount`" + ` | orchestrator plan and mount status |
+| ` + "`migration_admin`" + ` | migration tooling |
+| ` + "`operator_admin`" + ` | global/operator inspection and repair |
+| ` + "`break_glass_admin`" + ` | approved break-glass flows |
 `

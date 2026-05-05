@@ -41,6 +41,11 @@ handler resolves the record by `operationId`, then enforces namespace
 authorization when the stored namespace is present or operator/global
 authorization when it is absent.
 
+`operation_inspector` is the minimum namespace-scoped operation inspection role
+for redacted operation records. `operator_admin` covers global/operator
+inspection and repair; it must not be substituted into ordinary namespace
+caller policy when namespace-scoped redacted inspection is sufficient.
+
 ### Standard Operation Envelope
 
 Mutating responses must use one envelope shape across resource types:
@@ -156,7 +161,7 @@ GA error families:
   "allowed_callers": [
     {
       "caller_service": "example-product-api",
-      "roles": ["repo_admin", "repo_lifecycle_admin", "restore_admin", "export_admin", "template_admin", "mount_admin"]
+      "roles": ["repo_admin", "repo_lifecycle_admin", "restore_admin", "export_admin", "template_admin", "mount_admin", "operation_inspector"]
     },
     {
       "caller_service": "example-orchestrator",
@@ -526,6 +531,11 @@ have `namespace_id: null` for volume-global or operator workflows. The handler
 returns the redacted `OperationRecord` directly after authorizing against the
 stored namespace when present, or operator/global policy when absent. It must not
 wrap that record in `OperationEnvelope`.
+
+Product callers use `operation_inspector` for namespace-scoped operation
+inspection of redacted records. Operator/admin callers use `operator_admin` for
+global/operator inspection and repair, including records without a stored
+namespace.
 
 ## Operation Requirements
 

@@ -198,8 +198,59 @@ func TestAuthGateFailsClosedForRequiredRoleWithoutAllowedCallerPolicy(t *testing
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("error envelope did not decode: %v", err)
 	}
-	if envelope.Error.Code != CodeCapabilityDenied {
-		t.Fatalf("expected %s, got %s", CodeCapabilityDenied, envelope.Error.Code)
+	if envelope.Error.Code != CodeCallerNotAllowed {
+		t.Fatalf("expected %s, got %s", CodeCallerNotAllowed, envelope.Error.Code)
+	}
+}
+
+func TestAuthGateDeniesCallerServiceOutsideAllowlist(t *testing.T) {
+	body := &trackingReadCloser{}
+	req := httptest.NewRequest(http.MethodGet, "/fake", body)
+	req.Header.Set(auth.HeaderAuthorization, "Bearer service-token")
+	req.Header.Set(auth.HeaderCorrelationID, "corr_auth_gate")
+	req.Header.Set(auth.HeaderNamespaceID, "ns_123")
+
+	handler := AuthGate(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("next handler was called")
+		}),
+		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
+			Subject:                "service-account:agentsmith-api",
+			CanonicalCallerService: "agentsmith-api",
+		}},
+		fakeRouteClassResolver{route: RouteMetadata{
+			Method:       http.MethodGet,
+			Path:         "/fake",
+			OperationID:  "fakeRepoRead",
+			Class:        auth.RouteClassNamespaceBound,
+			Mutating:     false,
+			RequiredRole: auth.RoleRepoAdmin,
+		}},
+		fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{
+			{
+				CallerService: "other-product-api",
+				Kind:          auth.CallerKindProduct,
+				Roles:         []auth.Role{auth.RoleRepoAdmin},
+			},
+		}},
+	)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if body.reads != 0 {
+		t.Fatalf("auth gate read request body %d time(s)", body.reads)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusForbidden, rec.Code, rec.Body.String())
+	}
+
+	var envelope ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("error envelope did not decode: %v", err)
+	}
+	if envelope.Error.Code != CodeCallerNotAllowed {
+		t.Fatalf("expected %s, got %s", CodeCallerNotAllowed, envelope.Error.Code)
 	}
 }
 
@@ -249,8 +300,59 @@ func TestAuthGateDeniesProductCallerWithoutRequiredRole(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("error envelope did not decode: %v", err)
 	}
-	if envelope.Error.Code != CodeCapabilityDenied {
-		t.Fatalf("expected %s, got %s", CodeCapabilityDenied, envelope.Error.Code)
+	if envelope.Error.Code != CodeRoleNotAllowed {
+		t.Fatalf("expected %s, got %s", CodeRoleNotAllowed, envelope.Error.Code)
+	}
+}
+
+func TestAuthGateDeniesCallerKindThatCannotUseConfiguredRole(t *testing.T) {
+	body := &trackingReadCloser{}
+	req := httptest.NewRequest(http.MethodGet, "/fake", body)
+	req.Header.Set(auth.HeaderAuthorization, "Bearer service-token")
+	req.Header.Set(auth.HeaderCorrelationID, "corr_auth_gate")
+	req.Header.Set(auth.HeaderNamespaceID, "ns_123")
+
+	handler := AuthGate(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("next handler was called")
+		}),
+		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
+			Subject:                "service-account:agentsmith-api",
+			CanonicalCallerService: "agentsmith-api",
+		}},
+		fakeRouteClassResolver{route: RouteMetadata{
+			Method:       http.MethodGet,
+			Path:         "/fake",
+			OperationID:  "fakeOrchestratorPlan",
+			Class:        auth.RouteClassNamespaceBound,
+			Mutating:     false,
+			RequiredRole: auth.RoleOrchestratorMount,
+		}},
+		fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{
+			{
+				CallerService: "agentsmith-api",
+				Kind:          auth.CallerKindProduct,
+				Roles:         []auth.Role{auth.RoleOrchestratorMount},
+			},
+		}},
+	)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if body.reads != 0 {
+		t.Fatalf("auth gate read request body %d time(s)", body.reads)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusForbidden, rec.Code, rec.Body.String())
+	}
+
+	var envelope ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("error envelope did not decode: %v", err)
+	}
+	if envelope.Error.Code != CodeRoleNotAllowed {
+		t.Fatalf("expected %s, got %s", CodeRoleNotAllowed, envelope.Error.Code)
 	}
 }
 
@@ -302,14 +404,16 @@ func TestAuthGateAllowsRequiredRoleWhenPolicyGrantsCaller(t *testing.T) {
 	}
 }
 
-func TestAuthGateAllowsOperatorAndAdminWithOperatorAdminForOperationInspection(t *testing.T) {
+func TestAuthGateAllowsOperationInspectorAndOperatorAdminForOperationInspection(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		callerService string
 		kind          auth.CallerKind
+		roles         []auth.Role
 	}{
-		{name: "operator", callerService: "afscp-operator", kind: auth.CallerKindOperator},
-		{name: "admin", callerService: "afscp-admin", kind: auth.CallerKindAdmin},
+		{name: "product inspector", callerService: "agentsmith-api", kind: auth.CallerKindProduct, roles: []auth.Role{auth.RoleOperationInspector}},
+		{name: "operator admin", callerService: "afscp-operator", kind: auth.CallerKindOperator, roles: []auth.Role{auth.RoleOperatorAdmin}},
+		{name: "admin operator admin", callerService: "afscp-admin", kind: auth.CallerKindAdmin, roles: []auth.Role{auth.RoleOperatorAdmin}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := &trackingReadCloser{}
@@ -333,13 +437,13 @@ func TestAuthGateAllowsOperatorAndAdminWithOperatorAdminForOperationInspection(t
 					OperationID:  "fakeOperation",
 					Class:        auth.RouteClassOperationInspection,
 					Mutating:     false,
-					RequiredRole: auth.RoleOperatorAdmin,
+					RequiredRole: auth.RoleOperationInspector,
 				}},
 				fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{
 					{
 						CallerService: tc.callerService,
 						Kind:          tc.kind,
-						Roles:         []auth.Role{auth.RoleOperatorAdmin},
+						Roles:         tc.roles,
 					},
 				}},
 			)
@@ -368,7 +472,7 @@ func TestInternalRouteMetadataClassifiesNamespaceVolumeAndOperationRoutes(t *tes
 	}{
 		{operationID: "ensureVolume", wantClass: auth.RouteClassVolumeGlobal, wantRole: auth.RoleVolumeAdmin},
 		{operationID: "createRepo", wantClass: auth.RouteClassNamespaceBound, wantRole: auth.RoleRepoAdmin},
-		{operationID: "getOperation", wantClass: auth.RouteClassOperationInspection, wantRole: auth.RoleOperatorAdmin},
+		{operationID: "getOperation", wantClass: auth.RouteClassOperationInspection, wantRole: auth.RoleOperationInspector},
 	}
 
 	for _, tt := range tests {

@@ -3,8 +3,37 @@ package auth
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 )
+
+func TestCallerRolesExposeStableSchemaEnumOrder(t *testing.T) {
+	want := []Role{
+		RoleVolumeAdmin,
+		RoleNamespaceAdmin,
+		RoleRepoAdmin,
+		RoleRepoLifecycleAdmin,
+		RoleRestoreAdmin,
+		RoleTemplateAdmin,
+		RoleExportAdmin,
+		RoleMountAdmin,
+		RoleOperationInspector,
+		RoleOrchestratorMount,
+		RoleMigrationAdmin,
+		RoleOperatorAdmin,
+		RoleBreakGlassAdmin,
+	}
+
+	got := CallerRoles()
+	if !slices.Equal(got, want) {
+		t.Fatalf("CallerRoles() = %#v, want %#v", got, want)
+	}
+
+	got[0] = RoleBreakGlassAdmin
+	if CallerRoles()[0] != RoleVolumeAdmin {
+		t.Fatal("CallerRoles returned mutable backing storage")
+	}
+}
 
 func TestParseRequestContextCanonicalHeaders(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "/internal/v1/repos", nil)
@@ -224,6 +253,69 @@ func TestCallerNotAllowedRequiresConfiguredCallerAndRole(t *testing.T) {
 	}
 	if CallerNotAllowed("afscp-admin", RoleBreakGlassAdmin, allowed) {
 		t.Fatal("expected admin break-glass role to be allowed")
+	}
+}
+
+func TestCallerRoleDenialReasonDistinguishesCallerAndRoleFailures(t *testing.T) {
+	allowed := []AllowedCaller{
+		{
+			CallerService: "agentsmith-api",
+			Kind:          CallerKindProduct,
+			Roles:         []Role{RoleRepoAdmin},
+		},
+		{
+			CallerService: "sandbox-manager",
+			Kind:          CallerKindProduct,
+			Roles:         []Role{RoleOrchestratorMount},
+		},
+	}
+
+	tests := []struct {
+		name         string
+		caller       string
+		requiredRole Role
+		want         CallerRoleDenialReason
+	}{
+		{name: "allowed", caller: "agentsmith-api", requiredRole: RoleRepoAdmin, want: CallerRoleAllowed},
+		{name: "caller missing", caller: "unknown-service", requiredRole: RoleRepoAdmin, want: CallerServiceNotAllowed},
+		{name: "role missing", caller: "agentsmith-api", requiredRole: RoleExportAdmin, want: CallerRoleNotAllowed},
+		{name: "kind cannot use configured role", caller: "sandbox-manager", requiredRole: RoleOrchestratorMount, want: CallerRoleNotAllowed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CallerRoleDenialReasonFor(tt.caller, tt.requiredRole, allowed); got != tt.want {
+				t.Fatalf("CallerRoleDenialReasonFor() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOperatorAdminSatisfiesOperationInspectorForAdminAndOperatorCallers(t *testing.T) {
+	for _, caller := range []AllowedCaller{
+		{
+			CallerService: "afscp-operator",
+			Kind:          CallerKindOperator,
+			Roles:         []Role{RoleOperatorAdmin},
+		},
+		{
+			CallerService: "afscp-admin",
+			Kind:          CallerKindAdmin,
+			Roles:         []Role{RoleOperatorAdmin},
+		},
+	} {
+		if CallerNotAllowed(caller.CallerService, RoleOperationInspector, []AllowedCaller{caller}) {
+			t.Fatalf("expected %s operator_admin to satisfy operation_inspector", caller.CallerService)
+		}
+	}
+
+	product := AllowedCaller{
+		CallerService: "agentsmith-api",
+		Kind:          CallerKindProduct,
+		Roles:         []Role{RoleOperatorAdmin},
+	}
+	if !CallerNotAllowed(product.CallerService, RoleOperationInspector, []AllowedCaller{product}) {
+		t.Fatal("ordinary product caller must not use operator_admin as operation_inspector")
 	}
 }
 
