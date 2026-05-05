@@ -29,6 +29,12 @@ type OperationStore interface {
 	OperationWriter
 }
 
+// OperationRecoveryReader is the read-only durable operation recovery candidate boundary.
+// It must not claim, recover, finalize, or mutate operation state.
+type OperationRecoveryReader interface {
+	ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+}
+
 // OperationLeaseStore owns atomic worker/recovery lease transitions by operation_id.
 //
 // Implementations must not implement these methods as GetOperation followed by

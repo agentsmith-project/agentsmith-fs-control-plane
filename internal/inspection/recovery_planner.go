@@ -76,6 +76,14 @@ func ClassifyOperationRecovery(record operations.OperationRecord, ctx RecoveryCo
 		}
 		return manual("operator_intervention_required")
 	case operations.OperationStateCancelRequested:
+		if record.LeaseExpiresAt != nil {
+			if ctx.Now.IsZero() {
+				return manual("missing_recovery_time")
+			}
+			if record.LeaseExpiresAt.After(ctx.Now) {
+				return plan(RecoveryActionWait, "cancel_requested_live_lease")
+			}
+		}
 		return plan(RecoveryActionFinalizeCancellation, "cancel_requested")
 	default:
 		return manual(fmt.Sprintf("unsupported_operation_state:%s", record.State))

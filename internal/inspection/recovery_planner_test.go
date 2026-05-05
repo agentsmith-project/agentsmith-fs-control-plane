@@ -29,7 +29,10 @@ func TestClassifyOperationRecovery(t *testing.T) {
 		{name: "running missing lease is manual", record: operations.OperationRecord{State: operations.OperationStateRunning}, want: RecoveryActionManualIntervention},
 		{name: "operator intervention is manual by default", record: operations.OperationRecord{State: operations.OperationStateOperatorInterventionRequired}, want: RecoveryActionManualIntervention},
 		{name: "operator intervention with explicit recovery", record: operations.OperationRecord{State: operations.OperationStateOperatorInterventionRequired}, ctx: RecoveryContext{ExplicitRecovery: true}, want: RecoveryActionRecover},
-		{name: "cancel requested finalizes", record: operations.OperationRecord{State: operations.OperationStateCancelRequested}, want: RecoveryActionFinalizeCancellation},
+		{name: "cancel requested without lease finalizes", record: operations.OperationRecord{State: operations.OperationStateCancelRequested}, want: RecoveryActionFinalizeCancellation},
+		{name: "cancel requested expired lease finalizes", record: operations.OperationRecord{State: operations.OperationStateCancelRequested, LeaseOwner: "worker-a", LeaseExpiresAt: &expiredLease}, want: RecoveryActionFinalizeCancellation},
+		{name: "cancel requested live lease waits", record: operations.OperationRecord{State: operations.OperationStateCancelRequested, LeaseOwner: "worker-a", LeaseExpiresAt: &liveLease}, want: RecoveryActionWait},
+		{name: "cancel requested dirty lease pair is manual", record: operations.OperationRecord{State: operations.OperationStateCancelRequested, LeaseOwner: "worker-a"}, want: RecoveryActionManualIntervention},
 		{name: "unknown state is manual", record: operations.OperationRecord{State: operations.OperationState("wedged")}, want: RecoveryActionManualIntervention},
 		{name: "negative attempt is manual", record: operations.OperationRecord{State: operations.OperationStateQueued, Attempt: -1}, want: RecoveryActionManualIntervention},
 	}
@@ -41,6 +44,21 @@ func TestClassifyOperationRecovery(t *testing.T) {
 			plan := ClassifyOperationRecovery(tt.record, ctx)
 			assertRecoveryPlan(t, plan, tt.want)
 		})
+	}
+}
+
+func TestClassifyCancelRequestedRecoveryRequiresNowForLeasedOperation(t *testing.T) {
+	leaseExpiresAt := recoveryPlannerTestTime().Add(-time.Minute)
+	record := operations.OperationRecord{
+		State:          operations.OperationStateCancelRequested,
+		LeaseOwner:     "worker-a",
+		LeaseExpiresAt: &leaseExpiresAt,
+	}
+
+	plan := ClassifyOperationRecovery(record, RecoveryContext{})
+	assertRecoveryPlan(t, plan, RecoveryActionManualIntervention)
+	if plan.Reason != "missing_recovery_time" {
+		t.Fatalf("Reason = %q, want missing_recovery_time", plan.Reason)
 	}
 }
 

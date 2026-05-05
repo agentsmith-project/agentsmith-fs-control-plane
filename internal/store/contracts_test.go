@@ -105,6 +105,32 @@ func TestOperationLeaseStoreContractCoversClaimReclaimRenewAndFencedUpdateByOper
 	}
 }
 
+func TestOperationRecoveryReaderContractListsReadOnlyCandidates(t *testing.T) {
+	fake := &fakeOperationStore{}
+	var _ OperationRecoveryReader = fake
+
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	expiredLease := now.Add(-time.Minute)
+	liveLease := now.Add(time.Minute)
+	fake.operations = []operations.OperationRecord{
+		{ID: "op_queued", State: operations.OperationStateQueued, CreatedAt: now.Add(-4 * time.Minute)},
+		{ID: "op_running_expired", State: operations.OperationStateRunning, LeaseOwner: "worker-a", LeaseExpiresAt: &expiredLease, CreatedAt: now.Add(-3 * time.Minute)},
+		{ID: "op_cancel_expired", State: operations.OperationStateCancelRequested, LeaseOwner: "worker-a", LeaseExpiresAt: &expiredLease, CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: "op_running_live", State: operations.OperationStateRunning, LeaseOwner: "worker-a", LeaseExpiresAt: &liveLease, CreatedAt: now.Add(-time.Minute)},
+		{ID: "op_succeeded", State: operations.OperationStateSucceeded, CreatedAt: now},
+	}
+
+	candidates, err := fake.ListOperationsForRecovery(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("list operations for recovery: %v", err)
+	}
+	got := operationIDs(candidates)
+	want := []string{"op_queued", "op_running_expired", "op_cancel_expired"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("candidates = %#v, want %#v", got, want)
+	}
+}
+
 func TestIdempotencyStoreContractRequiresAtomicCreateOrReuseBoundary(t *testing.T) {
 	fake := &fakeIdempotencyStore{}
 	var _ IdempotencyStore = fake
@@ -481,7 +507,8 @@ func TestAuditOutboxDeliveryStoreContractCoversDBOnlyStateAdapter(t *testing.T) 
 }
 
 type fakeOperationStore struct {
-	record operations.OperationRecord
+	record     operations.OperationRecord
+	operations []operations.OperationRecord
 }
 
 func (fake *fakeOperationStore) GetOperation(_ context.Context, operationID string) (operations.OperationRecord, error) {
@@ -543,6 +570,36 @@ func (fake *fakeOperationStore) UpdateOperationWithLease(_ context.Context, reco
 	}
 	fake.record = updated.SanitizedForPersistence().Record()
 	return fake.record, nil
+}
+
+func (fake *fakeOperationStore) ListOperationsForRecovery(_ context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	var out []operations.OperationRecord
+	for _, record := range fake.operations {
+		if len(out) >= limit {
+			break
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record.Sanitized())
+		case operations.OperationStateRunning:
+			if record.LeaseExpiresAt == nil || strings.TrimSpace(record.LeaseOwner) == "" || !record.LeaseExpiresAt.After(now) {
+				out = append(out, record.Sanitized())
+			}
+		case operations.OperationStateCancelRequested:
+			if record.LeaseExpiresAt == nil || !record.LeaseExpiresAt.After(now) {
+				out = append(out, record.Sanitized())
+			}
+		}
+	}
+	return out, nil
+}
+
+func operationIDs(records []operations.OperationRecord) []string {
+	out := make([]string, len(records))
+	for idx, record := range records {
+		out[idx] = record.ID
+	}
+	return out
 }
 
 type fakeIdempotencyStore struct {

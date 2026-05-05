@@ -84,6 +84,21 @@ func (store *Store) GetOperation(ctx context.Context, operationID string) (opera
 	return scanOperation(row)
 }
 
+func (store *Store) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("list operations for recovery: now must be set")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list operations for recovery: limit must be positive")
+	}
+
+	rows, err := store.exec.QueryContext(ctx, operationRecoveryCandidatesSQL(), now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanOperations(rows)
+}
+
 func (store *Store) AcquireOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	args, err := operationLeaseRequestArgs(operationID, request)
 	if err != nil {
@@ -185,6 +200,18 @@ func operationCreateOrReuseSQL() string {
 
 func operationSelectSQL() string {
 	return "SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM operations"
+}
+
+func operationRecoveryCandidatesSQL() string {
+	noLeasePair := "(lease_owner IS NULL AND lease_expires_at IS NULL)"
+	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
+	invalidLeasePair := "((lease_owner IS NULL AND lease_expires_at IS NOT NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) = '') OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NULL))"
+	return operationSelectSQL() + " WHERE " +
+		"(operation_state = 'queued') OR " +
+		"(operation_state = 'running' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'cancel_requested' AND (" + noLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'operator_intervention_required') " +
+		"ORDER BY created_at, operation_id LIMIT $2"
 }
 
 func operationUpdateSQL() string {
@@ -495,6 +522,27 @@ func operationLeaseUnavailable(action, operationID string, err error) error {
 
 func scanOperation(row rowScanner) (operations.OperationRecord, error) {
 	return scanOperationWithInserted(row, nil)
+}
+
+func scanOperations(rows rowsScanner) (records []operations.OperationRecord, err error) {
+	defer func() {
+		closeErr := rows.Close()
+		if err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+
+	for rows.Next() {
+		record, err := scanOperation(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return records, nil
 }
 
 func scanOperationWithInserted(row rowScanner, inserted *bool) (operations.OperationRecord, error) {

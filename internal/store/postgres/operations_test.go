@@ -18,6 +18,7 @@ import (
 func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.OperationReader = (*Store)(nil)
 	var _ store.OperationWriter = (*Store)(nil)
+	var _ store.OperationRecoveryReader = (*Store)(nil)
 	var _ store.OperationLeaseStore = (*Store)(nil)
 	var _ store.IdempotencyStore = (*Store)(nil)
 	var _ store.AuditSink = (*Store)(nil)
@@ -252,6 +253,117 @@ func TestGetOperationReturnsSQLNoRows(t *testing.T) {
 	_, err := st.GetOperation(context.Background(), "missing")
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("GetOperation error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestListOperationsForRecoverySelectsOrderedCandidatesReadOnly(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	createdAt := now.Add(-time.Hour)
+	queued := operationFixture(createdAt)
+	queued.ID = "op-queued"
+	queued.State = operations.OperationStateQueued
+	queued.LeaseOwner = ""
+	queued.LeaseExpiresAt = nil
+	expired := operationFixture(createdAt.Add(time.Minute))
+	expired.ID = "op-running-expired"
+	expired.State = operations.OperationStateRunning
+	expiredLease := now.Add(-time.Minute)
+	expired.LeaseExpiresAt = &expiredLease
+	cancel := operationFixture(createdAt.Add(2 * time.Minute))
+	cancel.ID = "op-cancel-expired"
+	cancel.State = operations.OperationStateCancelRequested
+	cancel.LeaseExpiresAt = &expiredLease
+	exec := &fakeExecutor{rows: fakeRows{rows: []fakeRow{
+		{values: operationRowValues(queued)},
+		{values: operationRowValues(expired)},
+		{values: operationRowValues(cancel)},
+	}}}
+	st := &Store{exec: exec}
+
+	got, err := st.ListOperationsForRecovery(context.Background(), now, 25)
+	if err != nil {
+		t.Fatalf("ListOperationsForRecovery: %v", err)
+	}
+	if gotIDs := operationIDsForPostgresTest(got); strings.Join(gotIDs, ",") != "op-queued,op-running-expired,op-cancel-expired" {
+		t.Fatalf("candidate IDs = %#v", gotIDs)
+	}
+	if !exec.rows.closed {
+		t.Fatal("rows were not closed")
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"SELECT",
+		"FROM operations",
+		"operation_state = 'queued'",
+		"operation_state = 'running'",
+		"(lease_owner IS NULL AND lease_expires_at IS NULL)",
+		"(lease_owner IS NULL AND lease_expires_at IS NOT NULL)",
+		"lease_expires_at <= $1",
+		"operation_state = 'cancel_requested'",
+		"operator_intervention_required",
+		"ORDER BY created_at, operation_id",
+		"LIMIT $2",
+	)
+	if strings.Contains(exec.query, "UPDATE ") || strings.Contains(exec.query, " FOR UPDATE") {
+		t.Fatalf("ListOperationsForRecovery must be read-only SELECT, got %s", exec.query)
+	}
+	if strings.Contains(exec.query, "lease_expires_at > $1") {
+		t.Fatalf("ListOperationsForRecovery must not select live running leases: %s", exec.query)
+	}
+	if !reflect.DeepEqual(exec.args, []any{now, 25}) {
+		t.Fatalf("args = %#v, want now and limit", exec.args)
+	}
+}
+
+func TestListOperationsForRecoveryRejectsInvalidArgsBeforeSQL(t *testing.T) {
+	tests := []struct {
+		name  string
+		now   time.Time
+		limit int
+	}{
+		{name: "zero now", limit: 1},
+		{name: "zero limit", now: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)},
+		{name: "negative limit", now: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC), limit: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{}
+			st := &Store{exec: exec}
+
+			_, err := st.ListOperationsForRecovery(context.Background(), tt.now, tt.limit)
+			if err == nil {
+				t.Fatal("ListOperationsForRecovery succeeded, want error")
+			}
+			if exec.query != "" {
+				t.Fatalf("issued SQL for invalid args: %s", exec.query)
+			}
+		})
+	}
+}
+
+func TestListOperationsForRecoveryClosesRowsAndPropagatesRowsAndScanErrors(t *testing.T) {
+	valid := operationFixture(time.Date(2026, 5, 5, 11, 0, 0, 0, time.UTC))
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		rows fakeRows
+	}{
+		{name: "rows err", rows: fakeRows{rows: []fakeRow{{values: operationRowValues(valid)}}, err: errors.New("rows failed")}},
+		{name: "scan err", rows: fakeRows{rows: []fakeRow{{err: errors.New("scan failed")}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{rows: tt.rows}
+			st := &Store{exec: exec}
+
+			_, err := st.ListOperationsForRecovery(context.Background(), now, 10)
+			if err == nil {
+				t.Fatal("ListOperationsForRecovery succeeded, want error")
+			}
+			if !exec.rows.closed {
+				t.Fatal("rows were not closed after error")
+			}
+		})
 	}
 }
 
@@ -715,6 +827,14 @@ func operationRowValues(record operations.OperationRecord) []any {
 		mustMarshalJSONForTest(record.ExternalResourceIDs), mustMarshalJSONForTest(record.InputSummary), nil, nil, nullableArgString(record.CompensationStatus), nil,
 		record.CreatedAt, startedAt, finishedAt,
 	}
+}
+
+func operationIDsForPostgresTest(records []operations.OperationRecord) []string {
+	out := make([]string, len(records))
+	for idx, record := range records {
+		out[idx] = record.ID
+	}
+	return out
 }
 
 func ptrTime(value time.Time) *time.Time { return &value }
