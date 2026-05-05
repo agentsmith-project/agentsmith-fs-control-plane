@@ -18,6 +18,10 @@ type OperationReader interface {
 	ReadOperation(operationID string) (operations.OperationRecord, error)
 }
 
+type StoredNamespaceAuthorizer interface {
+	AllowsOperationInspection(namespaceID string, caller auth.AllowedCaller) bool
+}
+
 type Request struct {
 	OperationID  string
 	RouteClass   auth.RouteClass
@@ -27,14 +31,15 @@ type Request struct {
 }
 
 type Service struct {
-	Reader OperationReader
+	Reader                    OperationReader
+	StoredNamespaceAuthorizer StoredNamespaceAuthorizer
 }
 
 func (service Service) InspectOperation(request Request) (operations.OperationRecord, error) {
-	return InspectOperation(service.Reader, request)
+	return InspectOperation(service.Reader, service.StoredNamespaceAuthorizer, request)
 }
 
-func InspectOperation(reader OperationReader, request Request) (operations.OperationRecord, error) {
+func InspectOperation(reader OperationReader, authorizer StoredNamespaceAuthorizer, request Request) (operations.OperationRecord, error) {
 	if reader == nil {
 		return operations.OperationRecord{}, ErrMissingOperationReader
 	}
@@ -48,37 +53,38 @@ func InspectOperation(reader OperationReader, request Request) (operations.Opera
 	if err != nil {
 		return operations.OperationRecord{}, err
 	}
-	if !canInspect(request, record) {
+	if !canInspect(request, authorizer, record) {
 		return operations.OperationRecord{}, ErrInspectionDenied
 	}
 
 	return record.Sanitized(), nil
 }
 
-func canInspect(request Request, record operations.OperationRecord) bool {
-	if hasGlobalInspectionCapability(request.Caller) {
-		return true
-	}
-	if !hasNamespacedInspectionCapability(request.Caller, request.RequiredRole) {
-		return false
-	}
-
-	if strings.TrimSpace(record.NamespaceID) == "" {
-		return false
-	}
+func canInspect(request Request, authorizer StoredNamespaceAuthorizer, record operations.OperationRecord) bool {
 	if !routeCanCarryNamespaceInspection(request.RouteClass) {
 		return false
 	}
-
-	return !auth.NamespaceBoundMismatch(request.NamespaceID, record.NamespaceID)
-}
-
-func hasNamespacedInspectionCapability(caller auth.AllowedCaller, requiredRole auth.Role) bool {
-	if requiredRole != auth.RoleOperationInspector {
+	if hasGlobalInspectionCapability(request.Caller) {
+		return true
+	}
+	if request.RequiredRole != auth.RoleOperationInspector {
+		return false
+	}
+	if request.Caller.Kind != auth.CallerKindProduct {
+		return false
+	}
+	storedNamespaceID := strings.TrimSpace(record.NamespaceID)
+	if storedNamespaceID == "" {
+		return false
+	}
+	if requestNamespaceID := strings.TrimSpace(request.NamespaceID); requestNamespaceID != "" && auth.NamespaceMismatch(requestNamespaceID, storedNamespaceID) {
+		return false
+	}
+	if authorizer == nil {
 		return false
 	}
 
-	return !auth.CallerNotAllowed(caller.CallerService, requiredRole, []auth.AllowedCaller{caller})
+	return authorizer.AllowsOperationInspection(storedNamespaceID, request.Caller)
 }
 
 func routeCanCarryNamespaceInspection(class auth.RouteClass) bool {

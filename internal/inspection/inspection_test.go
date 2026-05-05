@@ -17,8 +17,9 @@ func TestInspectOperationAllowsProductInspectionRoleAndRedactsRecord(t *testing.
 			"op_123": namespacedRecord("op_123", "ns_123"),
 		},
 	}
+	authorizer := storedNamespaceAuthorizer("ns_123", productInspectionCaller())
 
-	record, err := InspectOperation(reader, Request{
+	record, err := InspectOperation(reader, authorizer, Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -38,6 +39,9 @@ func TestInspectOperationAllowsProductInspectionRoleAndRedactsRecord(t *testing.
 	if record.ID != "op_123" {
 		t.Fatalf("record ID = %q, want op_123", record.ID)
 	}
+	if authorizer.lastNamespaceID != "ns_123" {
+		t.Fatalf("stored namespace authorization used %q, want ns_123", authorizer.lastNamespaceID)
+	}
 	rendered := strings.ToLower(toInspectionTestString(record))
 	for _, forbidden := range []string{"plain-webdav-password", "metadata-secret", "jvs-secret"} {
 		if strings.Contains(rendered, forbidden) {
@@ -56,7 +60,7 @@ func TestInspectOperationDeniesNamespaceRecordForEmptyCallerWithMatchingNamespac
 		},
 	}
 
-	_, err := InspectOperation(reader, Request{
+	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -74,7 +78,7 @@ func TestInspectOperationDeniesProductCallerWithoutRequiredInspectionRole(t *tes
 		},
 	}
 
-	_, err := InspectOperation(reader, Request{
+	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productCaller()), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -93,7 +97,7 @@ func TestInspectOperationRequiresStoredNamespaceToMatchRequestNamespaceForProduc
 		},
 	}
 
-	_, err := InspectOperation(reader, Request{
+	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_456",
@@ -105,18 +109,106 @@ func TestInspectOperationRequiresStoredNamespaceToMatchRequestNamespaceForProduc
 	}
 }
 
-func TestInspectOperationDeniesNamespaceRecordWhenProductCallerHasNoRequestNamespace(t *testing.T) {
+func TestInspectOperationAllowsNamespaceRecordWhenProductCallerHasNoRequestNamespaceButStoredNamespaceAllows(t *testing.T) {
+	reader := &fakeOperationReader{
+		records: map[string]operations.OperationRecord{
+			"op_123": namespacedRecord("op_123", "ns_123"),
+		},
+	}
+	authorizer := storedNamespaceAuthorizer("ns_123", productInspectionCaller())
+
+	record, err := InspectOperation(reader, authorizer, Request{
+		OperationID:  "op_123",
+		RouteClass:   auth.RouteClassOperationInspection,
+		RequiredRole: auth.RoleOperationInspector,
+		Caller:       productInspectionCaller(),
+	})
+	if err != nil {
+		t.Fatalf("InspectOperation returned error: %v", err)
+	}
+	if record.ID != "op_123" {
+		t.Fatalf("record ID = %q, want op_123", record.ID)
+	}
+	if authorizer.lastNamespaceID != "ns_123" {
+		t.Fatalf("stored namespace authorization used %q, want ns_123", authorizer.lastNamespaceID)
+	}
+}
+
+func TestInspectOperationDeniesProductCallerWhenStoredNamespaceAuthorizationLacksInspector(t *testing.T) {
 	reader := &fakeOperationReader{
 		records: map[string]operations.OperationRecord{
 			"op_123": namespacedRecord("op_123", "ns_123"),
 		},
 	}
 
-	_, err := InspectOperation(reader, Request{
+	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productCaller()), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		RequiredRole: auth.RoleOperationInspector,
 		Caller:       productInspectionCaller(),
+	})
+	if !errors.Is(err, ErrInspectionDenied) {
+		t.Fatalf("expected ErrInspectionDenied, got %v", err)
+	}
+}
+
+func TestInspectOperationDeniesProductCallerAuthorizedOnlyForDifferentStoredNamespace(t *testing.T) {
+	reader := &fakeOperationReader{
+		records: map[string]operations.OperationRecord{
+			"op_456": namespacedRecord("op_456", "ns_456"),
+		},
+	}
+	authorizer := storedNamespaceAuthorizer("ns_123", productInspectionCaller())
+
+	_, err := InspectOperation(reader, authorizer, Request{
+		OperationID:  "op_456",
+		RouteClass:   auth.RouteClassOperationInspection,
+		RequiredRole: auth.RoleOperationInspector,
+		Caller:       productInspectionCaller(),
+	})
+	if !errors.Is(err, ErrInspectionDenied) {
+		t.Fatalf("expected ErrInspectionDenied, got %v", err)
+	}
+	if authorizer.lastNamespaceID != "ns_456" {
+		t.Fatalf("stored namespace authorization used %q, want ns_456", authorizer.lastNamespaceID)
+	}
+}
+
+func TestInspectOperationDeniesProductCallerWithoutStoredNamespaceAuthorizationBoundary(t *testing.T) {
+	reader := &fakeOperationReader{
+		records: map[string]operations.OperationRecord{
+			"op_123": namespacedRecord("op_123", "ns_123"),
+		},
+	}
+
+	_, err := InspectOperation(reader, nil, Request{
+		OperationID:  "op_123",
+		RouteClass:   auth.RouteClassOperationInspection,
+		RequiredRole: auth.RoleOperationInspector,
+		Caller:       productInspectionCaller(),
+	})
+	if !errors.Is(err, ErrInspectionDenied) {
+		t.Fatalf("expected ErrInspectionDenied, got %v", err)
+	}
+}
+
+func TestInspectOperationDeniesNonProductCallerWithoutOperatorAdminEvenWhenStoredNamespaceAllowsInspector(t *testing.T) {
+	reader := &fakeOperationReader{
+		records: map[string]operations.OperationRecord{
+			"op_123": namespacedRecord("op_123", "ns_123"),
+		},
+	}
+	operatorInspector := auth.AllowedCaller{
+		CallerService: "afscp-operator",
+		Kind:          auth.CallerKindOperator,
+		Roles:         []auth.Role{auth.RoleOperationInspector},
+	}
+
+	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", operatorInspector), Request{
+		OperationID:  "op_123",
+		RouteClass:   auth.RouteClassOperationInspection,
+		RequiredRole: auth.RoleOperationInspector,
+		Caller:       operatorInspector,
 	})
 	if !errors.Is(err, ErrInspectionDenied) {
 		t.Fatalf("expected ErrInspectionDenied, got %v", err)
@@ -130,7 +222,7 @@ func TestInspectOperationDeniesNamespaceRecordFromVolumeGlobalProductRoute(t *te
 		},
 	}
 
-	_, err := InspectOperation(reader, Request{
+	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassVolumeGlobal,
 		NamespaceID:  "ns_123",
@@ -197,7 +289,7 @@ func TestInspectOperationAllowsAdminAndOperatorWithOperatorAdminForNamespacedAnd
 				},
 			}
 
-			_, err := InspectOperation(reader, Request{
+			got, err := InspectOperation(reader, nil, Request{
 				OperationID: tt.record.ID,
 				RouteClass:  auth.RouteClassOperationInspection,
 				NamespaceID: tt.requestNamespace,
@@ -205,6 +297,73 @@ func TestInspectOperationAllowsAdminAndOperatorWithOperatorAdminForNamespacedAnd
 			})
 			if err != nil {
 				t.Fatalf("inspection returned error: %v", err)
+			}
+			if rendered := strings.ToLower(toInspectionTestString(got)); strings.Contains(rendered, "plain-webdav-password") || strings.Contains(rendered, "metadata-secret") {
+				t.Fatalf("privileged inspection leaked secret material: %s", rendered)
+			}
+		})
+	}
+}
+
+func TestInspectOperationDeniesAdminAndOperatorFromNonInspectionRouteClass(t *testing.T) {
+	tests := []struct {
+		name   string
+		record operations.OperationRecord
+		caller auth.AllowedCaller
+	}{
+		{
+			name:   "operator namespaced",
+			record: namespacedRecord("op_namespaced", "ns_123"),
+			caller: auth.AllowedCaller{
+				CallerService: "afscp-operator",
+				Kind:          auth.CallerKindOperator,
+				Roles:         []auth.Role{auth.RoleOperatorAdmin},
+			},
+		},
+		{
+			name:   "operator global",
+			record: globalRecord("op_global"),
+			caller: auth.AllowedCaller{
+				CallerService: "afscp-operator",
+				Kind:          auth.CallerKindOperator,
+				Roles:         []auth.Role{auth.RoleOperatorAdmin},
+			},
+		},
+		{
+			name:   "admin namespaced",
+			record: namespacedRecord("op_namespaced", "ns_123"),
+			caller: auth.AllowedCaller{
+				CallerService: "afscp-admin",
+				Kind:          auth.CallerKindAdmin,
+				Roles:         []auth.Role{auth.RoleOperatorAdmin},
+			},
+		},
+		{
+			name:   "admin global",
+			record: globalRecord("op_global"),
+			caller: auth.AllowedCaller{
+				CallerService: "afscp-admin",
+				Kind:          auth.CallerKindAdmin,
+				Roles:         []auth.Role{auth.RoleOperatorAdmin},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &fakeOperationReader{
+				records: map[string]operations.OperationRecord{
+					tt.record.ID: tt.record,
+				},
+			}
+
+			_, err := InspectOperation(reader, nil, Request{
+				OperationID: tt.record.ID,
+				RouteClass:  auth.RouteClassVolumeGlobal,
+				Caller:      tt.caller,
+			})
+			if !errors.Is(err, ErrInspectionDenied) {
+				t.Fatalf("expected ErrInspectionDenied, got %v", err)
 			}
 		})
 	}
@@ -217,7 +376,7 @@ func TestInspectOperationDeniesGlobalRecordToProductCaller(t *testing.T) {
 		},
 	}
 
-	_, err := InspectOperation(reader, Request{
+	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
 		OperationID:  "op_global",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -236,7 +395,7 @@ func TestInspectOperationDoesNotLetProductCallerUsePrivilegedConfiguredRole(t *t
 		},
 	}
 
-	_, err := InspectOperation(reader, Request{
+	_, err := InspectOperation(reader, nil, Request{
 		OperationID:  "op_global",
 		RouteClass:   auth.RouteClassOperationInspection,
 		RequiredRole: auth.RoleOperatorAdmin,
@@ -255,7 +414,7 @@ func TestInspectOperationPropagatesReaderErrors(t *testing.T) {
 	readerErr := errors.New("operation store unavailable")
 	reader := &fakeOperationReader{err: readerErr}
 
-	_, err := InspectOperation(reader, Request{
+	_, err := InspectOperation(reader, nil, Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -267,6 +426,22 @@ func TestInspectOperationPropagatesReaderErrors(t *testing.T) {
 	}
 }
 
+func TestInspectOperationRequiresReaderAndOperationID(t *testing.T) {
+	_, err := InspectOperation(nil, nil, Request{OperationID: "op_123"})
+	if !errors.Is(err, ErrMissingOperationReader) {
+		t.Fatalf("expected ErrMissingOperationReader, got %v", err)
+	}
+
+	reader := &fakeOperationReader{}
+	_, err = InspectOperation(reader, nil, Request{OperationID: " \t"})
+	if !errors.Is(err, ErrMissingOperationID) {
+		t.Fatalf("expected ErrMissingOperationID, got %v", err)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("reader reads = %d, want 0 for missing operation id", reader.reads)
+	}
+}
+
 func TestServiceInspectOperationUsesConfiguredReader(t *testing.T) {
 	reader := &fakeOperationReader{
 		records: map[string]operations.OperationRecord{
@@ -274,6 +449,7 @@ func TestServiceInspectOperationUsesConfiguredReader(t *testing.T) {
 		},
 	}
 	service := Service{Reader: reader}
+	service.StoredNamespaceAuthorizer = storedNamespaceAuthorizer("ns_123", productInspectionCaller())
 
 	record, err := service.InspectOperation(Request{
 		OperationID:  "op_123",
@@ -287,6 +463,28 @@ func TestServiceInspectOperationUsesConfiguredReader(t *testing.T) {
 	}
 	if record.ID != "op_123" {
 		t.Fatalf("record ID = %q, want op_123", record.ID)
+	}
+}
+
+type fakeStoredNamespaceAuthorizer struct {
+	allowed           map[string][]auth.AllowedCaller
+	calls             int
+	lastNamespaceID   string
+	lastCallerService string
+}
+
+func (authorizer *fakeStoredNamespaceAuthorizer) AllowsOperationInspection(namespaceID string, caller auth.AllowedCaller) bool {
+	authorizer.calls++
+	authorizer.lastNamespaceID = namespaceID
+	authorizer.lastCallerService = caller.CallerService
+	return !auth.CallerNotAllowed(caller.CallerService, auth.RoleOperationInspector, authorizer.allowed[namespaceID])
+}
+
+func storedNamespaceAuthorizer(namespaceID string, callers ...auth.AllowedCaller) *fakeStoredNamespaceAuthorizer {
+	return &fakeStoredNamespaceAuthorizer{
+		allowed: map[string][]auth.AllowedCaller{
+			namespaceID: callers,
+		},
 	}
 }
 
