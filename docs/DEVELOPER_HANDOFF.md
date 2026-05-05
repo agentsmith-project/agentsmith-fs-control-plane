@@ -94,7 +94,8 @@ Completed:
 - PostgreSQL migration contract for operations, idempotency, audit outbox, and
   repo fences
 - first PostgreSQL adapter slice for operation reader/writer, idempotency
-  create-or-reuse, and audit outbox append, with focused tests
+  create-or-reuse, and audit outbox append plus DB-only at-least-once delivery
+  primitive, with focused tests
 - minimal PostgreSQL repo fence adapter for held fence read, create, and active
   release, with focused tests
 - operation lease pure model and tests
@@ -114,11 +115,13 @@ Partially completed:
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
   models. The first PostgreSQL adapter slice implements operation read/write,
-  idempotency create-or-reuse, audit outbox append, and minimal repo fence held
-  read/create/active release. The recovery planner only classifies existing
-  durable record values into high-level actions; it is not a recovery loop and
-  does not execute workers or touch JVS/WebDAV/mount/storage mutation.
-  Repo/resource metadata adapters and the recovery loop are not implemented.
+  idempotency create-or-reuse, audit outbox append plus DB-only at-least-once
+  delivery primitive, and minimal repo fence held read/create/active release.
+  The recovery planner only classifies existing durable record values into
+  high-level actions; it is not a recovery loop and does not execute workers or
+  touch JVS/WebDAV/mount/storage mutation. Real external audit delivery
+  worker/sink integration, repo/resource metadata adapters, and the recovery
+  loop are not implemented.
 - Path resolver guardrails exist, but there is no storage mutation integration.
 
 Not implemented:
@@ -127,7 +130,7 @@ Not implemented:
   lifecycle handlers
 - durable DB-backed repo/resource metadata mutations
 - fence enforcement beyond the minimal repo fence adapter slice
-- DB-backed audit outbox delivery beyond append
+- real external audit delivery worker/sink integration
 - JVS execution or repo initialization
 - WebDAV export gateway file serving
 - workload mount issuance or orchestrator mount plans
