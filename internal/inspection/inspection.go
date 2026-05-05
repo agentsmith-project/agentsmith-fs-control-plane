@@ -1,6 +1,7 @@
 package inspection
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -15,11 +16,11 @@ var (
 )
 
 type OperationReader interface {
-	ReadOperation(operationID string) (operations.OperationRecord, error)
+	ReadOperation(ctx context.Context, operationID string) (operations.OperationRecord, error)
 }
 
 type StoredNamespaceAuthorizer interface {
-	AllowsOperationInspection(namespaceID string, caller auth.AllowedCaller) bool
+	AllowsOperationInspection(ctx context.Context, namespaceID string, caller auth.AllowedCaller) bool
 }
 
 type Request struct {
@@ -35,11 +36,14 @@ type Service struct {
 	StoredNamespaceAuthorizer StoredNamespaceAuthorizer
 }
 
-func (service Service) InspectOperation(request Request) (operations.OperationRecord, error) {
-	return InspectOperation(service.Reader, service.StoredNamespaceAuthorizer, request)
+func (service Service) InspectOperation(ctx context.Context, request Request) (operations.OperationRecord, error) {
+	return InspectOperation(ctx, service.Reader, service.StoredNamespaceAuthorizer, request)
 }
 
-func InspectOperation(reader OperationReader, authorizer StoredNamespaceAuthorizer, request Request) (operations.OperationRecord, error) {
+func InspectOperation(ctx context.Context, reader OperationReader, authorizer StoredNamespaceAuthorizer, request Request) (operations.OperationRecord, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if reader == nil {
 		return operations.OperationRecord{}, ErrMissingOperationReader
 	}
@@ -49,18 +53,18 @@ func InspectOperation(reader OperationReader, authorizer StoredNamespaceAuthoriz
 		return operations.OperationRecord{}, ErrMissingOperationID
 	}
 
-	record, err := reader.ReadOperation(operationID)
+	record, err := reader.ReadOperation(ctx, operationID)
 	if err != nil {
 		return operations.OperationRecord{}, err
 	}
-	if !canInspect(request, authorizer, record) {
+	if !canInspect(ctx, request, authorizer, record) {
 		return operations.OperationRecord{}, ErrInspectionDenied
 	}
 
 	return record.Sanitized(), nil
 }
 
-func canInspect(request Request, authorizer StoredNamespaceAuthorizer, record operations.OperationRecord) bool {
+func canInspect(ctx context.Context, request Request, authorizer StoredNamespaceAuthorizer, record operations.OperationRecord) bool {
 	if !routeCanCarryNamespaceInspection(request.RouteClass) {
 		return false
 	}
@@ -84,7 +88,7 @@ func canInspect(request Request, authorizer StoredNamespaceAuthorizer, record op
 		return false
 	}
 
-	return authorizer.AllowsOperationInspection(storedNamespaceID, request.Caller)
+	return authorizer.AllowsOperationInspection(ctx, storedNamespaceID, request.Caller)
 }
 
 func routeCanCarryNamespaceInspection(class auth.RouteClass) bool {

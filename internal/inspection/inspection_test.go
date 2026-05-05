@@ -1,6 +1,7 @@
 package inspection
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +20,8 @@ func TestInspectOperationAllowsProductInspectionRoleAndRedactsRecord(t *testing.
 	}
 	authorizer := storedNamespaceAuthorizer("ns_123", productInspectionCaller())
 
-	record, err := InspectOperation(reader, authorizer, Request{
+	ctx := context.WithValue(context.Background(), inspectionTestContextKey("operation-reader"), "ctx-sentinel")
+	record, err := InspectOperation(ctx, reader, authorizer, Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -35,6 +37,12 @@ func TestInspectOperationAllowsProductInspectionRoleAndRedactsRecord(t *testing.
 	}
 	if reader.lastOperationID != "op_123" {
 		t.Fatalf("reader operation id = %q, want op_123", reader.lastOperationID)
+	}
+	if reader.lastContext != ctx {
+		t.Fatal("operation reader did not receive request context")
+	}
+	if authorizer.lastContext != ctx {
+		t.Fatal("stored namespace authorizer did not receive request context")
 	}
 	if record.ID != "op_123" {
 		t.Fatalf("record ID = %q, want op_123", record.ID)
@@ -60,7 +68,7 @@ func TestInspectOperationDeniesNamespaceRecordForEmptyCallerWithMatchingNamespac
 		},
 	}
 
-	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
+	_, err := InspectOperation(context.Background(), reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -78,7 +86,7 @@ func TestInspectOperationDeniesProductCallerWithoutRequiredInspectionRole(t *tes
 		},
 	}
 
-	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productCaller()), Request{
+	_, err := InspectOperation(context.Background(), reader, storedNamespaceAuthorizer("ns_123", productCaller()), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -97,7 +105,7 @@ func TestInspectOperationRequiresStoredNamespaceToMatchRequestNamespaceForProduc
 		},
 	}
 
-	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
+	_, err := InspectOperation(context.Background(), reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_456",
@@ -117,7 +125,7 @@ func TestInspectOperationAllowsNamespaceRecordWhenProductCallerHasNoRequestNames
 	}
 	authorizer := storedNamespaceAuthorizer("ns_123", productInspectionCaller())
 
-	record, err := InspectOperation(reader, authorizer, Request{
+	record, err := InspectOperation(context.Background(), reader, authorizer, Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		RequiredRole: auth.RoleOperationInspector,
@@ -141,7 +149,7 @@ func TestInspectOperationDeniesProductCallerWhenStoredNamespaceAuthorizationLack
 		},
 	}
 
-	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productCaller()), Request{
+	_, err := InspectOperation(context.Background(), reader, storedNamespaceAuthorizer("ns_123", productCaller()), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		RequiredRole: auth.RoleOperationInspector,
@@ -160,7 +168,7 @@ func TestInspectOperationDeniesProductCallerAuthorizedOnlyForDifferentStoredName
 	}
 	authorizer := storedNamespaceAuthorizer("ns_123", productInspectionCaller())
 
-	_, err := InspectOperation(reader, authorizer, Request{
+	_, err := InspectOperation(context.Background(), reader, authorizer, Request{
 		OperationID:  "op_456",
 		RouteClass:   auth.RouteClassOperationInspection,
 		RequiredRole: auth.RoleOperationInspector,
@@ -181,7 +189,7 @@ func TestInspectOperationDeniesProductCallerWithoutStoredNamespaceAuthorizationB
 		},
 	}
 
-	_, err := InspectOperation(reader, nil, Request{
+	_, err := InspectOperation(context.Background(), reader, nil, Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		RequiredRole: auth.RoleOperationInspector,
@@ -204,7 +212,7 @@ func TestInspectOperationDeniesNonProductCallerWithoutOperatorAdminEvenWhenStore
 		Roles:         []auth.Role{auth.RoleOperationInspector},
 	}
 
-	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", operatorInspector), Request{
+	_, err := InspectOperation(context.Background(), reader, storedNamespaceAuthorizer("ns_123", operatorInspector), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		RequiredRole: auth.RoleOperationInspector,
@@ -222,7 +230,7 @@ func TestInspectOperationDeniesNamespaceRecordFromVolumeGlobalProductRoute(t *te
 		},
 	}
 
-	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
+	_, err := InspectOperation(context.Background(), reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassVolumeGlobal,
 		NamespaceID:  "ns_123",
@@ -289,7 +297,7 @@ func TestInspectOperationAllowsAdminAndOperatorWithOperatorAdminForNamespacedAnd
 				},
 			}
 
-			got, err := InspectOperation(reader, nil, Request{
+			got, err := InspectOperation(context.Background(), reader, nil, Request{
 				OperationID: tt.record.ID,
 				RouteClass:  auth.RouteClassOperationInspection,
 				NamespaceID: tt.requestNamespace,
@@ -357,7 +365,7 @@ func TestInspectOperationDeniesAdminAndOperatorFromNonInspectionRouteClass(t *te
 				},
 			}
 
-			_, err := InspectOperation(reader, nil, Request{
+			_, err := InspectOperation(context.Background(), reader, nil, Request{
 				OperationID: tt.record.ID,
 				RouteClass:  auth.RouteClassVolumeGlobal,
 				Caller:      tt.caller,
@@ -376,7 +384,7 @@ func TestInspectOperationDeniesGlobalRecordToProductCaller(t *testing.T) {
 		},
 	}
 
-	_, err := InspectOperation(reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
+	_, err := InspectOperation(context.Background(), reader, storedNamespaceAuthorizer("ns_123", productInspectionCaller()), Request{
 		OperationID:  "op_global",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -395,7 +403,7 @@ func TestInspectOperationDoesNotLetProductCallerUsePrivilegedConfiguredRole(t *t
 		},
 	}
 
-	_, err := InspectOperation(reader, nil, Request{
+	_, err := InspectOperation(context.Background(), reader, nil, Request{
 		OperationID:  "op_global",
 		RouteClass:   auth.RouteClassOperationInspection,
 		RequiredRole: auth.RoleOperatorAdmin,
@@ -414,7 +422,7 @@ func TestInspectOperationPropagatesReaderErrors(t *testing.T) {
 	readerErr := errors.New("operation store unavailable")
 	reader := &fakeOperationReader{err: readerErr}
 
-	_, err := InspectOperation(reader, nil, Request{
+	_, err := InspectOperation(context.Background(), reader, nil, Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -427,13 +435,13 @@ func TestInspectOperationPropagatesReaderErrors(t *testing.T) {
 }
 
 func TestInspectOperationRequiresReaderAndOperationID(t *testing.T) {
-	_, err := InspectOperation(nil, nil, Request{OperationID: "op_123"})
+	_, err := InspectOperation(context.Background(), nil, nil, Request{OperationID: "op_123"})
 	if !errors.Is(err, ErrMissingOperationReader) {
 		t.Fatalf("expected ErrMissingOperationReader, got %v", err)
 	}
 
 	reader := &fakeOperationReader{}
-	_, err = InspectOperation(reader, nil, Request{OperationID: " \t"})
+	_, err = InspectOperation(context.Background(), reader, nil, Request{OperationID: " \t"})
 	if !errors.Is(err, ErrMissingOperationID) {
 		t.Fatalf("expected ErrMissingOperationID, got %v", err)
 	}
@@ -451,7 +459,7 @@ func TestServiceInspectOperationUsesConfiguredReader(t *testing.T) {
 	service := Service{Reader: reader}
 	service.StoredNamespaceAuthorizer = storedNamespaceAuthorizer("ns_123", productInspectionCaller())
 
-	record, err := service.InspectOperation(Request{
+	record, err := service.InspectOperation(context.Background(), Request{
 		OperationID:  "op_123",
 		RouteClass:   auth.RouteClassOperationInspection,
 		NamespaceID:  "ns_123",
@@ -469,12 +477,14 @@ func TestServiceInspectOperationUsesConfiguredReader(t *testing.T) {
 type fakeStoredNamespaceAuthorizer struct {
 	allowed           map[string][]auth.AllowedCaller
 	calls             int
+	lastContext       context.Context
 	lastNamespaceID   string
 	lastCallerService string
 }
 
-func (authorizer *fakeStoredNamespaceAuthorizer) AllowsOperationInspection(namespaceID string, caller auth.AllowedCaller) bool {
+func (authorizer *fakeStoredNamespaceAuthorizer) AllowsOperationInspection(ctx context.Context, namespaceID string, caller auth.AllowedCaller) bool {
 	authorizer.calls++
+	authorizer.lastContext = ctx
 	authorizer.lastNamespaceID = namespaceID
 	authorizer.lastCallerService = caller.CallerService
 	return !auth.CallerNotAllowed(caller.CallerService, auth.RoleOperationInspector, authorizer.allowed[namespaceID])
@@ -492,11 +502,13 @@ type fakeOperationReader struct {
 	records         map[string]operations.OperationRecord
 	err             error
 	reads           int
+	lastContext     context.Context
 	lastOperationID string
 }
 
-func (reader *fakeOperationReader) ReadOperation(operationID string) (operations.OperationRecord, error) {
+func (reader *fakeOperationReader) ReadOperation(ctx context.Context, operationID string) (operations.OperationRecord, error) {
 	reader.reads++
+	reader.lastContext = ctx
 	reader.lastOperationID = operationID
 	if reader.err != nil {
 		return operations.OperationRecord{}, reader.err
@@ -527,6 +539,8 @@ func globalRecord(operationID string) operations.OperationRecord {
 		},
 	}
 }
+
+type inspectionTestContextKey string
 
 func productCaller() auth.AllowedCaller {
 	return auth.AllowedCaller{
