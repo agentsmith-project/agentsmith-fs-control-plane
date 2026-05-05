@@ -13,11 +13,15 @@ Status: GA pre-dev review draft
 - `mode`
 - `status`
 - `created_by_caller_service`
-- `authorized_actor_type`
-- `authorized_actor_id`
+- `created_by_actor`
+- `created_at`
 - `expires_at`
 - `revoked_at`
 - `last_accessed_at`
+
+`created_by_actor` uses the common `Actor` object. `revoked_at` and
+`last_accessed_at` are durable fields that are present on every `ExportSession`
+and may be `null` until revocation or first observed gateway access.
 
 ## Credential View
 

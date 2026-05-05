@@ -4,6 +4,24 @@ Status: GA pre-dev review draft
 
 AFSCP mutations are durable operations. The operation store is the recovery source of truth after process restart.
 
+## API Shape Boundary
+
+Resource mutation endpoints return the flat `OperationEnvelope` response with
+`operation_id`, `operation_state`, `resource`, `result`, and `error`. That
+response is a caller-facing acknowledgement or terminal result, not the durable
+operation-store record.
+
+The durable store and operation inspection API use `OperationRecord`. `GET
+/internal/v1/operations/{operationId}` returns the redacted `OperationRecord`
+directly after stored-namespace or operator authorization. It must not be
+wrapped in an `OperationEnvelope`, and mutation handlers must not return
+`OperationRecord` where the OpenAPI response is `OperationEnvelope`.
+
+Operation inspection does not require `X-AFSCP-Namespace-Id` because
+`OperationRecord.namespace_id` may be null. The inspection handler resolves by
+`operationId`, then enforces authorization against the stored namespace when
+present or operator/global policy when absent.
+
 ## States
 
 - `queued`
@@ -28,8 +46,8 @@ AFSCP mutations are durable operations. The operation store is the recovery sour
 - `request_hash`
 - `correlation_id`
 - `caller_service`
-- `authorized_actor_type`
-- `authorized_actor_id`
+- `authorized_actor`
+- `resource`
 - `namespace_id`
 - `repo_id`
 - `template_id`
@@ -41,11 +59,16 @@ AFSCP mutations are durable operations. The operation store is the recovery sour
 - `jvs_json_output`
 - `verification_result`
 - `compensation_status`
-- `error_code`
-- `error_message`
+- `error`
 - `created_at`
 - `started_at`
 - `finished_at`
+
+`lease_owner`, `lease_expires_at`, resource-specific IDs, `session_fence_id`,
+`jvs_json_output`, `verification_result`, `compensation_status`, `error`,
+`started_at`, and `finished_at` are required nullable DTO fields. They must be
+present as `null` when the operation has not reached the phase that populates
+them.
 
 ## Idempotency
 
@@ -95,10 +118,10 @@ JuiceFS metadata URLs, bucket credentials, access keys, secret keys, Secret
 values, WebDAV passwords, raw mount commands containing secrets, and bearer
 tokens.
 
-`external_resource_ids`, `input_summary`, `jvs_json_output`, `error_message`,
-and `verification_result` must be redacted before persistence or response. If a
-JVS or platform command emits secret material, AFSCP stores a redacted copy and
-records that redaction occurred.
+`external_resource_ids`, `input_summary`, `jvs_json_output`, `error.message`,
+`error.details`, and `verification_result` must be redacted before persistence
+or response. If a JVS or platform command emits secret material, AFSCP stores a
+redacted copy and records that redaction occurred.
 
 ## Writer-Session Fence
 

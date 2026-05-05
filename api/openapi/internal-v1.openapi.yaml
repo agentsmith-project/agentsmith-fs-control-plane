@@ -47,6 +47,13 @@ components:
       required: true
       schema:
         type: string
+    NamespaceId:
+      name: X-AFSCP-Namespace-Id
+      in: header
+      required: true
+      description: Required namespace context for namespace-bound requests. When the request also carries a namespace path, query, or body field, values must match.
+      schema:
+        $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/NamespaceId
   schemas:
     OperationEnvelope:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OperationEnvelope
@@ -165,6 +172,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: namespaceId
@@ -197,6 +205,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: namespaceId
@@ -229,6 +238,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: namespaceId
@@ -259,6 +269,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - name: namespaceId
           in: path
           required: true
@@ -283,6 +294,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
       requestBody:
@@ -308,11 +320,12 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - name: namespace_id
           in: query
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/NamespaceId
         - name: lifecycle_status
           in: query
           required: false
@@ -342,6 +355,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - name: repoId
           in: path
           required: true
@@ -366,6 +380,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: repoId
@@ -397,6 +412,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: repoId
@@ -428,6 +444,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: repoId
@@ -459,6 +476,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: repoId
@@ -490,6 +508,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: repoId
@@ -522,6 +541,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: repoId
@@ -552,6 +572,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - name: repoId
           in: path
           required: true
@@ -582,6 +603,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: repoId
@@ -614,6 +636,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: repoId
@@ -646,6 +669,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
       requestBody:
@@ -673,6 +697,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: templateId
@@ -705,6 +730,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: repoId
@@ -736,6 +762,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - name: exportId
           in: path
           required: true
@@ -759,6 +786,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: exportId
@@ -785,6 +813,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: repoId
@@ -816,6 +845,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - name: mountBindingId
           in: path
           required: true
@@ -840,6 +870,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: mountBindingId
@@ -871,6 +902,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - name: mountBindingId
           in: path
           required: true
@@ -895,6 +927,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: mountBindingId
@@ -921,6 +954,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: mountBindingId
@@ -947,6 +981,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
         - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
         - name: mountBindingId
@@ -969,6 +1004,12 @@ paths:
     get:
       operationId: getOperation
       summary: Get a redacted operation record.
+      description: >
+        Operation inspection does not require X-AFSCP-Namespace-Id because
+        stored operation.namespace_id may be null. The handler resolves the
+        record by operationId, then enforces namespace authorization when the
+        stored namespace_id is present or operator/global authorization when it
+        is absent.
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"

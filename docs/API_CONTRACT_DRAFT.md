@@ -32,6 +32,15 @@ AFSCP APIs are internal control-plane APIs.
 
 The GA transport uses the required headers in [contracts/afscp-internal-api-v1.md](contracts/afscp-internal-api-v1.md). Header values must map into this canonical context.
 
+`X-AFSCP-Namespace-Id` is required for every namespace-bound request. When a route also carries `namespace_id` in the path, query, or body, all namespace values must match before AFSCP reads or mutates the resource. Volume-global admin operations do not carry a namespace header.
+
+Operation inspection is the exception to request-carried namespace context:
+`GET /internal/v1/operations/{operationId}` does not require
+`X-AFSCP-Namespace-Id` because stored `operation.namespace_id` may be null. The
+handler resolves the record by `operationId`, then enforces namespace
+authorization when the stored namespace is present or operator/global
+authorization when it is absent.
+
 ### Standard Operation Envelope
 
 Mutating responses must use one envelope shape across resource types:
@@ -51,6 +60,9 @@ Mutating responses must use one envelope shape across resource types:
 
 Asynchronous mutations may return `queued` or `running` with the same envelope.
 Synchronous mutations may return terminal state and result in the same envelope.
+This is the flat API response envelope for resource mutation handlers. It is not
+the durable `OperationRecord`; handlers must not return persisted operation
+records from repo, template, export, mount, namespace, or volume mutation routes.
 
 ### Standard Error Envelope
 
@@ -236,7 +248,42 @@ AFSCP owns template repo storage and clone execution. Calling products own templ
 
 ### ExportSession And Access Credential
 
-AFSCP stores an `ExportSession` and returns a short-lived secret-bearing credential view when created.
+AFSCP stores an `ExportSession` and returns a short-lived secret-bearing
+credential view only in the create operation result. The create result nests the
+redacted session under `export` and the one-time credential under `access`.
+
+```json
+{
+  "export": {
+    "export_id": "export_123",
+    "namespace_id": "ns_123",
+    "repo_id": "repo_123",
+    "protocol": "webdav",
+    "mode": "read_write",
+    "status": "active",
+    "created_by_caller_service": "example-product-api",
+    "created_by_actor": {
+      "type": "user",
+      "id": "user_123"
+    },
+    "created_at": "2026-05-03T11:55:00Z",
+    "expires_at": "2026-05-03T12:00:00Z",
+    "revoked_at": null,
+    "last_accessed_at": null
+  },
+  "access": {
+    "url": "https://files.example.com/e/export_123/",
+    "auth": {
+      "type": "basic",
+      "username": "export_123",
+      "password": "short-lived-secret"
+    }
+  }
+}
+```
+
+`GET /internal/v1/exports/{exportId}` returns only the redacted
+`ExportSession` and must not return `access` or the WebDAV password:
 
 ```json
 {
@@ -246,15 +293,15 @@ AFSCP stores an `ExportSession` and returns a short-lived secret-bearing credent
   "protocol": "webdav",
   "mode": "read_write",
   "status": "active",
+  "created_by_caller_service": "example-product-api",
+  "created_by_actor": {
+    "type": "user",
+    "id": "user_123"
+  },
+  "created_at": "2026-05-03T11:55:00Z",
   "expires_at": "2026-05-03T12:00:00Z",
-  "access": {
-    "url": "https://files.example.com/e/export_123/",
-    "auth": {
-      "type": "basic",
-      "username": "export_123",
-      "password": "short-lived-secret"
-    }
-  }
+  "revoked_at": null,
+  "last_accessed_at": null
 }
 ```
 
@@ -468,10 +515,17 @@ binding creation with `CAPABILITY_DENIED` instead of issuing a degraded binding.
 GET /internal/v1/operations/{operationId}
 ```
 
-`GET /operations/{operationId}` returns a redacted `OperationRecord`, not the
-standard mutation response envelope. Operation list/search is not part of the
-first GA internal OpenAPI surface; it can be added later for operator tooling
-after access policy and pagination are reviewed.
+`GET /internal/v1/operations/{operationId}` returns a redacted
+`OperationRecord`, not the standard mutation response envelope. Operation
+list/search is not part of the first GA internal OpenAPI surface; it can be
+added later for operator tooling after access policy and pagination are
+reviewed.
+
+Operation inspection does not require `X-AFSCP-Namespace-Id`; an operation may
+have `namespace_id: null` for volume-global or operator workflows. The handler
+returns the redacted `OperationRecord` directly after authorizing against the
+stored namespace when present, or operator/global policy when absent. It must not
+wrap that record in `OperationEnvelope`.
 
 ## Operation Requirements
 

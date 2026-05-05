@@ -196,6 +196,8 @@
         "operation_state",
         "phase",
         "attempt",
+        "lease_owner",
+        "lease_expires_at",
         "idempotency_scope",
         "idempotency_key",
         "request_hash",
@@ -203,10 +205,21 @@
         "caller_service",
         "authorized_actor",
         "resource",
+        "namespace_id",
+        "repo_id",
+        "template_id",
+        "export_id",
+        "mount_binding_id",
+        "session_fence_id",
         "external_resource_ids",
         "input_summary",
+        "jvs_json_output",
+        "verification_result",
+        "compensation_status",
         "error",
-        "created_at"
+        "created_at",
+        "started_at",
+        "finished_at"
       ],
       "properties": {
         "operation_id": { "$ref": "#/$defs/OperationId" },
@@ -595,7 +608,20 @@
     "ExportSession": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["export_id", "namespace_id", "repo_id", "protocol", "mode", "status", "expires_at"],
+      "required": [
+        "export_id",
+        "namespace_id",
+        "repo_id",
+        "protocol",
+        "mode",
+        "status",
+        "created_by_caller_service",
+        "created_by_actor",
+        "created_at",
+        "expires_at",
+        "revoked_at",
+        "last_accessed_at"
+      ],
       "properties": {
         "export_id": { "$ref": "#/$defs/ExportId" },
         "namespace_id": { "$ref": "#/$defs/NamespaceId" },
@@ -603,7 +629,12 @@
         "protocol": { "type": "string", "enum": ["webdav"] },
         "mode": { "type": "string", "enum": ["read_only", "read_write"] },
         "status": { "type": "string", "enum": ["active", "revoking", "revoked", "expired", "failed"] },
-        "expires_at": { "type": "string", "format": "date-time" }
+        "created_by_caller_service": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "created_by_actor": { "$ref": "#/$defs/Actor" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "revoked_at": { "type": ["string", "null"], "format": "date-time" },
+        "last_accessed_at": { "type": ["string", "null"], "format": "date-time" }
       }
     },
     "ExportAccessCredential": {

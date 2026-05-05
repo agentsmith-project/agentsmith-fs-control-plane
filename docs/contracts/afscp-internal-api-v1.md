@@ -9,10 +9,17 @@ AFSCP internal APIs are called by trusted product control planes, privileged adm
 - `Authorization`: service credential. Deployment may use mTLS identity, signed service token, or both, but the credential must authenticate a stable service principal.
 - `Idempotency-Key`: required for mutating requests.
 - `X-Correlation-Id`: required.
-- `X-AFSCP-Namespace-Id`: required where applicable.
+- `X-AFSCP-Namespace-Id`: required for namespace-bound requests.
 - `X-AFSCP-Actor-Type`: required for mutating requests; examples: `user`, `system`, `admin_job`.
 - `X-AFSCP-Actor-Id`: required for mutating requests; the authorized end actor, not the caller service identity.
 - `X-AFSCP-Caller-Service`: required; must match the authenticated service principal or a configured alias.
+
+Namespace-bound requests include namespace create/disable and volume-binding
+operations, repo create/list/get/lifecycle/save/restore, template create/clone,
+export create/get/revoke, workload mount operations, and namespace-bound
+operation inspection. If the request also carries a namespace in the path, query,
+or body, it must equal `X-AFSCP-Namespace-Id`. Volume-global admin operations do
+not carry this header.
 
 ## Caller Authorization
 
@@ -55,14 +62,28 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
 ## Required Invariants
 
 - Every request includes namespace context where resource access is namespace-bound.
+- Operation inspection derives namespace context from the stored operation
+  record; no synthetic namespace is required when the record namespace is null.
 - Every mutating request includes the authorized end actor for audit.
 - AFSCP validates caller service authorization before namespace/resource consistency.
 - AFSCP validates namespace/repo/template/export consistency.
+- AFSCP rejects mismatches between `X-AFSCP-Namespace-Id` and any path, query, body, or stored resource namespace.
 - Cross-namespace template clone is rejected by default.
 - Cross-volume template clone is rejected with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
 - Mutations create operation records before executing external effects.
 - Ordinary product caller responses never include JuiceFS root credentials, raw root paths, or Secret references.
 - Errors are stable enough for callers to render product-facing messages.
+
+## Response Shape Boundary
+
+Mutating resource endpoints return the flat `OperationEnvelope` API response.
+The durable `OperationRecord` is the operation-store record and is returned only
+by `GET /internal/v1/operations/{operationId}` after redaction. Operation
+inspection does not require `X-AFSCP-Namespace-Id`; lookup resolves the record
+by `operationId`, then authorizes against the stored namespace when present or
+operator/global policy when the stored namespace is null. Handlers must not
+return an `OperationRecord` where an `OperationEnvelope` is specified, and
+operation inspection must not wrap the record in an `OperationEnvelope`.
 
 ## GA Role Matrix
 
