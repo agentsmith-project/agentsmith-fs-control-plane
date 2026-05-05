@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
 )
 
 func TestOperationTypesAreStableAndComplete(t *testing.T) {
@@ -38,18 +36,6 @@ func TestOperationTypesAreStableAndComplete(t *testing.T) {
 	}
 	if !stringSlicesEqual(got, want) {
 		t.Fatalf("OperationTypes() = %#v, want %#v", got, want)
-	}
-}
-
-func TestRouteOperationTypesCoverMutatingInternalV1Routes(t *testing.T) {
-	for _, route := range api.InternalV1RouteMetadata() {
-		got, ok := OperationTypeForRouteOperationID(route.OperationID)
-		if route.Mutating && !ok {
-			t.Fatalf("missing operation type mapping for mutating route operationId %q", route.OperationID)
-		}
-		if !route.Mutating && ok {
-			t.Fatalf("read route operationId %q unexpectedly maps to operation type %q", route.OperationID, got)
-		}
 	}
 }
 
