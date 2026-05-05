@@ -34,6 +34,10 @@ const (
 	OperationMigrationCutover          OperationType = "migration_cutover"
 )
 
+const (
+	OperationPhaseNamespaceUpsertValidate = "validate_namespace_upsert"
+)
+
 var operationTypes = []OperationType{
 	OperationVolumeEnsure,
 	OperationNamespaceUpsert,

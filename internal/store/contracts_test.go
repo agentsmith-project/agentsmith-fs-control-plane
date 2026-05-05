@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,163 @@ func TestOperationWorkerCommitStoreContractCommitsSanitizedOperationAndAuditToge
 	if strings.Contains(toStoreContractString(fake.record.InputSummary), "contract-secret") ||
 		strings.Contains(fake.auditEvents[0].Reason, "audit-secret") {
 		t.Fatalf("commit stored unsanitized operation/audit: %#v %#v", fake.record, fake.auditEvents)
+	}
+}
+
+func TestNamespaceUpsertOperationCommitStoreContractCommitsMetadataOperationAndAuditTogether(t *testing.T) {
+	fake := &fakeOperationStore{}
+	var _ NamespaceUpsertOperationCommitStore = fake
+
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	leaseExpiresAt := now.Add(30 * time.Minute)
+	fake.record = operations.OperationRecord{
+		ID:             "op_namespace",
+		Type:           operations.OperationNamespaceUpsert,
+		State:          operations.OperationStateRunning,
+		Phase:          operations.OperationPhaseNamespaceUpsertValidate,
+		LeaseOwner:     "worker-a",
+		LeaseExpiresAt: &leaseExpiresAt,
+		NamespaceID:    "ns_alpha01",
+		Resource:       operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"},
+		CallerService:  "afscp-api",
+		CorrelationID:  "corr-alpha",
+		AuthorizedActor: operations.Actor{
+			Type: "system",
+			ID:   "svc-alpha",
+		},
+		CreatedAt:    now.Add(-time.Hour),
+		InputSummary: map[string]any{"namespace_id": "ns_alpha01", "token": "input-secret-token"},
+	}
+	namespace := resources.Namespace{
+		ID:        "ns_alpha01",
+		Status:    resources.NamespaceStatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	update := fake.record
+	update.State = operations.OperationStateSucceeded
+	update.Phase = "namespace_upsert_committed"
+	event := audit.NewEvent(audit.Event{
+		EventID:         "audit-namespace",
+		Type:            audit.EventTypeNamespaceUpsert,
+		Time:            now,
+		OperationID:     "op_namespace",
+		Resource:        audit.Resource{Type: "namespace", ID: "ns_alpha01", Path: "/metadata?token=audit-path-secret"},
+		Outcome:         audit.OutcomeSucceeded,
+		Reason:          "namespace committed token=audit-reason-secret",
+		CallerService:   "afscp-api",
+		CorrelationID:   "corr-alpha",
+		AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"},
+		Details:         map[string]any{"authorization": "Bearer audit-detail-secret"},
+	})
+
+	gotNamespace, gotOperation, err := fake.CommitNamespaceUpsertWithLease(context.Background(), namespace, update.SanitizedForPersistence(), "worker-a", now, event)
+	if err != nil {
+		t.Fatalf("commit namespace upsert with lease: %v", err)
+	}
+	if gotNamespace.ID != "ns_alpha01" || gotNamespace.Status != resources.NamespaceStatusActive {
+		t.Fatalf("namespace = %#v, want active ns_alpha01", gotNamespace)
+	}
+	if gotOperation.State != operations.OperationStateSucceeded || gotOperation.LeaseOwner != "" || len(fake.auditEvents) != 1 {
+		t.Fatalf("operation/audit = %#v/%#v, want terminal operation and one audit", gotOperation, fake.auditEvents)
+	}
+	rendered := strings.ToLower(toStoreContractString(fake.record.InputSummary) + " " + toStoreContractString(fake.auditEvents[0]))
+	for _, forbidden := range []string{"input-secret-token", "audit-path-secret", "audit-reason-secret", "audit-detail-secret"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("namespace commit leaked %q in operation/audit: %#v %#v", forbidden, fake.record, fake.auditEvents[0])
+		}
+	}
+}
+
+func TestNamespaceUpsertOperationCommitStoreContractRejectsMismatchedOperationBeforeCommit(t *testing.T) {
+	fake := &fakeOperationStore{}
+	var _ NamespaceUpsertOperationCommitStore = fake
+
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	leaseExpiresAt := now.Add(30 * time.Minute)
+	fake.record = operations.OperationRecord{
+		ID:             "op_namespace",
+		Type:           operations.OperationNamespaceUpsert,
+		State:          operations.OperationStateRunning,
+		LeaseOwner:     "worker-a",
+		LeaseExpiresAt: &leaseExpiresAt,
+		NamespaceID:    "ns_alpha01",
+		Resource:       operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"},
+		CallerService:  "afscp-api",
+		CorrelationID:  "corr-alpha",
+		AuthorizedActor: operations.Actor{
+			Type: "system",
+			ID:   "svc-alpha",
+		},
+		CreatedAt: now.Add(-time.Hour),
+	}
+	namespace := resources.Namespace{ID: "ns_alpha01", Status: resources.NamespaceStatusActive, CreatedAt: now, UpdatedAt: now}
+	update := fake.record
+	update.Type = operations.OperationRepoCreate
+	update.State = operations.OperationStateSucceeded
+
+	_, _, err := fake.CommitNamespaceUpsertWithLease(context.Background(), namespace, update.SanitizedForPersistence(), "worker-a", now, audit.NewEvent(audit.Event{
+		EventID:         "audit-namespace",
+		Type:            audit.EventTypeNamespaceUpsert,
+		Time:            now,
+		OperationID:     "op_namespace",
+		Resource:        audit.Resource{Type: "namespace", ID: "ns_alpha01"},
+		Outcome:         audit.OutcomeSucceeded,
+		CallerService:   "afscp-api",
+		CorrelationID:   "corr-alpha",
+		AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"},
+	}))
+	if err == nil {
+		t.Fatal("CommitNamespaceUpsertWithLease succeeded for non-namespace operation, want error")
+	}
+	if len(fake.auditEvents) != 0 {
+		t.Fatalf("audit events = %#v, want none for rejected request", fake.auditEvents)
+	}
+
+	fake.record.Type = operations.OperationRepoCreate
+	update = operations.OperationRecord{
+		ID:              "op_namespace",
+		Type:            operations.OperationNamespaceUpsert,
+		State:           operations.OperationStateSucceeded,
+		LeaseOwner:      "worker-a",
+		LeaseExpiresAt:  &leaseExpiresAt,
+		NamespaceID:     "ns_alpha01",
+		Resource:        operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"},
+		CallerService:   "afscp-api",
+		CorrelationID:   "corr-alpha",
+		AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"},
+		CreatedAt:       now.Add(-time.Hour),
+	}
+	_, _, err = fake.CommitNamespaceUpsertWithLease(context.Background(), namespace, update.SanitizedForPersistence(), "worker-a", now, audit.NewEvent(audit.Event{
+		EventID:         "audit-namespace",
+		Type:            audit.EventTypeNamespaceUpsert,
+		Time:            now,
+		OperationID:     "op_namespace",
+		Resource:        audit.Resource{Type: "namespace", ID: "ns_alpha01"},
+		Outcome:         audit.OutcomeSucceeded,
+		CallerService:   "afscp-api",
+		CorrelationID:   "corr-alpha",
+		AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"},
+	}))
+	if !errors.Is(err, operations.ErrLeaseUnavailable) {
+		t.Fatalf("stored mismatch error = %v, want ErrLeaseUnavailable", err)
+	}
+
+	fake.record = update
+	fake.record.ID = "op_other"
+	_, _, err = fake.CommitNamespaceUpsertWithLease(context.Background(), namespace, update.SanitizedForPersistence(), "worker-a", now, audit.NewEvent(audit.Event{
+		EventID:         "audit-namespace",
+		Type:            audit.EventTypeNamespaceUpsert,
+		Time:            now,
+		OperationID:     "op_namespace",
+		Resource:        audit.Resource{Type: "namespace", ID: "ns_alpha01"},
+		Outcome:         audit.OutcomeSucceeded,
+		CallerService:   "afscp-api",
+		CorrelationID:   "corr-alpha",
+		AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"},
+	}))
+	if !errors.Is(err, operations.ErrLeaseUnavailable) {
+		t.Fatalf("stored id mismatch error = %v, want ErrLeaseUnavailable", err)
 	}
 }
 
@@ -641,6 +799,43 @@ func (fake *fakeOperationStore) CommitOperationWithLease(ctx context.Context, re
 	}
 	fake.auditEvents = append(fake.auditEvents, event.Sanitized())
 	return updated, nil
+}
+
+func (fake *fakeOperationStore) CommitNamespaceUpsertWithLease(ctx context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
+	if err := namespace.Validate(); err != nil {
+		return resources.Namespace{}, operations.OperationRecord{}, err
+	}
+	operation := record.Record()
+	if namespace.Status != resources.NamespaceStatusActive ||
+		operation.Type != operations.OperationNamespaceUpsert ||
+		operation.State != operations.OperationStateSucceeded ||
+		operation.NamespaceID == "" ||
+		operation.NamespaceID != namespace.ID ||
+		operation.Resource.Type != "namespace" ||
+		operation.Resource.ID == "" ||
+		operation.Resource.ID != namespace.ID ||
+		event.Outcome != audit.OutcomeSucceeded ||
+		event.Resource.Type != "namespace" ||
+		event.Resource.ID != namespace.ID ||
+		(strings.TrimSpace(event.Resource.NamespaceID) != "" && event.Resource.NamespaceID != namespace.ID) ||
+		event.CallerService != operation.CallerService ||
+		event.CorrelationID != operation.CorrelationID ||
+		event.AuthorizedActor.Type != operation.AuthorizedActor.Type ||
+		event.AuthorizedActor.ID != operation.AuthorizedActor.ID {
+		return resources.Namespace{}, operations.OperationRecord{}, operations.ErrInvalidLeaseRequest
+	}
+	if fake.record.ID != operation.ID ||
+		fake.record.Type != operations.OperationNamespaceUpsert ||
+		fake.record.NamespaceID != namespace.ID ||
+		fake.record.Resource.Type != "namespace" ||
+		fake.record.Resource.ID != namespace.ID {
+		return resources.Namespace{}, operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	updated, err := fake.CommitOperationWithLease(ctx, record, owner, now, event)
+	if err != nil {
+		return resources.Namespace{}, operations.OperationRecord{}, err
+	}
+	return namespace, updated, nil
 }
 
 func (fake *fakeOperationStore) ListOperationsForRecovery(_ context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {

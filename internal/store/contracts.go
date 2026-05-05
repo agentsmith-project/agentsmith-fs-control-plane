@@ -56,6 +56,18 @@ type OperationWorkerCommitStore interface {
 	CommitOperationWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
 }
 
+// NamespaceUpsertOperationCommitStore atomically commits namespace metadata,
+// a lease-fenced operation update, and its audit outbox event. Implementations
+// must perform all three writes in the same durable boundary; they must not
+// compose this by calling UpsertNamespace followed by CommitOperationWithLease.
+// The operation update and stored leased operation must both describe a
+// succeeded namespace_upsert for the same namespace resource, and the audit
+// event must describe the same operation, caller, actor, correlation, namespace
+// resource, and succeeded outcome.
+type NamespaceUpsertOperationCommitStore interface {
+	CommitNamespaceUpsertWithLease(ctx context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error)
+}
+
 // IdempotencyStore owns the durable create-or-reuse boundary for queued operations.
 //
 // Implementations must make CreateOrReuseOperation atomic by enforcing

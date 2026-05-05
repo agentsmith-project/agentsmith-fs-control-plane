@@ -14,8 +14,6 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 )
 
-const namespaceUpsertPhase = "validate_namespace_upsert"
-
 type NamespaceUpsertHandlerConfig struct {
 	IntakeStore       OperationIntakeStore
 	PrincipalResolver PrincipalResolver
@@ -109,7 +107,7 @@ func (handler namespaceUpsertLeafHandler) ServeHTTP(w http.ResponseWriter, r *ht
 		Resource:            operations.ResourceRef{Type: "namespace", ID: namespaceID},
 		CanonicalRequest:    body,
 		InputSummary:        map[string]any{"namespace_id": namespaceID},
-		Phase:               namespaceUpsertPhase,
+		Phase:               operations.OperationPhaseNamespaceUpsertValidate,
 		GenerateOperationID: handler.operationID,
 		Now:                 handler.now,
 	})

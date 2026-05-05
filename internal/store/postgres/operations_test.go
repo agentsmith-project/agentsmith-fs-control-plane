@@ -22,6 +22,7 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.OperationRecoveryReader = (*Store)(nil)
 	var _ store.OperationLeaseStore = (*Store)(nil)
 	var _ store.OperationWorkerCommitStore = (*Store)(nil)
+	var _ store.NamespaceUpsertOperationCommitStore = (*Store)(nil)
 	var _ store.IdempotencyStore = (*Store)(nil)
 	var _ store.AuditSink = (*Store)(nil)
 

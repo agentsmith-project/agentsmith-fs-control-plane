@@ -47,8 +47,8 @@ func TestUpsertNamespaceHandlerCreatesOperationIntake(t *testing.T) {
 	if spec.RequestHash != wantHash {
 		t.Fatalf("request hash = %q, want %q", spec.RequestHash, wantHash)
 	}
-	if spec.Phase != "validate_namespace_upsert" {
-		t.Fatalf("phase = %q, want validate_namespace_upsert", spec.Phase)
+	if spec.Phase != operations.OperationPhaseNamespaceUpsertValidate {
+		t.Fatalf("phase = %q, want %s", spec.Phase, operations.OperationPhaseNamespaceUpsertValidate)
 	}
 	if spec.NamespaceID != "ns_123" || spec.Resource.Type != "namespace" || spec.Resource.ID != "ns_123" {
 		t.Fatalf("namespace/resource = %q/%#v", spec.NamespaceID, spec.Resource)
