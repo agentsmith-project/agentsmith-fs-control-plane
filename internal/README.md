@@ -14,7 +14,7 @@ needed before real handlers and storage mutation work:
 - `store`: interfaces for durable operation records, idempotency, and audit
   sinks. PostgreSQL schema migration exists; the first PostgreSQL adapter slice
   covers operation reader/writer, idempotency create-or-reuse, and audit outbox
-  append.
+  append, plus minimal repo fence held read/create/active release.
 - `audit`: audit event typing, redaction expectations, and pure outbox state
   transitions.
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
@@ -23,10 +23,10 @@ needed before real handlers and storage mutation work:
   primitives.
 - `pathresolver`: path safety helpers, denial tests, and shared resolver corpus.
 
-Still intentionally absent: real endpoint handlers, repo/resource metadata and
-fence adapters, recovery loop, JVS execution, WebDAV export serving, workload
-mount issuance, repo/template lifecycle mutation, and storage mutation
-implementations.
+Still intentionally absent: real endpoint handlers, repo/resource metadata
+adapters, recovery loop, JVS execution, WebDAV export serving, workload mount
+issuance, repo/template lifecycle mutation, storage mutation implementations,
+and fence enforcement beyond the minimal repo fence adapter slice.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

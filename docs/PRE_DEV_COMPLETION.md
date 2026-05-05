@@ -66,6 +66,8 @@ Neutral service skeleton and control-plane primitives now exist:
 - PostgreSQL migration contract
 - first PostgreSQL adapter slice for operation reader/writer, idempotency
   create-or-reuse, and audit outbox append, with focused tests
+- minimal PostgreSQL repo fence adapter for held fence read, create, and active
+  release, with focused tests
 - operation lease pure model/tests
 - repo fence pure model/tests
 - audit outbox pure model/tests
@@ -78,18 +80,18 @@ The recovery planner is a read-only classifier for later recovery worker/runbook
 decisions; it is not a recovery loop, does not execute a worker, and does not
 touch JVS/WebDAV/mount/storage mutation. The first PostgreSQL adapter slice now
 implements operation reader/writer, idempotency create-or-reuse, and audit
-outbox append. Repo/resource metadata adapters, fence adapters, the recovery
-loop, real endpoint handlers, JVS execution, WebDAV serving, workload mount
-issuance, and storage mutation are not implemented. Continue directly toward GA
-by finishing guardrail review, implementing the remaining durable adapters and
-recovery next, then adding handlers only after their dependency gates are
-accepted.
+outbox append, plus minimal repo fence held read/create/active release.
+Repo/resource metadata adapters, the recovery loop, real endpoint handlers, JVS
+execution, WebDAV serving, workload mount issuance, and storage mutation are
+not implemented. Continue directly toward GA by finishing guardrail review,
+implementing the remaining durable adapters and recovery next, then adding
+handlers only after their dependency gates are accepted.
 
 Storage mutation remains blocked by G-005, recorded in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`. The JVS team has indicated the next
 release will add the required capability, but AFSCP cannot close G-005 or
-implement real storage mutation until a new GitHub release binary is pinned,
-re-smoked, and accepted as evidence.
+implement real storage mutation until a new JVS GitHub release binary is
+pinned, re-smoked, and accepted as evidence.
 
 ## Non-Negotiable Guardrails
 
@@ -104,4 +106,4 @@ re-smoked, and accepted as evidence.
 - Do not enable WebDAV, workload mount, restore-run, or repo lifecycle behavior
   without the relevant session drain/fence semantics.
 - Do not close G-005 until the JVS restore-plan blocker is resolved with a new
-  GitHub release binary and passing smoke evidence.
+  JVS GitHub release binary and passing smoke evidence.

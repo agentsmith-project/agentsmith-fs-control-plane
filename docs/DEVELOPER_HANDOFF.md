@@ -95,6 +95,8 @@ Completed:
   repo fences
 - first PostgreSQL adapter slice for operation reader/writer, idempotency
   create-or-reuse, and audit outbox append, with focused tests
+- minimal PostgreSQL repo fence adapter for held fence read, create, and active
+  release, with focused tests
 - operation lease pure model and tests
 - repo writer/lifecycle fence pure model and tests
 - audit outbox pure model and tests
@@ -112,18 +114,19 @@ Partially completed:
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
   models. The first PostgreSQL adapter slice implements operation read/write,
-  idempotency create-or-reuse, and audit outbox append. The recovery planner
-  only classifies existing durable record values into high-level actions; it is
-  not a recovery loop and does not execute workers or touch
-  JVS/WebDAV/mount/storage mutation. Repo/resource metadata adapters, fence
-  adapters, and the recovery loop are not implemented.
+  idempotency create-or-reuse, audit outbox append, and minimal repo fence held
+  read/create/active release. The recovery planner only classifies existing
+  durable record values into high-level actions; it is not a recovery loop and
+  does not execute workers or touch JVS/WebDAV/mount/storage mutation.
+  Repo/resource metadata adapters and the recovery loop are not implemented.
 - Path resolver guardrails exist, but there is no storage mutation integration.
 
 Not implemented:
 
 - real volume, namespace, repo, template, export, mount, save, restore, or
   lifecycle handlers
-- durable DB-backed repo/resource metadata or fence mutations
+- durable DB-backed repo/resource metadata mutations
+- fence enforcement beyond the minimal repo fence adapter slice
 - DB-backed audit outbox delivery beyond append
 - JVS execution or repo initialization
 - WebDAV export gateway file serving
@@ -137,14 +140,14 @@ Continue in dependency order:
 1. Finish review and acceptance for the existing contract verifier, denied audit,
    migration contract, lease, fence, outbox, and path resolver guardrails.
 2. Implement the remaining durable PostgreSQL adapters for repo/resource
-   metadata and fences, plus recovery inspection over those adapters.
+   metadata, plus recovery inspection over durable repo and fence records.
 3. Add recovery loop behavior only after the remaining durable primitives have
    tests.
 4. Implement volume and namespace binding APIs.
 5. Implement repo/JVS, export/WebDAV, workload mount, save/restore, template,
    and repo lifecycle handlers only after their dependency gates are accepted.
-   Real storage mutation remains blocked by G-005 until the new JVS release
-   binary is smoke-tested and accepted.
+   Real storage mutation remains blocked by G-005 until the new JVS GitHub
+   release binary is smoke-tested and accepted.
 
 ## Current Blocker
 
@@ -155,7 +158,7 @@ and can block `repo clone`. See
 
 The JVS team has indicated the next release will add the capability AFSCP needs.
 AFSCP cannot close G-005, implement real storage mutation, or rely on
-clone-after-restore behavior until a new GitHub release binary is pinned,
+clone-after-restore behavior until a new JVS GitHub release binary is pinned,
 re-smoked, and accepted as evidence. AFSCP must not delete private JVS files
 directly.
 
