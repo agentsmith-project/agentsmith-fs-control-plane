@@ -18,6 +18,8 @@ func TestStoreImplementsResourceContracts(t *testing.T) {
 	var _ store.VolumeStore = (*Store)(nil)
 	var _ store.NamespaceStore = (*Store)(nil)
 	var _ store.NamespaceVolumeBindingStore = (*Store)(nil)
+	var _ store.RepoReader = (*Store)(nil)
+	var _ store.RepoWriter = (*Store)(nil)
 	var _ store.RepoStore = (*Store)(nil)
 }
 

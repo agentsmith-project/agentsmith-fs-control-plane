@@ -14,21 +14,22 @@ needed before real handlers and storage mutation work:
 - `resources`: pure control-plane metadata models and validation for volumes,
   namespaces, namespace volume bindings, and repo/repo lifecycle metadata.
 - `store`: interfaces for durable operation records, idempotency, and audit
-  sinks, plus resource metadata store contracts. PostgreSQL schema migration
-  exists; the first PostgreSQL adapter slice
+  sinks, resource metadata store contracts, and read-only repo recovery
+  inspection contracts. PostgreSQL schema migration exists; the first
+  PostgreSQL adapter slice
   covers operation reader/writer, idempotency create-or-reuse, audit outbox
   append plus DB-only at-least-once delivery primitive, and minimal repo fence
   held read/create/active release. The PostgreSQL resource metadata adapter
-  covers volumes, namespaces, namespace volume bindings, and repo/repo
-  lifecycle metadata as control-plane records only, including internal template
-  storage identity. RepoTemplate publication lifecycle and handlers remain
-  unimplemented.
+  covers volumes, namespaces, namespace volume bindings, repo/repo lifecycle
+  metadata, lifecycle candidate repo reads, and all-held repo fence reads as
+  control-plane records only, including internal template storage identity.
+  RepoTemplate publication lifecycle and handlers remain unimplemented.
 - `audit`: audit event typing, redaction expectations, and pure outbox state
   transitions.
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
 - `fences`: pure repo fence model, held-state semantics, and acquisition checks.
-- `inspection`: recovery inspection and pure read-only recovery classification
-  primitives.
+- `inspection`: operation inspection, recovery classification, and read-only
+  repo recovery inspection composition primitives.
 - `pathresolver`: path safety helpers, denial tests, and shared resolver corpus.
 
 Still intentionally absent: real endpoint handlers, real external audit delivery

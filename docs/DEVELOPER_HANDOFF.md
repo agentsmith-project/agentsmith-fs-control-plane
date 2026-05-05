@@ -112,8 +112,15 @@ Completed:
 - operation lease pure model and tests
 - repo writer/lifecycle fence pure model and tests
 - audit outbox pure model and tests
-- pure recovery planner/classification for operation, fence, and audit outbox
-  durable records
+- pure recovery planner/classification for operation, fence, audit outbox, and
+  repo recovery inspection durable records
+- read-only repo recovery inspection composition over repo lifecycle metadata,
+  held repo fences, and supplied holder/last lifecycle operation records, plus
+  PostgreSQL SELECT-only readers for lifecycle candidate repos and all held repo
+  fences
+- repo recovery inspection marks sessions, exports, and mounts as explicit
+  `not_implemented` / not-inspectable surfaces; that marker is not evidence that
+  no sessions, exports, or mounts exist
 - path resolver guardrails and shared corpus
 - denied audit coverage in the neutral shell and AuthGate paths
 - contract verifier covering selected OpenAPI, schema, docs, and Go DTO drift
@@ -127,9 +134,10 @@ Partially completed:
   pure operation lease, repo fence, audit outbox, and recovery classification
   models. The first PostgreSQL adapter slice implements operation read/write,
   idempotency create-or-reuse, audit outbox append plus DB-only at-least-once
-  delivery primitive, and minimal repo fence held read/create/active release.
-  The recovery planner only classifies existing durable record values into
-  high-level actions; it is not a recovery loop and does not execute workers or
+  delivery primitive, minimal repo fence held read/create/active release, and
+  read-only repo recovery inspection readers. The recovery planner and repo
+  recovery inspection only classify existing durable record values into
+  high-level actions; they are not a recovery loop and do not execute workers or
   touch JVS/WebDAV/mount/storage mutation. Real external audit delivery
   worker/sink integration and the recovery loop are not implemented. Resource
   metadata persistence exists only as control-plane metadata storage; it is not
@@ -155,8 +163,8 @@ Continue in dependency order:
 
 1. Finish review and acceptance for the existing contract verifier, denied audit,
    migration contract, lease, fence, outbox, and path resolver guardrails.
-2. Build recovery inspection over durable repo and fence records, using the
-   existing resource metadata persistence as read/write control-plane state.
+2. Review and accept the read-only repo recovery inspection over durable repo,
+   fence, and operation records.
 3. Add recovery loop behavior only after the remaining durable primitives have
    tests.
 4. Implement volume and namespace binding APIs.

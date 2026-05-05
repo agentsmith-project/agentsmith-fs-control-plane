@@ -74,6 +74,15 @@ type RepoFenceStore interface {
 	RepoFenceWriter
 }
 
+// RepoRecoveryInspectionReader is the read-only durable metadata boundary for
+// composing repo recovery inspections. It must not claim, recover, release, or
+// mutate repo/fence/operation state.
+type RepoRecoveryInspectionReader interface {
+	GetRepo(ctx context.Context, repoID string) (resources.Repo, error)
+	ListReposForRecoveryInspection(ctx context.Context) ([]resources.Repo, error)
+	ListAllHeldRepoFences(ctx context.Context) ([]fences.Fence, error)
+}
+
 type VolumeStore interface {
 	UpsertVolume(ctx context.Context, volume resources.Volume) error
 	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
@@ -91,9 +100,20 @@ type NamespaceVolumeBindingStore interface {
 	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
 }
 
-type RepoStore interface {
-	CreateRepo(ctx context.Context, repo resources.Repo) error
+// RepoReader is the read side of the durable repo metadata boundary.
+type RepoReader interface {
 	GetRepo(ctx context.Context, repoID string) (resources.Repo, error)
 	ListReposByNamespace(ctx context.Context, namespaceID string) ([]resources.Repo, error)
+}
+
+// RepoWriter is the write side of the durable repo metadata boundary.
+type RepoWriter interface {
+	CreateRepo(ctx context.Context, repo resources.Repo) error
 	UpdateRepoLifecycle(ctx context.Context, repoID string, lifecycle resources.RepoLifecycle) (resources.Repo, error)
+}
+
+// RepoStore is the complete durable repo metadata boundary for callers that need both read and write access.
+type RepoStore interface {
+	RepoReader
+	RepoWriter
 }

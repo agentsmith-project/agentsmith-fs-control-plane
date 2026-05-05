@@ -49,6 +49,30 @@ func (store *Store) ListHeldRepoFences(ctx context.Context, repoID string) (fenc
 	return fencesOut, nil
 }
 
+func (store *Store) ListAllHeldRepoFences(ctx context.Context) (fencesOut []fences.Fence, err error) {
+	rows, err := store.exec.QueryContext(ctx, repoFenceListAllHeldSQL())
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+
+	for rows.Next() {
+		fence, err := scanRepoFence(rows)
+		if err != nil {
+			return nil, err
+		}
+		fencesOut = append(fencesOut, fence)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return fencesOut, nil
+}
+
 func (store *Store) CreateRepoFence(ctx context.Context, fence fences.Fence) error {
 	if err := fences.ValidateFence(fence); err != nil {
 		return err
@@ -86,6 +110,10 @@ func repoFenceInsertSQL() string {
 
 func repoFenceListHeldSQL() string {
 	return "SELECT " + strings.Join(repoFenceColumns, ", ") + " FROM repo_fences WHERE repo_id = $1 AND released_at IS NULL ORDER BY created_at, fence_id"
+}
+
+func repoFenceListAllHeldSQL() string {
+	return "SELECT " + strings.Join(repoFenceColumns, ", ") + " FROM repo_fences WHERE released_at IS NULL ORDER BY repo_id, created_at, fence_id"
 }
 
 func repoFenceReleaseSQL() string {

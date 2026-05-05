@@ -75,24 +75,25 @@ Neutral service skeleton and control-plane primitives now exist:
 - operation lease pure model/tests
 - repo fence pure model/tests
 - audit outbox pure model/tests
-- pure recovery planner/classification for operation, fence, and audit outbox
-  durable records
+- pure recovery planner/classification for operation, fence, audit outbox, and
+  repo recovery inspection durable records
 - path resolver shared corpus
 - test harness
 
-The recovery planner is a read-only classifier for later recovery worker/runbook
-decisions; it is not a recovery loop, does not execute a worker, and does not
-touch JVS/WebDAV/mount/storage mutation. The first PostgreSQL adapter slice now
-implements operation reader/writer, idempotency create-or-reuse, and audit
-outbox append plus DB-only at-least-once delivery primitive, plus minimal repo
-fence held read/create/active release. Resource metadata persistence for
+The recovery planner and repo recovery inspection are read-only classifiers for
+later recovery worker/runbook decisions; they are not a recovery loop, do not
+execute a worker, and do not touch JVS/WebDAV/mount/storage mutation. The first
+PostgreSQL adapter slice now implements operation reader/writer, idempotency
+create-or-reuse, audit outbox append plus DB-only at-least-once delivery
+primitive, minimal repo fence held read/create/active release, and SELECT-only
+repo recovery inspection readers. Resource metadata persistence for
 volumes, namespaces, namespace volume bindings, and repo/repo lifecycle metadata
 also exists as control-plane state only. Real external audit delivery
 worker/sink integration, repo lifecycle workers and recovery loop, real endpoint
 handlers, JVS execution, WebDAV serving, workload mount issuance, and storage
 mutation are not implemented. Continue directly toward GA by finishing guardrail
-review, implementing recovery inspection/loop pieces next, then adding handlers
-only after their dependency gates are accepted.
+review, reviewing the read-only repo recovery inspection, then adding recovery
+loop behavior and handlers only after their dependency gates are accepted.
 
 Storage mutation remains blocked by G-005, recorded in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`. The JVS team has indicated the next

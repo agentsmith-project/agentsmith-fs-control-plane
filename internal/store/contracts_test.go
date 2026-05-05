@@ -114,12 +114,74 @@ func TestRepoFenceStoreContractCoversDurableReadCreateReleaseBoundary(t *testing
 	}
 }
 
+func TestRepoRecoveryInspectionReaderContractIsReadOnly(t *testing.T) {
+	fake := &fakeRepoRecoveryInspectionReader{
+		repos: []resources.Repo{
+			{
+				ID:                  "repo_alpha01",
+				NamespaceID:         "ns_alpha01",
+				VolumeID:            "vol_shared01",
+				JVSRepoID:           "jvs-alpha",
+				Kind:                resources.RepoKindRepo,
+				Status:              resources.RepoStatusArchiving,
+				ControlVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/control",
+				PayloadVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload",
+				Lifecycle: resources.RepoLifecycle{
+					Status:                   resources.RepoStatusArchiving,
+					LastLifecycleOperationID: "op_archive01",
+				},
+				CreatedAt: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
+				UpdatedAt: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
+			},
+		},
+		fences: []fences.Fence{
+			{
+				ID:                "fence_alpha",
+				RepoID:            "repo_alpha01",
+				Kind:              fences.KindLifecycle,
+				HolderOperationID: "op_archive01",
+				Status:            fences.StatusActive,
+				ExpiresAt:         time.Date(2026, 5, 5, 12, 30, 0, 0, time.UTC),
+				CreatedAt:         time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
+				UpdatedAt:         time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	var _ RepoRecoveryInspectionReader = fake
+
+	repo, err := fake.GetRepo(context.Background(), "repo_alpha01")
+	if err != nil {
+		t.Fatalf("get repo through inspection reader: %v", err)
+	}
+	if repo.ID != "repo_alpha01" {
+		t.Fatalf("repo = %#v, want repo_alpha01", repo)
+	}
+
+	repos, err := fake.ListReposForRecoveryInspection(context.Background())
+	if err != nil {
+		t.Fatalf("list repos for recovery inspection: %v", err)
+	}
+	if len(repos) != 1 || repos[0].Status != resources.RepoStatusArchiving {
+		t.Fatalf("candidate repos = %#v, want archiving repo", repos)
+	}
+
+	held, err := fake.ListAllHeldRepoFences(context.Background())
+	if err != nil {
+		t.Fatalf("list all held repo fences: %v", err)
+	}
+	if len(held) != 1 || held[0].Kind != fences.KindLifecycle {
+		t.Fatalf("held fences = %#v, want lifecycle fence", held)
+	}
+}
+
 func TestResourceStoresContractCoverControlPlaneMetadataOnly(t *testing.T) {
 	fake := &fakeResourceStore{}
 
 	var _ VolumeStore = fake
 	var _ NamespaceStore = fake
 	var _ NamespaceVolumeBindingStore = fake
+	var _ RepoReader = fake
+	var _ RepoWriter = fake
 	var _ RepoStore = fake
 
 	now := time.Date(2026, 5, 5, 14, 0, 0, 0, time.UTC)
@@ -495,6 +557,32 @@ func (fake *fakeRepoFenceStore) ReleaseRepoFence(_ context.Context, repoID, fenc
 		}
 	}
 	return nil
+}
+
+type fakeRepoRecoveryInspectionReader struct {
+	repos  []resources.Repo
+	fences []fences.Fence
+}
+
+func (fake *fakeRepoRecoveryInspectionReader) GetRepo(_ context.Context, repoID string) (resources.Repo, error) {
+	for _, repo := range fake.repos {
+		if repo.ID == repoID {
+			return repo, nil
+		}
+	}
+	return resources.Repo{}, nil
+}
+
+func (fake *fakeRepoRecoveryInspectionReader) ListReposForRecoveryInspection(_ context.Context) ([]resources.Repo, error) {
+	out := make([]resources.Repo, len(fake.repos))
+	copy(out, fake.repos)
+	return out, nil
+}
+
+func (fake *fakeRepoRecoveryInspectionReader) ListAllHeldRepoFences(_ context.Context) ([]fences.Fence, error) {
+	out := make([]fences.Fence, len(fake.fences))
+	copy(out, fake.fences)
+	return out, nil
 }
 
 type fakeResourceStore struct {

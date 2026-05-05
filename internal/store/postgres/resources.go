@@ -183,6 +183,35 @@ func (store *Store) ListReposByNamespace(ctx context.Context, namespaceID string
 	return repos, nil
 }
 
+func (store *Store) ListReposForRecoveryInspection(ctx context.Context) (repos []resources.Repo, err error) {
+	statuses := repoRecoveryInspectionCandidateStatuses()
+	args := make([]any, len(statuses))
+	for idx, status := range statuses {
+		args[idx] = string(status)
+	}
+
+	rows, err := store.exec.QueryContext(ctx, repoRecoveryInspectionCandidatesSQL(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	for rows.Next() {
+		repo, err := scanRepo(rows)
+		if err != nil {
+			return nil, err
+		}
+		repos = append(repos, repo)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return repos, nil
+}
+
 func (store *Store) UpdateRepoLifecycle(ctx context.Context, repoID string, lifecycle resources.RepoLifecycle) (resources.Repo, error) {
 	if err := validateRepoOrTemplateID(repoID); err != nil {
 		return resources.Repo{}, err
@@ -273,6 +302,23 @@ func repoInsertSQL() string {
 
 func repoSelectSQL() string {
 	return "SELECT " + strings.Join(repoColumns, ", ") + " FROM repos"
+}
+
+func repoRecoveryInspectionCandidatesSQL() string {
+	return repoSelectSQL() +
+		" WHERE lifecycle_status IN (" + placeholders(1, len(repoRecoveryInspectionCandidateStatuses())) + ")" +
+		" ORDER BY updated_at, repo_id"
+}
+
+func repoRecoveryInspectionCandidateStatuses() []resources.RepoStatus {
+	return []resources.RepoStatus{
+		resources.RepoStatusArchiving,
+		resources.RepoStatusRestoringArchived,
+		resources.RepoStatusDeleting,
+		resources.RepoStatusRestoringTombstoned,
+		resources.RepoStatusPurging,
+		resources.RepoStatusOperatorInterventionRequired,
+	}
 }
 
 func repoLifecycleUpdateSQL() string {
