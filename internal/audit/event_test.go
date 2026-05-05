@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
 
 func TestNewEventRedactsDetails(t *testing.T) {
@@ -190,11 +191,145 @@ func TestNewEventWithRedactorUsesProvidedRedactor(t *testing.T) {
 	}
 }
 
+func TestStableEventTypesUseCommonRedactionRules(t *testing.T) {
+	for _, eventType := range EventTypes() {
+		t.Run(string(eventType), func(t *testing.T) {
+			event := NewEvent(Event{
+				EventID:       "evt_stable_redaction",
+				Type:          eventType,
+				Time:          time.Date(2026, 5, 4, 22, 7, 0, 0, time.UTC),
+				CallerService: "agentsmith",
+				CorrelationID: "corr_stable_redaction",
+				OperationID:   "op_stable_redaction",
+				Resource: Resource{
+					Type:        "repo",
+					ID:          "repo_123",
+					NamespaceID: "ns_123",
+					Path:        `/payload --token path-token redis://:path-metadata-secret@metadata:6379/1`,
+				},
+				Outcome: OutcomeFailed,
+				Reason:  `metadata postgres://user:metadata-secret@metadata.internal:5432/jfs token=reason-token password=reason-password Secret ref: ns/raw-secret`,
+				Details: auditSecretDetailsForTest(),
+			})
+
+			body, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("MarshalJSON returned error: %v", err)
+			}
+
+			rendered := strings.ToLower(auditEventTestString(t, event) + " " + string(body))
+			for _, forbidden := range []string{
+				"detail-token",
+				"detail-password",
+				"detail-metadata-secret",
+				"detail-access-key",
+				"detail-webdav-password",
+				"nested-token",
+				"nested-password",
+				"nested-metadata-secret",
+				"path-token",
+				"path-metadata-secret",
+				"reason-token",
+				"reason-password",
+				"metadata-secret",
+				"raw-secret",
+				"postgres://",
+				"redis://",
+			} {
+				if strings.Contains(rendered, strings.ToLower(forbidden)) {
+					t.Fatalf("%s leaked secret material %q in %s", eventType, forbidden, rendered)
+				}
+			}
+			if !strings.Contains(rendered, strings.ToLower(observability.Redacted)) {
+				t.Fatalf("%s missing redacted marker in %s", eventType, rendered)
+			}
+		})
+	}
+}
+
+func TestOperationTypesMapToStableAuditEventTypes(t *testing.T) {
+	eventTypes := EventTypes()
+	knownEventTypes := make(map[EventType]bool, len(eventTypes))
+	for _, eventType := range eventTypes {
+		knownEventTypes[eventType] = true
+	}
+
+	seenMappedTypes := make(map[EventType]operations.OperationType)
+	for _, operationType := range operations.OperationTypes() {
+		eventType, ok := EventTypeForOperationType(operationType.String())
+		if !ok {
+			t.Fatalf("EventTypeForOperationType(%q) ok = false, want true", operationType)
+		}
+		if eventType == "" {
+			t.Fatalf("EventTypeForOperationType(%q) = empty", operationType)
+		}
+		if !knownEventTypes[eventType] {
+			t.Fatalf("EventTypeForOperationType(%q) = %q, not in EventTypes()", operationType, eventType)
+		}
+		if previous, ok := seenMappedTypes[eventType]; ok {
+			t.Fatalf("duplicate operation event type %q mapped from %q and %q", eventType, previous, operationType)
+		}
+		seenMappedTypes[eventType] = operationType
+	}
+}
+
+func TestOperationEventTypesContainOnlyKnownUniqueEventTypes(t *testing.T) {
+	eventTypes := EventTypes()
+	knownEventTypes := make(map[EventType]bool, len(eventTypes))
+	for _, eventType := range eventTypes {
+		knownEventTypes[eventType] = true
+	}
+
+	mapped := OperationEventTypes()
+	seen := make(map[EventType]string, len(mapped))
+	for operationType, eventType := range mapped {
+		if strings.TrimSpace(operationType) == "" {
+			t.Fatalf("OperationEventTypes contains empty operation type")
+		}
+		if eventType == "" {
+			t.Fatalf("OperationEventTypes[%q] = empty", operationType)
+		}
+		if !knownEventTypes[eventType] {
+			t.Fatalf("OperationEventTypes[%q] = %q, not in EventTypes()", operationType, eventType)
+		}
+		if previous, ok := seen[eventType]; ok {
+			t.Fatalf("duplicate operation event type %q mapped from %q and %q", eventType, previous, operationType)
+		}
+		seen[eventType] = operationType
+	}
+}
+
+func TestEventTypeAccessorsReturnDefensiveCopies(t *testing.T) {
+	eventTypes := EventTypes()
+	if len(eventTypes) == 0 {
+		t.Fatalf("EventTypes() returned empty list")
+	}
+	eventTypes[0] = EventType("mutated")
+	if got := EventTypes()[0]; got == EventType("mutated") {
+		t.Fatalf("EventTypes() returned mutable backing storage")
+	}
+
+	operationEventTypes := OperationEventTypes()
+	if len(operationEventTypes) == 0 {
+		t.Fatalf("OperationEventTypes() returned empty map")
+	}
+	for operationType := range operationEventTypes {
+		operationEventTypes[operationType] = EventType("mutated")
+		break
+	}
+	for operationType, eventType := range OperationEventTypes() {
+		if eventType == EventType("mutated") {
+			t.Fatalf("OperationEventTypes() returned mutable backing storage at %q", operationType)
+		}
+	}
+}
+
 func TestDeniedEventsAllowEmptyOperationID(t *testing.T) {
 	for _, eventType := range []EventType{
 		EventTypeAuthzDenied,
 		EventTypePathDenied,
 		EventTypeCapabilityDenied,
+		EventTypeResourceNamespaceMismatchDenied,
 	} {
 		event := NewEvent(Event{
 			EventID:         "evt_denied",
@@ -324,4 +459,21 @@ func auditEventTestString(t *testing.T, value any) string {
 		t.Fatalf("marshal audit test value: %v", err)
 	}
 	return string(encoded)
+}
+
+func auditSecretDetailsForTest() map[string]any {
+	return map[string]any{
+		"metadata_url":    "redis://:detail-metadata-secret@metadata:6379/1",
+		"accessKey":       "detail-access-key",
+		"token":           "detail-token",
+		"password":        "detail-password",
+		"Secret ref":      "ns/detail-secret-ref",
+		"WebDAV password": "detail-webdav-password",
+		"repo_id":         "repo_123",
+		"nested": map[string]any{
+			"token":        "nested-token",
+			"password":     "nested-password",
+			"metadata_url": "redis://:nested-metadata-secret@metadata:6379/1",
+		},
+	}
 }

@@ -7,7 +7,7 @@ import (
 
 const Redacted = "[REDACTED]"
 
-const rawSensitiveKeyPattern = `(?:secret|token|password|passwd|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credential|authorization|metadata[_-]?url|webdav[_-]?password)`
+const rawSensitiveKeyPattern = `(?:secret[\s_-]?ref|secret|token|password|passwd|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|private[\s_-]?key|credential|authorization|metadata[\s_-]?url|webdav[\s_-]?password)`
 
 var (
 	rawMetadataURLPattern = regexp.MustCompile(`(?i)\b(?:redis|mysql|postgres|postgresql|mongodb|etcd|tikv|sqlite|badger)://[^\s,;)"'}]+`)
