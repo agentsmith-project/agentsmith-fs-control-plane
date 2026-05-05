@@ -100,9 +100,11 @@ Completed:
 - PostgreSQL migration contract for operations, idempotency, audit outbox, repo
   fences, volumes, namespaces, namespace volume bindings, and repo/repo
   lifecycle metadata
-- first PostgreSQL adapter slice for operation reader/writer, idempotency
-  create-or-reuse, and audit outbox append plus DB-only at-least-once delivery
-  primitive, with focused tests
+- first PostgreSQL adapter slice for operation reader/writer, DB-only operation
+  lease claim/reclaim/recover/finalize/renew plus lease-fenced worker
+  progress/terminal update primitive, idempotency create-or-reuse, and audit
+  outbox append plus DB-only at-least-once delivery primitive, with focused
+  tests
 - PostgreSQL resource metadata adapter for volumes, namespaces, namespace volume
   bindings, and repo/repo lifecycle metadata, with focused tests
 - repo and template storage identities are recorded as control-plane metadata;
@@ -133,13 +135,17 @@ Partially completed:
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
   models. The first PostgreSQL adapter slice implements operation read/write,
-  idempotency create-or-reuse, audit outbox append plus DB-only at-least-once
-  delivery primitive, minimal repo fence held read/create/active release, and
-  read-only repo recovery inspection readers. The recovery planner and repo
-  recovery inspection only classify existing durable record values into
-  high-level actions; they are not a recovery loop and do not execute workers or
-  touch JVS/WebDAV/mount/storage mutation. Real external audit delivery
-  worker/sink integration and the recovery loop are not implemented. Resource
+  DB-only operation lease claim/reclaim/recover/finalize/renew plus
+  lease-fenced worker progress/terminal update primitive, idempotency
+  create-or-reuse, audit outbox append plus DB-only at-least-once delivery
+  primitive, minimal repo fence held read/create/active release, and read-only
+  repo recovery inspection readers. Worker-owned progress/terminal writes must
+  use the lease-fenced update primitive, not unguarded `UpdateOperation`. The
+  recovery planner and repo recovery inspection only classify existing durable
+  record values into high-level actions; they are not a recovery loop and do
+  not execute workers or touch JVS/WebDAV/mount/storage mutation. Real external
+  audit delivery worker/sink integration and the recovery loop are not
+  implemented. Resource
   metadata persistence exists only as control-plane metadata storage; it is not
   real repo lifecycle execution, recovery, or storage mutation.
 - Path resolver guardrails exist, but there is no storage mutation integration.

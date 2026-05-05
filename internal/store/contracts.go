@@ -29,6 +29,19 @@ type OperationStore interface {
 	OperationWriter
 }
 
+// OperationLeaseStore owns atomic worker/recovery lease transitions by operation_id.
+//
+// Implementations must not implement these methods as GetOperation followed by
+// UpdateOperation. Claim/reclaim/recover/finalize, renew, and worker-owned
+// progress/terminal writes must be single conditional durable mutations that
+// return the updated redacted operation record only when the operation was
+// still eligible at the database boundary.
+type OperationLeaseStore interface {
+	AcquireOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	RenewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	UpdateOperationWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error)
+}
+
 // IdempotencyStore owns the durable create-or-reuse boundary for queued operations.
 //
 // Implementations must make CreateOrReuseOperation atomic by enforcing

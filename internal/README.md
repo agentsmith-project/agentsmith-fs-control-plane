@@ -17,9 +17,11 @@ needed before real handlers and storage mutation work:
   sinks, resource metadata store contracts, and read-only repo recovery
   inspection contracts. PostgreSQL schema migration exists; the first
   PostgreSQL adapter slice
-  covers operation reader/writer, idempotency create-or-reuse, audit outbox
-  append plus DB-only at-least-once delivery primitive, and minimal repo fence
-  held read/create/active release. The PostgreSQL resource metadata adapter
+  covers operation reader/writer, DB-only operation lease
+  claim/reclaim/recover/finalize/renew plus lease-fenced worker
+  progress/terminal update primitives, idempotency create-or-reuse, audit
+  outbox append plus DB-only at-least-once delivery primitive, and minimal repo
+  fence held read/create/active release. The PostgreSQL resource metadata adapter
   covers volumes, namespaces, namespace volume bindings, repo/repo lifecycle
   metadata, lifecycle candidate repo reads, and all-held repo fence reads as
   control-plane records only, including internal template storage identity.

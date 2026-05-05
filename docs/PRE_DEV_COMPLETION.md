@@ -64,9 +64,11 @@ Neutral service skeleton and control-plane primitives now exist:
 - generated schema/OpenAPI plumbing
 - neutral route registration and denied audit shell/AuthGate paths
 - PostgreSQL migration contract
-- first PostgreSQL adapter slice for operation reader/writer, idempotency
-  create-or-reuse, and audit outbox append plus DB-only at-least-once delivery
-  primitive, with focused tests
+- first PostgreSQL adapter slice for operation reader/writer, DB-only operation
+  lease claim/reclaim/recover/finalize/renew plus lease-fenced worker
+  progress/terminal update primitive, idempotency create-or-reuse, and audit
+  outbox append plus DB-only at-least-once delivery primitive, with focused
+  tests
 - pure resource metadata models, store contracts, PostgreSQL adapter, and
   migration contract for volumes, namespaces, namespace volume bindings, and
   repo/repo lifecycle metadata
@@ -83,10 +85,13 @@ Neutral service skeleton and control-plane primitives now exist:
 The recovery planner and repo recovery inspection are read-only classifiers for
 later recovery worker/runbook decisions; they are not a recovery loop, do not
 execute a worker, and do not touch JVS/WebDAV/mount/storage mutation. The first
-PostgreSQL adapter slice now implements operation reader/writer, idempotency
-create-or-reuse, audit outbox append plus DB-only at-least-once delivery
-primitive, minimal repo fence held read/create/active release, and SELECT-only
-repo recovery inspection readers. Resource metadata persistence for
+PostgreSQL adapter slice now implements operation reader/writer, DB-only
+operation lease claim/reclaim/recover/finalize/renew plus lease-fenced worker
+progress/terminal update primitive, idempotency create-or-reuse, audit outbox
+append plus DB-only at-least-once delivery primitive, minimal repo fence held
+read/create/active release, and SELECT-only repo recovery inspection readers.
+Worker-owned progress/terminal writes must use the lease-fenced update
+primitive, not unguarded `UpdateOperation`. Resource metadata persistence for
 volumes, namespaces, namespace volume bindings, and repo/repo lifecycle metadata
 also exists as control-plane state only. Real external audit delivery
 worker/sink integration, repo lifecycle workers and recovery loop, real endpoint

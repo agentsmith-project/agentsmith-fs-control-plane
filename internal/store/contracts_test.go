@@ -40,6 +40,71 @@ func TestOperationStoreContractComposesReaderAndWriter(t *testing.T) {
 	}
 }
 
+func TestOperationLeaseStoreContractCoversClaimReclaimRenewAndFencedUpdateByOperationID(t *testing.T) {
+	fake := &fakeOperationStore{}
+	var _ OperationLeaseStore = fake
+
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	fake.record = operations.OperationRecord{
+		ID:        "op_alpha",
+		Type:      operations.OperationRepoCreate,
+		State:     operations.OperationStateQueued,
+		CreatedAt: now.Add(-time.Minute),
+	}
+
+	claimed, err := fake.AcquireOperationLease(context.Background(), "op_alpha", operations.LeaseRequest{
+		Owner:    "worker-a",
+		Duration: 30 * time.Minute,
+		Now:      now,
+	})
+	if err != nil {
+		t.Fatalf("claim operation lease: %v", err)
+	}
+	if claimed.State != operations.OperationStateRunning || claimed.LeaseOwner != "worker-a" || claimed.Attempt != 1 {
+		t.Fatalf("claimed operation = %#v, want running worker-a attempt 1", claimed)
+	}
+
+	reclaimed, err := fake.AcquireOperationLease(context.Background(), "op_alpha", operations.LeaseRequest{
+		Owner:    "worker-b",
+		Duration: 45 * time.Minute,
+		Now:      now.Add(31 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("reclaim operation lease: %v", err)
+	}
+	if reclaimed.LeaseOwner != "worker-b" || reclaimed.Attempt != 2 {
+		t.Fatalf("reclaimed operation = %#v, want worker-b attempt 2", reclaimed)
+	}
+
+	renewed, err := fake.RenewOperationLease(context.Background(), "op_alpha", operations.LeaseRequest{
+		Owner:    "worker-b",
+		Duration: time.Hour,
+		Now:      now.Add(32 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("renew operation lease: %v", err)
+	}
+	if renewed.LeaseOwner != "worker-b" || renewed.Attempt != 2 {
+		t.Fatalf("renewed operation = %#v, want worker-b attempt unchanged", renewed)
+	}
+	if renewed.LeaseExpiresAt == nil || !renewed.LeaseExpiresAt.Equal(now.Add(92*time.Minute)) {
+		t.Fatalf("renewed lease expiry = %v, want %v", renewed.LeaseExpiresAt, now.Add(92*time.Minute))
+	}
+
+	renewed.Phase = "verify_result"
+	renewed.JVSJSONOutput = map[string]any{"token": "lease-fenced-secret"}
+	updated, err := fake.UpdateOperationWithLease(context.Background(), renewed.SanitizedForPersistence(), "worker-b", now.Add(33*time.Minute))
+	if err != nil {
+		t.Fatalf("lease-fenced update operation: %v", err)
+	}
+	if updated.LeaseOwner != "worker-b" || updated.Attempt != 2 {
+		t.Fatalf("fenced updated operation = %#v, want worker-b attempt unchanged", updated)
+	}
+	if rendered := updated.JVSJSONOutput.(map[string]any)["token"]; rendered == "lease-fenced-secret" {
+		t.Fatalf("fenced update stored unsanitized output: %#v", updated.JVSJSONOutput)
+	}
+}
+
 func TestIdempotencyStoreContractRequiresAtomicCreateOrReuseBoundary(t *testing.T) {
 	fake := &fakeIdempotencyStore{}
 	var _ IdempotencyStore = fake
@@ -434,6 +499,50 @@ func (fake *fakeOperationStore) CreateOperation(_ context.Context, record operat
 func (fake *fakeOperationStore) UpdateOperation(_ context.Context, record operations.SanitizedOperationRecord) error {
 	fake.record = record.Record()
 	return nil
+}
+
+func (fake *fakeOperationStore) AcquireOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	if fake.record.ID != operationID {
+		return operations.OperationRecord{}, nil
+	}
+	decision := operations.AcquireLease(fake.record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	fake.record = decision.Record
+	return fake.record, nil
+}
+
+func (fake *fakeOperationStore) RenewOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	if fake.record.ID != operationID {
+		return operations.OperationRecord{}, nil
+	}
+	decision := operations.RenewLease(fake.record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	fake.record = decision.Record
+	return fake.record, nil
+}
+
+func (fake *fakeOperationStore) UpdateOperationWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	if fake.record.ID != record.Record().ID {
+		return operations.OperationRecord{}, nil
+	}
+	if fake.record.State != operations.OperationStateRunning || fake.record.LeaseOwner != strings.TrimSpace(owner) || fake.record.LeaseExpiresAt == nil || !fake.record.LeaseExpiresAt.After(now) {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	updated := record.Record()
+	updated.Attempt = fake.record.Attempt
+	if updated.State == operations.OperationStateRunning {
+		updated.LeaseOwner = fake.record.LeaseOwner
+		updated.LeaseExpiresAt = fake.record.LeaseExpiresAt
+	} else {
+		updated.LeaseOwner = ""
+		updated.LeaseExpiresAt = nil
+	}
+	fake.record = updated.SanitizedForPersistence().Record()
+	return fake.record, nil
 }
 
 type fakeIdempotencyStore struct {

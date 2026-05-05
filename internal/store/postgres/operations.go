@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -83,6 +84,67 @@ func (store *Store) GetOperation(ctx context.Context, operationID string) (opera
 	return scanOperation(row)
 }
 
+func (store *Store) AcquireOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	args, err := operationLeaseRequestArgs(operationID, request)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	row := store.exec.QueryRowContext(ctx, operationAcquireLeaseSQL(),
+		args.operationID,
+		args.owner,
+		args.expiresAt,
+		args.now,
+		args.recoveryMode,
+		args.cancelPolicy,
+	)
+	record, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("acquire", args.operationID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) RenewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	args, err := operationLeaseRequestArgs(operationID, request)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	row := store.exec.QueryRowContext(ctx, operationRenewLeaseSQL(),
+		args.operationID,
+		args.owner,
+		args.expiresAt,
+		args.now,
+	)
+	record, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("renew", args.operationID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) UpdateOperationWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	record := sanitized.Record()
+	args, err := operationLeaseFencedUpdateArgs(record, owner, now)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	row := store.exec.QueryRowContext(ctx, operationLeaseFencedUpdateSQL(), args...)
+	updated, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("update", record.ID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return updated, nil
+}
+
 func (store *Store) CreateOrReuseOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
 	record, err := operations.NewQueuedOperationRecord(spec)
 	if err != nil {
@@ -142,6 +204,51 @@ func operationUpdateSQL() string {
 		"finished_at = $13, " +
 		"updated_at = $14 " +
 		"WHERE operation_id = $15"
+}
+
+func operationAcquireLeaseSQL() string {
+	validLeasePair := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL))"
+	return "UPDATE operations SET " +
+		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
+		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
+		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
+		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
+		"updated_at = $4 " +
+		"WHERE operation_id = $1 AND (" +
+		"(operation_state = 'queued' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
+		"(operation_state = 'running' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
+		"(operation_state = 'operator_intervention_required' AND $5 = 'explicit_recovery_action' AND " + validLeasePair + ") OR " +
+		"(operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' AND " + validLeasePair + ")" +
+		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+}
+
+func operationRenewLeaseSQL() string {
+	return "UPDATE operations SET " +
+		"lease_expires_at = GREATEST(lease_expires_at, $3), " +
+		"updated_at = $4 " +
+		"WHERE operation_id = $1 AND operation_state = 'running' AND lease_owner = $2 AND lease_expires_at IS NOT NULL AND lease_expires_at > $4 " +
+		"RETURNING " + strings.Join(operationSelectColumns, ", ")
+}
+
+func operationLeaseFencedUpdateSQL() string {
+	return "UPDATE operations SET " +
+		"operation_state = $1, " +
+		"phase = $2, " +
+		"lease_owner = CASE WHEN $1 = 'running' THEN lease_owner ELSE NULL END, " +
+		"lease_expires_at = CASE WHEN $1 = 'running' THEN lease_expires_at ELSE NULL END, " +
+		"external_resource_ids = $3, " +
+		"input_summary = $4, " +
+		"jvs_json_output = $5, " +
+		"verification_result = $6, " +
+		"compensation_status = $7, " +
+		"error_json = $8, " +
+		"started_at = COALESCE(started_at, $9, $11), " +
+		"finished_at = CASE WHEN $1 IN ('succeeded', 'failed', 'cancelled') THEN COALESCE($10, $11) ELSE NULL END, " +
+		"updated_at = $11 " +
+		"WHERE operation_id = $12 AND operation_state = 'running' AND lease_owner = $13 AND lease_expires_at IS NOT NULL AND lease_expires_at > $11 " +
+		"RETURNING " + strings.Join(operationSelectColumns, ", ")
 }
 
 func operationInsertArgs(record operations.OperationRecord) ([]any, error) {
@@ -241,6 +348,149 @@ func operationUpdateArgs(record operations.OperationRecord, updatedAt any) ([]an
 		updatedAt,
 		record.ID,
 	}, nil
+}
+
+type operationLeaseArgs struct {
+	operationID  string
+	owner        string
+	expiresAt    time.Time
+	now          time.Time
+	recoveryMode string
+	cancelPolicy string
+}
+
+func operationLeaseRequestArgs(operationID string, request operations.LeaseRequest) (operationLeaseArgs, error) {
+	operationID = strings.TrimSpace(operationID)
+	if operationID == "" {
+		return operationLeaseArgs{}, operationLeaseInvalidRequest("operation_id", "missing operation id")
+	}
+	owner := strings.TrimSpace(request.Owner)
+	if owner == "" {
+		return operationLeaseArgs{}, operationLeaseInvalidRequest("owner", "missing lease owner")
+	}
+	if request.Duration <= 0 {
+		return operationLeaseArgs{}, operationLeaseInvalidRequest("duration", "lease duration must be positive")
+	}
+	if request.Now.IsZero() {
+		return operationLeaseArgs{}, operationLeaseInvalidRequest("now", "lease decision time must be set")
+	}
+	if !validOperationLeaseRecoveryMode(request.RecoveryMode) {
+		return operationLeaseArgs{}, operationLeaseInvalidRequest("recovery_mode", fmt.Sprintf("unknown recovery mode %q", request.RecoveryMode))
+	}
+	if !validOperationLeaseCancelPolicy(request.CancelPolicy) {
+		return operationLeaseArgs{}, operationLeaseInvalidRequest("cancel_policy", fmt.Sprintf("unknown cancel policy %q", request.CancelPolicy))
+	}
+
+	now := request.Now.UTC()
+	return operationLeaseArgs{
+		operationID:  operationID,
+		owner:        owner,
+		expiresAt:    now.Add(request.Duration),
+		now:          now,
+		recoveryMode: string(request.RecoveryMode),
+		cancelPolicy: string(request.CancelPolicy),
+	}, nil
+}
+
+func validOperationLeaseRecoveryMode(mode operations.LeaseRecoveryMode) bool {
+	switch mode {
+	case operations.LeaseRecoveryNone, operations.LeaseRecoveryExplicitAction:
+		return true
+	default:
+		return false
+	}
+}
+
+func validOperationLeaseCancelPolicy(policy operations.LeaseCancelPolicy) bool {
+	switch policy {
+	case operations.LeaseCancelPolicyNone, operations.LeaseCancelPolicyFinalize:
+		return true
+	default:
+		return false
+	}
+}
+
+func operationLeaseFencedUpdateArgs(record operations.OperationRecord, owner string, now time.Time) ([]any, error) {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return nil, operationLeaseInvalidRequest("owner", "missing lease owner")
+	}
+	operationID := strings.TrimSpace(record.ID)
+	if operationID == "" {
+		return nil, operationLeaseInvalidRequest("operation_id", "missing operation id")
+	}
+	if now.IsZero() {
+		return nil, operationLeaseInvalidRequest("now", "lease fence time must be set")
+	}
+	if !validOperationLeaseFencedUpdateState(record.State) {
+		return nil, operationLeaseInvalidRequest("operation_state", fmt.Sprintf("%q cannot be written through a lease-fenced worker update", record.State))
+	}
+	if recordOwner := strings.TrimSpace(record.LeaseOwner); recordOwner != "" && recordOwner != owner {
+		return nil, operationLeaseInvalidRequest("lease_owner", "record lease owner differs from fence owner")
+	}
+
+	externalResourceIDs, err := marshalObject(record.ExternalResourceIDs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal external_resource_ids: %w", err)
+	}
+	inputSummary, err := marshalObject(record.InputSummary)
+	if err != nil {
+		return nil, fmt.Errorf("marshal input_summary: %w", err)
+	}
+	jvsJSONOutput, err := marshalNullableJSON(record.JVSJSONOutput)
+	if err != nil {
+		return nil, fmt.Errorf("marshal jvs_json_output: %w", err)
+	}
+	verificationResult, err := marshalNullableJSON(record.VerificationResult)
+	if err != nil {
+		return nil, fmt.Errorf("marshal verification_result: %w", err)
+	}
+	errorJSON, err := marshalNullableJSON(record.Error)
+	if err != nil {
+		return nil, fmt.Errorf("marshal error_json: %w", err)
+	}
+
+	return []any{
+		string(record.State),
+		record.Phase,
+		externalResourceIDs,
+		inputSummary,
+		jvsJSONOutput,
+		verificationResult,
+		nullableStringArg(record.CompensationStatus),
+		errorJSON,
+		timePtrArg(record.StartedAt),
+		timePtrArg(record.FinishedAt),
+		now.UTC(),
+		operationID,
+		owner,
+	}, nil
+}
+
+func validOperationLeaseFencedUpdateState(state operations.OperationState) bool {
+	switch state {
+	case operations.OperationStateRunning,
+		operations.OperationStateSucceeded,
+		operations.OperationStateFailed,
+		operations.OperationStateCancelled,
+		operations.OperationStateOperatorInterventionRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func operationLeaseInvalidRequest(field, reason string) error {
+	return &operations.OperationLeaseError{
+		Code:   operations.OperationLeaseErrorInvalidRequest,
+		Field:  field,
+		Reason: reason,
+		Cause:  operations.ErrInvalidLeaseRequest,
+	}
+}
+
+func operationLeaseUnavailable(action, operationID string, err error) error {
+	return fmt.Errorf("%w: %s operation lease %q: %w", operations.ErrLeaseUnavailable, action, operationID, err)
 }
 
 func scanOperation(row rowScanner) (operations.OperationRecord, error) {

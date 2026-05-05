@@ -18,6 +18,7 @@ import (
 func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.OperationReader = (*Store)(nil)
 	var _ store.OperationWriter = (*Store)(nil)
+	var _ store.OperationLeaseStore = (*Store)(nil)
 	var _ store.IdempotencyStore = (*Store)(nil)
 	var _ store.AuditSink = (*Store)(nil)
 
@@ -349,6 +350,291 @@ func TestCreateOrReuseOperationArgsAreSanitized(t *testing.T) {
 	}
 	if got := mustJSONMap(t, exec.args[23])["safe"]; got != "visible" {
 		t.Fatalf("input_summary safe = %#v, want visible", got)
+	}
+}
+
+func TestAcquireOperationLeaseUsesAtomicConditionalUpdateReturningRecord(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	leaseExpiresAt := now.Add(30 * time.Minute)
+	startedAt := now
+	record := operationFixture(now.Add(-time.Hour))
+	record.State = operations.OperationStateRunning
+	record.Attempt = 1
+	record.LeaseOwner = "worker-a"
+	record.LeaseExpiresAt = &leaseExpiresAt
+	record.StartedAt = &startedAt
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
+	st := &Store{exec: exec}
+
+	got, err := st.AcquireOperationLease(context.Background(), "op-alpha", operations.LeaseRequest{
+		Owner:    " worker-a ",
+		Duration: 30 * time.Minute,
+		Now:      now,
+	})
+	if err != nil {
+		t.Fatalf("AcquireOperationLease: %v", err)
+	}
+
+	if got.LeaseOwner != "worker-a" || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(leaseExpiresAt) {
+		t.Fatalf("lease = %q/%v, want worker-a/%v", got.LeaseOwner, got.LeaseExpiresAt, leaseExpiresAt)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"UPDATE operations",
+		"operation_state = CASE",
+		"attempt = CASE",
+		"attempt + 1",
+		"lease_owner = CASE",
+		"lease_expires_at = CASE",
+		"started_at = CASE",
+		"COALESCE(started_at, $4)",
+		"finished_at = CASE",
+		"updated_at = $4",
+		"WHERE operation_id = $1",
+		"(operation_state = 'queued' AND lease_owner IS NULL AND lease_expires_at IS NULL)",
+		"(operation_state = 'running'",
+		"lease_expires_at <= $4",
+		"(operation_state = 'operator_intervention_required' AND $5 = 'explicit_recovery_action'",
+		"(operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation'",
+		"RETURNING",
+	)
+	if strings.Contains(exec.query, "SELECT ") {
+		t.Fatalf("AcquireOperationLease query must be a single UPDATE RETURNING, got %s", exec.query)
+	}
+	wantArgs := []any{
+		"op-alpha",
+		"worker-a",
+		leaseExpiresAt,
+		now,
+		string(operations.LeaseRecoveryNone),
+		string(operations.LeaseCancelPolicyNone),
+	}
+	if !reflect.DeepEqual(exec.args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", exec.args, wantArgs)
+	}
+}
+
+func TestAcquireOperationLeasePassesExplicitRecoveryAndFinalizePolicies(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+
+	t.Run("explicit recovery", func(t *testing.T) {
+		leaseExpiresAt := now.Add(30 * time.Minute)
+		record := operationFixture(now.Add(-time.Hour))
+		record.State = operations.OperationStateRunning
+		record.Attempt = 4
+		record.LeaseOwner = "recovery-worker"
+		record.LeaseExpiresAt = &leaseExpiresAt
+		exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
+		st := &Store{exec: exec}
+
+		got, err := st.AcquireOperationLease(context.Background(), "op-alpha", operations.LeaseRequest{
+			Owner:        "recovery-worker",
+			Duration:     30 * time.Minute,
+			Now:          now,
+			RecoveryMode: operations.LeaseRecoveryExplicitAction,
+		})
+		if err != nil {
+			t.Fatalf("AcquireOperationLease recovery: %v", err)
+		}
+		if got.State != operations.OperationStateRunning || got.LeaseOwner != "recovery-worker" {
+			t.Fatalf("recovered operation = %#v, want running recovery-worker", got)
+		}
+		if exec.args[4] != string(operations.LeaseRecoveryExplicitAction) {
+			t.Fatalf("recovery mode arg = %#v, want explicit recovery", exec.args[4])
+		}
+	})
+
+	t.Run("finalize cancellation", func(t *testing.T) {
+		finishedAt := now
+		returned := operationFixture(now.Add(-time.Hour))
+		returned.State = operations.OperationStateCancelled
+		returned.Attempt = 3
+		returned.LeaseOwner = ""
+		returned.LeaseExpiresAt = nil
+		returned.FinishedAt = &finishedAt
+		exec := &fakeExecutor{row: fakeRow{values: operationRowValues(returned)}}
+		st := &Store{exec: exec}
+
+		got, err := st.AcquireOperationLease(context.Background(), "op-alpha", operations.LeaseRequest{
+			Owner:        "canceller",
+			Duration:     30 * time.Minute,
+			Now:          now,
+			CancelPolicy: operations.LeaseCancelPolicyFinalize,
+		})
+		if err != nil {
+			t.Fatalf("AcquireOperationLease finalize cancellation: %v", err)
+		}
+		if got.State != operations.OperationStateCancelled || got.Attempt != 3 || got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+			t.Fatalf("finalized operation = %#v, want cancelled without lease and unchanged attempt", got)
+		}
+		if exec.args[5] != string(operations.LeaseCancelPolicyFinalize) {
+			t.Fatalf("cancel policy arg = %#v, want finalize cancellation", exec.args[5])
+		}
+		assertSQLContainsInOrder(t, exec.query,
+			"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN 'cancelled'",
+			"(operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation'",
+		)
+	})
+}
+
+func TestAcquireOperationLeaseNoRowsWrapsLeaseUnavailableAndSQLNoRows(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	st := &Store{exec: &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}}
+
+	_, err := st.AcquireOperationLease(context.Background(), "op-alpha", operations.LeaseRequest{
+		Owner:    "worker-a",
+		Duration: 30 * time.Minute,
+		Now:      now,
+	})
+	if !errors.Is(err, operations.ErrLeaseUnavailable) || !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("AcquireOperationLease error = %v, want ErrLeaseUnavailable and sql.ErrNoRows", err)
+	}
+}
+
+func TestRenewOperationLeaseExtendsLiveOwnerLeaseAtomically(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	existingLeaseExpiresAt := now.Add(45 * time.Minute)
+	record := operationFixture(now.Add(-time.Hour))
+	record.State = operations.OperationStateRunning
+	record.Attempt = 3
+	record.LeaseOwner = "worker-a"
+	record.LeaseExpiresAt = &existingLeaseExpiresAt
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
+	st := &Store{exec: exec}
+
+	got, err := st.RenewOperationLease(context.Background(), "op-alpha", operations.LeaseRequest{
+		Owner:    "worker-a",
+		Duration: 5 * time.Minute,
+		Now:      now,
+	})
+	if err != nil {
+		t.Fatalf("RenewOperationLease: %v", err)
+	}
+
+	if got.Attempt != 3 {
+		t.Fatalf("renew attempt = %d, want unchanged 3", got.Attempt)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"UPDATE operations",
+		"lease_expires_at = GREATEST(lease_expires_at, $3)",
+		"updated_at = $4",
+		"WHERE operation_id = $1",
+		"operation_state = 'running'",
+		"lease_owner = $2",
+		"lease_expires_at > $4",
+		"RETURNING",
+	)
+	updateSetClause := strings.Split(exec.query, " WHERE ")[0]
+	if strings.Contains(updateSetClause, "attempt") || strings.Contains(updateSetClause, "operation_state =") {
+		t.Fatalf("RenewOperationLease query must not change attempt or state: %s", exec.query)
+	}
+	wantArgs := []any{"op-alpha", "worker-a", now.Add(5 * time.Minute), now}
+	if !reflect.DeepEqual(exec.args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", exec.args, wantArgs)
+	}
+}
+
+func TestUpdateOperationWithLeaseUsesAtomicFenceAndPreservesRunningLease(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	existingLeaseExpiresAt := now.Add(30 * time.Minute)
+	attemptedLeaseExtension := now.Add(2 * time.Hour)
+	returned := operationFixture(now.Add(-time.Hour))
+	returned.Phase = "verify_result"
+	returned.Attempt = 2
+	returned.LeaseOwner = "worker-a"
+	returned.LeaseExpiresAt = &existingLeaseExpiresAt
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(returned)}}
+	st := &Store{exec: exec}
+
+	update := returned
+	update.LeaseExpiresAt = &attemptedLeaseExtension
+	got, err := st.UpdateOperationWithLease(context.Background(), update.SanitizedForPersistence(), "worker-a", now)
+	if err != nil {
+		t.Fatalf("UpdateOperationWithLease: %v", err)
+	}
+
+	if got.LeaseOwner != "worker-a" || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(existingLeaseExpiresAt) {
+		t.Fatalf("running update lease = %q/%v, want preserved worker-a/%v", got.LeaseOwner, got.LeaseExpiresAt, existingLeaseExpiresAt)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"UPDATE operations",
+		"operation_state = $1",
+		"phase = $2",
+		"lease_owner = CASE WHEN $1 = 'running' THEN lease_owner ELSE NULL END",
+		"lease_expires_at = CASE WHEN $1 = 'running' THEN lease_expires_at ELSE NULL END",
+		"updated_at = $11",
+		"WHERE operation_id = $12",
+		"operation_state = 'running'",
+		"lease_owner = $13",
+		"lease_expires_at IS NOT NULL",
+		"lease_expires_at > $11",
+		"RETURNING",
+	)
+	updateSetClause := strings.Split(exec.query, " WHERE ")[0]
+	if strings.Contains(updateSetClause, "lease_owner = $") || strings.Contains(updateSetClause, "lease_expires_at = $") {
+		t.Fatalf("UpdateOperationWithLease must not accept lease fields from the update record: %s", exec.query)
+	}
+	if exec.args[0] != string(operations.OperationStateRunning) || exec.args[11] != "op-alpha" || exec.args[12] != "worker-a" {
+		t.Fatalf("fence args = %#v, want state running, op-alpha, worker-a", exec.args)
+	}
+}
+
+func TestUpdateOperationWithLeaseRejectsRecordLeaseTransferBeforeSQL(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := operationFixture(now.Add(-time.Hour))
+	record.LeaseOwner = "worker-b"
+	exec := &fakeExecutor{}
+	st := &Store{exec: exec}
+
+	_, err := st.UpdateOperationWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now)
+	if !errors.Is(err, operations.ErrInvalidLeaseRequest) {
+		t.Fatalf("UpdateOperationWithLease error = %v, want ErrInvalidLeaseRequest", err)
+	}
+	if exec.query != "" {
+		t.Fatalf("UpdateOperationWithLease issued SQL after lease transfer request: %s", exec.query)
+	}
+}
+
+func TestUpdateOperationWithLeaseCanWriteTerminalAndClearLease(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	returned := operationFixture(now.Add(-time.Hour))
+	returned.State = operations.OperationStateSucceeded
+	returned.Phase = "done"
+	returned.LeaseOwner = ""
+	returned.LeaseExpiresAt = nil
+	returned.FinishedAt = &now
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(returned)}}
+	st := &Store{exec: exec}
+
+	update := operationFixture(now.Add(-time.Hour))
+	update.State = operations.OperationStateSucceeded
+	update.Phase = "done"
+	update.FinishedAt = nil
+	got, err := st.UpdateOperationWithLease(context.Background(), update.SanitizedForPersistence(), "worker-a", now)
+	if err != nil {
+		t.Fatalf("UpdateOperationWithLease terminal: %v", err)
+	}
+
+	if got.State != operations.OperationStateSucceeded || got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("terminal update = %#v, want succeeded with cleared lease", got)
+	}
+	if got.FinishedAt == nil || !got.FinishedAt.Equal(now) {
+		t.Fatalf("terminal finished_at = %v, want %v", got.FinishedAt, now)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"lease_owner = CASE WHEN $1 = 'running' THEN lease_owner ELSE NULL END",
+		"lease_expires_at = CASE WHEN $1 = 'running' THEN lease_expires_at ELSE NULL END",
+		"finished_at = CASE WHEN $1 IN ('succeeded', 'failed', 'cancelled') THEN COALESCE($10, $11) ELSE NULL END",
+	)
+}
+
+func TestUpdateOperationWithLeaseReturnsUnavailableWhenLeaseExpiredOrReclaimed(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := operationFixture(now.Add(-time.Hour))
+	st := &Store{exec: &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}}
+
+	_, err := st.UpdateOperationWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now)
+	if !errors.Is(err, operations.ErrLeaseUnavailable) || !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("UpdateOperationWithLease error = %v, want ErrLeaseUnavailable and sql.ErrNoRows", err)
 	}
 }
 
