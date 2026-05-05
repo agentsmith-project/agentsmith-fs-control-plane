@@ -8,6 +8,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
 // OperationReader is the read side of the durable operation record boundary.
@@ -213,6 +214,15 @@ type RepoRecoveryInspectionReader interface {
 	GetRepo(ctx context.Context, repoID string) (resources.Repo, error)
 	ListReposForRecoveryInspection(ctx context.Context) ([]resources.Repo, error)
 	ListAllHeldRepoFences(ctx context.Context) ([]fences.Fence, error)
+}
+
+// RepoSessionStateReader is the read-only durable session substrate boundary
+// for restore-run writer gates and lifecycle drain gates. It returns only safe
+// admission fields and must not expose credentials, raw paths, mount plans, or
+// gateway/orchestrator secrets.
+type RepoSessionStateReader interface {
+	ListExportSessionsByRepo(ctx context.Context, repoID string) ([]sessionstate.ExportSession, error)
+	ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error)
 }
 
 type VolumeStore interface {

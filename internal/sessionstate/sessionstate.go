@@ -64,6 +64,8 @@ type ExportSession struct {
 	Mode        AccessMode
 	Status      ExportStatus
 	ExpiresAt   time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type WorkloadMountBinding struct {
@@ -73,6 +75,8 @@ type WorkloadMountBinding struct {
 	ReadOnly       bool
 	Status         MountStatus
 	LeaseExpiresAt time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type GateRequest struct {

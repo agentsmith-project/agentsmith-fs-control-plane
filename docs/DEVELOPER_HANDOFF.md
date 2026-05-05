@@ -108,6 +108,8 @@ Completed:
   tests
 - PostgreSQL resource metadata adapter for volumes, namespaces, namespace volume
   bindings, and repo/repo lifecycle metadata, with focused tests
+- read-only PostgreSQL session-state readers for export sessions and workload
+  mount bindings, limited to safe admission/drain fields
 - repo and template storage identities are recorded as control-plane metadata;
   RepoTemplate publication lifecycle and handlers remain unimplemented
 - minimal PostgreSQL repo fence adapter for held fence read, create, and active

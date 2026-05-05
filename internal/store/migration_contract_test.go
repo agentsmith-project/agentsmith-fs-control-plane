@@ -191,6 +191,45 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 			"status = 'operator_intervention_required'",
 		)
 	})
+
+	t.Run("export sessions table", func(t *testing.T) {
+		table := contract.requireTable(t, "export_sessions")
+
+		table.requireColumn(t, "export_id", "text", "primary key")
+		table.requireColumn(t, "namespace_id", "text", "not null")
+		table.requireColumn(t, "repo_id", "text", "not null")
+		table.requireColumn(t, "access_mode", "text", "not null")
+		table.requireColumn(t, "status", "text", "not null")
+		table.requireColumn(t, "expires_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireCheckMentions(t, "access_mode", "read_only", "read_write")
+		table.requireCheckMentions(t, "status", "active", "revoking", "revoked", "expired", "failed")
+		table.requireBodyFragments(t,
+			"foreign key (namespace_id, repo_id) references repos (namespace_id, repo_id)",
+		)
+		table.requireNoSensitiveColumns(t)
+		contract.requireIndex(t, "export_sessions", []string{"repo_id", "created_at", "export_id"})
+	})
+
+	t.Run("workload mount bindings session table", func(t *testing.T) {
+		table := contract.requireTable(t, "workload_mount_bindings")
+
+		table.requireColumn(t, "mount_binding_id", "text", "primary key")
+		table.requireColumn(t, "namespace_id", "text", "not null")
+		table.requireColumn(t, "repo_id", "text", "not null")
+		table.requireColumn(t, "read_only", "boolean", "not null")
+		table.requireColumn(t, "status", "text", "not null")
+		table.requireColumn(t, "lease_expires_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireCheckMentions(t, "status", "issued", "pending", "active", "releasing", "released", "revoked", "expired", "failed")
+		table.requireBodyFragments(t,
+			"foreign key (namespace_id, repo_id) references repos (namespace_id, repo_id)",
+		)
+		table.requireNoSensitiveColumns(t)
+		contract.requireIndex(t, "workload_mount_bindings", []string{"repo_id", "created_at", "mount_binding_id"})
+	})
 }
 
 func TestPostgreSQLMigrationsDoNotEncodeStorageMutationMaterial(t *testing.T) {
@@ -263,6 +302,7 @@ func expectedRepoStatusValuesForMigrationContract() []string {
 type migrationContract struct {
 	raw           string
 	tables        map[string]tableContract
+	indexes       []indexContract
 	uniqueIndexes []indexContract
 }
 
@@ -306,6 +346,7 @@ func loadMigrationContract(t *testing.T) migrationContract {
 	return migrationContract{
 		raw:           raw,
 		tables:        parseTables(raw),
+		indexes:       parseIndexes(raw),
 		uniqueIndexes: parseUniqueIndexes(raw),
 	}
 }
@@ -337,6 +378,18 @@ func (contract migrationContract) requirePartialUniqueIndex(t *testing.T, tableN
 		}
 	}
 	t.Fatalf("missing partial unique index on %s(%s) where %s", tableName, strings.Join(columns, ", "), whereFragment)
+}
+
+func (contract migrationContract) requireIndex(t *testing.T, tableName string, columns []string) {
+	t.Helper()
+
+	wantColumns := normalizeColumnList(columns)
+	for _, index := range contract.indexes {
+		if index.table == tableName && sameStrings(index.columns, wantColumns) {
+			return
+		}
+	}
+	t.Fatalf("missing index on %s(%s)", tableName, strings.Join(columns, ", "))
 }
 
 func (table tableContract) requireColumn(t *testing.T, name string, fragments ...string) {
@@ -389,6 +442,28 @@ func (table tableContract) requireBodyFragments(t *testing.T, fragments ...strin
 	}
 }
 
+func (table tableContract) requireNoSensitiveColumns(t *testing.T) {
+	t.Helper()
+
+	forbidden := []string{
+		"credential",
+		"secret",
+		"token",
+		"password",
+		"raw",
+		"path",
+		"plan",
+		"storage",
+	}
+	for column := range table.columns {
+		for _, word := range forbidden {
+			if strings.Contains(column, word) {
+				t.Fatalf("table %s has sensitive/session-external column %q", table.name, column)
+			}
+		}
+	}
+}
+
 func parseTables(sql string) map[string]tableContract {
 	tablePattern := regexp.MustCompile(`(?is)create\s+table\s+(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_\.]*)\s*\((.*?)\);`)
 	matches := tablePattern.FindAllStringSubmatch(sql, -1)
@@ -416,7 +491,22 @@ func parseTables(sql string) map[string]tableContract {
 }
 
 func parseUniqueIndexes(sql string) []indexContract {
-	indexPattern := regexp.MustCompile(`(?is)create\s+unique\s+index\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)\s+on\s+([a-z_][a-z0-9_\.]*)\s*(?:using\s+[a-z_][a-z0-9_]*\s*)?\((.*?)\)(?:\s+where\s+(.*?))?;`)
+	uniquePattern := regexp.MustCompile(`(?is)create\s+unique\s+index\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)\s+on\s+([a-z_][a-z0-9_\.]*)\s*(?:using\s+[a-z_][a-z0-9_]*\s*)?\((.*?)\)(?:\s+where\s+(.*?))?;`)
+	matches := uniquePattern.FindAllStringSubmatch(sql, -1)
+	unique := make([]indexContract, 0, len(matches))
+	for _, match := range matches {
+		unique = append(unique, indexContract{
+			name:    match[1],
+			table:   unqualify(match[2]),
+			columns: columnsInsideFirstParens("(" + match[3] + ")"),
+			where:   compactSpace(match[4]),
+		})
+	}
+	return unique
+}
+
+func parseIndexes(sql string) []indexContract {
+	indexPattern := regexp.MustCompile(`(?is)create\s+(?:unique\s+)?index\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)\s+on\s+([a-z_][a-z0-9_\.]*)\s*(?:using\s+[a-z_][a-z0-9_]*\s*)?\((.*?)\)(?:\s+where\s+(.*?))?;`)
 	matches := indexPattern.FindAllStringSubmatch(sql, -1)
 	indexes := make([]indexContract, 0, len(matches))
 	for _, match := range matches {

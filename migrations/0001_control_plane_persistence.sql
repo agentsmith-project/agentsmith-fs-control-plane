@@ -354,4 +354,45 @@ CREATE INDEX IF NOT EXISTS repos_namespace_idx
 CREATE INDEX IF NOT EXISTS repos_volume_idx
     ON repos (volume_id);
 
+CREATE TABLE IF NOT EXISTS export_sessions (
+    export_id text PRIMARY KEY,
+    namespace_id text NOT NULL,
+    repo_id text NOT NULL,
+    access_mode text NOT NULL,
+    status text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT export_sessions_repo_fk FOREIGN KEY (namespace_id, repo_id)
+        REFERENCES repos (namespace_id, repo_id),
+    CONSTRAINT export_sessions_access_mode_check CHECK (
+        access_mode IN ('read_only', 'read_write')
+    ),
+    CONSTRAINT export_sessions_status_check CHECK (
+        status IN ('active', 'revoking', 'revoked', 'expired', 'failed')
+    )
+);
+
+CREATE INDEX IF NOT EXISTS export_sessions_repo_read_idx
+    ON export_sessions (repo_id, created_at, export_id);
+
+CREATE TABLE IF NOT EXISTS workload_mount_bindings (
+    mount_binding_id text PRIMARY KEY,
+    namespace_id text NOT NULL,
+    repo_id text NOT NULL,
+    read_only boolean NOT NULL,
+    status text NOT NULL,
+    lease_expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT workload_mount_bindings_repo_fk FOREIGN KEY (namespace_id, repo_id)
+        REFERENCES repos (namespace_id, repo_id),
+    CONSTRAINT workload_mount_bindings_status_check CHECK (
+        status IN ('issued', 'pending', 'active', 'releasing', 'released', 'revoked', 'expired', 'failed')
+    )
+);
+
+CREATE INDEX IF NOT EXISTS workload_mount_bindings_repo_read_idx
+    ON workload_mount_bindings (repo_id, created_at, mount_binding_id);
+
 COMMIT;

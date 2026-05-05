@@ -23,8 +23,9 @@ needed before real handlers and storage mutation work:
   outbox append plus DB-only at-least-once delivery primitive, and minimal repo
   fence held read/create/active release. The PostgreSQL resource metadata adapter
   covers volumes, namespaces, namespace volume bindings, repo/repo lifecycle
-  metadata, lifecycle candidate repo reads, and all-held repo fence reads as
-  control-plane records only, including internal template storage identity.
+  metadata, lifecycle candidate repo reads, all-held repo fence reads, and
+  read-only export session/workload mount binding state as control-plane records
+  only, including internal template storage identity.
   RepoTemplate publication lifecycle and handlers remain unimplemented.
 - `audit`: audit event typing, redaction expectations, and pure outbox state
   transitions.
