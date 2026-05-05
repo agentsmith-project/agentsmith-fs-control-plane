@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -46,6 +47,12 @@ type RepoPaths struct {
 	ContainerVolumeSubdir string
 	ControlVolumeSubdir   string
 	PayloadVolumeSubdir   string
+}
+
+type RepoRootPaths struct {
+	RepoPaths
+	ControlRootPath string
+	PayloadRootPath string
 }
 
 type TemplatePaths struct {
@@ -128,6 +135,29 @@ func ResolveRepoPaths(namespaceID, repoID string) (RepoPaths, error) {
 	}, nil
 }
 
+func ResolveRepoRootPaths(volumeRoot, namespaceID, repoID string) (RepoRootPaths, error) {
+	if err := validateTrustedVolumeRoot(volumeRoot); err != nil {
+		return RepoRootPaths{}, err
+	}
+
+	repoPaths, err := ResolveRepoPaths(namespaceID, repoID)
+	if err != nil {
+		return RepoRootPaths{}, err
+	}
+
+	controlRoot := filepath.Join(volumeRoot, filepath.FromSlash(repoPaths.ControlVolumeSubdir))
+	payloadRoot := filepath.Join(volumeRoot, filepath.FromSlash(repoPaths.PayloadVolumeSubdir))
+	if err := validateResolvedRepoRoots(controlRoot, payloadRoot); err != nil {
+		return RepoRootPaths{}, err
+	}
+
+	return RepoRootPaths{
+		RepoPaths:       repoPaths,
+		ControlRootPath: controlRoot,
+		PayloadRootPath: payloadRoot,
+	}, nil
+}
+
 func ResolveTemplatePaths(namespaceID, templateID string) (TemplatePaths, error) {
 	if err := ValidateID(NamespaceID, namespaceID); err != nil {
 		return TemplatePaths{}, err
@@ -142,6 +172,49 @@ func ResolveTemplatePaths(namespaceID, templateID string) (TemplatePaths, error)
 		ControlVolumeSubdir:   container + "/control",
 		PayloadVolumeSubdir:   container + "/payload",
 	}, nil
+}
+
+func validateTrustedVolumeRoot(root string) error {
+	if root == "" {
+		return fmt.Errorf("%w: empty volume root", ErrInvalidPath)
+	}
+	if !filepath.IsAbs(root) {
+		return fmt.Errorf("%w: volume root must be absolute", ErrInvalidPath)
+	}
+	if filepath.Clean(root) != root {
+		return fmt.Errorf("%w: volume root must be clean", ErrInvalidPath)
+	}
+	if root == string(filepath.Separator) {
+		return fmt.Errorf("%w: volume root cannot be filesystem root", ErrInvalidPath)
+	}
+	return nil
+}
+
+func validateResolvedRepoRoots(controlRoot, payloadRoot string) error {
+	if controlRoot == "" || payloadRoot == "" {
+		return fmt.Errorf("%w: empty repo root", ErrInvalidPath)
+	}
+	if !filepath.IsAbs(controlRoot) || !filepath.IsAbs(payloadRoot) {
+		return fmt.Errorf("%w: repo roots must be absolute", ErrInvalidPath)
+	}
+	if filepath.Clean(controlRoot) != controlRoot || filepath.Clean(payloadRoot) != payloadRoot {
+		return fmt.Errorf("%w: repo roots must be clean", ErrInvalidPath)
+	}
+	if controlRoot == payloadRoot {
+		return fmt.Errorf("%w: control and payload roots overlap", ErrPathEscape)
+	}
+	if pathContains(controlRoot, payloadRoot) || pathContains(payloadRoot, controlRoot) {
+		return fmt.Errorf("%w: control and payload roots overlap", ErrPathEscape)
+	}
+	return nil
+}
+
+func pathContains(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func ResolveCallerPath(rawPath string) (CallerPath, error) {

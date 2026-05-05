@@ -69,6 +69,10 @@ External control root rules accepted for AFSCP:
   `--control-root <control_root_path> --workspace main`. The process CWD must
   be clean and controlled, must not be inside another JVS repo, and must never
   be used to discover the target repo.
+- The current internal runner abstraction is intentionally limited to
+  `init` and `doctor --strict`; repo_create worker execution, directory
+  creation, storage mutation, save/restore, clone, WebDAV, and mount flows remain
+  separate future slices.
 - JVS has repo/workspace lifecycle commands for ordinary repos, but AFSCP GA
   lifecycle does not depend on them. If AFSCP later uses those commands, their
   external-control-root behavior must first be pinned and tested against the

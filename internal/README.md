@@ -41,9 +41,14 @@ needed before real handlers and storage mutation work:
 - `namespacebindingexec`: minimal recovery executor for `namespace_volume_binding_put`;
   it commits binding metadata, the terminal operation update, and the audit
   event through the dedicated namespace volume binding store boundary.
+- `jvsrunner`: minimal JVS v0.4.8 CLI runner abstraction for fixed
+  external-control-root `init` and `doctor --strict` JSON commands only; it is
+  not wired into repo workers yet.
 - `workerapp`: production `afscp-worker --run-once` bootstrap for the
   opt-in namespace metadata operation recovery runner.
-- `pathresolver`: path safety helpers, denial tests, and shared resolver corpus.
+- `pathresolver`: path safety helpers, denial tests, shared resolver corpus, and
+  canonical internal repo root resolution from trusted volume roots plus repo
+  IDs.
 
 Still intentionally absent: repo/JVS/WebDAV/mount endpoint handlers, real
 external audit delivery worker/sink integration, repo lifecycle

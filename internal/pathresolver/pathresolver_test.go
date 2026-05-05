@@ -2,6 +2,7 @@ package pathresolver
 
 import (
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -142,6 +143,90 @@ func TestResolveRepoPathsRejectsInvalidIDs(t *testing.T) {
 
 			if _, err := ResolveRepoPaths(tt.namespaceID, tt.repoID); err == nil {
 				t.Fatalf("ResolveRepoPaths(%q, %q) succeeded, want error", tt.namespaceID, tt.repoID)
+			}
+		})
+	}
+}
+
+func TestResolveRepoRootPathsReturnsCanonicalInternalRoots(t *testing.T) {
+	t.Parallel()
+
+	got, err := ResolveRepoRootPaths("/srv/afscp/volumes/vol_default", "ns_alpha-01", "repo_Project_02")
+	if err != nil {
+		t.Fatalf("ResolveRepoRootPaths returned error: %v", err)
+	}
+
+	wantRepoPaths := RepoPaths{
+		ContainerVolumeSubdir: "afscp/namespaces/ns_alpha-01/repos/repo_Project_02",
+		ControlVolumeSubdir:   "afscp/namespaces/ns_alpha-01/repos/repo_Project_02/control",
+		PayloadVolumeSubdir:   "afscp/namespaces/ns_alpha-01/repos/repo_Project_02/payload",
+	}
+	if got.RepoPaths != wantRepoPaths {
+		t.Fatalf("RepoPaths mismatch:\n got: %#v\nwant: %#v", got.RepoPaths, wantRepoPaths)
+	}
+
+	wantControl := filepath.Join("/srv/afscp/volumes/vol_default", "afscp", "namespaces", "ns_alpha-01", "repos", "repo_Project_02", "control")
+	wantPayload := filepath.Join("/srv/afscp/volumes/vol_default", "afscp", "namespaces", "ns_alpha-01", "repos", "repo_Project_02", "payload")
+	if got.ControlRootPath != wantControl {
+		t.Fatalf("ControlRootPath = %q, want %q", got.ControlRootPath, wantControl)
+	}
+	if got.PayloadRootPath != wantPayload {
+		t.Fatalf("PayloadRootPath = %q, want %q", got.PayloadRootPath, wantPayload)
+	}
+	assertAbsoluteCleanForTest(t, got.ControlRootPath)
+	assertAbsoluteCleanForTest(t, got.PayloadRootPath)
+	if got.ControlRootPath == got.PayloadRootPath {
+		t.Fatal("control and payload roots must be different")
+	}
+	if pathContainsForTest(got.ControlRootPath, got.PayloadRootPath) || pathContainsForTest(got.PayloadRootPath, got.ControlRootPath) {
+		t.Fatalf("control and payload roots must be siblings, got control=%q payload=%q", got.ControlRootPath, got.PayloadRootPath)
+	}
+}
+
+func TestResolveRepoRootPathsRejectsUntrustedVolumeRoot(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		root string
+	}{
+		{name: "empty", root: ""},
+		{name: "relative", root: "srv/afscp"},
+		{name: "root filesystem", root: string(filepath.Separator)},
+		{name: "not clean", root: "/srv/../srv/afscp"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := ResolveRepoRootPaths(tt.root, "ns_alpha", "repo_project"); err == nil {
+				t.Fatalf("ResolveRepoRootPaths(%q, ...) succeeded, want error", tt.root)
+			}
+		})
+	}
+}
+
+func TestResolveRepoRootPathsRejectsInvalidIDs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		namespaceID string
+		repoID      string
+	}{
+		{name: "bad namespace", namespaceID: "repo_alpha", repoID: "repo_project"},
+		{name: "bad repo", namespaceID: "ns_alpha", repoID: "ns_project"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := ResolveRepoRootPaths("/srv/afscp/volumes/vol_default", tt.namespaceID, tt.repoID); err == nil {
+				t.Fatalf("ResolveRepoRootPaths(..., %q, %q) succeeded, want error", tt.namespaceID, tt.repoID)
 			}
 		})
 	}
@@ -434,4 +519,23 @@ func assertRelativeForTest(t *testing.T, path string) {
 			t.Fatalf("path %q contains backslash", path)
 		}
 	}
+}
+
+func assertAbsoluteCleanForTest(t *testing.T, path string) {
+	t.Helper()
+
+	if !filepath.IsAbs(path) {
+		t.Fatalf("path %q is not absolute", path)
+	}
+	if filepath.Clean(path) != path {
+		t.Fatalf("path %q is not clean", path)
+	}
+}
+
+func pathContainsForTest(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
