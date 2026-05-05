@@ -48,6 +48,7 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		table.requireColumn(t, "started_at", "timestamp with time zone")
 		table.requireColumn(t, "finished_at", "timestamp with time zone")
 		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireCheckMentions(t, "operation_type", expectedOperationTypeValuesForMigrationContract()...)
 		table.requireCheckMentions(t, "operation_state", "queued", "running", "succeeded", "failed", "cancel_requested", "cancelled", "operator_intervention_required")
 	})
 
@@ -121,6 +122,35 @@ func TestPostgreSQLMigrationsDoNotEncodeStorageMutationMaterial(t *testing.T) {
 		if strings.Contains(contract.raw, word) {
 			t.Fatalf("migration SQL contains forbidden storage-mutation/material term %q", word)
 		}
+	}
+}
+
+func expectedOperationTypeValuesForMigrationContract() []string {
+	return []string{
+		"volume_ensure",
+		"namespace_upsert",
+		"namespace_disable",
+		"namespace_volume_binding_put",
+		"repo_create",
+		"repo_archive",
+		"repo_restore_archived",
+		"repo_delete",
+		"repo_restore_tombstoned",
+		"repo_purge",
+		"save_point_create",
+		"restore_preview",
+		"restore_run",
+		"template_create",
+		"template_clone",
+		"export_create",
+		"export_revoke",
+		"export_session_reconcile",
+		"mount_binding_create",
+		"mount_binding_status_update",
+		"mount_binding_heartbeat",
+		"mount_binding_release",
+		"mount_binding_revoke",
+		"migration_cutover",
 	}
 }
 
