@@ -49,6 +49,7 @@ func TestErrorFamiliesMapToStableAPICodes(t *testing.T) {
 func TestHeldFollowsUnreleasedAndUnrecoveredDurableSemantics(t *testing.T) {
 	t.Parallel()
 
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name  string
 		fence Fence
@@ -56,6 +57,11 @@ func TestHeldFollowsUnreleasedAndUnrecoveredDurableSemantics(t *testing.T) {
 	}{
 		{name: "active", fence: heldFence(KindWriterSession, StatusActive, "repo_alpha", "op_restore"), want: true},
 		{name: "expired still held", fence: heldFence(KindWriterSession, StatusExpired, "repo_alpha", "op_restore"), want: true},
+		{name: "active past expires_at still held", fence: func() Fence {
+			fence := heldFence(KindWriterSession, StatusActive, "repo_alpha", "op_restore")
+			fence.ExpiresAt = now.Add(-time.Minute)
+			return fence
+		}(), want: true},
 		{name: "recovery required still held", fence: heldFence(KindLifecycle, StatusRecoveryRequired, "repo_alpha", "op_delete"), want: true},
 		{name: "released unblocks", fence: releasedFence(KindWriterSession, "repo_alpha", "op_restore"), want: false},
 		{name: "recovered unblocks", fence: recoveredFence(KindLifecycle, "repo_alpha", "op_delete"), want: false},
@@ -245,6 +251,7 @@ func TestAcquisitionRejectsInvalidExistingFenceInputs(t *testing.T) {
 		{name: "missing status", fence: Fence{ID: "fence_1", RepoID: "repo_alpha", Kind: KindWriterSession, HolderOperationID: "op_restore"}},
 		{name: "invalid status", fence: Fence{ID: "fence_1", RepoID: "repo_alpha", Kind: KindWriterSession, HolderOperationID: "op_restore", Status: Status("wedged")}},
 		{name: "missing holder operation", fence: Fence{ID: "fence_1", RepoID: "repo_alpha", Kind: KindWriterSession, Status: StatusActive}},
+		{name: "missing expires_at", fence: Fence{ID: "fence_1", RepoID: "repo_alpha", Kind: KindWriterSession, HolderOperationID: "op_restore", Status: StatusActive}},
 		{name: "active with released timestamp", fence: invalidActiveReleasedFence()},
 		{name: "recovered without released timestamp", fence: invalidRecoveredWithoutReleaseFence()},
 	}
@@ -285,6 +292,42 @@ func TestValidateFenceReportsStructuredInvalidInput(t *testing.T) {
 	}
 }
 
+func TestValidateFenceRejectsMissingDurableTimestamps(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		fence Fence
+		field string
+	}{
+		{name: "missing created_at", fence: func() Fence {
+			fence := heldFence(KindWriterSession, StatusActive, "repo_alpha", "op_restore")
+			fence.CreatedAt = time.Time{}
+			return fence
+		}(), field: "created_at"},
+		{name: "missing updated_at", fence: func() Fence {
+			fence := heldFence(KindWriterSession, StatusActive, "repo_alpha", "op_restore")
+			fence.UpdatedAt = time.Time{}
+			return fence
+		}(), field: "updated_at"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := ValidateFence(tt.fence)
+			if err == nil {
+				t.Fatal("ValidateFence succeeded, want timestamp error")
+			}
+			if err.Field != tt.field {
+				t.Fatalf("Field = %q, want %q; error = %v", err.Field, tt.field, err)
+			}
+		})
+	}
+}
+
 func assertDeniedWithFamily(t *testing.T, decision AcquisitionDecision, family ErrorFamily) {
 	t.Helper()
 
@@ -303,12 +346,16 @@ func assertDeniedWithFamily(t *testing.T, decision AcquisitionDecision, family E
 }
 
 func heldFence(kind Kind, status Status, repoID, operationID string) Fence {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	return Fence{
 		ID:                "fence_" + repoID + "_" + kind.String(),
 		RepoID:            repoID,
 		Kind:              kind,
 		HolderOperationID: operationID,
 		Status:            status,
+		ExpiresAt:         now.Add(30 * time.Minute),
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 }
 
@@ -320,7 +367,10 @@ func releasedFence(kind Kind, repoID, operationID string) Fence {
 		Kind:              kind,
 		HolderOperationID: operationID,
 		Status:            StatusReleased,
+		ExpiresAt:         now.Add(30 * time.Minute),
 		ReleasedAt:        &now,
+		CreatedAt:         now.Add(-time.Hour),
+		UpdatedAt:         now,
 	}
 }
 
@@ -334,9 +384,12 @@ func recoveredFence(kind Kind, repoID, operationID string) Fence {
 		Kind:              kind,
 		HolderOperationID: operationID,
 		Status:            StatusRecovered,
+		ExpiresAt:         releasedAt.Add(30 * time.Minute),
 		ReleasedAt:        &releasedAt,
 		RecoveryStartedAt: &recoveryStartedAt,
 		RecoveredAt:       &recoveredAt,
+		CreatedAt:         releasedAt.Add(-time.Hour),
+		UpdatedAt:         recoveredAt,
 	}
 }
 

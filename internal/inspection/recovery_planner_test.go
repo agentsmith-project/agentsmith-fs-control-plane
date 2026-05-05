@@ -129,6 +129,7 @@ func recoveryFence(status fences.Status, releasedAt, recoveredAt, recoveryStarte
 		Kind:                fences.KindWriterSession,
 		HolderOperationID:   "op_restore",
 		Status:              status,
+		ExpiresAt:           recoveryPlannerTestTime().Add(time.Hour),
 		ReleasedAt:          releasedAt,
 		RecoveredAt:         recoveredAt,
 		RecoveryStartedAt:   recoveryStartedAt,

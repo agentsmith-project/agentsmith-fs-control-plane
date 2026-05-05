@@ -82,6 +82,7 @@ type Fence struct {
 	Kind                Kind
 	HolderOperationID   string
 	Status              Status
+	ExpiresAt           time.Time
 	ReleasedAt          *time.Time
 	RecoveryOperationID string
 	RecoveryReason      string
@@ -112,6 +113,15 @@ func ValidateFence(fence Fence) *FenceError {
 	}
 	if !fence.Status.Valid() {
 		return invalid("status", fmt.Sprintf("unknown fence status %q", fence.Status))
+	}
+	if fence.ExpiresAt.IsZero() {
+		return invalid("expires_at", "missing fence expiration")
+	}
+	if fence.CreatedAt.IsZero() {
+		return invalid("created_at", "missing fence creation time")
+	}
+	if fence.UpdatedAt.IsZero() {
+		return invalid("updated_at", "missing fence update time")
 	}
 	if fence.RecoveryOperationID != "" {
 		if err := pathresolver.ValidateID(pathresolver.OperationID, fence.RecoveryOperationID); err != nil {

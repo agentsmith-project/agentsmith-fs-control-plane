@@ -491,6 +491,7 @@ type fakeExecutor struct {
 	query        string
 	args         []any
 	row          fakeRow
+	rows         fakeRows
 	err          error
 	rowsAffected int64
 }
@@ -505,6 +506,12 @@ func (fake *fakeExecutor) QueryRowContext(_ context.Context, query string, args 
 	fake.query = query
 	fake.args = args
 	return fake.row
+}
+
+func (fake *fakeExecutor) QueryContext(_ context.Context, query string, args ...any) (rowsScanner, error) {
+	fake.query = query
+	fake.args = args
+	return &fake.rows, fake.err
 }
 
 type fakeRow struct {
@@ -525,6 +532,38 @@ func (row fakeRow) Scan(dest ...any) error {
 		}
 	}
 	return nil
+}
+
+type fakeRows struct {
+	rows     []fakeRow
+	index    int
+	err      error
+	closeErr error
+	closed   bool
+}
+
+func (rows *fakeRows) Close() error {
+	rows.closed = true
+	return rows.closeErr
+}
+
+func (rows *fakeRows) Err() error {
+	return rows.err
+}
+
+func (rows *fakeRows) Next() bool {
+	if rows.index >= len(rows.rows) {
+		return false
+	}
+	rows.index++
+	return true
+}
+
+func (rows *fakeRows) Scan(dest ...any) error {
+	if rows.index == 0 || rows.index > len(rows.rows) {
+		return errors.New("scan called without current row")
+	}
+	return rows.rows[rows.index-1].Scan(dest...)
 }
 
 func assignScanValue(dest any, value any) error {

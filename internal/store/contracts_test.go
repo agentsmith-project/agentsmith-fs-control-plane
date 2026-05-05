@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
@@ -69,6 +70,46 @@ func TestIdempotencyStoreContractRequiresAtomicCreateOrReuseBoundary(t *testing.
 	}
 	if got, want := fake.constraintKey, scope.ConstraintKey(); got != want {
 		t.Fatalf("constraint key = %#v, want %#v", got, want)
+	}
+}
+
+func TestRepoFenceStoreContractCoversDurableReadCreateReleaseBoundary(t *testing.T) {
+	fake := &fakeRepoFenceStore{}
+
+	var _ RepoFenceReader = fake
+	var _ RepoFenceWriter = fake
+	var _ RepoFenceStore = fake
+
+	fence := fences.Fence{
+		ID:                "fence_alpha",
+		RepoID:            "repo_alpha",
+		Kind:              fences.KindWriterSession,
+		HolderOperationID: "op_alpha",
+		Status:            fences.StatusActive,
+		ExpiresAt:         time.Date(2026, 5, 5, 12, 30, 0, 0, time.UTC),
+		CreatedAt:         time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
+	}
+
+	if err := fake.CreateRepoFence(context.Background(), fence); err != nil {
+		t.Fatalf("create repo fence: %v", err)
+	}
+	held, err := fake.ListHeldRepoFences(context.Background(), "repo_alpha")
+	if err != nil {
+		t.Fatalf("list held repo fences: %v", err)
+	}
+	if len(held) != 1 || held[0].ID != "fence_alpha" {
+		t.Fatalf("held fences = %#v, want fence_alpha", held)
+	}
+	if err := fake.ReleaseRepoFence(context.Background(), "repo_alpha", "fence_alpha"); err != nil {
+		t.Fatalf("release repo fence: %v", err)
+	}
+	held, err = fake.ListHeldRepoFences(context.Background(), "repo_alpha")
+	if err != nil {
+		t.Fatalf("list after release: %v", err)
+	}
+	if len(held) != 0 {
+		t.Fatalf("held fences after release = %#v, want none", held)
 	}
 }
 
@@ -190,5 +231,36 @@ type fakeAuditSink struct {
 
 func (fake *fakeAuditSink) AppendAuditEvent(_ context.Context, event audit.Event) error {
 	fake.events = append(fake.events, event)
+	return nil
+}
+
+type fakeRepoFenceStore struct {
+	fences []fences.Fence
+}
+
+func (fake *fakeRepoFenceStore) ListHeldRepoFences(_ context.Context, repoID string) ([]fences.Fence, error) {
+	var held []fences.Fence
+	for _, fence := range fake.fences {
+		if fence.RepoID == repoID && fence.Held() {
+			held = append(held, fence)
+		}
+	}
+	return held, nil
+}
+
+func (fake *fakeRepoFenceStore) CreateRepoFence(_ context.Context, fence fences.Fence) error {
+	fake.fences = append(fake.fences, fence)
+	return nil
+}
+
+func (fake *fakeRepoFenceStore) ReleaseRepoFence(_ context.Context, repoID, fenceID string) error {
+	now := time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC)
+	for idx := range fake.fences {
+		if fake.fences[idx].RepoID == repoID && fake.fences[idx].ID == fenceID && fake.fences[idx].Held() {
+			fake.fences[idx].Status = fences.StatusReleased
+			fake.fences[idx].ReleasedAt = &now
+			fake.fences[idx].UpdatedAt = now
+		}
+	}
 	return nil
 }

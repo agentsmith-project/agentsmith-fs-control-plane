@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
 
@@ -40,4 +41,21 @@ type IdempotencyStore interface {
 // AuditSink accepts audit events for append-only or outbox-backed delivery.
 type AuditSink interface {
 	AppendAuditEvent(ctx context.Context, event audit.Event) error
+}
+
+// RepoFenceReader is the read side of the durable repo fence boundary.
+type RepoFenceReader interface {
+	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
+}
+
+// RepoFenceWriter is the write side of the durable repo fence boundary.
+type RepoFenceWriter interface {
+	CreateRepoFence(ctx context.Context, fence fences.Fence) error
+	ReleaseRepoFence(ctx context.Context, repoID, fenceID string) error
+}
+
+// RepoFenceStore is the complete durable repo fence boundary for callers that need read and write access.
+type RepoFenceStore interface {
+	RepoFenceReader
+	RepoFenceWriter
 }
