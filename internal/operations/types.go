@@ -44,7 +44,8 @@ const (
 	OperationPhaseNamespaceVolumeBindingPutValidate  = "validate_namespace_volume_binding_put"
 	OperationPhaseNamespaceVolumeBindingPutCommitted = "namespace_volume_binding_put_committed"
 
-	OperationPhaseRepoCreateValidate = "validate_repo_create"
+	OperationPhaseRepoCreateValidate  = "validate_repo_create"
+	OperationPhaseRepoCreateCommitted = "repo_create_committed"
 )
 
 var operationTypes = []OperationType{

@@ -15,6 +15,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
@@ -346,6 +347,10 @@ func (store *cmdWorkerAppStore) ListNamespaceVolumeBindingPutOperationsForRecove
 	return nil, nil
 }
 
+func (store *cmdWorkerAppStore) ListRepoCreateOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 func (store *cmdWorkerAppStore) AcquireNamespaceUpsertOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
@@ -355,6 +360,10 @@ func (store *cmdWorkerAppStore) AcquireVolumeEnsureOperationLease(context.Contex
 }
 
 func (store *cmdWorkerAppStore) AcquireNamespaceVolumeBindingPutOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) AcquireRepoCreateOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
 
@@ -368,6 +377,34 @@ func (store *cmdWorkerAppStore) CommitVolumeEnsureWithLease(context.Context, res
 
 func (store *cmdWorkerAppStore) CommitNamespaceVolumeBindingPutWithLease(context.Context, resources.NamespaceVolumeBinding, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error) {
 	return resources.NamespaceVolumeBinding{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitRepoCreateSucceededWithLease(context.Context, resources.Repo, operations.SanitizedOperationRecord, string, time.Time, audit.Event, string) (resources.Repo, operations.OperationRecord, error) {
+	return resources.Repo{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitRepoCreateFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event, string) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
+	return resources.Namespace{}, errors.New("unexpected metadata read")
+}
+
+func (store *cmdWorkerAppStore) GetNamespaceVolumeBinding(context.Context, string) (resources.NamespaceVolumeBinding, error) {
+	return resources.NamespaceVolumeBinding{}, errors.New("unexpected metadata read")
+}
+
+func (store *cmdWorkerAppStore) GetVolume(context.Context, string) (resources.Volume, error) {
+	return resources.Volume{}, errors.New("unexpected metadata read")
+}
+
+func (store *cmdWorkerAppStore) ListHeldRepoFences(context.Context, string) ([]fences.Fence, error) {
+	return nil, errors.New("unexpected fence read")
+}
+
+func (store *cmdWorkerAppStore) CreateRepoFence(context.Context, fences.Fence) error {
+	return errors.New("unexpected fence create")
 }
 
 func (runner *fakeRunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error) {

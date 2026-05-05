@@ -39,6 +39,9 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	if cfg.Worker.RunOnceTimeout != 30*time.Second {
 		t.Fatalf("worker run-once timeout = %v, want 30s", cfg.Worker.RunOnceTimeout)
 	}
+	if cfg.Worker.OperationRecovery.RepoCreate.Enabled {
+		t.Fatal("repo_create recovery enabled by default, want disabled")
+	}
 }
 
 func TestLoadNormalizesFieldsAndCapabilities(t *testing.T) {
@@ -73,6 +76,80 @@ func TestLoadNormalizesFieldsAndCapabilities(t *testing.T) {
 	assertCapability(t, "jvs", cfg.Capabilities.JVS, true, false)
 	assertCapability(t, "webdav", cfg.Capabilities.WebDAV, true, true)
 	assertCapability(t, "mount", cfg.Capabilities.Mount, false, false)
+}
+
+func TestLoadRepoCreateRecoveryRequiresExplicitConfigWhenEnabled(t *testing.T) {
+	base := MapSource{
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
+		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
+		"AFSCP_WORKER_OWNER":                      "worker-a",
+		"AFSCP_REPO_CREATE_RECOVERY_ENABLED":      "true",
+	}
+	tests := []struct {
+		name     string
+		override MapSource
+		want     string
+	}{
+		{name: "missing binary", want: "AFSCP_JVS_BINARY_PATH"},
+		{name: "missing checksum", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs"}, want: "AFSCP_JVS_BINARY_SHA256"},
+		{name: "missing cwd", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64)}, want: "AFSCP_JVS_CWD"},
+		{name: "missing roots", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "relative binary", override: MapSource{"AFSCP_JVS_BINARY_PATH": "jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol"}, want: "AFSCP_JVS_BINARY_PATH"},
+		{name: "bad checksum", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": "not-sha", "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol"}, want: "AFSCP_JVS_BINARY_SHA256"},
+		{name: "relative cwd", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol"}, want: "AFSCP_JVS_CWD"},
+		{name: "bad root mapping", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=relative"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "bad volume id slash", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_bad/id=/srv/vol"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "bad volume id dot", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_bad.id=/srv/vol"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "duplicate volume id", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol-a,vol_123=/srv/vol-b"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "duplicate root", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol,vol_456=/srv/vol"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "overlapping roots", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol,vol_456=/srv/vol/child"}, want: "AFSCP_VOLUME_ROOTS"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := MapSource{}
+			for key, value := range base {
+				source[key] = value
+			}
+			for key, value := range tt.override {
+				source[key] = value
+			}
+			_, err := Load(source)
+			if err == nil {
+				t.Fatal("Load succeeded, want repo_create config error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want %s", err, tt.want)
+			}
+			for _, leaked := range []string{"/srv/vol", "/srv/vol-a", "/srv/vol-b", "/srv/vol/child"} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Fatalf("error leaked raw root %q: %v", leaked, err)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadRepoCreateRecoveryParsesValidConfig(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
+		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
+		"AFSCP_WORKER_OWNER":                      "worker-a",
+		"AFSCP_REPO_CREATE_RECOVERY_ENABLED":      "true",
+		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":                 strings.Repeat("a", 64),
+		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123, vol_other=/srv/afscp/volumes/vol_other",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	repo := cfg.Worker.OperationRecovery.RepoCreate
+	if !repo.Enabled || repo.JVSBinaryPath != "/opt/afscp/bin/jvs" || repo.JVSCWD != "/var/lib/afscp/jvs-cwd" || repo.JVSBinarySHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("repo_create config = %#v", repo)
+	}
+	if repo.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" || repo.VolumeRoots["vol_other"] != "/srv/afscp/volumes/vol_other" {
+		t.Fatalf("volume roots = %#v", repo.VolumeRoots)
+	}
 }
 
 func TestLoadRejectsInvalidCapabilityBool(t *testing.T) {

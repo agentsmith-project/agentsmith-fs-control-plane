@@ -2,19 +2,26 @@ package workerapp
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"sync/atomic"
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/namespacebindingexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/namespaceexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store/postgres"
@@ -28,9 +35,11 @@ type OperationRecoveryStore interface {
 	store.VolumeEnsureOperationRecoveryStore
 	store.NamespaceUpsertOperationRecoveryStore
 	store.NamespaceVolumeBindingOperationRecoveryStore
+	store.RepoCreateOperationRecoveryStore
 }
 
 type StoreFactory func(context.Context, string) (StoreHandle, error)
+type JVSRunnerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error)
 
 type StoreHandle struct {
 	Store OperationRecoveryStore
@@ -38,10 +47,11 @@ type StoreHandle struct {
 }
 
 type Options struct {
-	Source       config.Source
-	StoreFactory StoreFactory
-	Clock        func() time.Time
-	AuditEventID namespaceexec.AuditEventIDGenerator
+	Source           config.Source
+	StoreFactory     StoreFactory
+	JVSRunnerFactory JVSRunnerFactory
+	Clock            func() time.Time
+	AuditEventID     namespaceexec.AuditEventIDGenerator
 }
 
 type RunOnceRunner struct {
@@ -130,10 +140,40 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		}
 		return nil, err
 	}
+	executors := []recovery.OperationExecutor{volumeExecutor, namespaceExecutor, bindingExecutor}
+	if opConfig.RepoCreate.Enabled {
+		jvsFactory := options.JVSRunnerFactory
+		if jvsFactory == nil {
+			jvsFactory = NewJVSRunnerFromConfig
+		}
+		jvs, err := jvsFactory(opConfig.RepoCreate)
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		repoExecutor, err := repoexec.NewExecutor(repoexec.Config{
+			Store:        scopedStore,
+			JVSRunner:    jvs,
+			Owner:        opConfig.Owner,
+			Clock:        now,
+			AuditEventID: func() string { return eventID() },
+			VolumeRoots:  opConfig.RepoCreate.VolumeRoots,
+		})
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		executors = append(executors, repoExecutor)
+		scopedStore.repoCreateEnabled = true
+	}
 	operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
 		Reader:        scopedStore,
 		LeaseStore:    scopedStore,
-		Executor:      multiExecutor{executors: []recovery.OperationExecutor{volumeExecutor, namespaceExecutor, bindingExecutor}},
+		Executor:      multiExecutor{executors: executors},
 		Owner:         opConfig.Owner,
 		LeaseDuration: opConfig.LeaseDuration,
 		Limit:         opConfig.Limit,
@@ -144,6 +184,29 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		timeout: cfg.Worker.RunOnceTimeout,
 		close:   handle.Close,
 	}, nil
+}
+
+func NewJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+	if err := verifyFileSHA256(cfg.JVSBinaryPath, cfg.JVSBinarySHA256); err != nil {
+		return nil, err
+	}
+	return jvsrunner.New(jvsrunner.Config{BinaryPath: cfg.JVSBinaryPath, CWD: cfg.JVSCWD})
+}
+
+func verifyFileSHA256(path, want string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return errors.New("jvs binary verification failed")
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return errors.New("jvs binary verification failed")
+	}
+	if got := hex.EncodeToString(hash.Sum(nil)); got != want {
+		return errors.New("jvs binary checksum mismatch")
+	}
+	return nil
 }
 
 func (runner *RunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error) {
@@ -198,7 +261,8 @@ func nowFunc(clock func() time.Time) func() time.Time {
 }
 
 type operationRecoveryStore struct {
-	store OperationRecoveryStore
+	store             OperationRecoveryStore
+	repoCreateEnabled bool
 }
 
 func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
@@ -216,6 +280,13 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 	}
 	records := append(volumeRecords, namespaceRecords...)
 	records = append(records, bindingRecords...)
+	if scoped.repoCreateEnabled {
+		repoRecords, err := scoped.store.ListRepoCreateOperationsForRecovery(ctx, now, limit)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, repoRecords...)
+	}
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
 			return records[i].ID < records[j].ID
@@ -237,7 +308,11 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
 		return record, err
 	}
-	return scoped.store.AcquireNamespaceVolumeBindingPutOperationLease(ctx, operationID, request)
+	record, err = scoped.store.AcquireNamespaceVolumeBindingPutOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || !scoped.repoCreateEnabled {
+		return record, err
+	}
+	return scoped.store.AcquireRepoCreateOperationLease(ctx, operationID, request)
 }
 
 func (scoped operationRecoveryStore) RenewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
@@ -258,6 +333,34 @@ func (scoped operationRecoveryStore) CommitNamespaceUpsertWithLease(ctx context.
 
 func (scoped operationRecoveryStore) CommitNamespaceVolumeBindingPutWithLease(ctx context.Context, binding resources.NamespaceVolumeBinding, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error) {
 	return scoped.store.CommitNamespaceVolumeBindingPutWithLease(ctx, binding, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitRepoCreateSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+	return scoped.store.CommitRepoCreateSucceededWithLease(ctx, repo, record, owner, now, event, fenceID)
+}
+
+func (scoped operationRecoveryStore) CommitRepoCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
+	return scoped.store.CommitRepoCreateFailedWithLease(ctx, record, owner, now, event, releaseFenceID)
+}
+
+func (scoped operationRecoveryStore) GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error) {
+	return scoped.store.GetNamespace(ctx, namespaceID)
+}
+
+func (scoped operationRecoveryStore) GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error) {
+	return scoped.store.GetNamespaceVolumeBinding(ctx, namespaceID)
+}
+
+func (scoped operationRecoveryStore) GetVolume(ctx context.Context, volumeID string) (resources.Volume, error) {
+	return scoped.store.GetVolume(ctx, volumeID)
+}
+
+func (scoped operationRecoveryStore) ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error) {
+	return scoped.store.ListHeldRepoFences(ctx, repoID)
+}
+
+func (scoped operationRecoveryStore) CreateRepoFence(ctx context.Context, fence fences.Fence) error {
+	return scoped.store.CreateRepoFence(ctx, fence)
 }
 
 func operationRecoveryCountError(result recovery.OperationBatchResult) error {
@@ -310,5 +413,6 @@ var (
 	_ store.VolumeEnsureOperationCommitStore           = operationRecoveryStore{}
 	_ store.NamespaceUpsertOperationCommitStore        = operationRecoveryStore{}
 	_ store.NamespaceVolumeBindingOperationCommitStore = operationRecoveryStore{}
+	_ store.RepoCreateOperationCommitStore             = operationRecoveryStore{}
 	_ recovery.OperationExecutor                       = multiExecutor{}
 )

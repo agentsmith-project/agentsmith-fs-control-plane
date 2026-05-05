@@ -70,9 +70,9 @@ External control root rules accepted for AFSCP:
   be clean and controlled, must not be inside another JVS repo, and must never
   be used to discover the target repo.
 - The current internal runner abstraction is intentionally limited to
-  `init` and `doctor --strict`; repo_create worker execution, directory
-  creation, storage mutation, save/restore, clone, WebDAV, and mount flows remain
-  separate future slices.
+  `init` and `doctor --strict`. `repo_create` recovery may use those commands
+  behind its explicit worker gate; save/restore, clone, WebDAV, and mount flows
+  remain separate future slices.
 - JVS has repo/workspace lifecycle commands for ordinary repos, but AFSCP GA
   lifecycle does not depend on them. If AFSCP later uses those commands, their
   external-control-root behavior must first be pinned and tested against the
@@ -82,7 +82,8 @@ External control root rules accepted for AFSCP:
 
 - Every mutating JVS action must have an AFSCP operation record.
 - Mutating JVS actions must use resource locks.
-- JVS JSON output should be stored with the operation record.
+- JVS JSON output stored with the operation record must be reduced to a safe
+  summary and must not include absolute roots, raw stdout/stderr, or secrets.
 - AFSCP should map JVS errors into stable caller-visible error codes.
 - `doctor --strict` should be run after repo create, restore, and clone in GA smoke paths.
 - `doctor --strict` should be run before reactivating archived or tombstoned repos when retained JVS metadata is expected to remain usable.
@@ -114,11 +115,15 @@ Before enabling workload mounts, CI should prove the pinned JVS binary can:
 Creating a repo should:
 
 1. Resolve namespace and volume policy.
-2. Allocate canonical `control_root_path` and `payload_root_path`.
+2. Resolve canonical runtime `control_root_path` and `payload_root_path` from
+   the worker's trusted volume root map plus canonical volume-relative subdirs.
 3. Ensure parent directories exist and the payload root is ready for adoption.
 4. Run `jvs init <payload_root_path> --control-root <control_root_path> --workspace main --json`.
-5. Store `repo_id`, `namespace_id`, `volume_id`, `control_root_path`, `payload_root_path`, `control_volume_subdir`, `payload_volume_subdir`, and `jvs_repo_id`.
-6. Return only IDs and status to ordinary callers. Raw paths remain internal.
+5. Store `repo_id`, `namespace_id`, `volume_id`, `control_volume_subdir`,
+   `payload_volume_subdir`, and `jvs_repo_id`; do not store absolute
+   `control_root_path` or `payload_root_path` in DB, operation, or audit data.
+6. Return only IDs and status to ordinary callers. Absolute volume roots remain
+   worker config only and raw paths remain internal.
 
 ## Repo Lifecycle
 

@@ -54,16 +54,14 @@ Required fields:
 - `repo_id`
 - `volume_id`
 - `repo_kind`
-- `control_root_path`
-- `payload_root_path`
 - `control_volume_subdir`
 - `payload_volume_subdir`
 - `jvs_repo_id`
 - `status`
 
-`control_root_path` is the absolute JVS external control root used only by AFSCP/JVS runner.
+`control_root_path` is the absolute JVS external control root used only by the AFSCP/JVS runner. It is resolved at runtime from the worker's trusted volume root map plus `control_volume_subdir`; it is not persisted in DB, operation, or audit data.
 
-`payload_root_path` is the absolute JVS `main` workspace folder. It is the root for user files, WebDAV export, and workload mounts.
+`payload_root_path` is the absolute JVS `main` workspace folder. It is resolved at runtime from the worker's trusted volume root map plus `payload_volume_subdir`; it is not persisted in DB, operation, or audit data.
 
 `payload_volume_subdir` is the AFSCP-generated JuiceFS subdirectory relative to the JuiceFS filesystem root that a privileged orchestrator may consume. It points at `payload/`, not the repo container directory and not the control root.
 
@@ -74,7 +72,7 @@ control_volume_subdir = afscp/namespaces/<namespace_id>/repos/<repo_id>/control
 payload_volume_subdir = afscp/namespaces/<namespace_id>/repos/<repo_id>/payload
 ```
 
-These paths and subdirs should be treated as implementation state. Ordinary product APIs should use IDs. Only the privileged orchestrator plan may include `payload_volume_subdir`, and it must never include a leading slash or full host path. `control_root_path` and `control_volume_subdir` must never be returned to ordinary product callers, workloads, or client connectors.
+These paths and subdirs should be treated as implementation state. Ordinary product APIs should use IDs. Only the privileged orchestrator plan may include `payload_volume_subdir`, and it must never include a leading slash or full host path. Absolute `control_root_path` and `payload_root_path` values are worker-runtime values only; `control_root_path` and `control_volume_subdir` must never be returned to ordinary product callers, workloads, or client connectors.
 
 ## Path Resolver Rules
 

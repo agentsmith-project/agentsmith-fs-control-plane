@@ -42,22 +42,27 @@ needed before real handlers and storage mutation work:
   it commits binding metadata, the terminal operation update, and the audit
   event through the dedicated namespace volume binding store boundary.
 - `jvsrunner`: minimal JVS v0.4.8 CLI runner abstraction for fixed
-  external-control-root `init` and `doctor --strict` JSON commands only; it is
-  not wired into repo workers yet.
+  external-control-root `init` and `doctor --strict` JSON commands only; when
+  the explicit `repo_create` recovery gate is enabled, it is wired through
+  `repoexec` and `workerapp`.
+- `repoexec`: opt-in `repo_create` recovery executor that resolves metadata,
+  acquires the create fence, runs JVS `init`/`doctor --strict`, and commits repo
+  metadata, terminal operation, audit, and fence release through dedicated store
+  boundaries.
 - `workerapp`: production `afscp-worker --run-once` bootstrap for the
-  opt-in namespace metadata operation recovery runner.
+  opt-in metadata operation recovery runner.
 - `pathresolver`: path safety helpers, denial tests, shared resolver corpus, and
   canonical internal repo root resolution from trusted volume roots plus repo
   IDs.
 
 Still intentionally absent: repo/JVS/WebDAV/mount endpoint handlers, real
 external audit delivery worker/sink integration, repo lifecycle
-workers/recovery loop, JVS execution, WebDAV export serving, workload mount
-issuance, repo/template lifecycle mutation, storage mutation implementations,
-and fence enforcement beyond the minimal repo fence adapter slice. The worker
-app currently wires only
-`volume_ensure`, `namespace_upsert`, and `namespace_volume_binding_put`
-operation recovery when explicitly enabled.
+workers/recovery loop beyond create, WebDAV export serving, workload mount
+issuance, repo/template lifecycle mutation, storage mutation implementations
+beyond JVS repo init, and fence enforcement beyond the minimal repo fence adapter
+slice. The worker app currently wires `volume_ensure`, `namespace_upsert`,
+`namespace_volume_binding_put`, and opt-in `repo_create` operation recovery when
+explicitly enabled.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

@@ -9,8 +9,11 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
 )
@@ -125,6 +128,61 @@ func TestRunOnceClaimsQueuedVolumeEnsureThroughDefaultRunner(t *testing.T) {
 	}
 }
 
+func TestRunOnceRepoCreateDisabledDoesNotListRepoCreate(t *testing.T) {
+	now := workerAppNow()
+	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
+	store := newWorkerAppStore(repoRecord)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 0 || summary.Claimed != 0 || strings.Join(store.acquireIDs, ",") != "" {
+		t.Fatalf("summary/acquire = %#v/%#v, want repo_create ignored while gate disabled", summary, store.acquireIDs)
+	}
+}
+
+func TestRunOnceRepoCreateEnabledClaimsThroughRepoExecutor(t *testing.T) {
+	now := workerAppNow()
+	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
+	store := newWorkerAppStore(repoRecord)
+	jvs := &workerAppFakeJVSRunner{
+		initSummary:   jvsrunner.InitSummary{RepoID: "jvs_repo_alpha", Workspace: "main"},
+		doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_repo" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want repo_create claimed", summary)
+	}
+	if store.repo.ID != "repo_alpha01" || store.operation.Type != operations.OperationRepoCreate || store.operation.State != operations.OperationStateSucceeded || len(store.auditEvents) != 1 {
+		t.Fatalf("repo/operation/audit = %#v/%#v/%#v", store.repo, store.operation, store.auditEvents)
+	}
+	if strings.Join(jvs.calls, ",") != "init,doctor" {
+		t.Fatalf("jvs calls = %#v, want init,doctor", jvs.calls)
+	}
+}
+
 func TestRunOnceScopedStoreDoesNotStarveVolumeBehindNonScopedRecords(t *testing.T) {
 	now := workerAppNow()
 	repoQueued := workerAppRepoOperationRecord("op_repo_queued", operations.OperationStateQueued, now)
@@ -234,6 +292,23 @@ func TestRunOnceReturnsCloseError(t *testing.T) {
 	}
 	if store.closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", store.closeCalls)
+	}
+}
+
+func TestNewJVSRunnerFromConfigRedactsBinaryReadErrors(t *testing.T) {
+	rawPath := "/tmp/afscp-secret-missing-jvs-binary"
+	_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
+		Enabled:         true,
+		JVSBinaryPath:   rawPath,
+		JVSBinarySHA256: strings.Repeat("a", 64),
+		JVSCWD:          "/var/lib/afscp/jvs-cwd",
+		VolumeRoots:     map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+	})
+	if err == nil {
+		t.Fatal("NewJVSRunnerFromConfig succeeded, want read/checksum error")
+	}
+	if strings.Contains(err.Error(), rawPath) || strings.Contains(strings.ToLower(err.Error()), "secret") {
+		t.Fatalf("error leaked raw binary path: %v", err)
 	}
 }
 
@@ -532,6 +607,20 @@ func workerAppConfigSource(overrides config.MapSource) config.MapSource {
 	return source
 }
 
+func workerAppRepoConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppConfigSource(config.MapSource{
+		"AFSCP_REPO_CREATE_RECOVERY_ENABLED": "true",
+		"AFSCP_JVS_BINARY_PATH":              "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":            strings.Repeat("a", 64),
+		"AFSCP_JVS_CWD":                      "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                 "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return source
+}
+
 func workerAppOperationRecord(now time.Time) operations.OperationRecord {
 	return operations.OperationRecord{
 		ID:               "op_namespace",
@@ -567,6 +656,15 @@ func workerAppRepoOperationRecord(operationID string, state operations.Operation
 		RepoID:           "repo_alpha",
 		CreatedAt:        now.Add(-time.Hour),
 	}
+}
+
+func workerAppRepoCreateOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	record := workerAppRepoOperationRecord(operationID, operations.OperationStateQueued, now)
+	record.Phase = operations.OperationPhaseRepoCreateValidate
+	record.RepoID = "repo_alpha01"
+	record.Resource = operations.ResourceRef{Type: "repo", ID: "repo_alpha01"}
+	record.InputSummary = map[string]any{"namespace_id": "ns_alpha01", "target_repo_id": "repo_alpha01"}
+	return record
 }
 
 func workerAppVolumeOperationRecord(operationID string, now time.Time) operations.OperationRecord {
@@ -634,10 +732,13 @@ type fakeWorkerAppStore struct {
 	records         map[string]operations.OperationRecord
 	order           []string
 	volume          resources.Volume
+	repo            resources.Repo
 	namespace       resources.Namespace
 	binding         resources.NamespaceVolumeBinding
 	operation       operations.OperationRecord
 	auditEvents     []audit.Event
+	fences          []fences.Fence
+	releasedFenceID string
 	listDeadline    time.Time
 	closeCalls      int
 	acquireIDs      []string
@@ -797,6 +898,49 @@ func (store *fakeWorkerAppStore) AcquireNamespaceVolumeBindingPutOperationLease(
 	return decision.Record, nil
 }
 
+func (store *fakeWorkerAppStore) ListRepoCreateOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		store.listDeadline = deadline
+	}
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if record.Type != operations.OperationRepoCreate || record.Phase != operations.OperationPhaseRepoCreateValidate {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+		case operations.OperationStateRunning, operations.OperationStateCancelRequested:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (store *fakeWorkerAppStore) AcquireRepoCreateOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if record.Type != operations.OperationRepoCreate || record.Phase != operations.OperationPhaseRepoCreateValidate {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
 func (store *fakeWorkerAppStore) CommitNamespaceUpsertWithLease(_ context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
 	operation := record.Record()
 	operation.LeaseOwner = ""
@@ -830,6 +974,62 @@ func (store *fakeWorkerAppStore) CommitNamespaceVolumeBindingPutWithLease(_ cont
 	return binding, operation, nil
 }
 
+func (store *fakeWorkerAppStore) CommitRepoCreateSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.repo = repo
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	store.releasedFenceID = fenceID
+	return repo, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitRepoCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	store.releasedFenceID = releaseFenceID
+	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
+	return resources.Namespace{ID: "ns_alpha01", Status: resources.NamespaceStatusActive, CreatedAt: workerAppNow().Add(-time.Hour), UpdatedAt: workerAppNow()}, nil
+}
+
+func (store *fakeWorkerAppStore) GetNamespaceVolumeBinding(context.Context, string) (resources.NamespaceVolumeBinding, error) {
+	return resources.NamespaceVolumeBinding{
+		NamespaceID:       "ns_alpha01",
+		DefaultVolumeID:   "vol_123",
+		AllowedCallers:    []resources.AllowedCaller{{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}}},
+		QuotaBytesDefault: 4096,
+		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
+		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
+		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false},
+		TemplatePolicy:    map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false},
+		Status:            resources.NamespaceStatusActive,
+		CreatedAt:         workerAppNow().Add(-time.Hour),
+		UpdatedAt:         workerAppNow(),
+	}, nil
+}
+
+func (store *fakeWorkerAppStore) GetVolume(context.Context, string) (resources.Volume, error) {
+	return resources.Volume{ID: "vol_123", Backend: resources.VolumeBackendJuiceFS, IsolationClass: resources.VolumeIsolationShared, Status: resources.VolumeStatusActive, Capabilities: map[string]any{"webdav_export": true, "workload_mount": true, "jvs_external_control_root": true, "directory_quota": false}, CreatedAt: workerAppNow().Add(-time.Hour), UpdatedAt: workerAppNow()}, nil
+}
+
+func (store *fakeWorkerAppStore) ListHeldRepoFences(context.Context, string) ([]fences.Fence, error) {
+	return store.fences, nil
+}
+
+func (store *fakeWorkerAppStore) CreateRepoFence(_ context.Context, fence fences.Fence) error {
+	store.fences = append(store.fences, fence)
+	return nil
+}
+
 type fakeOperationRecoveryRunner struct {
 	result recovery.OperationBatchResult
 	err    error
@@ -837,4 +1037,20 @@ type fakeOperationRecoveryRunner struct {
 
 func (runner *fakeOperationRecoveryRunner) RunOnce(context.Context) (recovery.OperationBatchResult, error) {
 	return runner.result, runner.err
+}
+
+type workerAppFakeJVSRunner struct {
+	calls         []string
+	initSummary   jvsrunner.InitSummary
+	doctorSummary jvsrunner.DoctorSummary
+}
+
+func (runner *workerAppFakeJVSRunner) Init(context.Context, string, string) (jvsrunner.InitSummary, error) {
+	runner.calls = append(runner.calls, "init")
+	return runner.initSummary, nil
+}
+
+func (runner *workerAppFakeJVSRunner) DoctorStrict(context.Context, string) (jvsrunner.DoctorSummary, error) {
+	runner.calls = append(runner.calls, "doctor")
+	return runner.doctorSummary, nil
 }

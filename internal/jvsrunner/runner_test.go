@@ -68,7 +68,7 @@ func TestDoctorStrictUsesFixedCommandAndParsesEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoctorStrict returned error: %v", err)
 	}
-	if summary != (DoctorSummary{Healthy: true, Workspace: "main"}) {
+	if summary != (DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}) {
 		t.Fatalf("summary = %#v", summary)
 	}
 
@@ -257,6 +257,12 @@ func TestDoctorStrictFailsClosedForInvalidEnvelope(t *testing.T) {
 		{name: "missing healthy", stdout: func(t *testing.T) []byte {
 			return doctorStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "healthy") })
 		}},
+		{name: "missing repo id", stdout: func(t *testing.T) []byte {
+			return doctorStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "repo_id") })
+		}},
+		{name: "unsafe repo id", stdout: func(t *testing.T) []byte {
+			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "jvs/repo" })
+		}},
 		{name: "wrong workspace", stdout: func(t *testing.T) []byte {
 			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["workspace"] = "dev" })
 		}},
@@ -432,6 +438,7 @@ func doctorStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	t.Helper()
 	env := baseEnvelope("doctor")
 	data := env["data"].(map[string]any)
+	data["repo_id"] = "jvs_repo_alpha"
 	data["healthy"] = true
 	data["checks"] = []map[string]any{{"name": "control_root", "path": testControlRoot}}
 	if mutate != nil {

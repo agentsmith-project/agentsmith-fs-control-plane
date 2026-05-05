@@ -70,6 +70,9 @@ func TestRepoCreatePhasesAreStable(t *testing.T) {
 	if OperationPhaseRepoCreateValidate != "validate_repo_create" {
 		t.Fatalf("validate phase = %q, want validate_repo_create", OperationPhaseRepoCreateValidate)
 	}
+	if OperationPhaseRepoCreateCommitted != "repo_create_committed" {
+		t.Fatalf("committed phase = %q, want repo_create_committed", OperationPhaseRepoCreateCommitted)
+	}
 }
 
 func TestRouteOperationTypesReturnsDefensiveCopy(t *testing.T) {

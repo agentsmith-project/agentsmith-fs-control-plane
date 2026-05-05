@@ -62,6 +62,7 @@ type InitSummary struct {
 }
 
 type DoctorSummary struct {
+	RepoID    string
 	Healthy   bool
 	Workspace string
 }
@@ -177,12 +178,13 @@ func (runner *Runner) DoctorStrict(ctx context.Context, controlRoot string) (Doc
 		return DoctorSummary{}, fmt.Errorf("%w: doctor", ErrInvalidEnvelope)
 	}
 	healthy, ok := envelope.Data["healthy"].(bool)
+	repoID, _ := envelope.Data["repo_id"].(string)
 	workspace, _ := envelope.Data["workspace"].(string)
-	if !envelope.validFor("doctor", controlRoot) || !ok || !healthy || workspace != workspaceMain {
+	if !envelope.validFor("doctor", controlRoot) || !ok || !healthy || !safeOpaqueID(repoID) || workspace != workspaceMain {
 		return DoctorSummary{}, fmt.Errorf("%w: doctor", ErrInvalidEnvelope)
 	}
 
-	return DoctorSummary{Healthy: true, Workspace: workspace}, nil
+	return DoctorSummary{RepoID: repoID, Healthy: true, Workspace: workspace}, nil
 }
 
 func (runner *Runner) capResult(result CommandResult) CommandResult {

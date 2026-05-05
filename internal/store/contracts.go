@@ -140,6 +140,36 @@ type RepoCreateOperationIntakeStore interface {
 	CreateOrReuseRepoCreateOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
+// RepoCreateOperationCommitStore atomically commits repo metadata, a
+// lease-fenced repo_create operation update, audit outbox append, and the
+// target create fence release. Failure/intervention updates must also be
+// lease-fenced and append audit in one durable boundary; callers choose whether
+// to release a held fence only when no external JVS side effect is possible.
+type RepoCreateOperationCommitStore interface {
+	CommitRepoCreateSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error)
+	CommitRepoCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error)
+}
+
+type RepoCreateOperationMetadataReader interface {
+	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
+	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
+	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
+	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
+	CreateRepoFence(ctx context.Context, fence fences.Fence) error
+}
+
+// RepoCreateOperationRecoveryStore owns the durable recovery and metadata
+// boundary for repo_create. Implementations must push repo_create +
+// validate_repo_create scope into list/acquire SQL predicates, and success or
+// failure/intervention commits must not compose generic operation commits with
+// separate repo/fence writes.
+type RepoCreateOperationRecoveryStore interface {
+	ListRepoCreateOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireRepoCreateOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	RepoCreateOperationCommitStore
+	RepoCreateOperationMetadataReader
+}
+
 // AuditSink accepts audit events for append-only or outbox-backed delivery.
 type AuditSink interface {
 	AppendAuditEvent(ctx context.Context, event audit.Event) error

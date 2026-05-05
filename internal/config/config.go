@@ -3,9 +3,13 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 )
 
 const (
@@ -71,6 +75,15 @@ type WorkerOperationRecoveryConfig struct {
 	Owner         string
 	Limit         int
 	LeaseDuration time.Duration
+	RepoCreate    WorkerRepoCreateRecoveryConfig
+}
+
+type WorkerRepoCreateRecoveryConfig struct {
+	Enabled         bool
+	JVSBinaryPath   string
+	JVSBinarySHA256 string
+	JVSCWD          string
+	VolumeRoots     map[string]string
 }
 
 func (c Capability) Available() bool {
@@ -161,6 +174,11 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		worker.OperationRecovery.PostgresDSN = valueOrDefault(source, "AFSCP_DATABASE_URL", "")
 	}
 	worker.OperationRecovery.Owner = valueOrDefault(source, "AFSCP_WORKER_OWNER", "")
+	repoCreate, err := loadRepoCreateRecoveryConfig(source)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.OperationRecovery.RepoCreate = repoCreate
 
 	limit, err := intValue(source, "AFSCP_OPERATION_RECOVERY_LIMIT", worker.OperationRecovery.Limit)
 	if err != nil {
@@ -199,6 +217,98 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 	}
 
 	return worker, nil
+}
+
+func loadRepoCreateRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
+	enabled, err := boolValue(source, "AFSCP_REPO_CREATE_RECOVERY_ENABLED")
+	if err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	cfg := WorkerRepoCreateRecoveryConfig{Enabled: enabled, VolumeRoots: map[string]string{}}
+	if !enabled {
+		return cfg, nil
+	}
+	cfg.JVSBinaryPath = valueOrDefault(source, "AFSCP_JVS_BINARY_PATH", "")
+	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_BINARY_PATH", cfg.JVSBinaryPath); err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	cfg.JVSBinarySHA256 = strings.ToLower(valueOrDefault(source, "AFSCP_JVS_BINARY_SHA256", ""))
+	if !validSHA256Hex(cfg.JVSBinarySHA256) {
+		return WorkerRepoCreateRecoveryConfig{}, fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must be a sha256 hex digest")
+	}
+	cfg.JVSCWD = valueOrDefault(source, "AFSCP_JVS_CWD", "")
+	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_CWD", cfg.JVSCWD); err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	rootsRaw := valueOrDefault(source, "AFSCP_VOLUME_ROOTS", "")
+	roots, err := parseVolumeRoots(rootsRaw)
+	if err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	cfg.VolumeRoots = roots
+	return cfg, nil
+}
+
+func validateCleanAbsoluteConfigPath(key, path string) error {
+	if path == "" {
+		return fmt.Errorf("%s is required when AFSCP_REPO_CREATE_RECOVERY_ENABLED is true", key)
+	}
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || path == string(filepath.Separator) {
+		return fmt.Errorf("%s must be an absolute clean path", key)
+	}
+	return nil
+}
+
+func validSHA256Hex(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if !unicode.IsDigit(r) && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func parseVolumeRoots(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS is required when AFSCP_REPO_CREATE_RECOVERY_ENABLED is true")
+	}
+	roots := map[string]string{}
+	for _, part := range strings.Split(raw, ",") {
+		pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(pair) != 2 || strings.TrimSpace(pair[0]) == "" || strings.TrimSpace(pair[1]) == "" {
+			return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must be vol_id=/abs/root pairs")
+		}
+		volumeID := strings.TrimSpace(pair[0])
+		root := strings.TrimSpace(pair[1])
+		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
+			return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must contain valid volume ids and absolute clean roots")
+		}
+		if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == string(filepath.Separator) {
+			return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must contain valid volume ids and absolute clean roots")
+		}
+		if _, exists := roots[volumeID]; exists {
+			return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must contain unique volume ids and non-overlapping roots")
+		}
+		for _, existingRoot := range roots {
+			if root == existingRoot || configPathContains(root, existingRoot) || configPathContains(existingRoot, root) {
+				return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must contain unique volume ids and non-overlapping roots")
+			}
+		}
+		roots[volumeID] = root
+	}
+	if len(roots) == 0 {
+		return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS is required when AFSCP_REPO_CREATE_RECOVERY_ENABLED is true")
+	}
+	return roots, nil
+}
+
+func configPathContains(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func boolValue(source Source, key string) (bool, error) {

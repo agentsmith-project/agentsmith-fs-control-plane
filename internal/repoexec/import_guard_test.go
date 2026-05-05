@@ -1,4 +1,4 @@
-package workerapp
+package repoexec
 
 import (
 	"go/parser"
@@ -9,27 +9,20 @@ import (
 	"testing"
 )
 
-func TestWorkerAppImportBoundaries(t *testing.T) {
-	allowed := map[string]bool{
-		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/namespacebindingexec": true,
-		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner":            true,
-		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec":             true,
-	}
+func TestRepoExecImportBoundaries(t *testing.T) {
 	forbidden := []string{
 		"/internal/api",
 		"/internal/operationexec",
-		"/internal/auditdelivery",
+		"/internal/workerapp",
+		"/internal/store/postgres",
 		"/cmd",
-		"/jvs",
 		"/webdav",
 		"/mount",
 		"/storage",
-		"namespace_volume",
 	}
-
 	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("read workerapp package dir: %v", err)
+		t.Fatalf("read repoexec package dir: %v", err)
 	}
 	for _, entry := range entries {
 		name := entry.Name()
@@ -42,12 +35,9 @@ func TestWorkerAppImportBoundaries(t *testing.T) {
 		}
 		for _, spec := range file.Imports {
 			importPath := strings.Trim(spec.Path.Value, `"`)
-			if allowed[importPath] {
-				continue
-			}
 			for _, fragment := range forbidden {
 				if strings.Contains(importPath, fragment) {
-					t.Fatalf("workerapp import boundary violation: %s imports %q matching %q", name, importPath, fragment)
+					t.Fatalf("repoexec import boundary violation: %s imports %q matching %q", name, importPath, fragment)
 				}
 			}
 		}
