@@ -5,134 +5,77 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver/testcorpus"
 )
 
-func TestValidateIDAcceptsStrictGrammar(t *testing.T) {
+func TestSharedCorpusContainsContractGuardCategories(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		kind IDKind
-		id   string
-	}{
-		{name: "namespace", kind: NamespaceID, id: "ns_ab"},
-		{name: "repo", kind: RepoID, id: "repo_A1-b_2"},
-		{name: "template", kind: TemplateID, id: "tmpl_09"},
-		{name: "volume", kind: VolumeID, id: "vol_Z9"},
-		{name: "export", kind: ExportID, id: "export_a-b_c9"},
-		{name: "mount binding", kind: WorkloadMountBindingID, id: "wmb_m0"},
-		{name: "mount alias", kind: MountID, id: "wmb_m0"},
-		{name: "operation", kind: OperationID, id: "op_xY"},
-		{name: "max suffix", kind: RepoID, id: "repo_A" + repeatForTest("b", 62)},
+	tags := map[string]bool{}
+	for _, tag := range testcorpus.AllTags() {
+		tags[tag] = true
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
+	required := []string{
+		testcorpus.TagRepoManagedRoot,
+		testcorpus.TagTemplateManagedRoot,
+		testcorpus.TagJVS,
+		testcorpus.TagEncodedSeparator,
+		testcorpus.TagDoubleEncodedSeparator,
+		testcorpus.TagUnicodeSlashLike,
+		testcorpus.TagControlChar,
+		testcorpus.TagSymlink,
+		testcorpus.TagHardlink,
+		testcorpus.TagTraversalDefenseFlag,
+		testcorpus.TagNilInspector,
+	}
+	for _, tag := range required {
+		tag := tag
+		t.Run(tag, func(t *testing.T) {
 			t.Parallel()
 
-			if err := ValidateID(tt.kind, tt.id); err != nil {
-				t.Fatalf("ValidateID(%q, %q) returned error: %v", tt.kind, tt.id, err)
+			if !tags[tag] {
+				t.Fatalf("shared resolver corpus is missing required category tag %q", tag)
 			}
 		})
 	}
 }
 
-func TestValidateIDRejectsUnsafeInput(t *testing.T) {
+func TestValidateIDAcceptsSharedCorpus(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		kind IDKind
-		id   string
-	}{
-		{name: "empty", kind: NamespaceID, id: ""},
-		{name: "wrong prefix", kind: RepoID, id: "ns_ab"},
-		{name: "too short suffix", kind: NamespaceID, id: "ns_a"},
-		{name: "too long suffix", kind: NamespaceID, id: "ns_A" + repeatForTest("b", 63)},
-		{name: "first suffix underscore", kind: VolumeID, id: "vol__a"},
-		{name: "first suffix hyphen", kind: VolumeID, id: "vol_-a"},
-		{name: "first suffix dot", kind: RepoID, id: "repo_.hidden"},
-		{name: "slash", kind: RepoID, id: "repo_ab/cd"},
-		{name: "backslash", kind: RepoID, id: "repo_ab\\cd"},
-		{name: "dot", kind: TemplateID, id: "tmpl_ab.cd"},
-		{name: "space", kind: ExportID, id: "export_ab cd"},
-		{name: "display name", kind: RepoID, id: "repo_My Project"},
-		{name: "display name punctuation", kind: TemplateID, id: "tmpl_Base:v1"},
-		{name: "percent encoded slash", kind: RepoID, id: "repo_ab%2fcd"},
-		{name: "double encoded slash", kind: RepoID, id: "repo_ab%252fcd"},
-		{name: "unicode division slash", kind: RepoID, id: "repo_ab\u2215cd"},
-		{name: "unicode fullwidth reverse solidus", kind: RepoID, id: "repo_ab\uff3ccd"},
-		{name: "unicode", kind: OperationID, id: "op_ab\u00e9"},
-		{name: "control", kind: WorkloadMountBindingID, id: "wmb_ab\ncd"},
-		{name: "unknown kind", kind: IDKind("other"), id: "ns_ab"},
-	}
-
+	tests := testcorpus.AcceptedIDCases()
 	for _, tt := range tests {
 		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.Name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := ValidateID(tt.kind, tt.id); err == nil {
-				t.Fatalf("ValidateID(%q, %q) succeeded, want error", tt.kind, tt.id)
+			if err := ValidateID(IDKind(tt.Kind), tt.ID); err != nil {
+				t.Fatalf("ValidateID(%q, %q) returned error: %v", tt.Kind, tt.ID, err)
 			}
 		})
 	}
+
+	t.Run("mount alias", func(t *testing.T) {
+		t.Parallel()
+
+		if err := ValidateID(MountID, "wmb_m0"); err != nil {
+			t.Fatalf("ValidateID(%q, %q) returned error: %v", MountID, "wmb_m0", err)
+		}
+	})
 }
 
-func TestRepoPathContractStrictIDCorpus(t *testing.T) {
+func TestValidateIDRejectsSharedCorpus(t *testing.T) {
 	t.Parallel()
 
-	accepted := []struct {
-		name string
-		kind IDKind
-		id   string
-	}{
-		{name: "namespace lowercase", kind: NamespaceID, id: "ns_ab"},
-		{name: "namespace mixed", kind: NamespaceID, id: "ns_A9-_b"},
-		{name: "repo lowercase", kind: RepoID, id: "repo_ab"},
-		{name: "repo max suffix", kind: RepoID, id: "repo_A" + repeatForTest("z", 62)},
-		{name: "template", kind: TemplateID, id: "tmpl_T9"},
-		{name: "volume", kind: VolumeID, id: "vol_v1"},
-	}
-	for _, tt := range accepted {
+	for _, tt := range testcorpus.RejectedIDCases() {
 		tt := tt
-		t.Run("accept/"+tt.name, func(t *testing.T) {
+		t.Run(tt.Name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := ValidateID(tt.kind, tt.id); err != nil {
-				t.Fatalf("ValidateID(%q, %q) returned error: %v", tt.kind, tt.id, err)
-			}
-		})
-	}
-
-	rejected := []struct {
-		name string
-		kind IDKind
-		id   string
-	}{
-		{name: "empty", kind: NamespaceID, id: ""},
-		{name: "encoded separator slash", kind: RepoID, id: "repo_ab%2Fcd"},
-		{name: "encoded separator backslash", kind: RepoID, id: "repo_ab%5ccd"},
-		{name: "double encoded separator", kind: RepoID, id: "repo_ab%252fcd"},
-		{name: "slash-like fraction slash", kind: RepoID, id: "repo_ab\u2044cd"},
-		{name: "slash-like division slash", kind: RepoID, id: "repo_ab\u2215cd"},
-		{name: "slash-like fullwidth solidus", kind: RepoID, id: "repo_ab\uff0fcd"},
-		{name: "control newline", kind: RepoID, id: "repo_ab\ncd"},
-		{name: "control nul", kind: RepoID, id: "repo_ab\x00cd"},
-		{name: "leading dot display segment", kind: RepoID, id: "repo_.hidden"},
-		{name: "display name spaces", kind: RepoID, id: "repo_Project Alpha"},
-		{name: "display name punctuation", kind: RepoID, id: "repo_Project.Alpha"},
-		{name: "template id passed as repo", kind: RepoID, id: "tmpl_alpha"},
-		{name: "repo id passed as template", kind: TemplateID, id: "repo_alpha"},
-	}
-	for _, tt := range rejected {
-		tt := tt
-		t.Run("reject/"+tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			if err := ValidateID(tt.kind, tt.id); err == nil {
-				t.Fatalf("ValidateID(%q, %q) succeeded, want error", tt.kind, tt.id)
+			if err := ValidateID(IDKind(tt.Kind), tt.ID); err == nil {
+				t.Fatalf("ValidateID(%q, %q) succeeded, want error", tt.Kind, tt.ID)
 			}
 		})
 	}
@@ -188,8 +131,8 @@ func TestResolveRepoPathsRejectsInvalidIDs(t *testing.T) {
 		namespaceID string
 		repoID      string
 	}{
-		{name: "bad namespace", namespaceID: "ns_alpha/01", repoID: "repo_ok"},
-		{name: "bad repo", namespaceID: "ns_ok", repoID: "repo_.."},
+		{name: "bad namespace", namespaceID: findRejectedIDForTest(t, "too short suffix").ID, repoID: "repo_ok"},
+		{name: "bad repo", namespaceID: "ns_ok", repoID: findRejectedIDForTest(t, "first suffix dot").ID},
 	}
 
 	for _, tt := range tests {
@@ -212,8 +155,8 @@ func TestResolveTemplatePathsRejectsInvalidIDs(t *testing.T) {
 		namespaceID string
 		templateID  string
 	}{
-		{name: "bad namespace", namespaceID: "ns_alpha/01", templateID: "tmpl_ok"},
-		{name: "bad template", namespaceID: "ns_ok", templateID: "repo_wrong"},
+		{name: "bad namespace", namespaceID: findRejectedIDForTest(t, "too short suffix").ID, templateID: "tmpl_ok"},
+		{name: "bad template", namespaceID: "ns_ok", templateID: findRejectedIDForTest(t, "repo id passed as template").ID},
 	}
 
 	for _, tt := range tests {
@@ -289,36 +232,38 @@ func TestRepoPathContractRejectsKindMismatchesBeforePathCompute(t *testing.T) {
 	}
 }
 
-func TestResolveCallerPathAcceptsSafeRelativePaths(t *testing.T) {
+func TestResolveCallerPathAcceptsSharedCorpus(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		rawPath  string
-		clean    string
-		segments []string
-	}{
-		{name: "single segment", rawPath: "file.txt", clean: "file.txt", segments: []string{"file.txt"}},
-		{name: "nested", rawPath: "dir/subdir/file.txt", clean: "dir/subdir/file.txt", segments: []string{"dir", "subdir", "file.txt"}},
-		{name: "url decoded space", rawPath: "dir/a%20b.txt", clean: "dir/a b.txt", segments: []string{"dir", "a b.txt"}},
-		{name: "unicode filename", rawPath: "\u5ba2\u6237/\u62a5\u544a.txt", clean: "\u5ba2\u6237/\u62a5\u544a.txt", segments: []string{"\u5ba2\u6237", "\u62a5\u544a.txt"}},
-		{name: "literal percent", rawPath: "dir/100%25.txt", clean: "dir/100%.txt", segments: []string{"dir", "100%.txt"}},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range testcorpus.AcceptedCallerPathCases() {
 		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.Name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := ResolveCallerPath(tt.rawPath)
+			got, err := ResolveCallerPath(tt.RawPath)
 			if err != nil {
-				t.Fatalf("ResolveCallerPath(%q) returned error: %v", tt.rawPath, err)
+				t.Fatalf("ResolveCallerPath(%q) returned error: %v", tt.RawPath, err)
 			}
-			if got.Clean != tt.clean {
-				t.Fatalf("Clean mismatch: got %q, want %q", got.Clean, tt.clean)
+			if got.Clean != tt.Clean {
+				t.Fatalf("Clean mismatch: got %q, want %q", got.Clean, tt.Clean)
 			}
-			if !reflect.DeepEqual(got.Segments, tt.segments) {
-				t.Fatalf("Segments mismatch: got %#v, want %#v", got.Segments, tt.segments)
+			if !reflect.DeepEqual(got.Segments, tt.Segments) {
+				t.Fatalf("Segments mismatch: got %#v, want %#v", got.Segments, tt.Segments)
+			}
+		})
+	}
+}
+
+func TestResolveCallerPathRejectsSharedCorpus(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range testcorpus.RejectedCallerPathCases() {
+		tt := tt
+		t.Run(tt.Name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := ResolveCallerPath(tt.RawPath); err == nil {
+				t.Fatalf("ResolveCallerPath(%q) succeeded, want error", tt.RawPath)
 			}
 		})
 	}
@@ -347,244 +292,72 @@ func TestResolvePayloadTraversalPlanCarriesEscapeDefenseRequirements(t *testing.
 	}
 }
 
-func TestValidateTraversalPlanRejectsSymlinkComponents(t *testing.T) {
+func TestResolvePayloadTraversalAcceptsManagedRootCorpus(t *testing.T) {
 	t.Parallel()
 
-	plan := TraversalPlan{
-		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
-		Segments:        []string{"dir", "file.txt"},
-		NoFollow:        true,
-		RejectHardlinks: true,
-	}
-	inspector := fakeTraversalInspector{
-		"dir": {Exists: true, Type: EntryDirectory, Symlink: true},
-	}
-
-	err := ValidateTraversalPlan(plan, inspector)
-	if !errors.Is(err, ErrPathEscape) {
-		t.Fatalf("err = %v, want ErrPathEscape", err)
-	}
-}
-
-func TestValidateTraversalPlanRejectsHardlinkedFiles(t *testing.T) {
-	t.Parallel()
-
-	plan := TraversalPlan{
-		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
-		Segments:        []string{"dir", "file.txt"},
-		NoFollow:        true,
-		RejectHardlinks: true,
-	}
-	inspector := fakeTraversalInspector{
-		"dir":          {Exists: true, Type: EntryDirectory, LinkCount: 1},
-		"dir/file.txt": {Exists: true, Type: EntryFile, LinkCount: 2},
-	}
-
-	err := ValidateTraversalPlan(plan, inspector)
-	if !errors.Is(err, ErrPathEscape) {
-		t.Fatalf("err = %v, want ErrPathEscape", err)
-	}
-}
-
-func TestValidateTraversalPlanAcceptsPlainComponents(t *testing.T) {
-	t.Parallel()
-
-	plan := TraversalPlan{
-		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
-		Segments:        []string{"dir", "file.txt"},
-		NoFollow:        true,
-		RejectHardlinks: true,
-	}
-	inspector := fakeTraversalInspector{
-		"dir":          {Exists: true, Type: EntryDirectory, LinkCount: 1},
-		"dir/file.txt": {Exists: true, Type: EntryFile, LinkCount: 1},
-	}
-
-	if err := ValidateTraversalPlan(plan, inspector); err != nil {
-		t.Fatalf("ValidateTraversalPlan returned error: %v", err)
-	}
-}
-
-func TestValidateTraversalPlanRequiresEscapeDefenseFlags(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		plan TraversalPlan
-	}{
-		{
-			name: "missing nofollow",
-			plan: TraversalPlan{
-				RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
-				Segments:        []string{"dir", "file.txt"},
-				NoFollow:        false,
-				RejectHardlinks: true,
-			},
-		},
-		{
-			name: "missing hardlink rejection",
-			plan: TraversalPlan{
-				RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
-				Segments:        []string{"dir", "file.txt"},
-				NoFollow:        true,
-				RejectHardlinks: false,
-			},
-		},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range testcorpus.AcceptedManagedRootCases() {
 		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.Name, func(t *testing.T) {
 			t.Parallel()
 
-			err := ValidateTraversalPlan(tt.plan, fakeTraversalInspector{})
-			if !errors.Is(err, ErrPathEscape) {
-				t.Fatalf("err = %v, want ErrPathEscape", err)
+			got, err := ResolvePayloadTraversal(tt.RootSubdir, "dir/file.txt")
+			if err != nil {
+				t.Fatalf("ResolvePayloadTraversal(%q, %q) returned error: %v", tt.RootSubdir, "dir/file.txt", err)
+			}
+			if got.RootSubdir != tt.RootSubdir {
+				t.Fatalf("RootSubdir = %q, want %q", got.RootSubdir, tt.RootSubdir)
 			}
 		})
 	}
 }
 
-func TestResolveCallerPathRejectsUnsafePaths(t *testing.T) {
+func TestResolvePayloadTraversalRejectsManagedRootCorpus(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		rawPath string
-	}{
-		{name: "empty", rawPath: ""},
-		{name: "dot", rawPath: "."},
-		{name: "dot segment", rawPath: "dir/./file"},
-		{name: "absolute", rawPath: "/dir/file"},
-		{name: "windows absolute", rawPath: `C:\dir\file`},
-		{name: "parent", rawPath: "../file"},
-		{name: "nested parent", rawPath: "dir/../file"},
-		{name: "empty middle segment", rawPath: "dir//file"},
-		{name: "trailing slash", rawPath: "dir/"},
-		{name: "backslash", rawPath: `dir\file`},
-		{name: "encoded parent", rawPath: "dir/%2e%2e/file"},
-		{name: "encoded slash", rawPath: "dir%2ffile"},
-		{name: "encoded backslash", rawPath: "dir%5cfile"},
-		{name: "double encoded traversal", rawPath: "dir/%252e%252e%252fsecret"},
-		{name: "malformed escape", rawPath: "dir/%zz/file"},
-		{name: "unicode division slash", rawPath: "dir\u2215file"},
-		{name: "unicode fullwidth solidus", rawPath: "dir\uff0ffile"},
-		{name: "control char", rawPath: "dir/\n/file"},
-		{name: "root jvs", rawPath: ".jvs/config"},
-		{name: "nested jvs", rawPath: "dir/.jvs/config"},
-		{name: "encoded jvs", rawPath: "%2ejvs/config"},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range testcorpus.RejectedManagedRootCases() {
 		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.Name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := ResolveCallerPath(tt.rawPath); err == nil {
-				t.Fatalf("ResolveCallerPath(%q) succeeded, want error", tt.rawPath)
+			if _, err := ResolvePayloadTraversal(tt.RootSubdir, "dir/file.txt"); err == nil {
+				t.Fatalf("ResolvePayloadTraversal(%q, %q) succeeded, want error", tt.RootSubdir, "dir/file.txt")
 			}
 		})
 	}
 }
 
-func TestRepoPathContractCallerPathCorpus(t *testing.T) {
+func TestResolvePayloadTraversalRejectsPayloadPathCorpus(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		rawPath string
-	}{
-		{name: "absolute unix", rawPath: "/payload/file.txt"},
-		{name: "absolute windows drive", rawPath: `C:\payload\file.txt`},
-		{name: "absolute windows root", rawPath: `\payload\file.txt`},
-		{name: "dot segment", rawPath: "dir/./file.txt"},
-		{name: "parent traversal", rawPath: "../file.txt"},
-		{name: "nested parent traversal", rawPath: "dir/../file.txt"},
-		{name: "encoded parent traversal", rawPath: "dir/%2e%2e/file.txt"},
-		{name: "encoded separator slash lower", rawPath: "dir%2ffile.txt"},
-		{name: "encoded separator slash upper", rawPath: "dir%2Ffile.txt"},
-		{name: "encoded separator backslash lower", rawPath: "dir%5cfile.txt"},
-		{name: "encoded separator backslash upper", rawPath: "dir%5Cfile.txt"},
-		{name: "double encoded parent", rawPath: "dir/%252e%252e/file.txt"},
-		{name: "double encoded slash", rawPath: "dir%252ffile.txt"},
-		{name: "double encoded backslash", rawPath: "dir%255cfile.txt"},
-		{name: "slash-like fraction slash", rawPath: "dir\u2044file.txt"},
-		{name: "slash-like division slash", rawPath: "dir\u2215file.txt"},
-		{name: "slash-like fullwidth solidus", rawPath: "dir\uff0ffile.txt"},
-		{name: "slash-like fullwidth reverse solidus", rawPath: "dir\uff3cfile.txt"},
-		{name: "control newline", rawPath: "dir/\n/file.txt"},
-		{name: "control nul", rawPath: "dir/\x00/file.txt"},
-		{name: "root jvs directory", rawPath: ".jvs"},
-		{name: "root jvs access", rawPath: ".jvs/config.json"},
-		{name: "root jvs create case variant", rawPath: ".JVS/config.json"},
-		{name: "nested jvs access", rawPath: "dir/.jvs/config.json"},
-		{name: "encoded jvs dot", rawPath: "%2ejvs/config.json"},
-		{name: "encoded jvs mixed case", rawPath: "%2EJVS/config.json"},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range testcorpus.RejectedPayloadTraversalCases() {
 		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.Name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := ResolveCallerPath(tt.rawPath); err == nil {
-				t.Fatalf("ResolveCallerPath(%q) succeeded, want error", tt.rawPath)
+			if _, err := ResolvePayloadTraversal(tt.RootSubdir, tt.RawPath); err == nil {
+				t.Fatalf("ResolvePayloadTraversal(%q, %q) succeeded, want error", tt.RootSubdir, tt.RawPath)
 			}
 		})
 	}
 }
 
-func TestRepoPathContractPayloadTraversalCorpus(t *testing.T) {
+func TestValidateTraversalPlanUsesSharedEscapeCorpus(t *testing.T) {
 	t.Parallel()
 
-	paths, err := ResolveRepoPaths("ns_alpha", "repo_project")
-	if err != nil {
-		t.Fatalf("ResolveRepoPaths returned error: %v", err)
-	}
-
-	accepted, err := ResolvePayloadTraversal(paths.PayloadVolumeSubdir, "dir/file.txt")
-	if err != nil {
-		t.Fatalf("ResolvePayloadTraversal returned error: %v", err)
-	}
-	if !accepted.NoFollow {
-		t.Fatalf("NoFollow = false, want true in traversal plan: %#v", accepted)
-	}
-	if !accepted.RejectHardlinks {
-		t.Fatalf("RejectHardlinks = false, want true in traversal plan: %#v", accepted)
-	}
-
-	templatePaths, err := ResolveTemplatePaths("ns_alpha", "tmpl_base")
-	if err != nil {
-		t.Fatalf("ResolveTemplatePaths returned error: %v", err)
-	}
-	templateAccepted, err := ResolvePayloadTraversal(templatePaths.PayloadVolumeSubdir, "seed/file.txt")
-	if err != nil {
-		t.Fatalf("ResolvePayloadTraversal for template returned error: %v", err)
-	}
-	if templateAccepted.RootSubdir != templatePaths.PayloadVolumeSubdir {
-		t.Fatalf("template RootSubdir = %q, want %q", templateAccepted.RootSubdir, templatePaths.PayloadVolumeSubdir)
-	}
-
-	rejected := []struct {
-		name       string
-		rootSubdir string
-		rawPath    string
-	}{
-		{name: "control root is not payload root", rootSubdir: paths.ControlVolumeSubdir, rawPath: "dir/file.txt"},
-		{name: "repo root with template id", rootSubdir: "afscp/namespaces/ns_alpha/repos/tmpl_base/payload", rawPath: "dir/file.txt"},
-		{name: "template root with repo id", rootSubdir: "afscp/namespaces/ns_alpha/templates/repo_project/payload", rawPath: "dir/file.txt"},
-		{name: "root contains jvs", rootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project/.jvs/payload", rawPath: "dir/file.txt"},
-		{name: "payload path attempts jvs", rootSubdir: paths.PayloadVolumeSubdir, rawPath: ".jvs/config.json"},
-		{name: "payload path encoded separator", rootSubdir: paths.PayloadVolumeSubdir, rawPath: "dir%2ffile.txt"},
-		{name: "payload path double encoded traversal", rootSubdir: paths.PayloadVolumeSubdir, rawPath: "dir/%252e%252e/file.txt"},
-	}
-	for _, tt := range rejected {
+	for _, tt := range testcorpus.TraversalPlanCases() {
 		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.Name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := ResolvePayloadTraversal(tt.rootSubdir, tt.rawPath); err == nil {
-				t.Fatalf("ResolvePayloadTraversal(%q, %q) succeeded, want error", tt.rootSubdir, tt.rawPath)
+			err := ValidateTraversalPlan(traversalPlanFromCorpus(tt), inspectorFromCorpus(tt))
+			if tt.WantEscape {
+				if !errors.Is(err, ErrPathEscape) {
+					t.Fatalf("err = %v, want ErrPathEscape", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateTraversalPlan returned error: %v", err)
 			}
 		})
 	}
@@ -596,12 +369,55 @@ func (inspector fakeTraversalInspector) InspectTraversalEntry(segments []string)
 	return inspector[strings.Join(segments, "/")], nil
 }
 
-func repeatForTest(s string, n int) string {
-	out := ""
-	for i := 0; i < n; i++ {
-		out += s
+func traversalPlanFromCorpus(tt testcorpus.TraversalPlanCase) TraversalPlan {
+	return TraversalPlan{
+		RootSubdir:      tt.RootSubdir,
+		Segments:        append([]string(nil), tt.Segments...),
+		NoFollow:        tt.NoFollow,
+		RejectHardlinks: tt.RejectHardlinks,
 	}
-	return out
+}
+
+func inspectorFromCorpus(tt testcorpus.TraversalPlanCase) TraversalInspector {
+	if tt.InspectorNil {
+		return nil
+	}
+
+	inspector := fakeTraversalInspector{}
+	for _, entry := range tt.Entries {
+		inspector[entry.Path] = TraversalEntry{
+			Exists:    entry.Exists,
+			Type:      entryTypeFromCorpus(entry.Type),
+			Symlink:   entry.Symlink,
+			LinkCount: entry.LinkCount,
+		}
+	}
+	return inspector
+}
+
+func entryTypeFromCorpus(entryType string) EntryType {
+	switch entryType {
+	case "directory":
+		return EntryDirectory
+	case "file":
+		return EntryFile
+	case "other":
+		return EntryOther
+	default:
+		return EntryUnknown
+	}
+}
+
+func findRejectedIDForTest(t *testing.T, name string) testcorpus.IDCase {
+	t.Helper()
+
+	for _, tt := range testcorpus.RejectedIDCases() {
+		if tt.Name == name {
+			return tt
+		}
+	}
+	t.Fatalf("missing rejected ID corpus case %q", name)
+	return testcorpus.IDCase{}
 }
 
 func assertRelativeForTest(t *testing.T, path string) {

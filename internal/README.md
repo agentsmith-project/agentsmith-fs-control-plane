@@ -17,7 +17,7 @@ needed before real handlers and storage mutation work:
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
 - `fences`: pure repo fence model, held-state semantics, and acquisition checks.
 - `inspection`: recovery inspection primitives.
-- `pathresolver`: path safety helpers and denial tests.
+- `pathresolver`: path safety helpers, denial tests, and shared resolver corpus.
 
 Still intentionally absent: real endpoint handlers, durable DB mutations, JVS
 execution, WebDAV export serving, workload mount issuance, repo/template
