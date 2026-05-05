@@ -1,18 +1,22 @@
-# Backlog Seeds
+# Open Readiness Items
 
-These are planning seeds, not committed implementation promises.
+Status: planning seeds. The authoritative scope is `docs/GA_PRE_DEV_READINESS.md`.
 
 ## Contract Work
 
 - Decide service auth: mTLS, service token, or both.
 - Finalize internal OpenAPI shape.
+- Finalize standard operation and error envelopes.
+- Finalize stable error families.
 - Finalize namespace volume binding schema.
 - Finalize caller-service authorization schema.
 - Finalize workload mount binding/orchestrator plan schema.
 - Finalize mount binding lease/status lifecycle.
 - Finalize export session/access credential schema.
+- Finalize writer-session fence contract.
+- Finalize repo lifecycle fence, drain, tombstone, restore, purge, and recovery contract.
 
-## Storage Work
+## Storage And Safety Work
 
 - Design volume registry.
 - Design namespace binding store.
@@ -21,10 +25,13 @@ These are planning seeds, not committed implementation promises.
 - Design per-repo operation lock.
 - Design per-repo writer-session fence.
 - Design `.jvs` protected view for WebDAV and workload mounts.
+- Define namespace disable behavior for active and uncertain sessions.
+- Define repo lifecycle behavior for session drain, retention, restore, and purge.
 
 ## Functional Work
 
 - Repo create.
+- Repo archive/restore/delete/purge lifecycle.
 - Save/history/restore.
 - Template create from repo.
 - Same-namespace template clone.
@@ -37,10 +44,15 @@ These are planning seeds, not committed implementation promises.
 - Secret management plan.
 - Operation recovery reconciliation.
 - Audit event outbox.
-- Runbooks for failed repo create, save, restore, clone, and export.
+- Required GA runbooks.
+- Observability and alerting.
+- Backup and restore plan.
+- Risk register closure.
 
-## P1 Seeds
+## Outside GA Unless Re-Approved
 
-- Repo archive/delete/rename/detach lifecycle APIs.
 - Operator break-glass restore flow.
 - Explicit legacy migration tooling.
+- Cross-namespace template sharing/import.
+- Product display-name rename or catalog detach APIs inside AFSCP.
+- Namespace delete APIs.

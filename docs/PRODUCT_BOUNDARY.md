@@ -9,6 +9,7 @@ AFSCP should expose:
 - volume
 - namespace
 - repo
+- repo lifecycle
 - repo template
 - save point
 - restore
@@ -26,6 +27,7 @@ AFSCP should not expose or depend on:
 - AgentSmith workspace
 - Desktop product UX
 - product template catalog UX
+- product display names
 - user-facing product permission model
 
 ## Authority Split
@@ -42,18 +44,23 @@ AFSCP also validates whether the calling service principal is allowed to operate
 
 - The default new storage model is managed JuiceFS-backed volumes plus controlled repo paths.
 - Different namespaces may use different volume bindings and isolation classes.
-- Repo templates are namespace-scoped in P0.
-- Cross-namespace template clone is rejected by default in P0.
+- Repo templates are namespace-scoped for GA.
+- Cross-namespace template clone is rejected by default.
 - Template clone creates an independent repo, not a shared collaborative directory.
 - Ordinary file reads and writes can happen concurrently.
 - AFSCP does not provide version merge or conflict resolution.
 - JVS save, restore-run, and clone operations must be serialized per repo.
-- Restore-run rejects active read-write export/workload sessions in P0.
+- Restore-run rejects active or uncertain read-write export/workload sessions.
+- Repo lifecycle operations are storage-control operations in GA. Archive, restore-from-archive, delete request, restore-from-tombstone, and purge are owned by AFSCP because they affect storage availability and retention.
+- Repo lifecycle operations must drain or revoke all existing export and workload mount sessions, read-only or read-write, before tombstone or purge.
+- Purge additionally requires lifecycle policy approval, product confirmation, and audited authorization because it permanently removes storage.
 - Ordinary client access uses controlled exports, initially WebDAV.
+- Product display-name rename and catalog detach remain caller-owned metadata changes; AFSCP repo IDs are stable and immutable.
+- Quota fields are policy records and enforcement hooks unless the selected volume capability explicitly reports enforcement.
 
-## MVP Guardrails
+## GA Guardrails
 
-Do not expand MVP into:
+Do not expand GA into:
 
 - a product workflow engine
 - a product authorization service
@@ -64,5 +71,8 @@ Do not expand MVP into:
 - per-file ACL UI
 - Git remote workflows
 - automatic legacy migration
-- repo archive/delete/rename/detach lifecycle APIs
 - billing or quota UI
+- ordinary raw JuiceFS direct mount
+- caller-visible Kubernetes Secret references
+- product display-name rename or catalog detach APIs
+- namespace delete APIs

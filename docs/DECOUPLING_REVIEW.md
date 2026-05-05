@@ -66,7 +66,7 @@ The mapping belongs in AgentSmith integration code, not inside AFSCP core.
 
 AFSCP can support namespace-scoped repo templates without knowing what product flow created them.
 
-P0 rule:
+GA rule:
 
 - Clone from template is allowed only within the same namespace.
 - Cross-namespace clone is rejected by default.

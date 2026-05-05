@@ -1,8 +1,8 @@
 # AFSCP Storage Control Plane
 
-Status: handoff scaffold, no implementation yet.
+Status: GA pre-development handoff, no implementation yet.
 
-`agentsmith-fs-control-plane` hosts AFSCP: a product-agnostic file storage control plane for managed volumes, JVS repos, repo templates, exports, workload mounts, and durable storage operations.
+`agentsmith-fs-control-plane` hosts AFSCP: a product-agnostic file storage control plane for managed volumes, JVS repos, repo lifecycle, repo templates, exports, workload mounts, and durable storage operations.
 
 AgentSmith is expected to be the first consumer, but AFSCP itself should not know about any caller's business objects. Product concepts belong in the calling product and integration guide. AFSCP should expose robust functional primitives and enforce storage boundaries.
 
@@ -12,7 +12,7 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 - This repository is the implementation home for the AFSCP runtime.
 - Deploy AFSCP as an independent container with its own Kubernetes Deployment, Service, ServiceAccount, Secrets, and operation store.
 - Calling applications remain responsible for product authorization, catalog UX, and business workflows.
-- AFSCP owns volume credentials, namespace boundaries, repo path allocation, JVS execution, repo template clone, WebDAV/export runtime, workload mount bindings, orchestrator mount plans, operations, logs, and audit events.
+- AFSCP owns volume credentials, namespace boundaries, repo path allocation and lifecycle, JVS execution, repo template clone, WebDAV/export runtime, workload mount bindings, orchestrator mount plans, operations, logs, and audit events.
 - New repos should use a managed shared JuiceFS-backed volume by default, with room for future volume sharding by tenant, region, compliance profile, or isolation class.
 - Do not expose JuiceFS metadata URLs, bucket credentials, access keys, or secret keys to ordinary clients or workloads.
 - Do not implement product-specific workflow concepts in AFSCP.
@@ -23,6 +23,8 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 - `Volume`: managed backing filesystem/storage pool, initially JuiceFS.
 - `Namespace`: storage isolation and policy boundary inside a managed volume.
 - `Repo`: JVS-managed filesystem root inside a namespace.
+- `RepoLifecycle`: archive, restore, delete, tombstone, and purge state for a repo.
+- `SavePoint`: JVS-managed version marker for a repo payload.
 - `RepoTemplate`: namespace-scoped clone source managed by AFSCP.
 - `Export`: short-lived user/client access, initially WebDAV.
 - `WorkloadMountBinding`: caller-visible mount authorization and lifecycle record.
@@ -32,15 +34,22 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 ## Repository Contents
 
 - [docs/HANDOFF.md](docs/HANDOFF.md): start here.
-- [docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md](docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md): feasibility review with 2026-05-04 JVS external-control resolution update.
-- [docs/TEAM_REVIEW_2026-05-03.md](docs/TEAM_REVIEW_2026-05-03.md): product/architecture/security review closure.
+- [docs/GA_PRE_DEV_READINESS.md](docs/GA_PRE_DEV_READINESS.md): active GA pre-dev source of truth.
+- [docs/DEVELOPMENT_GOVERNANCE.md](docs/DEVELOPMENT_GOVERNANCE.md): review, contract, ADR, and risk governance.
+- [docs/RISK_REGISTER.md](docs/RISK_REGISTER.md): live pre-dev risk register.
+- [docs/READINESS_EVIDENCE.md](docs/READINESS_EVIDENCE.md): GA gate evidence ledger.
+- [docs/PRE_DEV_COMPLETION.md](docs/PRE_DEV_COMPLETION.md): pre-dev artifact completion package and current blockers.
+- [docs/DEVELOPER_HANDOFF.md](docs/DEVELOPER_HANDOFF.md): coding team entrypoint.
+- [docs/JVS_SMOKE_EVIDENCE_2026-05-05.md](docs/JVS_SMOKE_EVIDENCE_2026-05-05.md): current JVS smoke evidence and blocker.
+- [docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md](docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md): historical feasibility review with 2026-05-04 JVS external-control resolution update.
+- [docs/TEAM_REVIEW_2026-05-03.md](docs/TEAM_REVIEW_2026-05-03.md): historical product/architecture/security review closure.
 - [docs/DECOUPLING_REVIEW.md](docs/DECOUPLING_REVIEW.md): decoupling analysis and revised boundary.
 - [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md): product-agnostic requirements.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): component boundaries and target architecture.
 - [docs/API_CONTRACT_DRAFT.md](docs/API_CONTRACT_DRAFT.md): draft internal API and data contracts.
 - [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md): AgentSmith integration mapping, kept outside the core model.
 - [docs/SECURITY_AND_TENANCY.md](docs/SECURITY_AND_TENANCY.md): credential, namespace, path, export, and JVS control metadata protection model.
-- [docs/MVP_PLAN.md](docs/MVP_PLAN.md): delivery plan and backlog guardrails.
+- [docs/MVP_PLAN.md](docs/MVP_PLAN.md): historical delivery plan; use the GA readiness document for active scope.
 - [docs/OPERATIONS_AND_MIGRATION.md](docs/OPERATIONS_AND_MIGRATION.md): operations, migration, and rollout strategy.
 - [docs/PRODUCT_BOUNDARY.md](docs/PRODUCT_BOUNDARY.md): hard product boundaries and non-goals.
 - [docs/STORAGE_LAYOUT.md](docs/STORAGE_LAYOUT.md): shared JuiceFS path model and resolver rules.
@@ -55,7 +64,7 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 
 ## Implementation Rule
 
-This repository intentionally has no application code yet. The first development milestone should create the runtime skeleton only after the team confirms the generic API contracts, namespace/volume model, operation store, and deployment shape described in the handoff docs.
+This repository intentionally has no application code yet. Neutral service skeleton work may start after the runtime ADR. Endpoint handlers and storage mutation logic must wait until the GA pre-dev admission items in `docs/GA_PRE_DEV_READINESS.md` are closed.
 
 ## License
 

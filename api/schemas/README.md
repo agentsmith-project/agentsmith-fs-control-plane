@@ -1,16 +1,27 @@
 # Schemas
 
-No JSON schemas are implemented yet. Creating these schemas is the next contract step before endpoint handler implementation.
+`afscp-internal-v1.schema.json` is the first GA pre-dev JSON Schema bundle for
+the internal API. It is intentionally product-agnostic and must stay aligned
+with `api/openapi/internal-v1.openapi.yaml` and `docs/API_CONTRACT_DRAFT.md`.
 
-Expected future schemas:
+Schema coverage:
 
 - operation envelope
+- standard error envelope and stable error families
+- canonical request context headers
 - JVS JSON envelope
 - export session and access credential
 - workload mount binding
 - orchestrator mount plan
+- writer-session fence projection
 - namespace volume binding projection
+- namespace lifecycle policy projection
 - repo and repo template request/response
+- namespace-bound repo list projection
+- repo lifecycle request/response and status projection
+- repo purge confirmation request fields
 - save point and restore request/response
 - export session status
-- standard error envelope
+
+Before endpoint handlers depend on these schemas, reviewers must confirm schema
+names, stable error enums, secret-bearing fields, and generated client behavior.

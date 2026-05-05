@@ -24,4 +24,4 @@ Tradeoffs:
 
 - Larger blast radius for root storage credentials.
 - Stronger AFSCP security boundary is required.
-- Path resolver and JVS control metadata protection become P0 requirements.
+- Path resolver and JVS control metadata protection become GA requirements.

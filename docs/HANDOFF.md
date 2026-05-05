@@ -2,11 +2,13 @@
 
 This repository is the handoff package for building AFSCP, a product-agnostic file storage control plane.
 
-AFSCP should manage volumes, namespaces, repos, repo templates, exports, workload mount bindings, orchestrator mount plans, durable operations, logs, and audit events. It should not understand product workflows from any one caller.
+AFSCP should manage volumes, namespaces, repos, repo lifecycle, repo templates, exports, workload mount bindings, orchestrator mount plans, durable operations, logs, and audit events. It should not understand product workflows from any one caller.
 
 ## Source Of Truth
 
-Current handoff source of truth is the root-level documentation in this repository, especially `docs/HANDOFF.md`, `docs/PRODUCT_REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/STORAGE_LAYOUT.md`, `docs/API_CONTRACT_DRAFT.md`, `docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md`, and `docs/contracts/`.
+Current active source of truth is the root-level documentation in this repository, especially `docs/DEVELOPER_HANDOFF.md`, `docs/PRE_DEV_COMPLETION.md`, `docs/GA_PRE_DEV_READINESS.md`, `docs/DEVELOPMENT_GOVERNANCE.md`, `docs/RISK_REGISTER.md`, `docs/READINESS_EVIDENCE.md`, `docs/HANDOFF.md`, `docs/PRODUCT_REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/STORAGE_LAYOUT.md`, `docs/API_CONTRACT_DRAFT.md`, `api/openapi/internal-v1.openapi.yaml`, `api/schemas/afscp-internal-v1.schema.json`, and `docs/contracts/`.
+
+Historical review and research documents may still use P0, P1, or MVP language. For active planning, read those terms through the GA pre-dev readiness document.
 
 The planning work that produced this handoff was committed in:
 
@@ -17,16 +19,12 @@ The planning work that produced this handoff was committed in:
 
 Important: do not use `agentsmith-oss` for current-state analysis. It is an old version and was explicitly excluded.
 
-## Day 1 Sequence
+## Pre-Dev Readiness Rules
 
-1. Read `docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md` and its 2026-05-04 update note, then confirm the P0 gates are still accepted.
-2. Record the runtime language/framework in a new ADR.
-3. Start only the neutral service skeleton: package layout, health endpoint, config loading, logging, test harness, and empty route registration.
-4. Freeze internal auth and caller-service authorization.
-5. Convert `docs/API_CONTRACT_DRAFT.md` into JSON schemas and the P0 internal OpenAPI.
-6. Pin the JVS binary/commit and add CLI smoke tests for the commands AFSCP depends on.
-7. Freeze the JVS external control root layout and payload-only mount contract with orchestrator owners before enabling workload mounts.
-8. Freeze operation store schema, writer-session fence, and recovery matrix before implementing storage handlers.
+1. Record the runtime language/framework in a new ADR before adding application code.
+2. Runtime is now recorded in ADR 0005. Start only the neutral service skeleton until the relevant GA pre-dev admission gates are closed: package layout, health endpoint, config loading, logging, test harness, generated contract plumbing, and empty route registration.
+3. Freeze internal auth, caller-service authorization, schemas, OpenAPI, JVS runner, operation/audit, WebDAV, workload mount, writer-session fence, and namespace policy contracts before endpoint handlers or storage mutations.
+4. Keep all implementation choices aligned with `docs/GA_PRE_DEV_READINESS.md`.
 
 ## Revised Boundary
 
@@ -37,6 +35,7 @@ AFSCP should know:
 - volumes
 - namespaces
 - repos
+- repo lifecycle
 - repo templates
 - exports
 - workload mount bindings
@@ -63,7 +62,7 @@ Calling products map their own concepts to AFSCP primitives. Product-specific ex
 
 Build AFSCP as an independent application module in this repository.
 
-MVP deployment shape:
+GA deployment shape:
 
 - One container image.
 - One Kubernetes Deployment and Service.
@@ -91,6 +90,7 @@ AFSCP owns:
 - namespace boundaries
 - caller-service authorization for namespace-bound storage operations
 - repo path allocation and path resolution
+- repo archive, restore, delete, tombstone, and purge lifecycle
 - JVS `init`, `save`, `history`, `restore`, and `repo clone` execution
 - repo template storage and clone execution
 - WebDAV/export runtime and short-lived export credentials
@@ -110,7 +110,7 @@ Client/desktop connector owns:
 - Local mount UX and diagnostics.
 - No raw JuiceFS credential handling for ordinary users.
 
-## MVP Must Not Expand Into
+## GA Must Not Expand Into
 
 - product workflow engine
 - product authorization service
@@ -122,14 +122,13 @@ Client/desktop connector owns:
 - real-time collaborative editing
 - per-file ACL UI
 - raw JuiceFS direct mount for ordinary users
-- repo archive/delete/rename/detach lifecycle APIs in P0
+- product display-name rename or catalog detach APIs inside AFSCP
+- namespace delete APIs
 
 ## First Engineering Checkpoints
 
-1. Confirm runtime language and framework in an ADR.
-2. Finalize generic volume, namespace, repo, template, export, mount binding, and orchestrator plan contracts.
-3. Finalize internal service auth, caller identity, and namespace caller authorization.
-4. Generate P0 OpenAPI before implementing handlers.
-5. Finalize operation store schema, writer-session fence, and recovery matrix.
-6. Finalize JVS external control root and payload-only mount behavior before enabling workload mounts; stock JuiceFS CSI must mount the payload subdir, not the repo container directory.
-7. Confirm first-consumer mapping in `docs/INTEGRATION_GUIDE.md` without moving those concepts into core AFSCP.
+1. Bootstrap Go service skeleton from `docs/DEVELOPER_HANDOFF.md`.
+2. Do not implement storage mutation handlers until the relevant gate in `docs/READINESS_EVIDENCE.md` is closed.
+3. Resolve the JVS restore-plan blocker recorded in `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md` before restore-run, clone-after-restore, or lifecycle reactivation handlers.
+4. Keep generated clients and handlers aligned with `api/openapi/internal-v1.openapi.yaml` and `api/schemas/afscp-internal-v1.schema.json`.
+5. Close GA-blocking risks in `docs/RISK_REGISTER.md` or approve residual risk under `docs/DEVELOPMENT_GOVERNANCE.md` when waivable.

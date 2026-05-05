@@ -1,6 +1,6 @@
 # Storage Layout
 
-AFSCP should manage one or more JuiceFS-backed volumes. MVP should bootstrap a default shared volume for new repos, while preserving the ability to bind namespaces to different volumes later.
+AFSCP should manage one or more JuiceFS-backed volumes. GA should bootstrap a default shared volume for new repos, while preserving the ability to bind namespaces to different volumes later.
 
 ## Logical Layout
 
@@ -26,7 +26,7 @@ Suggested layout under each JuiceFS filesystem root:
         <repo_id>/
 ```
 
-AFSCP should use JVS external control root mode for new repos.
+AFSCP must use JVS external control root mode for new repos.
 
 `control/` is the JVS external control root selected with `--control-root`. It contains JVS control metadata and is never mounted into workload containers or exported to clients.
 
@@ -44,7 +44,7 @@ AFSCP runs later JVS commands with:
 jvs --control-root <control_root_path> --workspace main <command> --json
 ```
 
-The older embedded-control layout, where `.jvs/` sits inside the mounted workspace root, is not the P0 layout for AFSCP-managed repos. Legacy embedded-control repos require migration or a verified filtered view before workload mounting.
+The older embedded-control layout, where `.jvs/` sits inside the mounted workspace root, is not the GA layout for AFSCP-managed repos. Legacy embedded-control repos require migration or a verified filtered view before workload mounting.
 
 ## Repo Fields
 
@@ -101,9 +101,9 @@ Filesystem implementations should use dirfd/openat-style traversal with symlink 
 
 ## Control Metadata Protection Gate
 
-P0 exports and workload mounts must expose `payload/` only.
+GA exports and workload mounts must expose `payload/` only.
 
-Required P0 checks:
+Required GA checks:
 
 - `payload_root_path` must not contain root-level `.jvs`.
 - `control_root_path` and `payload_root_path` must be distinct and must not contain each other.
@@ -114,7 +114,7 @@ Permission-only controls on embedded `.jvs` are not sufficient. AFSCP-managed ne
 
 ## Volume Sharding
 
-MVP should not create one JuiceFS DB/bucket per repo.
+GA should not create one JuiceFS DB/bucket per repo.
 
 Future sharding can use:
 
@@ -124,3 +124,17 @@ Future sharding can use:
 - isolation class
 
 This keeps the data model flexible without reverting to per-task or per-repo infrastructure.
+
+## Lifecycle Storage
+
+Repo delete and purge must not be implemented as an untracked filesystem delete.
+GA lifecycle uses durable repo lifecycle state plus an AFSCP-controlled
+tombstone/trash location or equivalent retained-storage marker.
+
+Lifecycle rules:
+
+- archive keeps control and payload storage retained but unavailable for ordinary access
+- delete moves or marks both control and payload storage as tombstoned after all export and workload mount sessions are confirmed terminal
+- restore-tombstoned returns retained control and payload storage to the canonical repo location only while retention policy allows
+- purge permanently removes both control and payload storage only after retention, product confirmation, and authorization checks pass
+- raw paths for trash or tombstone locations remain internal and are never returned to ordinary product callers

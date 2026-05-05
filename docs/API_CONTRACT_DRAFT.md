@@ -1,8 +1,8 @@
 # API Contract Draft
 
-Status: implementation review draft. This document is the product-agnostic narrative source for the first internal OpenAPI spec.
+Status: GA pre-dev narrative draft. This document is the product-agnostic narrative source for the first internal OpenAPI spec.
 
-The implementation team may start service skeleton work before this draft is frozen. Endpoint handlers and generated clients should wait until request, response, and error schemas are written under `api/schemas/` and the P0 OpenAPI file exists under `api/openapi/`.
+The implementation team may start service skeleton work before this draft is frozen. Endpoint handlers and generated clients must wait until request, response, and error schemas are written under `api/schemas/` and the internal OpenAPI file exists under `api/openapi/`.
 
 ## Service Access
 
@@ -30,7 +30,82 @@ AFSCP APIs are internal control-plane APIs.
 }
 ```
 
-The P0 transport uses the required headers in [contracts/afscp-internal-api-v1.md](contracts/afscp-internal-api-v1.md). Header values must map into this canonical context.
+The GA transport uses the required headers in [contracts/afscp-internal-api-v1.md](contracts/afscp-internal-api-v1.md). Header values must map into this canonical context.
+
+### Standard Operation Envelope
+
+Mutating responses must use one envelope shape across resource types:
+
+```json
+{
+  "operation_id": "op_123",
+  "operation_state": "succeeded",
+  "resource": {
+    "type": "repo",
+    "id": "repo_123"
+  },
+  "result": {},
+  "error": null
+}
+```
+
+Asynchronous mutations may return `queued` or `running` with the same envelope.
+Synchronous mutations may return terminal state and result in the same envelope.
+
+### Standard Error Envelope
+
+Errors must be stable enough for callers to build product-facing behavior
+without parsing messages:
+
+```json
+{
+  "error": {
+    "code": "ACTIVE_WRITER_SESSIONS",
+    "message": "restore-run is blocked by active read-write sessions",
+    "retryable": false,
+    "correlation_id": "corr_123",
+    "operation_id": "op_123",
+    "details": {
+      "repo_id": "repo_123"
+    }
+  }
+}
+```
+
+GA error families:
+
+- `AUTHENTICATION_FAILED`
+- `CALLER_NOT_ALLOWED`
+- `ROLE_NOT_ALLOWED`
+- `NAMESPACE_NOT_FOUND`
+- `NAMESPACE_DISABLED`
+- `RESOURCE_NAMESPACE_MISMATCH`
+- `INVALID_ID`
+- `PATH_DENIED`
+- `CAPABILITY_DENIED`
+- `IDEMPOTENCY_CONFLICT`
+- `ACTIVE_WRITER_SESSIONS`
+- `WRITER_SESSION_FENCE_HELD`
+- `STALE_WRITER_SESSION_UNCERTAIN`
+- `RESTORE_DIRTY_STATE`
+- `JVS_COMMAND_FAILED`
+- `JVS_DOCTOR_FAILED`
+- `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE`
+- `VOLUME_MISMATCH_REQUIRES_IMPORT`
+- `EXPORT_EXPIRED`
+- `EXPORT_REVOKED`
+- `MOUNT_BINDING_TERMINAL`
+- `REPO_LIFECYCLE_INVALID_STATE`
+- `REPO_LIFECYCLE_FENCE_HELD`
+- `ACTIVE_SESSIONS_BLOCK_LIFECYCLE`
+- `STALE_SESSION_BLOCKS_LIFECYCLE`
+- `REPO_ARCHIVED`
+- `REPO_TOMBSTONED`
+- `REPO_PURGED`
+- `PURGE_CONFIRMATION_REQUIRED`
+- `PURGE_RETENTION_NOT_MET`
+- `PURGE_REQUIRES_OPERATOR_APPROVAL`
+- `OPERATION_RECOVERY_REQUIRED`
 
 ## Core Types
 
@@ -69,7 +144,7 @@ The P0 transport uses the required headers in [contracts/afscp-internal-api-v1.m
   "allowed_callers": [
     {
       "caller_service": "example-product-api",
-      "roles": ["repo_admin", "restore_admin", "export_admin", "template_admin", "mount_admin"]
+      "roles": ["repo_admin", "repo_lifecycle_admin", "restore_admin", "export_admin", "template_admin", "mount_admin"]
     },
     {
       "caller_service": "example-orchestrator",
@@ -80,6 +155,11 @@ The P0 transport uses the required headers in [contracts/afscp-internal-api-v1.m
   "export_policy": {
     "webdav_enabled": true,
     "max_session_seconds": 86400
+  },
+  "lifecycle_policy": {
+    "tombstone_retention_seconds": 2592000,
+    "purge_requires_lifecycle_admin": true,
+    "break_glass_purge_enabled": false
   },
   "mount_policy": {
     "workload_mount_enabled": true,
@@ -110,15 +190,34 @@ Ordinary repo responses expose IDs and status only.
   "repo_kind": "repo",
   "jvs_repo_id": "jvs_repo_abc",
   "status": "active",
+  "lifecycle": {
+    "status": "active",
+    "retention_expires_at": null,
+    "last_lifecycle_operation_id": null
+  },
   "created_at": "2026-05-03T12:00:00Z"
 }
 ```
 
 `control_root_path`, `payload_root_path`, `control_volume_subdir`, `payload_volume_subdir`, `.jvs` paths, and JuiceFS root details are internal implementation state. Admin/debug APIs may expose them behind break-glass controls, but ordinary product callers should not depend on them.
 
+Repo IDs are stable and immutable. Product display-name rename and catalog
+detach are caller-owned metadata operations and are not AFSCP repo rename
+operations.
+
+GA repo lifecycle statuses include `active`, `archiving`, `archived`,
+`restoring_archived`, `deleting`, `tombstoned`, `restoring_tombstoned`,
+`purging`, `purged`, and `operator_intervention_required`.
+
+Lifecycle operations use product-familiar storage semantics without adopting
+product vocabulary: archive is retained but unavailable, delete is recoverable
+tombstone/trash while retention allows, and purge is permanent deletion. Delete
+is allowed from `active` or `archived`; restore-tombstoned returns the repo to
+the recorded pre-delete accessibility state.
+
 ### RepoTemplate
 
-P0 `RepoTemplate` is an immutable published snapshot repo. To change template contents, callers create a new template or a new template revision outside the P0 core contract.
+GA `RepoTemplate` is an immutable published snapshot repo. To change template contents, callers create a new template or a new template revision outside the GA core contract.
 
 ```json
 {
@@ -226,10 +325,37 @@ GET  /internal/v1/namespaces/{namespaceId}/volume-binding
 
 ```http
 POST /internal/v1/repos
+GET  /internal/v1/repos?namespace_id={namespaceId}&lifecycle_status={status}
 GET  /internal/v1/repos/{repoId}
+POST /internal/v1/repos/{repoId}:archive
+POST /internal/v1/repos/{repoId}:restore-archived
+POST /internal/v1/repos/{repoId}:delete
+POST /internal/v1/repos/{repoId}:restore-tombstoned
+POST /internal/v1/repos/{repoId}:purge
 ```
 
-Repo archive/delete/rename/detach are P1 lifecycle APIs. They should not be implemented in the P0 API unless a separate lifecycle state machine and active session drain contract is accepted.
+Repo lifecycle operations are asynchronous durable operations. They use the
+standard operation envelope and the repo lifecycle contract in
+[contracts/repo-lifecycle-v1.md](contracts/repo-lifecycle-v1.md).
+
+`archive` retains repo data and blocks ordinary access. `restore-archived`
+reactivates an archived repo. `delete` is a logical delete request that drains
+sessions and tombstones retained data. `restore-tombstoned` is allowed only
+before purge and within retention policy. `purge` is irreversible and requires
+retention-policy approval or an approved operator break-glass purge.
+
+Product display-name rename and catalog detach are not AFSCP repo lifecycle
+operations.
+
+Repo list is a namespace-bound storage inventory projection for trusted callers
+and operators. It must not become a product catalog API: no display names,
+business objects, raw paths, or storage credentials are returned.
+
+`PurgeRepoRequest` must carry a caller-side confirmation or approval reference
+and a reason. If the caller requests a retention override, the request must use
+an approved break-glass policy; otherwise AFSCP rejects it with
+`PURGE_CONFIRMATION_REQUIRED`, `PURGE_RETENTION_NOT_MET`, or
+`PURGE_REQUIRES_OPERATOR_APPROVAL`.
 
 ### Save Points
 
@@ -240,9 +366,13 @@ POST /internal/v1/repos/{repoId}/restore-preview
 POST /internal/v1/repos/{repoId}/restore-run
 ```
 
-P0 `restore-run` must reject active read-write export or workload mount sessions by default. An operator break-glass restore can be designed separately with explicit approval, session revoke/drain, and audit.
+GA `restore-run` is version restore and must reject active or uncertain read-write export or workload mount sessions by default. Lifecycle restore is handled by `restore-archived` and `restore-tombstoned`; audit event names and product copy must distinguish these from version restore. An operator break-glass restore can be designed separately with explicit approval, session revoke/drain, and audit.
 
-Restore-run must acquire the per-repo writer-session fence before checking active sessions. While this fence is held, AFSCP rejects new read-write export and workload mount binding issuance for the repo. The fence is released only after restore, `jvs doctor --strict`, and audit completion.
+Restore-run must acquire the per-repo writer-session fence before checking active or uncertain read-write sessions. While this fence is held, AFSCP rejects new read-write export and workload mount binding issuance for the repo. The fence is released only after restore, `jvs doctor --strict`, and audit completion.
+
+Dirty-state behavior is fail-closed by default with `RESTORE_DIRTY_STATE`.
+Any future `discard_unsaved` or `save_first` mode must be represented in the
+request schema and audited explicitly.
 
 ### Templates
 
@@ -262,11 +392,11 @@ POST /internal/v1/repo-templates/{templateId}:clone
 }
 ```
 
-P0 template creation always creates a fresh source save point inside the operation and records it as `source_save_point_id` on the resulting `RepoTemplate`. Caller-provided historical `source_save_point_id` is not accepted in P0 because JVS `repo clone` clones the current source repo/workspace rather than directly cloning an arbitrary historical save point.
+GA template creation always creates a fresh source save point inside the operation and records it as `source_save_point_id` on the resulting `RepoTemplate`. Caller-provided historical `source_save_point_id` is not accepted because JVS `repo clone` clones the current source repo/workspace rather than directly cloning an arbitrary historical save point.
 
 If the source repo changes after the source save point is created and JVS reports dirty/current-state mismatch before clone, AFSCP fails with `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE` and the caller may retry. Creating a template from an older save point requires a future staging restore/import flow.
 
-`clone_history_mode` must be pinned to the verified JVS capability for the deployment. P0 may use `main` first. `all` is allowed only after the pinned JVS version supports durable imported-save-point protection.
+`clone_history_mode` must be pinned to the verified JVS capability for the deployment. GA may use `main`. `all` is allowed only after the pinned JVS version supports durable imported-save-point protection.
 
 `CloneRepoTemplateRequest`:
 
@@ -282,11 +412,11 @@ Required invariants:
 
 ```text
 template.namespace_id == request.namespace_id
-template.volume_id == namespace.default_volume_id in P0
-cross_namespace_clone_enabled == false in P0
+template.volume_id == namespace.default_volume_id
+cross_namespace_clone_enabled == false
 ```
 
-If a namespace binding changes after a template is created and the template volume differs from the namespace default volume, P0 clone must reject with `VOLUME_MISMATCH_REQUIRES_IMPORT`. It must not silently create a new repo outside the current namespace volume policy.
+If a namespace binding changes after a template is created and the template volume differs from the namespace default volume, GA clone must reject with `VOLUME_MISMATCH_REQUIRES_IMPORT`. It must not silently create a new repo outside the current namespace volume policy.
 
 ### Exports
 
@@ -295,6 +425,16 @@ POST   /internal/v1/repos/{repoId}/exports
 GET    /internal/v1/exports/{exportId}
 DELETE /internal/v1/exports/{exportId}
 ```
+
+Export create must define:
+
+- default and maximum TTL
+- whether credentials can be reissued after create
+- one-time secret-bearing response behavior, if selected
+- revoke behavior for new and active requests
+- whether read-write exports count as active writer sessions until revoked, expired, or reconciled terminal
+- credential hashing or encryption at rest
+- access log and audit redaction fields
 
 ### Workload Mounts
 
@@ -310,7 +450,11 @@ GET  /internal/v1/workload-mount-bindings/{mountBindingId}/orchestrator-plan
 
 Only caller services with the `orchestrator_mount` role may call `orchestrator-plan`.
 
-P0 mount bindings must be lease-based. Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions for restore-run. Expired leases are treated as active until reconciliation marks them terminal, because stale writable mounts are a safety risk. `revoked` is terminal only after the orchestrator confirms the runtime mount is stopped or unable to write; a requested revoke remains `releasing`.
+GA mount bindings must be lease-based. Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions for restore-run. Expired leases are treated as active until reconciliation marks them terminal, because stale writable mounts are a safety risk. `revoked` is terminal only after the orchestrator confirms the runtime mount is stopped or unable to write; a requested revoke remains `releasing`.
+
+If the orchestrator contract cannot prove payload-only mount, heartbeat,
+release, revoke, and confirmed-unmounted behavior, AFSCP must reject mount
+binding creation with `CAPABILITY_DENIED` instead of issuing a degraded binding.
 
 ### Operations
 
@@ -330,22 +474,33 @@ Mutating endpoints must support:
 - operation ID
 - resource locks where applicable
 - per-repo writer-session fence for restore-run versus read-write export/mount issuance
+- per-repo lifecycle fence for archive, restore-archived, delete, restore-tombstoned, and purge versus all export/mount/session issuance and repo storage mutations
 - durable operation record with phase and external resource IDs
 - structured JVS JSON output capture
 - retry-safe status transitions
 - stable caller-facing error codes
 - audit event emission for success, failure, and denied requests
 
-Minimum P0 operation matrix:
+Minimum GA operation matrix:
 
 | Operation | Lock | Active Session Rule | Retry Rule |
 | --- | --- | --- | --- |
 | repo_create | target repo exclusive create | none | inspect path and JVS identity |
+| repo_archive | repo lifecycle exclusive plus session drain | block new sessions and mutations, then reject or drain existing sessions, including read-only sessions | inspect lifecycle status, session terminal state, and retained storage |
+| repo_restore_archived | repo lifecycle exclusive | block new sessions and mutations until active | inspect lifecycle status and repo health |
+| repo_delete | repo lifecycle exclusive plus session drain | block new sessions and mutations, then reject or drain existing sessions, including read-only sessions | inspect tombstone status and retained storage |
+| repo_restore_tombstoned | repo lifecycle exclusive | reject after purge or retention denial | inspect tombstone status, retention policy, and repo health |
+| repo_purge | repo lifecycle exclusive plus session drain | require no active or uncertain sessions | inspect purge marker and absence of retained storage |
 | save_point_create | repo JVS exclusive | allow ordinary IO | retry only from recorded phase |
 | restore_preview | repo JVS shared/read | allow ordinary IO | retry safe |
-| restore_run | repo JVS exclusive plus writer-session fence | block new read-write sessions, then reject existing active read-write sessions | inspect and doctor |
+| restore_run | repo JVS exclusive plus writer-session fence | block new read-write sessions, then reject existing active or uncertain read-write sessions | inspect and doctor |
 | template_create | source repo JVS exclusive during save phase, then source read gate plus target template exclusive create | fail if source becomes dirty after template save point | inspect source save point, clone history mode, and target template path |
 | template_clone | template read gate plus target repo exclusive create | none | inspect target repo path |
-| export_create | repo export lock plus writer-session fence for read_write mode | reject if repo not active or restore fence is held | revoke leaked partial credential |
+| export_create | repo export lock plus writer-session fence for read_write mode | reject if repo not active, restore fence is held for read_write, or lifecycle fence is held | revoke leaked partial credential |
 | export_revoke | export session lock | revoke idempotently | repeat returns terminal state |
-| mount_binding_create | repo mount lock plus writer-session fence for read_write mode | reject mount unless repo uses external control root or equivalent verified protection; reject read_write when restore fence is held | repeat returns existing binding |
+| export_session_reconcile | export session lock | terminal only after gateway confirms no future access for lifecycle, and no future writes for restore-run | repeat from observed gateway state |
+| mount_binding_create | repo mount lock plus writer-session fence for read_write mode | reject mount unless repo is active, lifecycle fence is clear, and repo uses external control root or equivalent verified protection; reject read_write when restore fence is held | repeat returns existing binding |
+| mount_binding_status_update | mount binding lock | terminal only when orchestrator confirms runtime access ended or failed safely | repeat from observed orchestrator state |
+| mount_binding_heartbeat | mount binding lock | extend only non-terminal live bindings | repeat with same lease state |
+| mount_binding_release | mount binding lock | terminal only after runtime access ended | repeat returns terminal state |
+| mount_binding_revoke | mount binding lock | requested revoke remains non-terminal until runtime access ended or is confirmed unable to write | repeat returns current teardown state |

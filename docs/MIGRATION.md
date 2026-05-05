@@ -1,6 +1,6 @@
 # Migration
 
-P0 should not force-migrate existing caller data.
+GA should not force-migrate existing caller data.
 
 ## Strategy
 
@@ -35,5 +35,5 @@ Rollback is allowed while the legacy backend is preserved and the calling produc
 - Do not silently move data when namespace volume binding changes.
 - Do not keep ordinary direct JuiceFS mount as the migrated user path.
 - Do not delete legacy DB/bucket before validation.
-- Do not migrate cross-namespace templates, because they are not supported in P0.
+- Do not migrate cross-namespace templates, because they are not supported in GA.
 - Do not cut over without either source write freeze or a verified delta-sync/final-lock procedure.

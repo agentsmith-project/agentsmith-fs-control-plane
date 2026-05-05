@@ -1,6 +1,6 @@
 # Contract: AFSCP Internal API V1
 
-Status: P0 review draft
+Status: GA pre-dev review draft
 
 AFSCP internal APIs are called by trusted product control planes, privileged admin jobs, migration jobs, operator tools, and a dedicated workload orchestrator service.
 
@@ -18,7 +18,7 @@ AFSCP internal APIs are called by trusted product control planes, privileged adm
 
 AFSCP must authorize `caller_service` for every namespace-bound request.
 
-P0 authorization sources:
+GA authorization sources:
 
 - `NamespaceVolumeBinding.allowed_callers`
 - deployment-level admin/operator allowlist
@@ -36,7 +36,8 @@ AFSCP must reject and audit:
 
 - volume ensure/health
 - namespace create/disable and volume binding get/update
-- repo create/get
+- repo create/get/list
+- repo archive, restore-archived, delete, restore-tombstoned, and purge
 - save point create/list
 - restore preview/run
 - repo template create/clone
@@ -46,7 +47,8 @@ AFSCP must reject and audit:
 - orchestrator mount plan get
 - operation get/list
 
-Repo archive/delete/rename/detach are P1 unless a lifecycle drain contract is separately accepted.
+Product display-name rename and catalog detach are outside AFSCP. Repo storage
+lifecycle is in GA through [repo-lifecycle-v1.md](repo-lifecycle-v1.md).
 
 See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft payloads.
 
@@ -56,19 +58,20 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
 - Every mutating request includes the authorized end actor for audit.
 - AFSCP validates caller service authorization before namespace/resource consistency.
 - AFSCP validates namespace/repo/template/export consistency.
-- Cross-namespace template clone is rejected by default in P0.
-- Cross-volume template clone is rejected with `VOLUME_MISMATCH_REQUIRES_IMPORT` in P0.
+- Cross-namespace template clone is rejected by default.
+- Cross-volume template clone is rejected with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
 - Mutations create operation records before executing external effects.
 - Ordinary product caller responses never include JuiceFS root credentials, raw root paths, or Secret references.
 - Errors are stable enough for callers to render product-facing messages.
 
-## P0 Role Matrix
+## GA Role Matrix
 
 | Role | Endpoint Groups |
 | --- | --- |
 | `volume_admin` | volume ensure/health |
 | `namespace_admin` | namespace create/disable and volume binding update |
-| `repo_admin` | repo create/get, save point create/list, history |
+| `repo_admin` | repo create/get/list, save point create/list, history |
+| `repo_lifecycle_admin` | repo archive, restore-archived, delete, restore-tombstoned, purge when policy permits |
 | `restore_admin` | restore preview/run |
 | `template_admin` | repo template create/clone |
 | `export_admin` | export create/get/revoke |
@@ -79,3 +82,12 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
 | `break_glass_admin` | explicitly approved break-glass flows only |
 
 Deployments may split these roles further, but they must not merge ordinary product caller roles with `orchestrator_mount` or `break_glass_admin`.
+
+## Stable Error Families
+
+The internal API must expose a standard error envelope and stable error codes
+for authentication, caller authorization, namespace/resource mismatch,
+capability denial, idempotency conflict, active writer restore rejection, dirty
+restore rejection, JVS failure, export expiry/revoke, mount terminal state, repo
+lifecycle invalid state, lifecycle session drain failure, missing purge
+confirmation, purge retention denial, and operation recovery required.

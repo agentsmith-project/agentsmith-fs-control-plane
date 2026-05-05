@@ -15,6 +15,8 @@ Core rule: AgentSmith owns product workflow and authorization. AFSCP owns generi
 | AgentSmith template catalog record | product metadata pointing to AFSCP `repo_template` |
 | Desktop/Web file access | `export` |
 | sandbox workspace binding | `workload_mount_binding` plus orchestrator-only mount plan |
+| Storage-affecting file library delete/archive | AFSCP repo lifecycle operation plus AgentSmith catalog state |
+| AgentSmith file library rename | AgentSmith catalog metadata only |
 | AgentSmith audit entry | projection of AFSCP operation/audit events |
 
 AFSCP should store the right-hand concepts only. Left-hand concepts stay in AgentSmith.
@@ -30,6 +32,9 @@ AgentSmith API should:
 - configure namespace volume bindings through AFSCP admin/internal APIs
 - map file library records to AFSCP repo IDs
 - map template catalog records to AFSCP template IDs
+- call AFSCP repo lifecycle APIs when a file library archive/delete/restore/purge affects storage state
+- keep the file library catalog record and AFSCP repo ID while tombstoned storage remains restorable
+- pass a product confirmation or approval reference and reason when requesting AFSCP purge
 - call AFSCP with authorized actor, namespace ID, correlation ID, and idempotency key
 - reject cross-workspace template clone before calling AFSCP
 - render user-visible audit from AFSCP events
@@ -40,6 +45,22 @@ AgentSmith API should not:
 - hold JuiceFS root credentials
 - pass raw filesystem paths to AFSCP
 - require AFSCP to know notebook task IDs or file library IDs
+- use AFSCP repo lifecycle APIs for display-name rename or product-only catalog detach
+
+## AgentSmith Lifecycle Mapping
+
+| AgentSmith file library state | AFSCP state/change | Catalog rule |
+| --- | --- | --- |
+| active | repo `active` | keep ordinary catalog record |
+| product-only archived/hidden | no AFSCP storage change | keep repo `active`; hide or group in AgentSmith catalog |
+| storage archived/cold | call AFSCP `archive` | keep catalog record and repo ID; show restore/unarchive action |
+| deleted/trash | call AFSCP `delete` | keep tombstoned catalog record and repo ID until purge or retention expiry |
+| restored from trash | call AFSCP `restore-tombstoned` | restore catalog visibility according to product policy and AFSCP lifecycle result |
+| permanently deleted | call AFSCP `purge` only after product confirmation and policy approval | keep only product audit marker; no storage restore is possible |
+
+AgentSmith display-name rename and product-only catalog detach remain catalog
+metadata changes. They must not call AFSCP repo lifecycle APIs unless storage
+availability or retention state changes.
 
 Current paths to inspect:
 
@@ -102,7 +123,7 @@ Required capabilities:
 - save point creation and history
 - restore preview and restore
 - repo clone
-- repo lifecycle management only in P1/future flows
+- repo lifecycle management for archive/delete/restore/purge storage state
 - `doctor --strict` for validation
 
 Current paths to inspect:
@@ -125,5 +146,6 @@ Current paths to inspect:
 8. Route save/history/restore through AFSCP.
 9. Save notebook task result by asking AFSCP to clone source repo into a repo template, then let AgentSmith store catalog metadata.
 10. Clone template by asking AFSCP to clone same-namespace template into a new repo.
-11. Gate new behavior behind AgentSmith workspace/profile feature flags.
-12. Plan legacy migration separately.
+11. Route file library archive/delete/restore/purge storage state changes through AFSCP repo lifecycle APIs.
+12. Gate new behavior behind AgentSmith workspace/profile feature flags.
+13. Plan legacy migration separately.

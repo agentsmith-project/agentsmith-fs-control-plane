@@ -1,6 +1,6 @@
 # Contract: Repo Path V1
 
-Status: P0 review draft
+Status: GA pre-dev review draft
 
 AFSCP resolves repo paths from structured IDs. Callers never provide raw filesystem paths.
 
@@ -22,7 +22,7 @@ AFSCP resolves repo paths from structured IDs. Callers never provide raw filesys
 
 `payload_volume_subdir` is relative to the JuiceFS filesystem root and is the only path-like value that may appear in an ordinary orchestrator mount plan. It points to the repo payload root, never to the control root.
 
-P0 subdirs include the AFSCP managed subroot prefix:
+GA subdirs include the AFSCP managed subroot prefix:
 
 ```text
 control_volume_subdir = afscp/namespaces/<namespace_id>/repos/<repo_id>/control
@@ -34,7 +34,7 @@ template payload_volume_subdir = afscp/namespaces/<namespace_id>/templates/<temp
 
 ## ID Grammar
 
-P0 IDs should use strict ASCII grammar:
+GA IDs must use strict ASCII grammar:
 
 ```text
 namespace_id := ns_[A-Za-z0-9][A-Za-z0-9_-]{1,62}

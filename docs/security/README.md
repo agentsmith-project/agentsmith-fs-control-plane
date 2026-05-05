@@ -2,7 +2,7 @@
 
 Start with [threat-model.md](threat-model.md).
 
-The P0 security review must cover:
+The GA security review must cover:
 
 - JuiceFS credential boundary.
 - Namespace path isolation.

@@ -37,10 +37,11 @@ Operation states should support at least:
 - `failed`
 - `cancel_requested`
 - `cancelled`
+- `operator_intervention_required`
 
 ## Deployment
 
-MVP:
+GA deployment:
 
 - One AFSCP API/worker Deployment.
 - WebDAV gateway may be same pod sidecar or same image subprocess.
@@ -48,7 +49,7 @@ MVP:
 - Dedicated Secrets for JuiceFS root credentials.
 - Internal-only Service.
 
-P1:
+Future deployment options:
 
 - Split export gateway pool if WebDAV load grows.
 - Split worker queue if JVS operations become heavy.
@@ -91,19 +92,19 @@ Explicit migration flow should be:
 
 Ordinary concurrent reads and writes are allowed for normal file IO. Restore-run is different: it changes repo version state.
 
-P0 restore-run must reject active read-write WebDAV export and workload mount sessions by default. It should:
+GA restore-run must reject active or uncertain read-write WebDAV export and workload mount sessions by default. It should:
 
 - run restore preview
 - acquire the per-repo writer-session fence to block new read-write export/mount issuance
-- inspect active sessions
-- reject if active read-write sessions exist
+- inspect active and uncertain read-write sessions
+- reject if active or uncertain read-write sessions exist
 - acquire repo-level restore lock
 - execute restore
 - validate with `jvs doctor --strict`
 - emit audit events
 - release the writer-session fence after terminal success/failure handling
 
-P1 may add operator break-glass restore with explicit approval, session revoke/drain, richer user warnings, and rollback runbooks.
+Future work may add operator break-glass restore with explicit approval, session revoke/drain, richer user warnings, and rollback runbooks.
 
 ## Backup And Recovery
 

@@ -1,8 +1,14 @@
 # Team Review Closure: 2026-05-03
 
-Status: historical review closure; superseded where noted by the 2026-05-04 JVS external-control update.
+Status: historical review closure; superseded where noted by the 2026-05-04 JVS external-control update and by the current GA readiness docs.
 
 2026-05-04 update: JVS now supports external control roots. Current AFSCP handoff docs use a separated `control/.jvs` plus `payload/` repo layout. Historical `.jvs` exposure findings in this document still apply to embedded-control repos, but not to new AFSCP-managed repos that mount/export only `payload/`.
+
+Current GA update: P0/P1/MVP terms in this document are historical. Repo
+archive, restore-archived, delete, restore-tombstoned, and purge are now in GA
+scope through `docs/GA_PRE_DEV_READINESS.md` and
+`docs/contracts/repo-lifecycle-v1.md`. Product display-name rename and catalog
+detach remain caller-owned metadata operations.
 
 This review used product, platform architecture, security/operations, and API/handoff perspectives. The goal was to prevent early implementation choices that would force rework.
 
@@ -76,8 +82,8 @@ Risk: restore-run racing active writers can produce an unsafe version state.
 Decision:
 
 - AFSCP does not enforce a product-level single-writer model for ordinary file IO
-- P0 restore-run acquires a per-repo writer-session fence, blocks new read-write session issuance, then rejects active read-write export/workload sessions by default
-- operator break-glass restore is P1 unless explicitly pulled forward with audit and revoke/drain controls
+- Historical P0 note, superseded by GA readiness: restore-run acquires a per-repo writer-session fence, blocks new read-write session issuance, then rejects active or uncertain read-write export/workload sessions by default
+- operator break-glass restore remains outside GA unless explicitly pulled forward with audit and revoke/drain controls
 
 Updated docs:
 
@@ -85,14 +91,19 @@ Updated docs:
 - [OPERATIONS_AND_MIGRATION.md](OPERATIONS_AND_MIGRATION.md)
 - [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md)
 
-### 5. Repo Lifecycle Is P1
+### 5. Historical Repo Lifecycle Deferral, Superseded
 
-Risk: archive/delete/rename/detach require active session drain and recovery semantics, which would expand MVP.
+Risk: the lifecycle and catalog actions discussed in this historical section
+require session drain and recovery semantics, which would have expanded the
+earlier MVP framing.
 
 Decision:
 
-- P0 supports repo create/get, save/history/restore-run, template create/clone, export, and mount binding
-- archive/delete/rename/detach remain P1
+- Superseded by current GA readiness: AFSCP GA includes repo archive,
+  restore-archived, delete, restore-tombstoned, and purge as storage lifecycle
+  APIs.
+- Product display-name rename and product catalog detach remain caller-owned
+  metadata operations, not AFSCP repo lifecycle APIs.
 
 Updated docs:
 
@@ -172,7 +183,7 @@ Before endpoint implementation:
 
 - choose runtime/framework ADR
 - create JSON schemas and generate internal OpenAPI
-- pin supported JVS version or commit
+- pin supported JVS release binary/version/checksum
 - freeze exact JVS argv/JSON/error mapping
 - confirm orchestrator can consume payload-only mount plans and report mount binding heartbeat/release
 - confirm auth provider maps to canonical `caller_service`

@@ -1,6 +1,6 @@
 # WebDAV Export
 
-Client access should use controlled exports. P0 export protocol is WebDAV.
+Client access should use controlled exports. GA export protocol is WebDAV.
 
 ## Current Problem
 
@@ -42,7 +42,7 @@ Client -> Calling Product -> AFSCP -> WebDAV export runtime
 
 Do not return JuiceFS metadata URL, bucket URL, access key, or secret key.
 
-## P0 Requirements
+## GA Requirements
 
 - Support read-only and read-write modes.
 - Support TTL and revoke.
@@ -54,13 +54,17 @@ Do not return JuiceFS metadata URL, bucket URL, access key, or secret key.
 - Reject creation, rename, copy, move, or propfind of root-level `.jvs` as defense-in-depth and legacy safety.
 - Reject encoded or double-encoded path traversal and `.jvs` bypass attempts.
 - Prevent symlink escape from the exported payload root.
-- Expired or revoked credentials must fail future requests and close or reject active sessions where supported.
+- Expired or revoked credentials must fail future requests. Read-write exports remain active or uncertain writer sessions until the gateway confirms no future writes are possible and any active write-capable requests are closed, expired and reconciled, or terminal.
+- Any export, read-only or read-write, blocks repo archive/delete/purge lifecycle drain until the gateway confirms no future access is possible and active requests are closed, expired and reconciled, or terminal.
 - Redact credentials from logs.
 - Audit export create, credential issuance, revoke, expiry, and denied path attempts.
+- Define default TTL, maximum TTL, credential reissue behavior, and one-time secret-bearing response behavior.
+- Define when read-write exports count as active writer sessions for restore-run.
+- Store credential material hashed or encrypted according to the accepted security contract.
 
 ## Gateway Requirement
 
-P0 WebDAV export must be served by an AFSCP-controlled policy gateway. Stock `juicefs webdav` can be a reference or backend capability, but it is not enough by itself because AFSCP must apply the canonical path resolver, payload-root chroot, and method policy across every method, including `MOVE` and `COPY` destination paths.
+GA WebDAV export must be served by an AFSCP-controlled policy gateway. Stock `juicefs webdav` can be a reference or backend capability, but it is not enough by itself because AFSCP must apply the canonical path resolver, payload-root chroot, and method policy across every method, including `MOVE` and `COPY` destination paths.
 
 Do not rely on a directory listing deny list, a reverse proxy path prefix check, or a method allowlist as the complete policy boundary.
 
@@ -85,7 +89,19 @@ All methods use the same payload-root resolver. Root-level `.jvs` source or dest
 
 Denied mutating method attempts on read-only exports must be audited with export ID, method, normalized path, actor/caller context, and reason.
 
-## P1 Options
+## Credential And Session Semantics
+
+- Credentials are short-lived. Deployment policy must set default and maximum TTL before GA.
+- Secret-bearing credentials are returned at create time. Any reissue endpoint or repeat display behavior must be explicitly represented in the API contract.
+- Revoked or expired credentials fail new requests.
+- Active write-capable requests after revoke must be closed or allowed to reach a terminal state before the export stops counting as an active or uncertain writer.
+- Read-write exports count as active or uncertain writer sessions until the gateway confirms no future writes are possible and any active write-capable requests are closed, expired and reconciled, or terminal.
+- A control-plane revoke record alone does not unblock restore-run.
+- Read-only exports do not block restore-run, but namespace disable and credential revoke/expiry still apply.
+- Read-only exports do block repo archive/delete/purge lifecycle drain until gateway reconciliation confirms there is no ongoing or future access through that export.
+- Access logs must include export ID, correlation ID when available, method, normalized path, result, and denial reason without credential material.
+
+## Future Options
 
 - SMB/NFS export.
 - Export gateway pool.

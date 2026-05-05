@@ -4,9 +4,11 @@ AFSCP is the only ordinary JVS executor in the storage-control path.
 
 ## Integration Mode
 
-P0 should integrate through the JVS CLI with JSON output.
+GA should integrate through the JVS CLI with JSON output.
 
-Do not reimplement JVS save, restore, clone, or lifecycle semantics inside AFSCP.
+Do not reimplement JVS save, version restore, or clone semantics inside AFSCP.
+Repo availability, archive, tombstone, and purge semantics are owned by the
+AFSCP repo lifecycle contract.
 
 ## Required Commands
 
@@ -21,7 +23,12 @@ AFSCP should support:
 - repo clone
 - `jvs doctor --strict`
 
-Repo lifecycle operations are P1 unless a separate lifecycle drain/recovery contract is accepted.
+Repo lifecycle operations are GA storage-control operations implemented through
+AFSCP durable lifecycle state, session drain, and the accepted tombstone/purge
+storage contract. JVS lifecycle commands are optional implementation helpers
+only after their external-control-root behavior is pinned; they are not the GA
+source of lifecycle authority. AFSCP must not perform lifecycle filesystem
+changes that leave JVS control metadata inconsistent.
 
 See:
 
@@ -32,7 +39,7 @@ See:
 
 ## External Control Root Mode
 
-AFSCP-managed repos should use JVS external control roots for P0.
+AFSCP-managed repos must use JVS external control roots for GA.
 
 Repo create command shape:
 
@@ -53,7 +60,10 @@ External control root rules accepted for AFSCP:
 - A bare payload folder cannot auto-discover the control root; AFSCP runner must pass `--control-root` and `--workspace main`.
 - `--repo` is not the selector for external control root repos.
 - Current JVS external control root contract is main-only.
-- JVS has repo/workspace lifecycle commands for ordinary repos, but the current external control root contract fails lifecycle commands closed. This is not a P0 blocker because AFSCP P0 does not expose repo archive/delete/rename/detach or additional workspace lifecycle APIs.
+- JVS has repo/workspace lifecycle commands for ordinary repos, but AFSCP GA
+  lifecycle does not depend on them. If AFSCP later uses those commands, their
+  external-control-root behavior must first be pinned and tested against the
+  same AFSCP lifecycle contract.
 
 ## Operation Rules
 
@@ -61,9 +71,10 @@ External control root rules accepted for AFSCP:
 - Mutating JVS actions must use resource locks.
 - JVS JSON output should be stored with the operation record.
 - AFSCP should map JVS errors into stable caller-visible error codes.
-- `doctor --strict` should be run after repo create, restore, and clone in P0 smoke paths.
-- The supported JVS version or commit must be pinned before endpoint implementation.
-- The packaged JVS binary must be built from the pinned commit; CI should smoke-test the required commands instead of trusting a stale local artifact.
+- `doctor --strict` should be run after repo create, restore, and clone in GA smoke paths.
+- `doctor --strict` should be run before reactivating archived or tombstoned repos when retained JVS metadata is expected to remain usable.
+- The supported JVS release version, binary asset name, checksum, and signature bundle must be pinned before endpoint implementation.
+- The packaged JVS binary must come from the pinned GitHub release asset; CI should verify the checksum, verify Sigstore/cosign bundles where supported, and smoke-test the required commands instead of trusting a stale local artifact.
 - AFSCP should run JVS commands from a clean working directory outside another JVS repo, or explicitly validate that the runner CWD cannot affect target resolution.
 - Cross-resource operations must use deterministic lock ordering.
 
@@ -96,6 +107,18 @@ Creating a repo should:
 5. Store `repo_id`, `namespace_id`, `volume_id`, `control_root_path`, `payload_root_path`, `control_volume_subdir`, `payload_volume_subdir`, and `jvs_repo_id`.
 6. Return only IDs and status to ordinary callers. Raw paths remain internal.
 
+## Repo Lifecycle
+
+AFSCP repo lifecycle should:
+
+1. Acquire the repo lifecycle fence.
+2. Block new export, mount, save, restore-run, template, and lifecycle mutations.
+3. Drain or revoke existing exports and workload mounts, read-only or read-write, according to the lifecycle operation.
+4. Preserve JVS control metadata for archive and tombstone restore.
+5. Verify retained repos with `doctor --strict` before returning to `active` or the recorded lifecycle accessibility state.
+6. Permanently remove control and payload metadata only during approved purge.
+7. Store JVS output or lifecycle verification output with the operation record.
+
 ## Template Flow
 
 Creating a repo template should:
@@ -108,17 +131,17 @@ Creating a repo template should:
 6. AFSCP clones the source repo into the template repo with the pinned `clone_history_mode`.
 7. AFSCP returns the template repo identity and JVS repo identity.
 
-The P0 template is immutable after publication. Replacing a template means creating a new template or a caller-managed revision that points to a new AFSCP `template_id`.
+The GA template is immutable after publication. Replacing a template means creating a new template or a caller-managed revision that points to a new AFSCP `template_id`.
 
-P0 does not accept caller-provided historical `source_save_point_id` for template creation. JVS `repo clone` clones the current source repo/workspace; creating a template from an older save point requires a future staging restore/import flow.
+GA does not accept caller-provided historical `source_save_point_id` for template creation. JVS `repo clone` clones the current source repo/workspace; creating a template from an older save point requires a future staging restore/import flow.
 
-For external control root repos, P0 should use `--save-points main` and record `clone_history_mode=main`, because JVS fails closed for `--save-points all` in this profile until imported-history protection is available. If the source becomes dirty after the template save point is created and before clone, fail with `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE`.
+For external control root repos, GA must use `--save-points main` and record `clone_history_mode=main` unless a pinned JVS version supports durable imported-save-point protection and the contract is updated. If the source becomes dirty after the template save point is created and before clone, fail with `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE`.
 
 Using a template should:
 
 1. Caller authorizes the request in its own product domain.
 2. AFSCP validates that source template repo and target namespace are the same namespace.
-3. AFSCP validates volume policy. If the template volume differs from the target namespace default volume, P0 rejects with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
+3. AFSCP validates volume policy. If the template volume differs from the target namespace default volume, GA rejects with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
 4. AFSCP creates new target control and payload roots.
 5. AFSCP runs `jvs --control-root <template_control_root_path> --workspace main repo clone <target_payload_root_path> --target-control-root <target_control_root_path> --save-points <clone_history_mode> --json`.
 6. AFSCP returns the new target repo metadata to the caller.
@@ -133,6 +156,6 @@ JVS repo clone can reject dirty source state depending on command semantics. AFS
 
 Template creation must also prevent source writes between the fresh save point and clone publication, or detect the race and fail closed with cleanup. `doctor --strict` is not a substitute for proving the source stayed clean relative to the template save point.
 
-Restore preview/run must model JVS dirty-state decisions explicitly. P0 should fail closed on dirty repos unless the API exposes a supported `discard_unsaved` or `save_first` mode and audits that choice.
+Restore preview/run must model JVS dirty-state decisions explicitly. GA should fail closed on dirty repos unless the API exposes a supported `discard_unsaved` or `save_first` mode and audits that choice.
 
 External control root `jvs repo clone` permits target payload and target control roots to be missing or empty, but fails closed if they are non-empty. AFSCP should allocate the target paths but must not pre-populate the clone target roots before invoking JVS.

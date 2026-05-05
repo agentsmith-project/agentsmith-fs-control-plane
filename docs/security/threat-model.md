@@ -88,6 +88,6 @@ Controls:
 
 - active session registry
 - per-repo writer-session fence blocks new read-write sessions during restore-run
-- restore-run rejects active read-write sessions in P0
+- restore-run rejects active or uncertain read-write sessions for GA
 - repo JVS exclusive lock
 - doctor verification

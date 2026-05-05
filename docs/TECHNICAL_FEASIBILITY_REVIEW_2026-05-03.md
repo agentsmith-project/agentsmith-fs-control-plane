@@ -1,14 +1,17 @@
 # Technical Feasibility Review 2026-05-03
 
-Status: historical feasibility review with 2026-05-04 resolution update.
+Status: historical feasibility review with 2026-05-04 resolution update. Current GA scope is defined by `docs/GA_PRE_DEV_READINESS.md`.
 
-This review intentionally tried to disprove the current product design before implementation. It checked the AFSCP docs, local JVS source and rebuilt binary, local `mbos-sandbox-v1`, local AgentSmith and Desktop code, JuiceFS/CSI/WebDAV documentation, Kubernetes storage/RBAC documentation, and small POSIX permission experiments.
+P0/P1/MVP terms in this document are historical and are not active delivery
+scope.
+
+This review intentionally tried to disprove the current product design before implementation. It checked the AFSCP docs, JVS docs and release binary behavior, local `mbos-sandbox-v1`, local AgentSmith and Desktop code, JuiceFS/CSI/WebDAV documentation, Kubernetes storage/RBAC documentation, and small POSIX permission experiments.
 
 Important: `agentsmith-oss` was not used.
 
 ## 2026-05-04 Resolution Update
 
-JVS has implemented external control root support and the rebuilt local binary exposes the required CLI surface:
+JVS has implemented external control root support and the release binary exposes the required CLI surface:
 
 - global `--control-root`
 - `jvs init <payload_root> --control-root <control_root> --workspace main --json`
@@ -23,7 +26,7 @@ Current handoff conclusion:
 - The former writable-workload `.jvs` exposure blocker is resolved for new AFSCP-managed repos if AFSCP uses JVS external control root mode.
 - The P0 AFSCP repo layout is `control/.jvs` plus `payload/`; WebDAV and workload mounts expose only `payload/`.
 - The blocker below still applies to legacy or incorrectly created embedded-control repos where `.jvs` is inside the workload-visible root.
-- AFSCP must pin a JVS binary/commit with this support and must always pass `--control-root --workspace main` for separated repos; a bare payload directory cannot auto-discover its control root.
+- AFSCP must pin a JVS release binary/version/checksum with this support and must always pass `--control-root --workspace main` for separated repos; a bare payload directory cannot auto-discover its control root.
 
 ## Executive Conclusion
 
@@ -123,7 +126,7 @@ Decision:
 
 These are not product blockers if handled before implementation:
 
-- Pin and package a JVS binary built from a commit that includes `repo clone` and the lifecycle commands AFSCP depends on.
+- Pin and package a JVS release binary that includes `repo clone` and the lifecycle commands AFSCP depends on.
 - Require the pinned JVS binary to include external control root support.
 - CI should smoke-test `jvs repo clone --help`, `jvs init`, save, history, restore preview/run, and `doctor --strict`.
 - CI should include a separated-control smoke test that proves `payload/.jvs` is absent before issuing workload mount plans.

@@ -1,17 +1,29 @@
-# Review Checklist
+# GA Review Checklist
 
-Use this checklist before beginning implementation.
+Use this checklist before endpoint handlers or storage mutation logic are
+implemented, and again before GA.
+
+Each checked item needs an owner role, reviewer role, evidence link or file
+path, and blocking/non-blocking status recorded in `docs/READINESS_EVIDENCE.md`.
+The evidence entry should name the related gate or risk ID where one exists.
+Waivers and residual-risk acceptance follow `docs/DEVELOPMENT_GOVERNANCE.md`;
+credential exposure, tenant isolation failure, user data loss, irrecoverable
+operation ambiguity, and caller-visible contract break risks are non-waivable
+for GA.
 
 ## Product Boundary
 
-- [ ] AFSCP core docs use generic storage concepts: volume, namespace, repo, template, export, mount, operation.
+- [ ] AFSCP core docs use generic storage concepts: volume, namespace, repo, save point, restore, template, export, mount, operation.
 - [ ] Caller-specific concepts stay in integration docs only.
-- [ ] Cross-namespace template clone remains rejected by default in P0.
+- [ ] Direct and indirect caller model is accepted.
+- [ ] Cross-namespace template clone remains rejected by default.
 - [ ] Ordinary concurrent read/write behavior is accepted without merge semantics.
-- [ ] Restore-run is treated as a version mutation, blocks new read-write sessions, and rejects active read-write sessions in P0.
+- [ ] Restore-run is treated as a version mutation, blocks new read-write sessions, and rejects active or uncertain read-write sessions.
 - [ ] Ordinary client access uses controlled exports rather than raw JuiceFS.
-- [ ] Legacy compatibility and migration sequencing are accepted as caller integration work.
-- [ ] P0 repo layout is accepted: each repo has an AFSCP-only JVS external control root and a separate payload root mounted/exported to clients and workloads.
+- [ ] Product deletion/archive/restore/purge behavior maps to AFSCP repo lifecycle APIs when storage state changes.
+- [ ] Calling product catalog keeps repo ID mappings while tombstoned storage remains restorable.
+- [ ] Product display-name rename and catalog detach remain outside AFSCP core.
+- [ ] Quota behavior is documented as policy hook or explicit enforcement capability.
 
 ## Architecture
 
@@ -23,6 +35,8 @@ Use this checklist before beginning implementation.
 - [ ] No direct dependency on `agentsmith-oss` exists.
 - [ ] Namespace volume binding does not contain an authoritative raw filesystem path supplied by a caller.
 - [ ] Namespace binding includes caller-service authorization policy.
+- [ ] Namespace disable semantics for new and existing sessions are accepted.
+- [ ] Repo lifecycle fence, session drain, tombstone, restore, purge, and retention semantics are accepted.
 
 ## Security
 
@@ -31,21 +45,39 @@ Use this checklist before beginning implementation.
 - [ ] Ordinary product callers never receive JuiceFS Secret references.
 - [ ] Orchestrator-only mount plans are protected by a dedicated caller role.
 - [ ] WebDAV is served by an AFSCP-controlled policy gateway or equivalent wrapper; stock `juicefs webdav` alone is not accepted.
-- [ ] WebDAV exposes only payload roots, never JVS control roots, and rejects root-level `.jvs` access/creation attempts as defense-in-depth.
+- [ ] WebDAV exposes only payload roots, never JVS control roots, and rejects root-level `.jvs` access/creation attempts.
 - [ ] Workload mounts expose only `payload_volume_subdir`; embedded-control repos are rejected until migrated or protected by a verified filtered view.
 - [ ] Mount binding lease/status lifecycle defines revoke-request versus confirmed-unmounted terminal states and is integrated with restore-run.
 - [ ] Path resolver rejects traversal and namespace mismatch.
-- [ ] Template clone is checked by namespace, resource, and P0 volume rules in AFSCP.
+- [ ] Template clone is checked by namespace, resource, and volume rules in AFSCP.
 - [ ] Mutating JVS operations use durable operation records, phases, and resource locks.
 - [ ] Mutating AFSCP requests include the authorized end actor, separate from the calling service identity.
-- [ ] Denied authorization and path checks emit audit events.
+- [ ] Denied authorization, path, namespace, and capability checks emit audit events.
+- [ ] Break-glass direct mount is disabled by default or covered by a reviewed contract.
+- [ ] Repo purge is irreversible, explicitly authorized, audited, and blocked by active or uncertain sessions.
+- [ ] Namespace lifecycle policy defines tombstone retention, purge eligibility, and break-glass purge behavior.
 
-## Handoff
+## Contract Readiness
 
 - [ ] Runtime language decision is captured in a new ADR.
-- [ ] JVS commit/binary is pinned, required command smoke tests pass, and the runner CWD cannot affect repo resolution.
-- [ ] Generic internal API contract is reviewed with the first calling product team.
-- [ ] Workload mount binding/orchestrator plan split is reviewed with orchestrator owners.
-- [ ] Writer-session fence is reviewed with export and orchestrator owners.
-- [ ] Export session/access credential contract is reviewed with client connector owners.
-- [ ] Operational rollback plan is written before storage mutations go live.
+- [ ] Internal service auth and caller identity model are accepted.
+- [ ] JSON schemas and internal OpenAPI exist and match narrative contracts.
+- [ ] Standard operation envelope and standard error envelope are accepted.
+- [ ] Stable error families are accepted by first calling product.
+- [ ] JVS release binary/version/checksum is pinned, required command smoke tests pass, and runner CWD cannot affect repo resolution.
+- [ ] JVS argv, JSON success/error, exit-code mapping, dirty-state behavior, and recovery mapping are frozen.
+- [ ] Workload mount binding/orchestrator plan split is accepted by orchestrator owners.
+- [ ] Writer-session fence is accepted by export and orchestrator owners.
+- [ ] Repo lifecycle contract is accepted by calling product, operations, and security owners.
+- [ ] Export session/access credential contract is accepted by client connector owners.
+- [ ] Operation recovery matrix and audit delivery semantics are accepted.
+
+## GA Operations
+
+- [ ] Required runbooks in `docs/runbooks/README.md` exist and have drill evidence.
+- [ ] Observability covers volume health, JVS failures, operation failures, stale leases, held fences, export denials, and audit outbox lag.
+- [ ] Backup and restore behavior is documented for operation store and metadata records.
+- [ ] Secret rotation runbook exists.
+- [ ] Operator intervention semantics and escalation are documented.
+- [ ] All GA-blocking risks in `docs/RISK_REGISTER.md` are closed or have approved residual-risk acceptance under `docs/DEVELOPMENT_GOVERNANCE.md`.
+- [ ] Operation records, logs, audit payloads, generated schemas, OpenAPI examples, and error payloads pass secret redaction review.

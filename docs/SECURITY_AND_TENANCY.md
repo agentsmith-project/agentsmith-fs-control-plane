@@ -53,7 +53,7 @@ Changing a namespace binding should affect new repos only. Existing repos requir
 
 ## Template Boundary
 
-Repo template sharing and clone are namespace-scoped in P0.
+Repo template sharing and clone are namespace-scoped for GA.
 
 Required checks:
 
@@ -79,7 +79,7 @@ The resolver must reject:
 
 JVS metadata must be protected from clients, workloads, and exports.
 
-P0 access gate:
+GA access gate:
 
 - AFSCP-managed repos use JVS external control roots.
 - WebDAV and workload mounts expose only the payload root.
@@ -88,6 +88,14 @@ P0 access gate:
 - AFSCP should run `jvs doctor --strict` after sensitive operations.
 
 Permission-only controls on embedded `.jvs` are not sufficient by themselves for workload mounts. If a legacy embedded-control repo is encountered, workload mounts must be rejected until the repo is migrated to external control root mode or protected by a verified filtered mount/view.
+
+## Namespace Disable And Active Sessions
+
+Namespace disable rejects new mutating operations, new exports, and new mount
+bindings. Existing read-write sessions are not assumed safe merely because the
+namespace is disabled. Restore-run or destructive operational action must wait
+until active read-write exports and workload mount bindings are revoked,
+expired and reconciled, or handled through an explicit operator intervention.
 
 ## Admin/Debug Direct Mount
 
@@ -101,6 +109,7 @@ If enabled for operations, it must be:
 - tied to a ticket, reason, namespace, repo, and short TTL
 - audited on issue, use, and revoke
 - prevented from returning root credentials to ordinary clients
+- covered by a separate reviewed break-glass contract before use
 
 ## Operation Safety
 
@@ -109,12 +118,20 @@ AFSCP must persist operation state before executing mutating actions.
 Mutating operations include:
 
 - repo create
+- repo archive, restore-archived, delete, restore-tombstoned, and purge
 - save point create
 - restore
 - repo clone
 - template clone
 - export create/revoke
 - workload mount binding/plan issuance
-- lifecycle archive/delete/move/rename/detach in P1
+- namespace lifecycle delete outside GA
 
-Use operation locks for JVS and lifecycle operations. Do not lock ordinary reads and writes. Restore-run is a control-plane mutation and must acquire a per-repo writer-session fence, reject active read-write export/workload sessions, and block new read-write session issuance in P0 unless an audited operator break-glass flow is explicitly added.
+Use operation locks for JVS and lifecycle operations. Do not lock ordinary reads and writes. Restore-run is a control-plane mutation and must acquire a per-repo writer-session fence, reject active or uncertain read-write export/workload sessions, and block new read-write session issuance unless an audited operator break-glass flow is explicitly added.
+
+Repo archive, restore-archived, delete, restore-tombstoned, and purge must
+acquire the repo lifecycle fence. Archive, delete, and purge must block new
+sessions and drain or revoke existing exports and workload mounts, read-only or
+read-write, before changing retained storage state. Purge is irreversible and
+requires namespace lifecycle-policy approval, product confirmation, and explicit
+operator break-glass approval when retention is overridden.

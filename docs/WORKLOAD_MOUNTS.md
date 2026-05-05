@@ -8,7 +8,7 @@ Product-specific systems often pass raw filesystem names, metadata URLs, or stor
 
 ## Target Contract
 
-New AFSCP-backed repos should use a two-layer contract.
+New AFSCP-backed repos must use a two-layer contract.
 
 Product callers receive a caller-visible mount binding:
 
@@ -51,7 +51,7 @@ This example assumes an AFSCP-managed repo created with JVS external control roo
 
 The final field names should be agreed with the orchestrator that consumes this plan. `payload_volume_subdir` is relative to the JuiceFS filesystem root and has no leading slash. The AFSCP-managed subroot is `afscp/`, so repo payload subdirs include that prefix.
 
-Any shape that returns an absolute payload path and Secret reference to an ordinary product caller is rejected for P0 because it mixes product authorization with platform mount assembly.
+Any shape that returns an absolute payload path and Secret reference to an ordinary product caller is rejected for GA because it mixes product authorization with platform mount assembly.
 
 ## Responsibilities
 
@@ -84,7 +84,7 @@ Workload:
 
 ## Binding Lifecycle
 
-P0 bindings are lease-based.
+GA bindings are lease-based.
 
 Statuses:
 
@@ -103,12 +103,13 @@ Rules:
 - The orchestrator heartbeats before `lease_expires_at`.
 - A read-write binding in `issued`, `pending`, `active`, or `releasing` with a live lease counts as an active writer session.
 - An expired read-write binding still blocks restore-run until reconciliation marks it `expired`, `released`, confirmed-unmounted `revoked`, or `failed`.
+- Any binding, read-only or read-write, blocks repo archive/delete/purge lifecycle drain until AFSCP has a confirmed terminal non-accessing state.
 - AFSCP can revoke a binding; the orchestrator must unmount or stop using it and report final status.
 - `revoked` is terminal only after the orchestrator confirms that the runtime can no longer write. A revoke request waiting for runtime teardown remains `releasing` and continues to block restore-run.
 
 ## JVS Control Metadata Protection
 
-P0 workload mounts expose only the JVS payload root. For AFSCP-managed new repos, JVS control metadata is in the external control root and is outside the mounted subtree.
+GA workload mounts expose only the JVS payload root. For AFSCP-managed new repos, JVS control metadata is in the external control root and is outside the mounted subtree.
 
 Permission-only protection on embedded `.jvs` is not sufficient because a writable parent directory may still allow rename/unlink/link/chmod/chown attempts against the entry. If a legacy embedded-control repo is encountered, AFSCP must reject workload mounts until the repo is migrated to external control root mode or protected by a verified filtered view.
 
@@ -119,6 +120,22 @@ JuiceFS CSI can mount a selected filesystem subdirectory as the volume root, and
 Do not mount the repo container directory. It contains both `control/` and `payload/`, and would expose the control root. The orchestrator must map `payload_volume_subdir` to a JuiceFS CSI-supported form, such as `mountOptions: ["subdir=afscp/.../payload"]` or a controlled Kubernetes `subPath`.
 
 Do not assume `volumeAttributes["subdir"]` is portable without verifying the pinned CSI driver version.
+
+## GA Enablement Rule
+
+AFSCP must not issue workload mount bindings for a repo/runtime unless the
+orchestrator contract supports:
+
+- orchestrator-only mount plan retrieval
+- payload-only subdir mounting
+- Secret RBAC that excludes ordinary product callers and workloads
+- heartbeat before lease expiry
+- idempotent release
+- revoke request followed by confirmed-unmounted or confirmed-unable-to-write terminal status
+- stale lease reconciliation
+
+If any requirement is missing, AFSCP returns a stable capability error instead
+of issuing a read-only or read-write degraded binding.
 
 ## Compatibility
 

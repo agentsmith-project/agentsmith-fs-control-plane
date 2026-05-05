@@ -1,7 +1,13 @@
 # OpenAPI
 
-No OpenAPI document has been generated yet.
+`internal-v1.openapi.yaml` is the first GA pre-dev internal OpenAPI draft. The
+spec is private/internal, product-agnostic, and must not be exposed as a
+user-facing API.
 
-Before endpoint implementation, turn `docs/API_CONTRACT_DRAFT.md` plus `api/schemas/` JSON schemas into a reviewed internal OpenAPI spec. The spec should be private/internal, product-agnostic, and should not expose user-facing APIs directly.
+Service skeleton work may start from this file, but storage handlers still need
+the relevant readiness gates in `docs/READINESS_EVIDENCE.md` to close.
 
-Service skeleton work may start before this file exists, but handlers should not be implemented against ad hoc payloads.
+The OpenAPI includes the standard operation envelope, standard error envelope,
+stable error families, caller context headers, orchestrator-only response
+boundaries, repo lifecycle endpoints, namespace lifecycle policy, purge
+confirmation fields, and stable lifecycle error codes.

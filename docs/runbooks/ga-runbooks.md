@@ -1,0 +1,413 @@
+# GA Runbooks
+
+Status: pre-dev runbook draft for implementation handoff.
+
+Every incident action must record operator, reason, correlation ID, affected
+namespace/repo/export/mount/operation IDs, and audit event IDs.
+
+## Shared Operator Rules
+
+- Prefer API/operator tooling over raw filesystem access.
+- Do not expose or paste JuiceFS root credentials, metadata URLs, Secret values,
+  WebDAV passwords, bearer tokens, or raw host paths into tickets or chat.
+- If a state transition cannot be proven, move the operation to
+  `operator_intervention_required` and keep the relevant fence held.
+- Do not release a writer or lifecycle fence until the corresponding session,
+  JVS, storage, and audit state is known.
+- Purged storage must not be restored from backups into ordinary service without
+  a new reviewed incident decision.
+
+## Failed Repo Create
+
+Symptoms:
+
+- `repo_create` operation failed or stuck.
+- JVS init output missing or doctor failed.
+
+Actions:
+
+- Inspect operation phase, allocated path state, and JVS JSON output.
+- Verify no raw path or credential leaked into operation/error records.
+- If path exists without durable repo record, mark for operator cleanup after
+  confirming no caller-visible repo exists.
+- Retry only from recorded phase or create a new operation after cleanup.
+
+Terminal evidence:
+
+- repo record active with doctor ok, or failed with cleanup decision.
+- audit event emitted.
+
+## Failed Save Point Create
+
+Symptoms:
+
+- `save_point_create` failed, timed out, or JVS returned dirty/current-state
+  ambiguity.
+
+Actions:
+
+- Inspect JVS JSON and operation phase.
+- Verify save point ID existence before retry.
+- If existence is ambiguous, keep operation in intervention and do not issue
+  restore/template operations from the ambiguous save point.
+
+Terminal evidence:
+
+- save point visible in history or operation failed with stable error.
+
+## Failed Restore Preview
+
+Symptoms:
+
+- restore preview failed or returned unexpected JVS shape.
+
+Actions:
+
+- Confirm repo is active and no lifecycle fence is held.
+- Inspect save point ID and JVS output.
+- Do not create restore-run operation without a valid preview operation.
+
+Terminal evidence:
+
+- preview operation terminal with plan ID, or stable failure error.
+
+## Failed Restore-Run
+
+Symptoms:
+
+- restore-run failed, doctor failed, or JVS recovery state is ambiguous.
+
+Actions:
+
+- Keep writer-session fence held.
+- Inspect active/uncertain read-write sessions.
+- Run `jvs recovery status` through the runner contract only.
+- If recovery cannot prove safe terminal state, mark
+  `operator_intervention_required`.
+- Do not manually delete JVS private restore-plan files.
+
+Terminal evidence:
+
+- repo doctor ok and fence released, or intervention record with runbook owner.
+
+## Restore-Run Blocked By Writers
+
+Symptoms:
+
+- `ACTIVE_WRITER_SESSIONS` or `STALE_WRITER_SESSION_UNCERTAIN`.
+
+Actions:
+
+- List active read-write exports and workload mount bindings.
+- Revoke or wait for expiry/reconciliation according to caller policy.
+- Retry restore-run with same idempotency key only when request body is
+  unchanged.
+
+Terminal evidence:
+
+- restore-run rejected with stable error, or retried after sessions terminal.
+
+## Writer-Session Fence Stuck
+
+Symptoms:
+
+- new read-write sessions rejected with `WRITER_SESSION_FENCE_HELD`.
+- no running restore-run appears healthy.
+
+Actions:
+
+- Inspect operation store for owning operation and lease.
+- Reconcile process restart state.
+- Release fence only after restore operation terminal state is proven.
+
+Terminal evidence:
+
+- fence released with audit reason, or intervention remains open.
+
+## JVS Doctor Failure
+
+Symptoms:
+
+- `JVS_DOCTOR_FAILED`, doctor unhealthy, or recovery blocking state.
+
+Actions:
+
+- Capture redacted JVS JSON.
+- Block restore-run, template clone, lifecycle reactivation, and purge until
+  operator decision.
+- Escalate to JVS owner when doctor output conflicts with recovery status.
+
+Terminal evidence:
+
+- doctor ok after recovery, or intervention record with disabled repo access.
+
+## Failed Template Create Or Clone
+
+Symptoms:
+
+- template operation failed, source dirty after save, volume mismatch, clone JVS
+  failure.
+
+Actions:
+
+- Inspect source save point, target path, and clone history mode.
+- Clean up unpublished target template/repo only after operation phase proves no
+  caller-visible resource was returned.
+- Reject cross-namespace or cross-volume clone according to contract.
+
+Terminal evidence:
+
+- published template/active repo with doctor ok, or failed operation with cleanup
+  decision.
+
+## Repo Archive Blocked Or Failed
+
+Symptoms:
+
+- archive waits on sessions, lifecycle fence held, or health verification fails.
+
+Actions:
+
+- Confirm lifecycle fence owner.
+- Drain/revoke all non-terminal exports and workload mounts.
+- Keep repo active until retained storage state is safely archived.
+
+Terminal evidence:
+
+- repo `archived`, sessions terminal, audit emitted; or intervention required.
+
+## Repo Restore From Archive Failed
+
+Symptoms:
+
+- archived repo cannot return to active.
+
+Actions:
+
+- Keep lifecycle fence held.
+- Verify retained control and payload storage.
+- Run doctor before returning active.
+- If JVS health is ambiguous, keep repo unavailable and mark intervention.
+
+Terminal evidence:
+
+- repo active with health verification, or intervention record.
+
+## Repo Delete Blocked By Sessions
+
+Symptoms:
+
+- delete operation running while exports or mounts are active/uncertain.
+
+Actions:
+
+- Revoke exports and workload mounts.
+- Confirm WebDAV gateway reports no future access.
+- Confirm orchestrator reports terminal non-accessing state.
+- Keep lifecycle fence held.
+
+Terminal evidence:
+
+- repo tombstoned with retained storage marker and audit event, or intervention.
+
+## Repo Tombstone Restore Failed
+
+Symptoms:
+
+- restore-tombstoned denied or health check fails.
+
+Actions:
+
+- Verify retention has not expired and repo is not purged.
+- Verify product catalog still maps to repo ID.
+- Restore to recorded pre-delete accessibility state only.
+- Run doctor before reactivation.
+
+Terminal evidence:
+
+- repo restored to recorded state, or stable denial/intervention.
+
+## Repo Purge Denied Or Failed
+
+Symptoms:
+
+- purge denied by retention, missing confirmation, active sessions, or storage
+  failure.
+
+Actions:
+
+- Verify product confirmation/approval reference and reason.
+- Verify namespace lifecycle policy.
+- Verify lifecycle role and break-glass approval when retention override is
+  requested.
+- Verify no active or uncertain export/mount sessions.
+- If physical removal is ambiguous, mark intervention and block reactivation.
+
+Terminal evidence:
+
+- repo purged with minimal audit/idempotency record retained, or denied with
+  stable error.
+
+## WebDAV Export Incident
+
+Symptoms:
+
+- denied path spike, credential misuse, traversal attempt, or unexpected method.
+
+Actions:
+
+- Revoke affected export sessions.
+- Inspect access logs with credential redaction.
+- Confirm no `.jvs`, control root, raw path, or credential exposure.
+
+Terminal evidence:
+
+- exports terminal, affected paths audited, incident outcome recorded.
+
+## WebDAV Credential Leak
+
+Symptoms:
+
+- password, URL credential, or bearer secret exposed.
+
+Actions:
+
+- Revoke export immediately.
+- Rotate stored credential material if needed.
+- Audit caller and actor context.
+- Confirm logs and operation records are redacted.
+
+Terminal evidence:
+
+- credential invalidated and leak scope documented.
+
+## Stale Workload Mount Lease
+
+Symptoms:
+
+- binding lease expired but not terminal.
+
+Actions:
+
+- Ask orchestrator for latest runtime state.
+- Treat read-write stale lease as uncertain writer.
+- Treat any non-terminal binding as lifecycle drain blocker when no access is
+  allowed.
+
+Terminal evidence:
+
+- binding terminal or intervention with orchestrator owner.
+
+## Workload Mount Revoke Stuck
+
+Symptoms:
+
+- binding remains `releasing`.
+
+Actions:
+
+- Confirm orchestrator received revoke.
+- Confirm pod/runtime unmounted or unable to write.
+- Do not mark `revoked` terminal from AFSCP intent alone.
+
+Terminal evidence:
+
+- confirmed terminal state or intervention.
+
+## Operation Reconciliation After Crash
+
+Symptoms:
+
+- operations left `running` after process restart.
+
+Actions:
+
+- Reacquire operation leases.
+- Run phase-specific recovery.
+- Recover fences from durable state.
+- Emit recovery audit events.
+
+Terminal evidence:
+
+- operations terminal or intervention with phase and external IDs.
+
+## Caller Authorization Denial
+
+Symptoms:
+
+- `CALLER_NOT_ALLOWED`, `ROLE_NOT_ALLOWED`, namespace mismatch.
+
+Actions:
+
+- Verify authenticated principal to caller mapping.
+- Verify namespace binding roles.
+- Do not bypass with admin unless operator action is explicitly approved.
+
+Terminal evidence:
+
+- denied event audited and caller policy corrected or request rejected.
+
+## Namespace Disable And Session Drain
+
+Symptoms:
+
+- namespace disabled while sessions exist.
+
+Actions:
+
+- Reject new mutations and new session issuance.
+- Revoke or wait for session expiry according to policy.
+- Allow only authorized operator inspection.
+
+Terminal evidence:
+
+- namespace disabled with sessions terminal or documented exceptions.
+
+## JuiceFS Secret Rotation
+
+Symptoms:
+
+- planned rotation or suspected credential exposure.
+
+Actions:
+
+- Rotate platform Secret outside ordinary product access.
+- Restart or reconcile mount/export components according to deployment policy.
+- Confirm no ordinary caller received Secret references.
+
+Terminal evidence:
+
+- rotation audited and health checks pass.
+
+## Volume Health Degradation
+
+Symptoms:
+
+- volume health check fails or reports degraded capability.
+
+Actions:
+
+- Stop new repo create on affected volume if unsafe.
+- Reject exports/mounts when capability is unavailable.
+- Keep operations retry-safe and visible.
+
+Terminal evidence:
+
+- volume active again, or namespace policy moved for new repos.
+
+## Audit Outbox Lag Or Replay
+
+Symptoms:
+
+- audit delivery lag over threshold.
+
+Actions:
+
+- Keep outbox records durable.
+- Replay idempotently.
+- Alert if denied/security events are delayed.
+
+Terminal evidence:
+
+- lag cleared or incident opened with retained outbox.
+

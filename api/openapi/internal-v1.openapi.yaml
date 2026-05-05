@@ -1,0 +1,714 @@
+openapi: 3.1.0
+info:
+  title: AFSCP Internal API
+  version: 1.0.0
+  description: Product-agnostic internal storage control plane API.
+servers:
+  - url: https://afscp.internal
+security:
+  - serviceAuth: []
+components:
+  securitySchemes:
+    serviceAuth:
+      type: http
+      scheme: bearer
+      description: Deployment service credential or mTLS-derived bearer facade.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: true
+      schema:
+        type: string
+    NamespaceIdHeader:
+      name: X-AFSCP-Namespace-Id
+      in: header
+      required: false
+      schema:
+        type: string
+    ActorType:
+      name: X-AFSCP-Actor-Type
+      in: header
+      required: false
+      schema:
+        type: string
+    ActorId:
+      name: X-AFSCP-Actor-Id
+      in: header
+      required: false
+      schema:
+        type: string
+    CallerService:
+      name: X-AFSCP-Caller-Service
+      in: header
+      required: true
+      schema:
+        type: string
+  schemas:
+    OperationEnvelope:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OperationEnvelope
+    ErrorEnvelope:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/ErrorEnvelope
+    Volume:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/Volume
+    NamespaceVolumeBinding:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/NamespaceVolumeBinding
+    Repo:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/Repo
+    CreateRepoRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateRepoRequest
+    LifecycleRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/LifecycleRequest
+    PurgeRepoRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/PurgeRepoRequest
+    CreateSavePointRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateSavePointRequest
+    RestorePreviewRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestorePreviewRequest
+    RestoreRunRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestoreRunRequest
+    CreateRepoTemplateRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateRepoTemplateRequest
+    CloneRepoTemplateRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CloneRepoTemplateRequest
+    CreateExportRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateExportRequest
+    ExportSession:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/ExportSession
+    CreateWorkloadMountBindingRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateWorkloadMountBindingRequest
+    WorkloadMountBinding:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/WorkloadMountBinding
+    OrchestratorMountPlan:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OrchestratorMountPlan
+  responses:
+    Error:
+      description: Standard error envelope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+paths:
+  /internal/v1/volumes/{volumeId}:ensure:
+    post:
+      operationId: ensureVolume
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: volumeId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Volume ensured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/namespaces/{namespaceId}/volume-binding:
+    put:
+      operationId: putNamespaceVolumeBinding
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NamespaceVolumeBinding"
+      responses:
+        "200":
+          description: Binding upserted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      operationId: getNamespaceVolumeBinding
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Binding.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NamespaceVolumeBinding"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos:
+    post:
+      operationId: createRepo
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRepoRequest"
+      responses:
+        "200":
+          description: Repo create operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      operationId: listRepos
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: namespace_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: lifecycle_status
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Namespace-bound storage inventory, not product catalog.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repos]
+                properties:
+                  repos:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Repo"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}:
+    get:
+      operationId: getRepo
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Repo.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repo"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}:archive:
+    post:
+      operationId: archiveRepo
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LifecycleRequest"
+      responses:
+        "202":
+          description: Archive operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}:restore-archived:
+    post:
+      operationId: restoreArchivedRepo
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LifecycleRequest"
+      responses:
+        "202":
+          description: Restore archived operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}:delete:
+    post:
+      operationId: deleteRepo
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LifecycleRequest"
+      responses:
+        "202":
+          description: Delete to tombstone operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}:restore-tombstoned:
+    post:
+      operationId: restoreTombstonedRepo
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LifecycleRequest"
+      responses:
+        "202":
+          description: Restore tombstoned operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}:purge:
+    post:
+      operationId: purgeRepo
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurgeRepoRequest"
+      responses:
+        "202":
+          description: Purge operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}/save-points:
+    post:
+      operationId: createSavePoint
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSavePointRequest"
+      responses:
+        "202":
+          description: Save point operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}/restore-preview:
+    post:
+      operationId: restorePreview
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestorePreviewRequest"
+      responses:
+        "202":
+          description: Restore preview operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}/restore-run:
+    post:
+      operationId: restoreRun
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestoreRunRequest"
+      responses:
+        "202":
+          description: Restore run operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repo-templates:
+    post:
+      operationId: createRepoTemplate
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRepoTemplateRequest"
+      responses:
+        "202":
+          description: Template create operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repo-templates/{templateId}:clone:
+    post:
+      operationId: cloneRepoTemplate
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: templateId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloneRepoTemplateRequest"
+      responses:
+        "202":
+          description: Template clone operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}/exports:
+    post:
+      operationId: createExport
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExportRequest"
+      responses:
+        "202":
+          description: Export create operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/exports/{exportId}:
+    get:
+      operationId: getExport
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: exportId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Export session without secret-bearing credential unless create response policy permits it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportSession"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: revokeExport
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: exportId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Export revoke operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}/workload-mount-bindings:
+    post:
+      operationId: createWorkloadMountBinding
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkloadMountBindingRequest"
+      responses:
+        "202":
+          description: Mount binding create operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/workload-mount-bindings/{mountBindingId}:
+    get:
+      operationId: getWorkloadMountBinding
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: mountBindingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workload mount binding.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkloadMountBinding"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/workload-mount-bindings/{mountBindingId}/orchestrator-plan:
+    get:
+      operationId: getOrchestratorMountPlan
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: mountBindingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Orchestrator-only Secret-bearing mount plan.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchestratorMountPlan"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/workload-mount-bindings/{mountBindingId}:heartbeat:
+    post:
+      operationId: heartbeatWorkloadMountBinding
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: mountBindingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Heartbeat operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/workload-mount-bindings/{mountBindingId}:release:
+    post:
+      operationId: releaseWorkloadMountBinding
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: mountBindingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Release operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/workload-mount-bindings/{mountBindingId}:revoke:
+    post:
+      operationId: revokeWorkloadMountBinding
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: mountBindingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Revoke operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/operations/{operationId}:
+    get:
+      operationId: getOperation
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Operation envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"

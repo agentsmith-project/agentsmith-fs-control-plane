@@ -1,22 +1,24 @@
 # Contributing
 
-This repository is currently a handoff scaffold for the AFSCP storage control plane implementation.
+This repository is currently a GA pre-development handoff for the AFSCP storage control plane implementation.
 
 Before starting implementation:
 
 1. Read [docs/HANDOFF.md](docs/HANDOFF.md).
-2. Read [docs/DECOUPLING_REVIEW.md](docs/DECOUPLING_REVIEW.md).
-3. Confirm the MVP in [docs/MVP_PLAN.md](docs/MVP_PLAN.md).
-4. Confirm the security boundaries in [docs/SECURITY_AND_TENANCY.md](docs/SECURITY_AND_TENANCY.md).
-5. Confirm the draft API shape in [docs/API_CONTRACT_DRAFT.md](docs/API_CONTRACT_DRAFT.md).
+2. Read [docs/GA_PRE_DEV_READINESS.md](docs/GA_PRE_DEV_READINESS.md).
+3. Read [docs/DEVELOPMENT_GOVERNANCE.md](docs/DEVELOPMENT_GOVERNANCE.md).
+4. Read [docs/RISK_REGISTER.md](docs/RISK_REGISTER.md).
+5. Confirm the security boundaries in [docs/SECURITY_AND_TENANCY.md](docs/SECURITY_AND_TENANCY.md).
+6. Confirm the draft API shape in [docs/API_CONTRACT_DRAFT.md](docs/API_CONTRACT_DRAFT.md).
 
 Development rules:
 
 - Do not expose JuiceFS metadata URLs or object store credentials to ordinary clients or workloads.
 - Do not make AFSCP the product authorization authority.
 - Do not add caller-specific workflow concepts to AFSCP core.
-- Do not implement cross-namespace template sharing or clone in P0.
-- Do not add merge semantics or ordinary single-writer enforcement in MVP.
-- Keep implementation milestones small and tied to the P0 acceptance criteria.
+- Do not implement ordinary cross-namespace template sharing or clone for GA.
+- Do not add merge semantics or ordinary single-writer enforcement for GA.
+- Do not implement endpoint handlers or storage mutations until schemas, OpenAPI, auth, JVS runner, operation/audit, export, mount, and writer-session fence contracts are accepted.
+- Tie implementation PRs to accepted ADRs, contracts, and GA admission evidence.
 
-The runtime language, framework, and build system have not been selected yet. Make that decision explicitly in a future ADR before adding application code.
+The runtime language and initial service shape are selected in [ADR 0005](docs/adr/0005-runtime-and-service-shape.md). New implementation PRs should follow [docs/DEVELOPER_HANDOFF.md](docs/DEVELOPER_HANDOFF.md).

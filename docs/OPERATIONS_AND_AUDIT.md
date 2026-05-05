@@ -4,7 +4,7 @@ AFSCP executes long-running and mutating storage operations. These operations mu
 
 ## Operation Record
 
-Recommended P0 fields:
+Recommended GA fields:
 
 - `operation_id`
 - `operation_type`
@@ -56,16 +56,20 @@ Require durable operation records:
 - volume ensure/update
 - namespace create/disable and binding update
 - repo create
+- repo archive, restore-archived, delete, restore-tombstoned, and purge
 - save point create
 - restore preview/run
 - repo clone
 - template create/clone
 - export create/revoke
-- workload mount binding generation
+- export expiry/reconciliation when it changes session terminal state
+- workload mount binding generation, status update, heartbeat, release, and revoke
 - orchestrator mount plan issuance if it provisions external resources
 - migration cutover in future tooling
 
-Repo archive/delete/rename/detach are P1 lifecycle operations and should not be implemented before a drain/recovery contract exists.
+Product display-name rename and catalog detach are caller-owned metadata
+operations. AFSCP repo lifecycle operations affect storage availability and
+retention and therefore require operation records.
 
 ## Audit
 
@@ -97,11 +101,41 @@ Audit events are required for:
 - mount binding and orchestrator plan issuance
 - mount binding heartbeat, release, revoke, expiry, and stale-lease reconciliation
 - namespace binding changes
+- repo lifecycle archive, restore, delete, tombstone, purge, denial, and intervention
 - restore-run active session denials
 - migration cutover in future tooling
 - operator break-glass overrides
 
-P0 should use an append-only or outbox-style audit sink with documented retention. Credentials and secrets must be redacted.
+GA must use an append-only or outbox-style audit sink with documented retention. Credentials and secrets must be redacted.
+
+## GA Operator Minimum Surface
+
+Operators must be able to inspect:
+
+- operation by ID and by correlated resource
+- operations requiring intervention
+- volume health
+- namespace binding and status
+- repo/template/export/mount binding status
+- stale workload mount leases
+- held writer-session fences
+- held repo lifecycle fences
+- audit delivery lag or outbox failures
+
+Operator actions must be audited. Any action that can release a fence, mark an
+operation terminal, revoke a session, rotate a Secret, or accept residual risk
+must require an operator role and a reason.
+
+## Audit Delivery And Retention
+
+- Audit delivery must be append-only or outbox-backed.
+- Delivery failures must be visible to operators.
+- Replay or re-delivery semantics must be documented.
+- Retention must cover security investigation and caller audit projection needs.
+- Logs and audit payloads must redact credential material, Secret values,
+  metadata URLs, access keys, and WebDAV passwords.
+- Denied events must be retained with enough context to investigate caller
+  confused-deputy, path traversal, capability, and namespace mismatch failures.
 
 ## Recovery
 
@@ -112,6 +146,11 @@ Recovery behavior must be explicit per operation type:
 | Operation | Recovery Strategy |
 | --- | --- |
 | repo_create | inspect allocated path, JVS identity, and doctor result |
+| repo_archive | inspect lifecycle status, session terminal state, retained storage, and audit state |
+| repo_restore_archived | inspect lifecycle status and repo health |
+| repo_delete | inspect lifecycle status, session terminal state, tombstone state, retained storage, and audit state |
+| repo_restore_tombstoned | inspect tombstone status, retention policy, and repo health |
+| repo_purge | inspect purge marker and absence of retained storage |
 | save_point_create | inspect JVS save point existence before retry |
 | restore_preview | retry from request input |
 | restore_run | inspect restore state, hold writer-session fence, block new read-write sessions, verify no active read-write sessions, run doctor |
@@ -119,9 +158,12 @@ Recovery behavior must be explicit per operation type:
 | template_clone | inspect target repo path and JVS identity |
 | export_create | inspect session and credential state; revoke partial credential on failure |
 | export_revoke | idempotently mark revoked and invalidate credential |
+| export_session_reconcile | inspect gateway state; terminal only after no future access for lifecycle and no future writes for restore-run |
 | mount_binding_create | inspect binding state and issued orchestrator plan state |
+| mount_binding_status_update | inspect orchestrator-reported terminal state and runtime access guarantee |
 | mount_binding_heartbeat | idempotently extend lease or reject terminal bindings |
 | mount_binding_release | idempotently mark released and unblock restore |
+| mount_binding_revoke | keep releasing until runtime is confirmed unmounted or unable to write |
 | migration_cutover | require operator decision if source/target generations are ambiguous |
 
 If deterministic recovery is impossible, mark `operator_intervention_required` with the phase, external resource IDs, and recommended runbook.

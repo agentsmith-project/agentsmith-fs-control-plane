@@ -1,6 +1,6 @@
 # Contract: Namespace Volume Binding V1
 
-Status: P0 review draft
+Status: GA pre-dev review draft
 
 Namespace volume binding is owned and enforced by AFSCP. Trusted callers may request or configure bindings according to deployment policy, but they do not provide authoritative raw filesystem paths.
 
@@ -11,6 +11,7 @@ Namespace volume binding is owned and enforced by AFSCP. Trusted callers may req
 - `allowed_callers`
 - `quota_bytes_default`
 - `export_policy`
+- `lifecycle_policy`
 - `mount_policy`
 - `template_policy`
 - `status`
@@ -19,11 +20,11 @@ Namespace volume binding is owned and enforced by AFSCP. Trusted callers may req
 
 AFSCP treats namespace as a first-class storage boundary.
 
-P0 statuses:
+GA statuses:
 
 - `active`: repo create, export, mount, save, restore, and template clone may proceed if policy permits.
-- `disabled`: new repo/export/mount/template operations are rejected; existing read-only inspection may continue for operators.
-- `deleting`: P1 only, requires a lifecycle drain design.
+- `disabled`: new mutating operations and new session issuance are rejected; existing read-only inspection may continue for operators.
+- `deleting`: outside GA, requires a lifecycle drain design.
 
 `namespace_id` may be supplied by a trusted caller, but AFSCP owns the binding, status, allowed caller policy, and canonical storage root.
 
@@ -34,6 +35,7 @@ Each binding lists service principals that may act in the namespace.
 Example roles:
 
 - `repo_admin`
+- `repo_lifecycle_admin`
 - `restore_admin`
 - `export_admin`
 - `template_admin`
@@ -51,8 +53,13 @@ AFSCP must check `caller_service` and role before each namespace-bound operation
 - Changing a binding affects new repos only.
 - Existing repos require explicit migration.
 - AFSCP computes and owns the canonical namespace root for each volume.
-- `cross_namespace_clone_enabled` defaults to false in P0.
-- Template policy may enable namespace templates but not cross-namespace templates in P0.
-- Template clone must not cross volumes in P0. If source/template volume differs from the namespace default volume, AFSCP rejects with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
+- `cross_namespace_clone_enabled` defaults to false.
+- Template policy may enable namespace templates but not ordinary cross-namespace templates.
+- Template clone must not cross volumes in GA. If source/template volume differs from the namespace default volume, AFSCP rejects with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
 - Mount/export requests must be checked against volume capabilities and namespace policy before issuing credentials or mount plans.
+- Lifecycle policy defines tombstone retention, purge eligibility, and whether break-glass purge is enabled for the namespace. AFSCP records the applicable policy with each delete/purge operation so recovery and audit do not depend on later policy drift.
 - `mount_policy.workload_mount_enabled=true` is only a namespace permission. AFSCP must still reject workload mounts when the selected repo/runtime cannot provide a payload-only mount with JVS control metadata outside the mounted root.
+- Disabling a namespace rejects repo create, save point create, restore-run, template create, template clone, export create, workload mount binding create, and other new mutating/session issuance operations.
+- Restore preview, health inspection, operation inspection, and audit inspection may continue for authorized operator roles.
+- Existing ordinary exports and workload mounts remain governed by the namespace disable policy until revoked, expired and reconciled, or handled by explicit operator action. Restore-run must reject active or uncertain read-write sessions; destructive lifecycle activity must drain any non-terminal export or mount session required by the repo lifecycle contract.
+- Changing a binding affects new repos only. Existing repos retain their recorded volume and path state until explicit migration.

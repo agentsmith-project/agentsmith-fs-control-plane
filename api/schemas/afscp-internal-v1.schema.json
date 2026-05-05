@@ -1,0 +1,498 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://afscp.internal/schemas/afscp-internal-v1.schema.json",
+  "title": "AFSCP Internal API V1 Schemas",
+  "type": "object",
+  "$defs": {
+    "Actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["user", "system", "admin_job", "migration_job", "operator"]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "ResourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "volume",
+            "namespace",
+            "repo",
+            "repo_template",
+            "export",
+            "workload_mount_binding",
+            "operation"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "AUTHENTICATION_FAILED",
+        "CALLER_NOT_ALLOWED",
+        "ROLE_NOT_ALLOWED",
+        "NAMESPACE_NOT_FOUND",
+        "NAMESPACE_DISABLED",
+        "RESOURCE_NAMESPACE_MISMATCH",
+        "INVALID_ID",
+        "PATH_DENIED",
+        "CAPABILITY_DENIED",
+        "IDEMPOTENCY_CONFLICT",
+        "ACTIVE_WRITER_SESSIONS",
+        "WRITER_SESSION_FENCE_HELD",
+        "STALE_WRITER_SESSION_UNCERTAIN",
+        "RESTORE_DIRTY_STATE",
+        "JVS_COMMAND_FAILED",
+        "JVS_DOCTOR_FAILED",
+        "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE",
+        "VOLUME_MISMATCH_REQUIRES_IMPORT",
+        "EXPORT_EXPIRED",
+        "EXPORT_REVOKED",
+        "MOUNT_BINDING_TERMINAL",
+        "REPO_LIFECYCLE_INVALID_STATE",
+        "REPO_LIFECYCLE_FENCE_HELD",
+        "ACTIVE_SESSIONS_BLOCK_LIFECYCLE",
+        "STALE_SESSION_BLOCKS_LIFECYCLE",
+        "REPO_ARCHIVED",
+        "REPO_TOMBSTONED",
+        "REPO_PURGED",
+        "PURGE_CONFIRMATION_REQUIRED",
+        "PURGE_RETENTION_NOT_MET",
+        "PURGE_REQUIRES_OPERATOR_APPROVAL",
+        "OPERATION_RECOVERY_REQUIRED"
+      ]
+    },
+    "StandardError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "correlation_id"],
+      "properties": {
+        "code": { "$ref": "#/$defs/ErrorCode" },
+        "message": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" },
+        "correlation_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "operation_id": { "type": ["string", "null"], "maxLength": 128 },
+        "details": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "ErrorEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error"],
+      "properties": {
+        "error": { "$ref": "#/$defs/StandardError" }
+      }
+    },
+    "OperationState": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancel_requested",
+        "cancelled",
+        "operator_intervention_required"
+      ]
+    },
+    "OperationEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_id", "operation_state", "resource", "result", "error"],
+      "properties": {
+        "operation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "operation_state": { "$ref": "#/$defs/OperationState" },
+        "resource": { "$ref": "#/$defs/ResourceRef" },
+        "result": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        },
+        "error": {
+          "oneOf": [
+            { "$ref": "#/$defs/StandardError" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "Volume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["volume_id", "backend", "isolation_class", "status", "capabilities"],
+      "properties": {
+        "volume_id": { "type": "string", "pattern": "^vol_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" },
+        "backend": { "type": "string", "enum": ["juicefs"] },
+        "isolation_class": { "type": "string", "enum": ["shared", "dedicated"] },
+        "status": { "type": "string", "enum": ["active", "disabled", "degraded"] },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["webdav_export", "workload_mount", "jvs_external_control_root", "directory_quota"],
+          "properties": {
+            "webdav_export": { "type": "boolean" },
+            "workload_mount": { "type": "boolean" },
+            "jvs_external_control_root": { "type": "boolean" },
+            "filtered_mount": { "type": "boolean" },
+            "directory_quota": { "type": "boolean" },
+            "csi_driver": { "type": "string" },
+            "storage_class": { "type": "string" },
+            "permission_model": { "type": "string" }
+          }
+        }
+      }
+    },
+    "CallerRole": {
+      "type": "string",
+      "enum": [
+        "volume_admin",
+        "namespace_admin",
+        "repo_admin",
+        "repo_lifecycle_admin",
+        "restore_admin",
+        "template_admin",
+        "export_admin",
+        "mount_admin",
+        "orchestrator_mount",
+        "migration_admin",
+        "operator_admin",
+        "break_glass_admin"
+      ]
+    },
+    "AllowedCaller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller_service", "roles"],
+      "properties": {
+        "caller_service": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/CallerRole" }
+        }
+      }
+    },
+    "NamespaceVolumeBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace_id",
+        "default_volume_id",
+        "allowed_callers",
+        "quota_bytes_default",
+        "export_policy",
+        "lifecycle_policy",
+        "mount_policy",
+        "template_policy",
+        "status"
+      ],
+      "properties": {
+        "namespace_id": { "type": "string", "pattern": "^ns_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" },
+        "default_volume_id": { "type": "string", "pattern": "^vol_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" },
+        "allowed_callers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AllowedCaller" }
+        },
+        "quota_bytes_default": { "type": "integer", "minimum": 0 },
+        "export_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["webdav_enabled", "max_session_seconds"],
+          "properties": {
+            "webdav_enabled": { "type": "boolean" },
+            "max_session_seconds": { "type": "integer", "minimum": 60 }
+          }
+        },
+        "lifecycle_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tombstone_retention_seconds",
+            "purge_requires_lifecycle_admin",
+            "break_glass_purge_enabled"
+          ],
+          "properties": {
+            "tombstone_retention_seconds": { "type": "integer", "minimum": 0 },
+            "purge_requires_lifecycle_admin": { "type": "boolean" },
+            "break_glass_purge_enabled": { "type": "boolean" }
+          }
+        },
+        "mount_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "workload_mount_enabled",
+            "workload_mount_requires_jvs_external_control_root",
+            "allow_privileged_workload"
+          ],
+          "properties": {
+            "workload_mount_enabled": { "type": "boolean" },
+            "workload_mount_requires_jvs_external_control_root": { "type": "boolean" },
+            "allow_privileged_workload": { "type": "boolean" }
+          }
+        },
+        "template_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["namespace_templates_enabled", "cross_namespace_clone_enabled"],
+          "properties": {
+            "namespace_templates_enabled": { "type": "boolean" },
+            "cross_namespace_clone_enabled": { "type": "boolean" }
+          }
+        },
+        "status": { "type": "string", "enum": ["active", "disabled"] }
+      }
+    },
+    "RepoLifecycleStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "archiving",
+        "archived",
+        "restoring_archived",
+        "deleting",
+        "tombstoned",
+        "restoring_tombstoned",
+        "purging",
+        "purged",
+        "operator_intervention_required"
+      ]
+    },
+    "Repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo_id",
+        "namespace_id",
+        "volume_id",
+        "repo_kind",
+        "jvs_repo_id",
+        "status",
+        "lifecycle",
+        "created_at"
+      ],
+      "properties": {
+        "repo_id": { "type": "string", "pattern": "^repo_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" },
+        "namespace_id": { "type": "string", "pattern": "^ns_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" },
+        "volume_id": { "type": "string", "pattern": "^vol_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" },
+        "repo_kind": { "type": "string", "enum": ["repo", "template"] },
+        "jvs_repo_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "$ref": "#/$defs/RepoLifecycleStatus" },
+        "lifecycle": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "retention_expires_at", "last_lifecycle_operation_id"],
+          "properties": {
+            "status": { "$ref": "#/$defs/RepoLifecycleStatus" },
+            "retention_expires_at": { "type": ["string", "null"], "format": "date-time" },
+            "last_lifecycle_operation_id": { "type": ["string", "null"], "maxLength": 128 },
+            "pre_delete_status": { "$ref": "#/$defs/RepoLifecycleStatus" }
+          }
+        },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CreateRepoRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace_id", "target_repo_id"],
+      "properties": {
+        "namespace_id": { "type": "string", "pattern": "^ns_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" },
+        "target_repo_id": { "type": "string", "pattern": "^repo_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" }
+      }
+    },
+    "LifecycleRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reason": { "type": "string", "maxLength": 1024 }
+      }
+    },
+    "PurgeRepoRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "product_confirmation_ref"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "product_confirmation_ref": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "retention_override_requested": { "type": "boolean", "default": false },
+        "operator_approval_ref": { "type": "string", "maxLength": 256 }
+      }
+    },
+    "SavePoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["save_point_id", "repo_id", "created_at"],
+      "properties": {
+        "save_point_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "repo_id": { "type": "string" },
+        "message": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CreateSavePointRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message"],
+      "properties": {
+        "message": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "RestorePreviewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["save_point_id"],
+      "properties": {
+        "save_point_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "RestoreRunRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preview_operation_id"],
+      "properties": {
+        "preview_operation_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "RepoTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template_id", "namespace_id", "volume_id", "source_repo_id", "status", "created_at"],
+      "properties": {
+        "template_id": { "type": "string", "pattern": "^tmpl_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" },
+        "namespace_id": { "type": "string" },
+        "volume_id": { "type": "string" },
+        "source_repo_id": { "type": "string" },
+        "source_save_point_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["creating", "published", "failed"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CreateRepoTemplateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace_id", "source_repo_id", "target_template_id", "clone_history_mode"],
+      "properties": {
+        "namespace_id": { "type": "string" },
+        "source_repo_id": { "type": "string" },
+        "target_template_id": { "type": "string" },
+        "clone_history_mode": { "type": "string", "enum": ["main"] }
+      }
+    },
+    "CloneRepoTemplateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace_id", "template_id", "target_repo_id"],
+      "properties": {
+        "namespace_id": { "type": "string" },
+        "template_id": { "type": "string" },
+        "target_repo_id": { "type": "string" }
+      }
+    },
+    "ExportSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["export_id", "namespace_id", "repo_id", "protocol", "mode", "status", "expires_at"],
+      "properties": {
+        "export_id": { "type": "string", "pattern": "^export_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" },
+        "namespace_id": { "type": "string" },
+        "repo_id": { "type": "string" },
+        "protocol": { "type": "string", "enum": ["webdav"] },
+        "mode": { "type": "string", "enum": ["read_only", "read_write"] },
+        "status": { "type": "string", "enum": ["active", "revoking", "revoked", "expired", "failed"] },
+        "expires_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CreateExportRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "ttl_seconds"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["read_only", "read_write"] },
+        "ttl_seconds": { "type": "integer", "minimum": 60 }
+      }
+    },
+    "WorkloadMountBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mount_binding_id", "namespace_id", "repo_id", "volume_id", "mount_path", "read_only", "status", "lease_expires_at"],
+      "properties": {
+        "mount_binding_id": { "type": "string", "pattern": "^wmb_[A-Za-z0-9][A-Za-z0-9_-]{1,126}$" },
+        "namespace_id": { "type": "string" },
+        "repo_id": { "type": "string" },
+        "volume_id": { "type": "string" },
+        "mount_path": { "type": "string", "pattern": "^/.*" },
+        "read_only": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["issued", "pending", "active", "releasing", "released", "revoked", "expired", "failed"] },
+        "lease_expires_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CreateWorkloadMountBindingRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mount_path", "read_only", "lease_seconds"],
+      "properties": {
+        "mount_path": { "type": "string", "pattern": "^/.*" },
+        "read_only": { "type": "boolean" },
+        "lease_seconds": { "type": "integer", "minimum": 60 }
+      }
+    },
+    "OrchestratorMountPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mount_binding_id", "volume_id", "payload_volume_subdir", "mount_path", "read_only", "secret_ref", "security_policy"],
+      "properties": {
+        "mount_binding_id": { "type": "string" },
+        "volume_id": { "type": "string" },
+        "payload_volume_subdir": { "type": "string", "pattern": "^[^/].*" },
+        "mount_path": { "type": "string" },
+        "read_only": { "type": "boolean" },
+        "secret_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["namespace", "name"],
+          "properties": {
+            "namespace": { "type": "string" },
+            "name": { "type": "string" }
+          }
+        },
+        "security_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["run_as_non_root", "allow_privileged", "jvs_control_outside_payload"],
+          "properties": {
+            "run_as_non_root": { "type": "boolean" },
+            "allow_privileged": { "type": "boolean" },
+            "drop_capabilities": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "jvs_control_outside_payload": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}
