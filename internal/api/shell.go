@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 )
 
@@ -28,11 +29,86 @@ func NewNeutralShellWithLoggerAndAuditSink(logger *slog.Logger, sink audit.Sink)
 	return mux
 }
 
+type InternalAPIShellConfig struct {
+	Logger                     *slog.Logger
+	AuditSink                  audit.Sink
+	PrincipalResolver          PrincipalResolver
+	NamespaceBindingReader     NamespaceVolumeBindingReader
+	DeploymentGlobalPolicy     AllowedCallerPolicy
+	DeploymentNamespacePolicy  AllowedCallerPolicy
+	DeploymentGlobalCallers    []auth.AllowedCaller
+	DeploymentNamespaceCallers []auth.AllowedCaller
+}
+
+func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/healthz", requestLogHandler(HealthHandler(), config.Logger, slog.LevelInfo, "afscp.health", "health request", "/healthz", ""))
+	mux.Handle("/readyz", requestLogHandler(ReadinessHandler(NeutralReadiness()), config.Logger, slog.LevelInfo, "afscp.readiness", "readiness request", "/readyz", ""))
+
+	bindingHandler := NamespaceVolumeBindingHandler(NamespaceVolumeBindingHandlerConfig{
+		Reader:            config.NamespaceBindingReader,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		AuditSink: config.AuditSink,
+	})
+	bindingHandler = requestLogHandler(bindingHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/namespaces/{namespaceId}/volume-binding", "getNamespaceVolumeBinding")
+
+	// This shell enables only the implemented internal API subset. Known contract
+	// routes without handlers remain fail-closed instead of being silently absent.
+	fallback := internalAPIFallbackHandler(config.Logger, config.AuditSink)
+	mux.Handle("/", routeDispatchHandler(map[string]http.Handler{
+		"getNamespaceVolumeBinding": bindingHandler,
+	}, fallback))
+	return mux
+}
+
+func deploymentPolicyOrStatic(policy AllowedCallerPolicy, callers []auth.AllowedCaller) AllowedCallerPolicy {
+	if policy != nil {
+		return policy
+	}
+	if callers != nil {
+		static := NewStaticAllowedCallerPolicy(callers)
+		return static
+	}
+	return nil
+}
+
+func routeDispatchHandler(implemented map[string]http.Handler, fallback http.Handler) http.Handler {
+	if fallback == nil {
+		fallback = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		metadata, ok := RouteMetadataForRequest(r)
+		if !ok {
+			fallback.ServeHTTP(w, r)
+			return
+		}
+		handler := implemented[metadata.OperationID]
+		if handler == nil {
+			fallback.ServeHTTP(w, r)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	})
+}
+
 func CapabilityDeniedHandler() http.Handler {
+	return capabilityDeniedHandlerWithMessage("storage-backed API capabilities are disabled in neutral shell")
+}
+
+func internalAPICapabilityDeniedHandler() http.Handler {
+	return capabilityDeniedHandlerWithMessage("requested internal API capability is not enabled")
+}
+
+func capabilityDeniedHandlerWithMessage(message string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		envelope := NewErrorEnvelope(
 			CodeCapabilityDenied,
-			"storage-backed API capabilities are disabled in neutral shell",
+			message,
 			false,
 			CorrelationIDFromRequest(r),
 			nil,
@@ -66,7 +142,14 @@ func PathDeniedHandler() http.Handler {
 }
 
 func neutralFallbackHandler(logger *slog.Logger, sink audit.Sink) http.Handler {
-	capabilityDenied := CapabilityDeniedHandler()
+	return fallbackHandler(logger, sink, CapabilityDeniedHandler())
+}
+
+func internalAPIFallbackHandler(logger *slog.Logger, sink audit.Sink) http.Handler {
+	return fallbackHandler(logger, sink, internalAPICapabilityDeniedHandler())
+}
+
+func fallbackHandler(logger *slog.Logger, sink audit.Sink, capabilityDenied http.Handler) http.Handler {
 	pathDenied := PathDeniedHandler()
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
