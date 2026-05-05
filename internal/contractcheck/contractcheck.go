@@ -16,6 +16,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 )
 
 const (
@@ -41,6 +42,9 @@ const (
 	CodeSchemaOperationRecordTypeEnumInvalid               = "schema.operation_record_type_enum_invalid"
 	CodeSchemaErrorCodeEnumGoDrift                         = "schema.error_code_enum_go_drift"
 	CodeSchemaCallerRoleEnumGoDrift                        = "schema.caller_role_enum_go_drift"
+	CodeSchemaNamespaceBindingCallerRoleEnumGoDrift        = "schema.namespace_binding_caller_role_enum_go_drift"
+	CodeSchemaNamespaceBindingCallerRoleForbidden          = "schema.namespace_binding_caller_role_forbidden"
+	CodeSchemaAllowedCallerRoleRefInvalid                  = "schema.allowed_caller_role_ref_invalid"
 	CodeSchemaOperationTypeEnumGoDrift                     = "schema.operation_type_enum_go_drift"
 	CodeSchemaInvalidJSON                                  = "schema.invalid_json"
 
@@ -266,6 +270,8 @@ func verifySchema(path, body string) []Finding {
 
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "ErrorCode", apiErrorCodeStrings(), CodeSchemaErrorCodeEnumGoDrift)...)
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "CallerRole", authRoleStrings(), CodeSchemaCallerRoleEnumGoDrift)...)
+	findings = append(findings, verifySchemaEnumParity(path, body, defs, "NamespaceBindingCallerRole", namespaceBindingCallerRoleStrings(), CodeSchemaNamespaceBindingCallerRoleEnumGoDrift)...)
+	findings = append(findings, verifyNamespaceBindingAllowedCallerRoles(path, body, defs)...)
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "OperationType", operationTypeStrings(), CodeSchemaOperationTypeEnumGoDrift)...)
 
 	exportSession, _ := defs["ExportSession"].(map[string]any)
@@ -455,6 +461,45 @@ func verifySchemaEnumParity(path, body string, defs map[string]any, defName stri
 	}}
 }
 
+func verifyNamespaceBindingAllowedCallerRoles(path, body string, defs map[string]any) []Finding {
+	var findings []Finding
+
+	allowedCaller, _ := defs["AllowedCaller"].(map[string]any)
+	if !arrayItemsRefEquals(allowedCaller, "roles", "#/$defs/NamespaceBindingCallerRole") {
+		findings = append(findings, Finding{
+			Code:    CodeSchemaAllowedCallerRoleRefInvalid,
+			File:    path,
+			Line:    findLine(body, `"AllowedCaller"`),
+			Message: "AllowedCaller.roles must reference #/$defs/NamespaceBindingCallerRole, not the global CallerRole enum",
+		})
+	}
+
+	roleDef, _ := defs["NamespaceBindingCallerRole"].(map[string]any)
+	values := schemaEnumStrings(roleDef)
+	forbidden := map[string]bool{
+		string(resources.CallerRoleVolumeAdmin):     true,
+		string(resources.CallerRoleOperatorAdmin):   true,
+		string(resources.CallerRoleBreakGlassAdmin): true,
+	}
+	var present []string
+	for _, value := range values {
+		if forbidden[value] {
+			present = append(present, value)
+		}
+	}
+	if len(present) > 0 {
+		sort.Strings(present)
+		findings = append(findings, Finding{
+			Code:    CodeSchemaNamespaceBindingCallerRoleForbidden,
+			File:    path,
+			Line:    findLine(body, `"NamespaceBindingCallerRole"`),
+			Message: "NamespaceBindingCallerRole enum must not include deployment/global roles: " + strings.Join(present, ", "),
+		})
+	}
+
+	return findings
+}
+
 func schemaEnumStrings(def map[string]any) []string {
 	if def == nil {
 		return nil
@@ -482,6 +527,15 @@ func apiErrorCodeStrings() []string {
 
 func authRoleStrings() []string {
 	roles := auth.CallerRoles()
+	values := make([]string, len(roles))
+	for i, role := range roles {
+		values[i] = string(role)
+	}
+	return values
+}
+
+func namespaceBindingCallerRoleStrings() []string {
+	roles := resources.NamespaceBindingCallerRoles()
 	values := make([]string, len(roles))
 	for i, role := range roles {
 		values[i] = string(role)
@@ -1076,6 +1130,20 @@ func propertyRefEquals(def map[string]any, field, ref string) bool {
 		return false
 	}
 	got, ok := property["$ref"].(string)
+	return ok && got == ref
+}
+
+func arrayItemsRefEquals(def map[string]any, field, ref string) bool {
+	properties := propertiesMap(def)
+	property, ok := properties[field].(map[string]any)
+	if !ok {
+		return false
+	}
+	items, ok := property["items"].(map[string]any)
+	if !ok {
+		return false
+	}
+	got, ok := items["$ref"].(string)
 	return ok && got == ref
 }
 

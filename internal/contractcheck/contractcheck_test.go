@@ -470,6 +470,52 @@ func TestVerifyFilesCatchesSchemaEnumGoParityDrift(t *testing.T) {
 	assertFindingCount(t, findings, CodeSchemaOperationTypeEnumGoDrift, 1)
 }
 
+func TestVerifyFilesCatchesAllowedCallerRolesUsingGlobalCallerRole(t *testing.T) {
+	driftedSchema := strings.Replace(validSchema, `"items": { "$ref": "#/$defs/NamespaceBindingCallerRole" }`, `"items": { "$ref": "#/$defs/CallerRole" }`, 1)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: validOpenAPI,
+		schema:  driftedSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, CodeSchemaAllowedCallerRoleRefInvalid)
+}
+
+func TestVerifyFilesCatchesNamespaceBindingCallerRoleForbiddenRoles(t *testing.T) {
+	driftedSchema := strings.Replace(validSchema,
+		`"NamespaceBindingCallerRole": {
+      "type": "string",
+      "enum": [
+        "namespace_admin",`,
+		`"NamespaceBindingCallerRole": {
+      "type": "string",
+      "enum": [
+        "volume_admin",
+        "namespace_admin",`,
+		1,
+	)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: validOpenAPI,
+		schema:  driftedSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, CodeSchemaNamespaceBindingCallerRoleForbidden)
+	assertHasFinding(t, findings, CodeSchemaNamespaceBindingCallerRoleEnumGoDrift)
+}
+
 func TestVerifyRouteOperationTypeMappingCatchesMissingMutatingRoute(t *testing.T) {
 	routes := []api.RouteMetadata{
 		{Method: "POST", Path: "/internal/v1/repos", OperationID: "createRepo", Class: auth.RouteClassNamespaceBound, Mutating: true},
@@ -921,6 +967,35 @@ const validSchema = `
         "operator_admin",
         "break_glass_admin"
       ]
+    },
+    "NamespaceBindingCallerRole": {
+      "type": "string",
+      "enum": [
+        "namespace_admin",
+        "repo_admin",
+        "repo_lifecycle_admin",
+        "restore_admin",
+        "template_admin",
+        "export_admin",
+        "mount_admin",
+        "operation_inspector",
+        "orchestrator_mount",
+        "migration_admin"
+      ]
+    },
+    "AllowedCaller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller_service", "roles"],
+      "properties": {
+        "caller_service": { "type": "string" },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/NamespaceBindingCallerRole" }
+        }
+      }
     }
   }
 }

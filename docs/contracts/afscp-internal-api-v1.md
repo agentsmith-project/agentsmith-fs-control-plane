@@ -104,7 +104,7 @@ operation inspection must not wrap the record in an `OperationEnvelope`.
 | `operator_admin` | global/operator inspection and operational repair |
 | `break_glass_admin` | explicitly approved break-glass flows only |
 
-Deployments may split these roles further, but they must not merge ordinary product caller roles with `orchestrator_mount`, `operator_admin`, or `break_glass_admin`. `operation_inspector` is the minimum namespace-scoped role for redacted operation inspection; `operator_admin` is reserved for global/operator inspection and repair.
+Deployments may split these roles further, but they must not merge ordinary product caller roles with `volume_admin`, `orchestrator_mount`, `migration_admin`, `operator_admin`, or `break_glass_admin`. `operation_inspector` is the minimum namespace-scoped role for redacted operation inspection; `volume_admin`, `operator_admin`, and `break_glass_admin` are deployment/global roles, while `orchestrator_mount` and `migration_admin` are dedicated non-ordinary caller roles.
 
 ## Stable Error Families
 

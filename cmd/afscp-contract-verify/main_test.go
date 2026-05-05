@@ -345,6 +345,35 @@ const cliValidSchema = `
         "operator_admin",
         "break_glass_admin"
       ]
+    },
+    "NamespaceBindingCallerRole": {
+      "type": "string",
+      "enum": [
+        "namespace_admin",
+        "repo_admin",
+        "repo_lifecycle_admin",
+        "restore_admin",
+        "template_admin",
+        "export_admin",
+        "mount_admin",
+        "operation_inspector",
+        "orchestrator_mount",
+        "migration_admin"
+      ]
+    },
+    "AllowedCaller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller_service", "roles"],
+      "properties": {
+        "caller_service": { "type": "string" },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/NamespaceBindingCallerRole" }
+        }
+      }
     }
   }
 }

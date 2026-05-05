@@ -233,6 +233,25 @@ type AllowedCaller struct {
 	Roles         []CallerRole `json:"roles"`
 }
 
+var namespaceBindingCallerRoles = []CallerRole{
+	CallerRoleNamespaceAdmin,
+	CallerRoleRepoAdmin,
+	CallerRoleRepoLifecycleAdmin,
+	CallerRoleRestoreAdmin,
+	CallerRoleTemplateAdmin,
+	CallerRoleExportAdmin,
+	CallerRoleMountAdmin,
+	CallerRoleOperationInspector,
+	CallerRoleOrchestratorMount,
+	CallerRoleMigrationAdmin,
+}
+
+func NamespaceBindingCallerRoles() []CallerRole {
+	roles := make([]CallerRole, len(namespaceBindingCallerRoles))
+	copy(roles, namespaceBindingCallerRoles)
+	return roles
+}
+
 func (caller AllowedCaller) Validate() error {
 	if strings.TrimSpace(caller.CallerService) == "" {
 		return fmt.Errorf("allowed caller missing caller_service")
@@ -242,6 +261,7 @@ func (caller AllowedCaller) Validate() error {
 	}
 	seen := map[CallerRole]bool{}
 	hasOrchestratorMount := false
+	hasMigrationAdmin := false
 	for _, role := range caller.Roles {
 		if !role.valid() {
 			return fmt.Errorf("unknown caller role %q", role)
@@ -251,6 +271,8 @@ func (caller AllowedCaller) Validate() error {
 			return fmt.Errorf("%s is deployment/operator policy, not an ordinary namespace role", role)
 		case CallerRoleOrchestratorMount:
 			hasOrchestratorMount = true
+		case CallerRoleMigrationAdmin:
+			hasMigrationAdmin = true
 		}
 		if seen[role] {
 			return fmt.Errorf("duplicate caller role %q", role)
@@ -259,6 +281,9 @@ func (caller AllowedCaller) Validate() error {
 	}
 	if hasOrchestratorMount && len(caller.Roles) != 1 {
 		return fmt.Errorf("orchestrator_mount must be a dedicated caller role")
+	}
+	if hasMigrationAdmin && len(caller.Roles) != 1 {
+		return fmt.Errorf("migration_admin must be a dedicated caller role")
 	}
 	return nil
 }
@@ -293,10 +318,16 @@ func (binding NamespaceVolumeBinding) Validate() error {
 	if len(binding.AllowedCallers) == 0 {
 		return fmt.Errorf("allowed_callers must not be empty")
 	}
+	seenCallerServices := map[string]bool{}
 	for _, caller := range binding.AllowedCallers {
 		if err := caller.Validate(); err != nil {
 			return err
 		}
+		callerService := strings.TrimSpace(caller.CallerService)
+		if seenCallerServices[callerService] {
+			return fmt.Errorf("duplicate allowed caller_service %q", callerService)
+		}
+		seenCallerServices[callerService] = true
 	}
 	if err := validateObject("export_policy", binding.ExportPolicy); err != nil {
 		return err

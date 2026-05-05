@@ -43,6 +43,10 @@ Role split:
 - Purge also requires namespace lifecycle policy approval and product
   confirmation/approval reference.
 - `orchestrator_mount` must never be merged into ordinary product caller roles.
+- `migration_admin` is a dedicated migration role and must never be merged into
+  ordinary product caller roles.
+- `volume_admin` is deployment/global volume policy, not an ordinary namespace
+  binding product role.
 - `break_glass_admin` is explicit and audited.
 
 Denied checks are audited even when no durable mutation operation is created.
@@ -60,4 +64,3 @@ Tradeoffs:
 - Calling products must pass actor and correlation context consistently.
 - Deployment must provide a reliable principal-to-caller mapping.
 - Tests must cover both authenticated principal and caller-service alias behavior.
-
