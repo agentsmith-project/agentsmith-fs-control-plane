@@ -131,6 +131,15 @@ type IdempotencyStore interface {
 	CreateOrReuseOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
+// RepoCreateOperationIntakeStore owns the durable repo_create intake boundary.
+// Implementations must first resolve idempotency for the operation scope and
+// request hash, then reject only brand-new create requests that target an
+// existing repo. They must not compose this as GetRepo followed by
+// CreateOrReuseOperation.
+type RepoCreateOperationIntakeStore interface {
+	CreateOrReuseRepoCreateOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+}
+
 // AuditSink accepts audit events for append-only or outbox-backed delivery.
 type AuditSink interface {
 	AppendAuditEvent(ctx context.Context, event audit.Event) error

@@ -25,6 +25,7 @@ const (
 	CodePathDenied                ErrorCode = "PATH_DENIED"
 	CodeCapabilityDenied          ErrorCode = "CAPABILITY_DENIED"
 	CodeIdempotencyConflict       ErrorCode = "IDEMPOTENCY_CONFLICT"
+	CodeRepoAlreadyExists         ErrorCode = "REPO_ALREADY_EXISTS"
 	CodeStorageUnavailable        ErrorCode = "STORAGE_UNAVAILABLE"
 	CodeInternalError             ErrorCode = "INTERNAL_ERROR"
 
@@ -64,6 +65,7 @@ var allErrorCodes = []ErrorCode{
 	CodePathDenied,
 	CodeCapabilityDenied,
 	CodeIdempotencyConflict,
+	CodeRepoAlreadyExists,
 	CodeStorageUnavailable,
 	CodeInternalError,
 	CodeActiveWriterSessions,

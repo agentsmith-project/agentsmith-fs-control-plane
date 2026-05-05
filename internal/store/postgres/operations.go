@@ -333,6 +333,59 @@ func (store *Store) CreateOrReuseOperation(ctx context.Context, spec operations.
 	}, nil
 }
 
+func (store *Store) CreateOrReuseRepoCreateOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	if err := validateRepoCreateOperationSpec(record); err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	record = record.SanitizedForPersistence().Record()
+
+	args, err := operationInsertArgs(record)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+
+	var inserted bool
+	row := store.exec.QueryRowContext(ctx, repoCreateOperationCreateOrReuseSQL(), args...)
+	got, err := scanOperationWithInserted(row, &inserted)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.IdempotencyResolution{}, fmt.Errorf("%w: repo %q already exists", operations.ErrRepoAlreadyExists, record.RepoID)
+		}
+		return operations.IdempotencyResolution{}, err
+	}
+	if !inserted && got.RequestHash != spec.RequestHash {
+		return operations.IdempotencyResolution{}, fmt.Errorf("%w: scope %q already exists with a different request hash", operations.ErrIdempotencyConflict, spec.Scope.String())
+	}
+	return operations.IdempotencyResolution{
+		Operation: got.Sanitized(),
+		Existing:  !inserted,
+		Reused:    !inserted,
+	}, nil
+}
+
+func validateRepoCreateOperationSpec(record operations.OperationRecord) error {
+	if record.Type != operations.OperationRepoCreate {
+		return operationLeaseInvalidRequest("operation_type", "operation record must be repo_create")
+	}
+	if record.State != operations.OperationStateQueued {
+		return operationLeaseInvalidRequest("operation_state", "repo_create intake requires queued operation")
+	}
+	if record.Phase != operations.OperationPhaseRepoCreateValidate {
+		return operationLeaseInvalidRequest("phase", "repo_create intake requires validate phase")
+	}
+	if strings.TrimSpace(record.NamespaceID) == "" || strings.TrimSpace(record.RepoID) == "" {
+		return operationLeaseInvalidRequest("resource", "repo_create intake requires namespace and repo ids")
+	}
+	if record.Resource.Type != "repo" || record.Resource.ID != record.RepoID {
+		return operationLeaseInvalidRequest("resource", "repo_create resource must match target repo")
+	}
+	return nil
+}
+
 func operationInsertSQL() string {
 	return "INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") VALUES (" + placeholders(1, len(operationColumns)) + ")"
 }
@@ -341,6 +394,25 @@ func operationCreateOrReuseSQL() string {
 	return "INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") VALUES (" + placeholders(1, len(operationColumns)) + ") " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
 		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted"
+}
+
+func repoCreateOperationCreateOrReuseSQL() string {
+	return "WITH existing_operation AS (" +
+		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", false AS inserted FROM operations " +
+		"WHERE caller_service = $12 " +
+		"AND namespace_id = $17 " +
+		"AND operation_type = 'repo_create' " +
+		"AND idempotency_key = $9" +
+		"), inserted_operation AS (" +
+		"INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") " +
+		"SELECT " + placeholders(1, len(operationColumns)) + " " +
+		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
+		"AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = $18) " +
+		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
+		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted" +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM existing_operation " +
+		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM inserted_operation " +
+		"LIMIT 1"
 }
 
 func operationSelectSQL() string {

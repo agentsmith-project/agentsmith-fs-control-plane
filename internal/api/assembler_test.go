@@ -124,7 +124,6 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 		method string
 		path   string
 	}{
-		{name: "repo create", method: http.MethodPost, path: "/internal/v1/repos"},
 		{name: "repo list", method: http.MethodGet, path: "/internal/v1/repos"},
 	}
 
@@ -154,6 +153,68 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 				t.Fatalf("partial shell capability denied message mentions neutral shell: %q", env.Error.Message)
 			}
 		})
+	}
+}
+
+func TestInternalAPIShellServesCreateRepoThroughOperationIntake(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
+		CallerService: "agentsmith-api",
+		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
+	})}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:      namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader: bindingReader,
+		RepoCreateIntakeStore:  store,
+		OperationIntakeStore:   store,
+		GenerateOperationID:    func() string { return "op_repo_shell" },
+		Now:                    fixedNamespaceNow,
+	})
+	rec := httptest.NewRecorder()
+	req := createRepoRequest("ns_123", createRepoRequestBody("ns_123", "repo_123"))
+	req.URL.RawQuery = "token=query-secret"
+	req.Header.Set(auth.HeaderAuthorization, "Bearer auth-secret")
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if store.calls != 1 || store.spec.Scope.OperationType != operations.OperationRepoCreate || store.spec.RepoID != "repo_123" {
+		t.Fatalf("store/spec = %d/%#v, want repo create", store.calls, store.spec)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "query-secret") || strings.Contains(body, "auth-secret") {
+		t.Fatalf("response leaked secret: %s", body)
+	}
+}
+
+func TestInternalAPIShellCreateRepoFailsClosedWithoutDedicatedIntakeStore(t *testing.T) {
+	genericStore := &fakeOperationIntakeStore{}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
+		CallerService: "agentsmith-api",
+		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
+	})}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:      namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader: bindingReader,
+		OperationIntakeStore:   genericStore,
+		GenerateOperationID:    func() string { return "op_repo_shell" },
+		Now:                    fixedNamespaceNow,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, createRepoRequest("ns_123", createRepoRequestBody("ns_123", "repo_123")))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body = %s, want 500 fail closed", rec.Code, rec.Body.String())
+	}
+	if genericStore.calls != 0 {
+		t.Fatalf("generic intake calls = %d, want 0", genericStore.calls)
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeInternalError {
+		t.Fatalf("error code = %s, want INTERNAL_ERROR", env.Error.Code)
 	}
 }
 

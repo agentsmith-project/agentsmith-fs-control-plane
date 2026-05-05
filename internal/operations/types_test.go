@@ -66,6 +66,12 @@ func TestNamespaceVolumeBindingPutPhasesAreStable(t *testing.T) {
 	}
 }
 
+func TestRepoCreatePhasesAreStable(t *testing.T) {
+	if OperationPhaseRepoCreateValidate != "validate_repo_create" {
+		t.Fatalf("validate phase = %q, want validate_repo_create", OperationPhaseRepoCreateValidate)
+	}
+}
+
 func TestRouteOperationTypesReturnsDefensiveCopy(t *testing.T) {
 	mapped := RouteOperationTypes()
 	mapped["createRepo"] = OperationMigrationCutover

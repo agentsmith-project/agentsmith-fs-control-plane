@@ -11,6 +11,7 @@ import (
 
 var (
 	ErrIdempotencyConflict      = errors.New("idempotency conflict")
+	ErrRepoAlreadyExists        = errors.New("repo already exists")
 	ErrMissingOperationBoundary = errors.New("missing durable operation boundary")
 )
 

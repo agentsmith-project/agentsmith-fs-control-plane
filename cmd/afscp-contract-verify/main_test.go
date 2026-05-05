@@ -302,6 +302,7 @@ const cliValidSchema = `
         "PATH_DENIED",
         "CAPABILITY_DENIED",
         "IDEMPOTENCY_CONFLICT",
+        "REPO_ALREADY_EXISTS",
         "STORAGE_UNAVAILABLE",
         "INTERNAL_ERROR",
         "ACTIVE_WRITER_SESSIONS",

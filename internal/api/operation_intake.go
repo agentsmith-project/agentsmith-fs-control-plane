@@ -186,6 +186,8 @@ func mapOperationIntakeError(err error) error {
 	switch {
 	case errors.Is(err, operations.ErrIdempotencyConflict):
 		return &OperationIntakeError{Code: CodeIdempotencyConflict, Status: http.StatusConflict, Retryable: false, Message: "idempotency key conflicts with a different request"}
+	case errors.Is(err, operations.ErrRepoAlreadyExists):
+		return &OperationIntakeError{Code: CodeRepoAlreadyExists, Status: http.StatusConflict, Retryable: false, Message: "target repo already exists"}
 	case errors.Is(err, operations.ErrMissingOperationBoundary):
 		return internalOperationIntakeError()
 	default:

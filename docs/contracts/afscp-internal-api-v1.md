@@ -119,6 +119,13 @@ lifecycle invalid state, lifecycle session drain failure, missing purge
 confirmation, purge retention denial, operation recovery required, durable
 metadata/store unavailability, and unclassified internal service bugs.
 
+Repo-create intake resolves idempotency before checking target repo metadata:
+the same idempotency key and same request body reuses the original operation
+even if the repo metadata now exists. `REPO_ALREADY_EXISTS` is the stable 409
+response only for a new repo create request targeting an existing repo. It is
+distinct from `IDEMPOTENCY_CONFLICT`, which is reserved for reusing the same
+idempotency key with a different request body.
+
 `STORAGE_UNAVAILABLE` is for durable control-plane metadata/store outages,
 timeouts, or connection/query failures and should map to HTTP 503 with
 `retryable=true`. `INTERNAL_ERROR` is for handler, invariant, serialization, or

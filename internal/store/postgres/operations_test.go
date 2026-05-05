@@ -22,6 +22,7 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.OperationRecoveryReader = (*Store)(nil)
 	var _ store.OperationLeaseStore = (*Store)(nil)
 	var _ store.OperationWorkerCommitStore = (*Store)(nil)
+	var _ store.RepoCreateOperationIntakeStore = (*Store)(nil)
 	var _ store.VolumeEnsureOperationCommitStore = (*Store)(nil)
 	var _ store.VolumeEnsureOperationRecoveryStore = (*Store)(nil)
 	var _ store.NamespaceUpsertOperationCommitStore = (*Store)(nil)
@@ -686,6 +687,72 @@ func TestCreateOrReuseOperationArgsAreSanitized(t *testing.T) {
 	}
 	if got := mustJSONMap(t, exec.args[23])["safe"]; got != "visible" {
 		t.Fatalf("input_summary safe = %#v, want visible", got)
+	}
+}
+
+func TestCreateOrReuseRepoCreateOperationReusesExistingBeforeRepoExists(t *testing.T) {
+	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
+	spec := repoCreateQueuedSpecFixture(createdAt)
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		t.Fatalf("NewQueuedOperationRecord: %v", err)
+	}
+	exec := &fakeExecutor{row: fakeRow{values: append(operationRowValues(record.Sanitized()), false)}}
+	st := &Store{exec: exec}
+
+	got, err := st.CreateOrReuseRepoCreateOperation(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateOrReuseRepoCreateOperation: %v", err)
+	}
+	if !got.Existing || !got.Reused || got.Operation.ID != spec.OperationID {
+		t.Fatalf("resolution = %#v, want existing reused operation", got)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"WITH existing_operation AS (",
+		"FROM operations",
+		"caller_service = $12",
+		"namespace_id = $17",
+		"operation_type = 'repo_create'",
+		"idempotency_key = $9",
+		"), inserted_operation AS (",
+		"INSERT INTO operations",
+		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation)",
+		"AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = $18)",
+		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key)",
+		"SELECT",
+		"FROM existing_operation",
+		"UNION ALL",
+		"SELECT",
+		"FROM inserted_operation",
+	)
+	if strings.Contains(exec.query, "SELECT "+strings.Join(repoColumns, ", ")) {
+		t.Fatalf("repo create intake must not perform a separate repo read: %s", exec.query)
+	}
+}
+
+func TestCreateOrReuseRepoCreateOperationNewRequestExistingRepoReturnsRepoAlreadyExists(t *testing.T) {
+	st := &Store{exec: &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}}
+
+	_, err := st.CreateOrReuseRepoCreateOperation(context.Background(), repoCreateQueuedSpecFixture(time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)))
+	if !errors.Is(err, operations.ErrRepoAlreadyExists) {
+		t.Fatalf("CreateOrReuseRepoCreateOperation error = %v, want ErrRepoAlreadyExists", err)
+	}
+}
+
+func TestCreateOrReuseRepoCreateOperationDifferentHashReturnsIdempotencyConflictBeforeRepoExists(t *testing.T) {
+	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
+	spec := repoCreateQueuedSpecFixture(createdAt)
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		t.Fatalf("NewQueuedOperationRecord: %v", err)
+	}
+	record.RequestHash = "sha256:different"
+	exec := &fakeExecutor{row: fakeRow{values: append(operationRowValues(record.Sanitized()), false)}}
+	st := &Store{exec: exec}
+
+	_, err = st.CreateOrReuseRepoCreateOperation(context.Background(), spec)
+	if !errors.Is(err, operations.ErrIdempotencyConflict) {
+		t.Fatalf("CreateOrReuseRepoCreateOperation error = %v, want ErrIdempotencyConflict", err)
 	}
 }
 
@@ -1419,6 +1486,23 @@ func queuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
 		NamespaceID:     "",
 		RepoID:          "repo-alpha",
 		InputSummary:    map[string]any{"safe": "visible"},
+		CreatedAt:       createdAt,
+	}
+}
+
+func repoCreateQueuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
+	return operations.QueuedOperationSpec{
+		OperationID:     "op-repo-create",
+		Scope:           operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRepoCreate, "idem-repo"),
+		RequestHash:     "sha256:repo-create",
+		Phase:           operations.OperationPhaseRepoCreateValidate,
+		CorrelationID:   "corr-repo",
+		CallerService:   "agentsmith-api",
+		AuthorizedActor: operations.Actor{Type: "user", ID: "user_123"},
+		Resource:        operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
+		NamespaceID:     "ns_alpha01",
+		RepoID:          "repo_alpha01",
+		InputSummary:    map[string]any{"namespace_id": "ns_alpha01", "target_repo_id": "repo_alpha01"},
 		CreatedAt:       createdAt,
 	}
 }

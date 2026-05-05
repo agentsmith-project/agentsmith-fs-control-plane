@@ -35,6 +35,7 @@ type InternalAPIShellConfig struct {
 	AuditSink                  audit.Sink
 	PrincipalResolver          PrincipalResolver
 	NamespaceBindingReader     NamespaceVolumeBindingReader
+	RepoCreateIntakeStore      RepoCreateOperationIntakeStore
 	DeploymentGlobalPolicy     AllowedCallerPolicy
 	DeploymentNamespacePolicy  AllowedCallerPolicy
 	DeploymentGlobalCallers    []auth.AllowedCaller
@@ -62,6 +63,20 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		AuditSink:   config.AuditSink,
 	})
 	volumeHandler = requestLogHandler(volumeHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/volumes/{volumeId}:ensure", "ensureVolume")
+
+	createRepoHandler := CreateRepoHandler(CreateRepoHandlerConfig{
+		IntakeStore:       config.RepoCreateIntakeStore,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
+	})
+	createRepoHandler = requestLogHandler(createRepoHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos", "createRepo")
 
 	bindingHandler := NamespaceVolumeBindingHandler(NamespaceVolumeBindingHandlerConfig{
 		Reader:            config.NamespaceBindingReader,
@@ -96,6 +111,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	// routes without handlers remain fail-closed instead of being silently absent.
 	fallback := internalAPIFallbackHandler(config.Logger, config.AuditSink)
 	mux.Handle("/", routeDispatchHandler(map[string]http.Handler{
+		"createRepo":                createRepoHandler,
 		"ensureVolume":              volumeHandler,
 		"getNamespaceVolumeBinding": getBindingHandler,
 		"putNamespaceVolumeBinding": putBindingHandler,

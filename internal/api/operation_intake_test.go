@@ -343,6 +343,7 @@ type fakeOperationIntakeStore struct {
 	reused              bool
 	existingOperationID string
 	reusedRecord        *operations.OperationRecord
+	repoAlreadyExists   bool
 }
 
 func (store *fakeOperationIntakeStore) CreateOrReuseOperation(_ context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
@@ -363,6 +364,18 @@ func (store *fakeOperationIntakeStore) CreateOrReuseOperation(_ context.Context,
 		return operations.IdempotencyResolution{Operation: record.Sanitized(), Existing: true, Reused: true}, nil
 	}
 	return operations.IdempotencyResolution{Operation: record.Sanitized()}, nil
+}
+
+func (store *fakeOperationIntakeStore) CreateOrReuseRepoCreateOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	if store.reused || store.reusedRecord != nil {
+		return store.CreateOrReuseOperation(ctx, spec)
+	}
+	if store.repoAlreadyExists {
+		store.calls++
+		store.spec = spec
+		return operations.IdempotencyResolution{}, operations.ErrRepoAlreadyExists
+	}
+	return store.CreateOrReuseOperation(ctx, spec)
 }
 
 func operationIntakeError(t *testing.T, err error) *OperationIntakeError {

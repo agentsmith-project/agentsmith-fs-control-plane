@@ -398,6 +398,23 @@ Repo lifecycle operations are asynchronous durable operations. They use the
 standard operation envelope and the repo lifecycle contract in
 [contracts/repo-lifecycle-v1.md](contracts/repo-lifecycle-v1.md).
 
+`CreateRepoRequest` is metadata intake only; the worker later performs storage
+provisioning/recovery. The request body is strictly:
+
+```json
+{
+  "namespace_id": "ns_123",
+  "target_repo_id": "repo_123"
+}
+```
+
+Durable intake resolves idempotency before checking target repo metadata. The
+same idempotency key and same request body reuses the original operation even if
+the repo metadata now exists. `409 REPO_ALREADY_EXISTS` applies only to a new
+create request targeting an existing repo. This is distinct from
+`IDEMPOTENCY_CONFLICT`, which means the same idempotency key was reused with a
+different request body.
+
 `archive` retains repo data and blocks ordinary access. `restore-archived`
 reactivates an archived repo. `delete` is a logical delete request that drains
 sessions and tombstones retained data. `restore-tombstoned` is allowed only

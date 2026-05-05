@@ -312,6 +312,8 @@ paths:
       responses:
         "400":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "200":
           description: Repo create operation.
           content:
