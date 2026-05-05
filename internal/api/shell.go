@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
@@ -38,6 +39,9 @@ type InternalAPIShellConfig struct {
 	DeploymentNamespacePolicy  AllowedCallerPolicy
 	DeploymentGlobalCallers    []auth.AllowedCaller
 	DeploymentNamespaceCallers []auth.AllowedCaller
+	OperationIntakeStore       OperationIntakeStore
+	GenerateOperationID        OperationIDGenerator
+	Now                        func() time.Time
 }
 
 func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
@@ -56,12 +60,26 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		AuditSink: config.AuditSink,
 	})
 	bindingHandler = requestLogHandler(bindingHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/namespaces/{namespaceId}/volume-binding", "getNamespaceVolumeBinding")
+	upsertNamespaceHandler := NamespaceUpsertHandler(NamespaceUpsertHandlerConfig{
+		IntakeStore:       config.OperationIntakeStore,
+		PrincipalResolver: config.PrincipalResolver,
+		DeploymentPolicy: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
+	})
+	upsertNamespaceHandler = requestLogHandler(upsertNamespaceHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/namespaces/{namespaceId}", "upsertNamespace")
 
 	// This shell enables only the implemented internal API subset. Known contract
 	// routes without handlers remain fail-closed instead of being silently absent.
 	fallback := internalAPIFallbackHandler(config.Logger, config.AuditSink)
 	mux.Handle("/", routeDispatchHandler(map[string]http.Handler{
 		"getNamespaceVolumeBinding": bindingHandler,
+		"upsertNamespace":           upsertNamespaceHandler,
 	}, fallback))
 	return mux
 }

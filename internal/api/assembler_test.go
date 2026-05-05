@@ -126,7 +126,6 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 		{name: "repo create", method: http.MethodPost, path: "/internal/v1/repos"},
 		{name: "repo list", method: http.MethodGet, path: "/internal/v1/repos"},
 		{name: "put namespace binding exact sibling", method: http.MethodPut, path: "/internal/v1/namespaces/ns_123/volume-binding"},
-		{name: "upsert namespace same prefix", method: http.MethodPut, path: "/internal/v1/namespaces/ns_123"},
 	}
 
 	for _, tt := range tests {
