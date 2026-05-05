@@ -46,8 +46,15 @@ func TestInternalAPIShellServesNamespaceVolumeBindingThroughInjectedHandler(t *t
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
 	}
-	if reader.calls != 2 || reader.namespaceID != "ns_123" || reader.ctx != req.Context() {
-		t.Fatalf("reader calls/ns/ctx = %d/%q/%v, want policy and handler reads for ns_123 with request ctx", reader.calls, reader.namespaceID, reader.ctx == req.Context())
+	if reader.calls != 2 || reader.namespaceID != "ns_123" || reader.ctx == nil {
+		t.Fatalf("reader calls/ns/ctx = %d/%q/%v, want policy and handler reads for ns_123 with request context", reader.calls, reader.namespaceID, reader.ctx != nil)
+	}
+	bound, ok := RequestContextFromRequest(req.WithContext(reader.ctx))
+	if !ok {
+		t.Fatal("reader context did not include AuthGate request context")
+	}
+	if bound.CallerService != "agentsmith-api" {
+		t.Fatalf("bound CallerService = %q, want canonical agentsmith-api", bound.CallerService)
 	}
 	body := rec.Body.String()
 	for _, want := range []string{`"namespace_id":"ns_123"`, `"default_volume_id":"vol_123"`} {

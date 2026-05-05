@@ -156,6 +156,108 @@ func TestAuthGateAllowsVolumeGlobalAndOperationInspectionWithoutNamespace(t *tes
 	}
 }
 
+func TestAuthGateInjectsBoundRequestContextForNextHandler(t *testing.T) {
+	tests := []struct {
+		name         string
+		headerCaller string
+		wantCaller   string
+	}{
+		{name: "missing caller header uses canonical principal service", wantCaller: "agentsmith-api"},
+		{name: "caller header whitespace is normalized to canonical principal service", headerCaller: "  agentsmith-api  ", wantCaller: "agentsmith-api"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/fake", nil)
+			req.Header.Set(auth.HeaderAuthorization, "Bearer service-token")
+			req.Header.Set(auth.HeaderCorrelationID, "corr_auth_gate")
+			if tt.headerCaller != "" {
+				req.Header.Set(auth.HeaderCallerService, tt.headerCaller)
+			}
+
+			nextCalled := false
+			handler := AuthGate(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					nextCalled = true
+					requestContext, ok := RequestContextFromRequest(r)
+					if !ok {
+						t.Fatal("RequestContextFromRequest ok = false, want true")
+					}
+					if requestContext.CallerService != tt.wantCaller {
+						t.Fatalf("CallerService = %q, want %q", requestContext.CallerService, tt.wantCaller)
+					}
+					w.WriteHeader(http.StatusNoContent)
+				}),
+				fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
+					Subject:                "service-account:agentsmith-api",
+					CanonicalCallerService: "agentsmith-api",
+				}},
+				fakeRouteClassResolver{route: RouteMetadata{
+					Method:      http.MethodGet,
+					Path:        "/fake",
+					OperationID: "fakeVolumeGlobal",
+					Class:       auth.RouteClassVolumeGlobal,
+					Mutating:    false,
+				}},
+				nil,
+			)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if !nextCalled {
+				t.Fatal("next handler was not called")
+			}
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d body = %s, want 204", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuthGateCallerServiceMismatchDoesNotInjectOrCallNext(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/fake", nil)
+	req.Header.Set(auth.HeaderAuthorization, "Bearer service-token")
+	req.Header.Set(auth.HeaderCorrelationID, "corr_auth_gate")
+	req.Header.Set(auth.HeaderCallerService, "other-service")
+
+	nextCalled := false
+	handler := AuthGate(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			nextCalled = true
+		}),
+		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
+			Subject:                "service-account:agentsmith-api",
+			CanonicalCallerService: "agentsmith-api",
+		}},
+		fakeRouteClassResolver{route: RouteMetadata{
+			Method:      http.MethodGet,
+			Path:        "/fake",
+			OperationID: "fakeVolumeGlobal",
+			Class:       auth.RouteClassVolumeGlobal,
+			Mutating:    false,
+		}},
+		nil,
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if nextCalled {
+		t.Fatal("next handler was called")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body = %s, want 401", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeAuthenticationFailed {
+		t.Fatalf("error code = %s, want AUTHENTICATION_FAILED", env.Error.Code)
+	}
+	if _, ok := RequestContextFromRequest(req); ok {
+		t.Fatal("original request unexpectedly has injected request context")
+	}
+}
+
 func TestAuthGateFailsClosedForRequiredRoleWithoutAllowedCallerPolicy(t *testing.T) {
 	body := &trackingReadCloser{}
 	req := httptest.NewRequest(http.MethodGet, "/fake", body)

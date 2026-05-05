@@ -45,8 +45,15 @@ func TestNamespaceVolumeBindingHandlerReturnsBindingDTO(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", got)
 	}
-	if store.calls != 1 || store.namespaceID != "ns_123" || store.ctx != req.Context() {
-		t.Fatalf("store calls/id/ctx = %d/%q/%v, want one call for ns_123 with request ctx", store.calls, store.namespaceID, store.ctx == req.Context())
+	if store.calls != 1 || store.namespaceID != "ns_123" || store.ctx == nil {
+		t.Fatalf("store calls/id/ctx = %d/%q/%v, want one call for ns_123 with request context", store.calls, store.namespaceID, store.ctx != nil)
+	}
+	bound, ok := RequestContextFromRequest(req.WithContext(store.ctx))
+	if !ok {
+		t.Fatal("store context did not include AuthGate request context")
+	}
+	if bound.CallerService != "agentsmith-api" {
+		t.Fatalf("bound CallerService = %q, want canonical agentsmith-api", bound.CallerService)
 	}
 	var got map[string]any
 	mustUnmarshalJSON(t, rec.Body.Bytes(), &got)

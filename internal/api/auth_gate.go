@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -18,6 +19,24 @@ type RouteClassResolver interface {
 
 type AllowedCallerPolicy interface {
 	AllowedCallers(*http.Request) ([]auth.AllowedCaller, error)
+}
+
+type requestContextKey struct{}
+
+func RequestContextFromRequest(r *http.Request) (auth.RequestContext, bool) {
+	if r == nil {
+		return auth.RequestContext{}, false
+	}
+	requestContext, ok := r.Context().Value(requestContextKey{}).(auth.RequestContext)
+	return requestContext, ok
+}
+
+func requestWithBoundRequestContext(r *http.Request, requestContext auth.RequestContext) *http.Request {
+	if r == nil {
+		return r
+	}
+	ctx := context.WithValue(r.Context(), requestContextKey{}, requestContext)
+	return r.WithContext(ctx)
 }
 
 func AuthGate(next http.Handler, principalResolver PrincipalResolver, routeResolver RouteClassResolver, callerPolicy AllowedCallerPolicy) http.Handler {
@@ -62,7 +81,7 @@ func AuthGateWithAuditSink(next http.Handler, principalResolver PrincipalResolve
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, requestWithBoundRequestContext(r, requestContext))
 	})
 }
 
