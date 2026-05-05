@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
@@ -41,6 +42,18 @@ type IdempotencyStore interface {
 // AuditSink accepts audit events for append-only or outbox-backed delivery.
 type AuditSink interface {
 	AppendAuditEvent(ctx context.Context, event audit.Event) error
+}
+
+// AuditOutboxDeliveryStore owns DB-only, at-least-once audit outbox state transitions.
+//
+// The current audit_outbox schema has no delivery_owner column. ClaimDueAuditOutboxRecords
+// therefore validates owner for caller discipline but does not persist it and does not provide
+// owner fencing; callers must treat claimed records as at-least-once work.
+type AuditOutboxDeliveryStore interface {
+	ListDueAuditOutboxRecords(ctx context.Context, now time.Time, limit int) ([]audit.OutboxRecord, error)
+	ClaimDueAuditOutboxRecords(ctx context.Context, owner string, now time.Time, limit int) ([]audit.OutboxRecord, error)
+	MarkAuditOutboxDelivered(ctx context.Context, eventID string, now time.Time) error
+	MarkAuditOutboxDeliveryFailed(ctx context.Context, eventID string, failure audit.DeliveryFailure) error
 }
 
 // RepoFenceReader is the read side of the durable repo fence boundary.

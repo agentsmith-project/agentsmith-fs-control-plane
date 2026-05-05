@@ -187,6 +187,64 @@ func TestAuditSinkContractAcceptsAppendOnlyAuditEvents(t *testing.T) {
 	}
 }
 
+func TestAuditOutboxDeliveryStoreContractCoversDBOnlyStateAdapter(t *testing.T) {
+	fake := &fakeAuditOutboxDeliveryStore{}
+	var _ AuditOutboxDeliveryStore = fake
+
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := audit.OutboxRecord{
+		EventID:         "audit-1",
+		EventType:       audit.EventTypeRepoCreate,
+		EventTime:       now.Add(-time.Minute),
+		PayloadJSON:     []byte(`{"event_id":"audit-1"}`),
+		Status:          audit.OutboxStatusPending,
+		DeliveryAttempt: 0,
+		CreatedAt:       now.Add(-time.Minute),
+		UpdatedAt:       now.Add(-time.Minute),
+	}
+	fake.records = []audit.OutboxRecord{record}
+
+	due, err := fake.ListDueAuditOutboxRecords(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("list due audit outbox records: %v", err)
+	}
+	if len(due) != 1 || due[0].EventID != "audit-1" {
+		t.Fatalf("due records = %#v, want audit-1", due)
+	}
+
+	claimed, err := fake.ClaimDueAuditOutboxRecords(context.Background(), "deliverer-1", now, 10)
+	if err != nil {
+		t.Fatalf("claim due audit outbox records: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].Status != audit.OutboxStatusDelivering || claimed[0].DeliveryAttempt != 1 {
+		t.Fatalf("claimed records = %#v, want delivering attempt 1", claimed)
+	}
+	if fake.owner != "deliverer-1" {
+		t.Fatalf("owner = %q, want validated owner", fake.owner)
+	}
+
+	if err := fake.MarkAuditOutboxDelivered(context.Background(), "audit-1", now.Add(time.Minute)); err != nil {
+		t.Fatalf("mark audit outbox delivered: %v", err)
+	}
+	if fake.records[0].Status != audit.OutboxStatusDelivered || fake.records[0].DeliveredAt == nil {
+		t.Fatalf("delivered record = %#v", fake.records[0])
+	}
+
+	fake.records[0].Status = audit.OutboxStatusDelivering
+	fake.records[0].DeliveredAt = nil
+	if err := fake.MarkAuditOutboxDeliveryFailed(context.Background(), "audit-1", audit.DeliveryFailure{
+		MaxAttempts: 2,
+		Backoff:     time.Minute,
+		LastError:   "token=contract-secret",
+		Now:         now.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("mark audit outbox delivery failed: %v", err)
+	}
+	if fake.records[0].Status != audit.OutboxStatusRetryWait || strings.Contains(fake.records[0].LastError, "contract-secret") {
+		t.Fatalf("failed record = %#v, want retry_wait with redacted error", fake.records[0])
+	}
+}
+
 type fakeOperationStore struct {
 	record operations.OperationRecord
 }
@@ -231,6 +289,72 @@ type fakeAuditSink struct {
 
 func (fake *fakeAuditSink) AppendAuditEvent(_ context.Context, event audit.Event) error {
 	fake.events = append(fake.events, event)
+	return nil
+}
+
+type fakeAuditOutboxDeliveryStore struct {
+	records []audit.OutboxRecord
+	owner   string
+}
+
+func (fake *fakeAuditOutboxDeliveryStore) ListDueAuditOutboxRecords(_ context.Context, now time.Time, limit int) ([]audit.OutboxRecord, error) {
+	var due []audit.OutboxRecord
+	for _, record := range fake.records {
+		if len(due) >= limit {
+			break
+		}
+		if record.Status == audit.OutboxStatusPending ||
+			(record.Status == audit.OutboxStatusRetryWait && record.NextRetryAt != nil && !record.NextRetryAt.After(now)) {
+			due = append(due, record)
+		}
+	}
+	return due, nil
+}
+
+func (fake *fakeAuditOutboxDeliveryStore) ClaimDueAuditOutboxRecords(ctx context.Context, owner string, now time.Time, limit int) ([]audit.OutboxRecord, error) {
+	fake.owner = strings.TrimSpace(owner)
+	due, err := fake.ListDueAuditOutboxRecords(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	for idx := range fake.records {
+		for dueIdx := range due {
+			if fake.records[idx].EventID == due[dueIdx].EventID {
+				updated, err := audit.MarkDelivering(fake.records[idx], fake.owner, now)
+				if err != nil {
+					return nil, err
+				}
+				fake.records[idx] = updated
+				due[dueIdx] = updated
+			}
+		}
+	}
+	return due, nil
+}
+
+func (fake *fakeAuditOutboxDeliveryStore) MarkAuditOutboxDelivered(_ context.Context, eventID string, now time.Time) error {
+	for idx := range fake.records {
+		if fake.records[idx].EventID == eventID {
+			updated, err := audit.MarkDelivered(fake.records[idx], now)
+			if err != nil {
+				return err
+			}
+			fake.records[idx] = updated
+		}
+	}
+	return nil
+}
+
+func (fake *fakeAuditOutboxDeliveryStore) MarkAuditOutboxDeliveryFailed(_ context.Context, eventID string, failure audit.DeliveryFailure) error {
+	for idx := range fake.records {
+		if fake.records[idx].EventID == eventID {
+			updated, err := audit.MarkDeliveryFailed(fake.records[idx], failure)
+			if err != nil {
+				return err
+			}
+			fake.records[idx] = updated
+		}
+	}
 	return nil
 }
 
