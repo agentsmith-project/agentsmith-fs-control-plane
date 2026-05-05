@@ -19,6 +19,8 @@ func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {
 		CodePathDenied,
 		CodeCapabilityDenied,
 		CodeIdempotencyConflict,
+		CodeStorageUnavailable,
+		CodeInternalError,
 		CodeActiveWriterSessions,
 		CodeWriterSessionFenceHeld,
 		CodeStaleWriterSessionUncertain,

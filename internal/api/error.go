@@ -25,6 +25,8 @@ const (
 	CodePathDenied                ErrorCode = "PATH_DENIED"
 	CodeCapabilityDenied          ErrorCode = "CAPABILITY_DENIED"
 	CodeIdempotencyConflict       ErrorCode = "IDEMPOTENCY_CONFLICT"
+	CodeStorageUnavailable        ErrorCode = "STORAGE_UNAVAILABLE"
+	CodeInternalError             ErrorCode = "INTERNAL_ERROR"
 
 	CodeActiveWriterSessions        ErrorCode = "ACTIVE_WRITER_SESSIONS"
 	CodeWriterSessionFenceHeld      ErrorCode = "WRITER_SESSION_FENCE_HELD"
@@ -62,6 +64,8 @@ var allErrorCodes = []ErrorCode{
 	CodePathDenied,
 	CodeCapabilityDenied,
 	CodeIdempotencyConflict,
+	CodeStorageUnavailable,
+	CodeInternalError,
 	CodeActiveWriterSessions,
 	CodeWriterSessionFenceHeld,
 	CodeStaleWriterSessionUncertain,

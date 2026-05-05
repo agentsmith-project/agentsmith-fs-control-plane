@@ -113,4 +113,12 @@ for authentication, caller authorization, namespace/resource mismatch,
 capability denial, idempotency conflict, active writer restore rejection, dirty
 restore rejection, JVS failure, export expiry/revoke, mount terminal state, repo
 lifecycle invalid state, lifecycle session drain failure, missing purge
-confirmation, purge retention denial, and operation recovery required.
+confirmation, purge retention denial, operation recovery required, durable
+metadata/store unavailability, and unclassified internal service bugs.
+
+`STORAGE_UNAVAILABLE` is for durable control-plane metadata/store outages,
+timeouts, or connection/query failures and should map to HTTP 503 with
+`retryable=true`. `INTERNAL_ERROR` is for handler, invariant, serialization, or
+other unclassified server bugs and should map to HTTP 500 with
+`retryable=false`. Store outages must not be disguised as `CAPABILITY_DENIED` or
+`NAMESPACE_NOT_FOUND`.

@@ -101,6 +101,8 @@ GA error families:
 - `PATH_DENIED`
 - `CAPABILITY_DENIED`
 - `IDEMPOTENCY_CONFLICT`
+- `STORAGE_UNAVAILABLE`
+- `INTERNAL_ERROR`
 - `ACTIVE_WRITER_SESSIONS`
 - `WRITER_SESSION_FENCE_HELD`
 - `STALE_WRITER_SESSION_UNCERTAIN`
@@ -123,6 +125,13 @@ GA error families:
 - `PURGE_RETENTION_NOT_MET`
 - `PURGE_REQUIRES_OPERATOR_APPROVAL`
 - `OPERATION_RECOVERY_REQUIRED`
+
+`STORAGE_UNAVAILABLE` means the control-plane durable metadata/store dependency
+is temporarily unavailable, timed out, or failed a connection/query; handlers
+should map it to HTTP 503 with `retryable=true`. `INTERNAL_ERROR` is reserved
+for otherwise unclassified handler, invariant, serialization, or service bugs;
+handlers should map it to HTTP 500 and default `retryable=false`. Store outages
+must not be disguised as `CAPABILITY_DENIED` or `NAMESPACE_NOT_FOUND`.
 
 ## Core Types
 
