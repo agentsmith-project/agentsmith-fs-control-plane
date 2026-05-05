@@ -35,7 +35,8 @@ const (
 )
 
 const (
-	OperationPhaseNamespaceUpsertValidate = "validate_namespace_upsert"
+	OperationPhaseNamespaceUpsertValidate  = "validate_namespace_upsert"
+	OperationPhaseNamespaceUpsertCommitted = "namespace_upsert_committed"
 )
 
 var operationTypes = []OperationType{

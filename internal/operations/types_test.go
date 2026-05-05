@@ -39,6 +39,15 @@ func TestOperationTypesAreStableAndComplete(t *testing.T) {
 	}
 }
 
+func TestNamespaceUpsertPhasesAreStable(t *testing.T) {
+	if OperationPhaseNamespaceUpsertValidate != "validate_namespace_upsert" {
+		t.Fatalf("validate phase = %q, want validate_namespace_upsert", OperationPhaseNamespaceUpsertValidate)
+	}
+	if OperationPhaseNamespaceUpsertCommitted != "namespace_upsert_committed" {
+		t.Fatalf("committed phase = %q, want namespace_upsert_committed", OperationPhaseNamespaceUpsertCommitted)
+	}
+}
+
 func TestRouteOperationTypesReturnsDefensiveCopy(t *testing.T) {
 	mapped := RouteOperationTypes()
 	mapped["createRepo"] = OperationMigrationCutover
