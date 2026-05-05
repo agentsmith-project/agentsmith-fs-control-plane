@@ -9,8 +9,8 @@ needed before real handlers and storage mutation work:
   tests.
 - `config`: environment-backed config and capability gates.
 - `observability`: structured JSON logging and redaction helpers.
-- `operations`: operation state, idempotency, redaction, and typed operation
-  record boundaries.
+- `operations`: operation state, lease decisions, idempotency, redaction, and
+  typed operation record boundaries.
 - `store`: interfaces for durable operation records, idempotency, and audit
   sinks. PostgreSQL schema migration exists; no DB adapter implementation yet.
 - `audit`: audit event typing and redaction expectations.
