@@ -3,13 +3,18 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
-	defaultServiceName = "afscp"
-	defaultListenAddr  = "127.0.0.1:8080"
-	defaultEnvironment = "development"
+	defaultServiceName                    = "afscp"
+	defaultListenAddr                     = "127.0.0.1:8080"
+	defaultEnvironment                    = "development"
+	defaultOperationRecoveryLimit         = 10
+	defaultOperationRecoveryLeaseDuration = 5 * time.Minute
+	defaultWorkerRunOnceTimeout           = 30 * time.Second
 )
 
 // Source supplies configuration values without tying tests to process env.
@@ -40,6 +45,7 @@ type Config struct {
 	ListenAddr   string
 	Environment  string
 	Capabilities Capabilities
+	Worker       WorkerConfig
 }
 
 type Capabilities struct {
@@ -52,6 +58,19 @@ type Capabilities struct {
 type Capability struct {
 	Enabled bool
 	Ready   bool
+}
+
+type WorkerConfig struct {
+	RunOnceTimeout    time.Duration
+	OperationRecovery WorkerOperationRecoveryConfig
+}
+
+type WorkerOperationRecoveryConfig struct {
+	Enabled       bool
+	PostgresDSN   string
+	Owner         string
+	Limit         int
+	LeaseDuration time.Duration
 }
 
 func (c Capability) Available() bool {
@@ -67,6 +86,13 @@ func Load(source Source) (Config, error) {
 		ServiceName: defaultServiceName,
 		ListenAddr:  defaultListenAddr,
 		Environment: defaultEnvironment,
+		Worker: WorkerConfig{
+			RunOnceTimeout: defaultWorkerRunOnceTimeout,
+			OperationRecovery: WorkerOperationRecoveryConfig{
+				Limit:         defaultOperationRecoveryLimit,
+				LeaseDuration: defaultOperationRecoveryLeaseDuration,
+			},
+		},
 	}
 
 	cfg.ServiceName = strings.ToLower(valueOrDefault(source, "AFSCP_SERVICE_NAME", cfg.ServiceName))
@@ -84,6 +110,9 @@ func Load(source Source) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Capabilities.Mount, err = loadCapability(source, "AFSCP_MOUNT"); err != nil {
+		return Config{}, err
+	}
+	if cfg.Worker, err = loadWorkerConfig(source, cfg.Worker); err != nil {
 		return Config{}, err
 	}
 
@@ -120,6 +149,58 @@ func loadCapability(source Source, prefix string) (Capability, error) {
 	return Capability{Enabled: enabled, Ready: ready}, nil
 }
 
+func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error) {
+	worker := defaults
+	enabled, err := boolValue(source, "AFSCP_WORKER_OPERATION_RECOVERY_ENABLED")
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.OperationRecovery.Enabled = enabled
+	worker.OperationRecovery.PostgresDSN = valueOrDefault(source, "AFSCP_POSTGRES_DSN", "")
+	if worker.OperationRecovery.PostgresDSN == "" {
+		worker.OperationRecovery.PostgresDSN = valueOrDefault(source, "AFSCP_DATABASE_URL", "")
+	}
+	worker.OperationRecovery.Owner = valueOrDefault(source, "AFSCP_WORKER_OWNER", "")
+
+	limit, err := intValue(source, "AFSCP_OPERATION_RECOVERY_LIMIT", worker.OperationRecovery.Limit)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	if limit <= 0 {
+		return WorkerConfig{}, fmt.Errorf("AFSCP_OPERATION_RECOVERY_LIMIT must be positive")
+	}
+	worker.OperationRecovery.Limit = limit
+
+	leaseDuration, err := durationValue(source, "AFSCP_OPERATION_RECOVERY_LEASE_DURATION", worker.OperationRecovery.LeaseDuration)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	if leaseDuration <= 0 {
+		return WorkerConfig{}, fmt.Errorf("AFSCP_OPERATION_RECOVERY_LEASE_DURATION must be positive")
+	}
+	worker.OperationRecovery.LeaseDuration = leaseDuration
+
+	runOnceTimeout, err := durationValue(source, "AFSCP_WORKER_RUN_ONCE_TIMEOUT", worker.RunOnceTimeout)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	if runOnceTimeout <= 0 {
+		return WorkerConfig{}, fmt.Errorf("AFSCP_WORKER_RUN_ONCE_TIMEOUT must be positive")
+	}
+	worker.RunOnceTimeout = runOnceTimeout
+
+	if worker.OperationRecovery.Enabled {
+		if worker.OperationRecovery.PostgresDSN == "" {
+			return WorkerConfig{}, fmt.Errorf("AFSCP_POSTGRES_DSN is required when AFSCP_WORKER_OPERATION_RECOVERY_ENABLED is true")
+		}
+		if worker.OperationRecovery.Owner == "" {
+			return WorkerConfig{}, fmt.Errorf("AFSCP_WORKER_OWNER is required when AFSCP_WORKER_OPERATION_RECOVERY_ENABLED is true")
+		}
+	}
+
+	return worker, nil
+}
+
 func boolValue(source Source, key string) (bool, error) {
 	if source == nil {
 		return false, nil
@@ -136,4 +217,42 @@ func boolValue(source Source, key string) (bool, error) {
 	default:
 		return false, fmt.Errorf("invalid bool for %s: %q", key, value)
 	}
+}
+
+func intValue(source Source, key string, fallback int) (int, error) {
+	if source == nil {
+		return fallback, nil
+	}
+	value, ok := source.Lookup(key)
+	if !ok {
+		return fallback, nil
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid int for %s: %q", key, value)
+	}
+	return parsed, nil
+}
+
+func durationValue(source Source, key string, fallback time.Duration) (time.Duration, error) {
+	if source == nil {
+		return fallback, nil
+	}
+	value, ok := source.Lookup(key)
+	if !ok {
+		return fallback, nil
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration for %s: %q", key, value)
+	}
+	return parsed, nil
 }

@@ -10,10 +10,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workerapp"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -89,6 +95,38 @@ func TestCommandRunOnceSuccessOutputsJSONSummary(t *testing.T) {
 	}
 }
 
+func TestCommandRunOnceCanUseWorkerAppFactoryWithInjectedStore(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := newCommand(&stdout, &stderr)
+	cmd.newRunner = func() (runOnceRunner, error) {
+		return workerapp.NewRunOnceRunner(workerapp.Options{
+			Source: config.MapSource{
+				"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
+				"AFSCP_POSTGRES_DSN":                      "postgres://worker:password@db/afscp",
+				"AFSCP_WORKER_OWNER":                      "worker-a",
+			},
+			StoreFactory: func(context.Context, string) (workerapp.StoreHandle, error) {
+				return workerapp.StoreHandle{Store: &cmdWorkerAppStore{}}, nil
+			},
+			Clock:        func() time.Time { return time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC) },
+			AuditEventID: func() string { return "evt_namespace" },
+		})
+	}
+
+	code := cmd.run([]string{"--run-once"})
+	if code != 0 {
+		t.Fatalf("run returned %d, want 0; stderr %q", code, stderr.String())
+	}
+	var summary worker.Summary
+	if err := json.Unmarshal(stdout.Bytes(), &summary); err != nil {
+		t.Fatalf("stdout is not JSON summary: %q: %v", stdout.String(), err)
+	}
+	if summary.Operation.Scanned != 0 || summary.Operation.Failed != 0 {
+		t.Fatalf("summary = %#v, want empty successful operation pass", summary)
+	}
+}
+
 func TestCommandRunOnceErrorOutputsPartialSummaryAndRedactedFailure(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -115,6 +153,34 @@ func TestCommandRunOnceErrorOutputsPartialSummaryAndRedactedFailure(t *testing.T
 	}
 	if !strings.Contains(stderr.String(), "run-once failed") || strings.Contains(stderr.String(), "secret-token") {
 		t.Fatalf("stderr = %q, want short redacted failure", stderr.String())
+	}
+}
+
+func TestCommandRunOnceOperationRecoveryCountErrorOutputsSummaryAndExitsOne(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &fakeRunOnceRunner{
+		result: worker.Result{OperationRecovery: recovery.OperationBatchResult{Unsupported: 1}},
+		err:    errors.New("operation recovery incomplete: unsupported=1"),
+	}
+	cmd := newCommand(&stdout, &stderr)
+	cmd.newRunner = func() (runOnceRunner, error) {
+		return runner, nil
+	}
+
+	code := cmd.run([]string{"--run-once"})
+	if code != 1 {
+		t.Fatalf("run returned %d, want 1", code)
+	}
+	var summary worker.Summary
+	if err := json.Unmarshal(stdout.Bytes(), &summary); err != nil {
+		t.Fatalf("stdout is not JSON summary: %q: %v", stdout.String(), err)
+	}
+	if summary.Operation.Unsupported != 1 {
+		t.Fatalf("summary = %#v, want unsupported=1", summary)
+	}
+	if !strings.Contains(stderr.String(), "run-once failed") || !strings.Contains(stderr.String(), "operation recovery incomplete") {
+		t.Fatalf("stderr = %q, want run-once incomplete error", stderr.String())
 	}
 }
 
@@ -161,10 +227,42 @@ func TestCommandRunOnceNilRunnerFailsClosed(t *testing.T) {
 func TestCommandDefaultRunOnceFactoryFailsClosed(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	t.Setenv("AFSCP_WORKER_OPERATION_RECOVERY_ENABLED", "")
+	t.Setenv("AFSCP_POSTGRES_DSN", "")
+	t.Setenv("AFSCP_DATABASE_URL", "")
+	t.Setenv("AFSCP_WORKER_OWNER", "")
 
 	code := newCommand(&stdout, &stderr).run([]string{"--run-once"})
 	if code != 2 {
 		t.Fatalf("run returned %d, want default factory config error", code)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "operation recovery") {
+		t.Fatalf("stderr = %q, want operation recovery config error", stderr.String())
+	}
+}
+
+func TestCommandRunOnceConfigErrorsRedactDSN(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := newCommand(&stdout, &stderr)
+	cmd.newRunner = func() (runOnceRunner, error) {
+		return nil, errors.New("open postgres://worker:password=secret-password@db/afscp failed")
+	}
+
+	code := cmd.run([]string{"--run-once"})
+	if code != 2 {
+		t.Fatalf("run returned %d, want 2", code)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	for _, leaked := range []string{"postgres://worker", "secret-password"} {
+		if strings.Contains(stderr.String(), leaked) {
+			t.Fatalf("stderr = %q leaked %q", stderr.String(), leaked)
+		}
 	}
 }
 
@@ -232,6 +330,20 @@ type fakeRunOnceRunner struct {
 	ctx    context.Context
 	result worker.Result
 	err    error
+}
+
+type cmdWorkerAppStore struct{}
+
+func (store *cmdWorkerAppStore) ListNamespaceUpsertOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
+func (store *cmdWorkerAppStore) AcquireNamespaceUpsertOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) CommitNamespaceUpsertWithLease(context.Context, resources.Namespace, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (resources.Namespace, operations.OperationRecord, error) {
+	return resources.Namespace{}, operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
 func (runner *fakeRunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error) {

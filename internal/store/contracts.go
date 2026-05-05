@@ -68,6 +68,18 @@ type NamespaceUpsertOperationCommitStore interface {
 	CommitNamespaceUpsertWithLease(ctx context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error)
 }
 
+// NamespaceUpsertOperationRecoveryStore owns the durable recovery boundary for
+// the minimal namespace_upsert runner. Implementations must push the
+// namespace_upsert + validate_namespace_upsert scope into durable list and
+// acquire predicates before ORDER/LIMIT or lease mutation; callers must not
+// compose this by using the generic operation recovery list/acquire and
+// filtering after the fact.
+type NamespaceUpsertOperationRecoveryStore interface {
+	ListNamespaceUpsertOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireNamespaceUpsertOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	NamespaceUpsertOperationCommitStore
+}
+
 // IdempotencyStore owns the durable create-or-reuse boundary for queued operations.
 //
 // Implementations must make CreateOrReuseOperation atomic by enforcing

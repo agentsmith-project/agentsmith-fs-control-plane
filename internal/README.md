@@ -32,13 +32,19 @@ needed before real handlers and storage mutation work:
 - `fences`: pure repo fence model, held-state semantics, and acquisition checks.
 - `inspection`: operation inspection, recovery classification, and read-only
   repo recovery inspection composition primitives.
+- `namespaceexec`: minimal recovery executor for `namespace_upsert`; it commits
+  namespace metadata, the terminal operation update, and the audit event through
+  the dedicated namespace upsert store boundary.
+- `workerapp`: production `afscp-worker --run-once` bootstrap for the
+  opt-in `namespace_upsert` operation recovery runner.
 - `pathresolver`: path safety helpers, denial tests, and shared resolver corpus.
 
 Still intentionally absent: real endpoint handlers, real external audit delivery
 worker/sink integration, repo lifecycle workers/recovery loop, JVS execution,
 WebDAV export serving, workload mount issuance, repo/template lifecycle
 mutation, storage mutation implementations, and fence enforcement beyond the
-minimal repo fence adapter slice.
+minimal repo fence adapter slice. The worker app currently wires only
+`namespace_upsert` operation recovery when explicitly enabled.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

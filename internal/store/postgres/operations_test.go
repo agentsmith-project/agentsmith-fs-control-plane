@@ -23,6 +23,7 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.OperationLeaseStore = (*Store)(nil)
 	var _ store.OperationWorkerCommitStore = (*Store)(nil)
 	var _ store.NamespaceUpsertOperationCommitStore = (*Store)(nil)
+	var _ store.NamespaceUpsertOperationRecoveryStore = (*Store)(nil)
 	var _ store.IdempotencyStore = (*Store)(nil)
 	var _ store.AuditSink = (*Store)(nil)
 
@@ -350,6 +351,77 @@ func TestListOperationsForRecoveryRejectsInvalidArgsBeforeSQL(t *testing.T) {
 	}
 }
 
+func TestListNamespaceUpsertOperationsForRecoveryScopesBeforeOrderAndLimit(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := operationFixture(now.Add(-time.Hour))
+	record.ID = "op-namespace"
+	record.Type = operations.OperationNamespaceUpsert
+	record.State = operations.OperationStateQueued
+	record.Phase = operations.OperationPhaseNamespaceUpsertValidate
+	record.NamespaceID = "ns_alpha01"
+	record.Resource = operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"}
+	record.LeaseOwner = ""
+	record.LeaseExpiresAt = nil
+	exec := &fakeExecutor{rows: fakeRows{rows: []fakeRow{{values: operationRowValues(record)}}}}
+	st := &Store{exec: exec}
+
+	got, err := st.ListNamespaceUpsertOperationsForRecovery(context.Background(), now, 1)
+	if err != nil {
+		t.Fatalf("ListNamespaceUpsertOperationsForRecovery: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "op-namespace" {
+		t.Fatalf("records = %#v, want op-namespace", got)
+	}
+	if !exec.rows.closed {
+		t.Fatal("rows were not closed")
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"SELECT",
+		"FROM operations",
+		"operation_type = 'namespace_upsert'",
+		"phase = 'validate_namespace_upsert'",
+		"operation_state = 'queued'",
+		"operation_state = 'running'",
+		"operation_state = 'cancel_requested'",
+		"operator_intervention_required",
+		"ORDER BY created_at, operation_id",
+		"LIMIT $2",
+	)
+	if strings.Contains(exec.query, "UPDATE ") || strings.Contains(exec.query, " FOR UPDATE") {
+		t.Fatalf("namespace upsert recovery list must be read-only SELECT, got %s", exec.query)
+	}
+	if !reflect.DeepEqual(exec.args, []any{now, 1}) {
+		t.Fatalf("args = %#v, want now and limit", exec.args)
+	}
+}
+
+func TestListNamespaceUpsertOperationsForRecoveryRejectsInvalidArgsBeforeSQL(t *testing.T) {
+	tests := []struct {
+		name  string
+		now   time.Time
+		limit int
+	}{
+		{name: "zero now", limit: 1},
+		{name: "zero limit", now: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)},
+		{name: "negative limit", now: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC), limit: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{}
+			st := &Store{exec: exec}
+
+			_, err := st.ListNamespaceUpsertOperationsForRecovery(context.Background(), tt.now, tt.limit)
+			if err == nil {
+				t.Fatal("ListNamespaceUpsertOperationsForRecovery succeeded, want error")
+			}
+			if exec.query != "" {
+				t.Fatalf("issued SQL for invalid args: %s", exec.query)
+			}
+		})
+	}
+}
+
 func TestListOperationsForRecoveryClosesRowsAndPropagatesRowsAndScanErrors(t *testing.T) {
 	valid := operationFixture(time.Date(2026, 5, 5, 11, 0, 0, 0, time.UTC))
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
@@ -625,6 +697,138 @@ func TestAcquireOperationLeaseNoRowsWrapsLeaseUnavailableAndSQLNoRows(t *testing
 	})
 	if !errors.Is(err, operations.ErrLeaseUnavailable) || !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("AcquireOperationLease error = %v, want ErrLeaseUnavailable and sql.ErrNoRows", err)
+	}
+}
+
+func TestAcquireNamespaceUpsertOperationLeaseScopesAtomicUpdateBeforeMutation(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	leaseExpiresAt := now.Add(30 * time.Minute)
+	record := operationFixture(now.Add(-time.Hour))
+	record.ID = "op-namespace"
+	record.Type = operations.OperationNamespaceUpsert
+	record.State = operations.OperationStateRunning
+	record.Phase = operations.OperationPhaseNamespaceUpsertValidate
+	record.NamespaceID = "ns_alpha01"
+	record.Resource = operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"}
+	record.LeaseOwner = "worker-a"
+	record.LeaseExpiresAt = &leaseExpiresAt
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
+	st := &Store{exec: exec}
+
+	got, err := st.AcquireNamespaceUpsertOperationLease(context.Background(), "op-namespace", operations.LeaseRequest{
+		Owner:    " worker-a ",
+		Duration: 30 * time.Minute,
+		Now:      now,
+	})
+	if err != nil {
+		t.Fatalf("AcquireNamespaceUpsertOperationLease: %v", err)
+	}
+	if got.ID != "op-namespace" || got.Type != operations.OperationNamespaceUpsert || got.Phase != operations.OperationPhaseNamespaceUpsertValidate {
+		t.Fatalf("got = %#v, want namespace upsert validate", got)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"UPDATE operations",
+		"operation_state = CASE",
+		"attempt = CASE",
+		"lease_owner = CASE",
+		"lease_expires_at = CASE",
+		"started_at = CASE",
+		"finished_at = CASE",
+		"WHERE operation_id = $1",
+		"operation_type = 'namespace_upsert'",
+		"phase = 'validate_namespace_upsert'",
+		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL)",
+		"(operation_state = 'running'",
+		"lease_expires_at <= $4",
+		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation'",
+		"RETURNING",
+	)
+	if strings.Contains(exec.query, "operator_intervention_required") {
+		t.Fatalf("namespace upsert acquire must not perform explicit operator recovery: %s", exec.query)
+	}
+	if strings.Contains(exec.query, "SELECT ") {
+		t.Fatalf("AcquireNamespaceUpsertOperationLease query must be a single UPDATE RETURNING, got %s", exec.query)
+	}
+	wantArgs := []any{"op-namespace", "worker-a", leaseExpiresAt, now, string(operations.LeaseCancelPolicyNone)}
+	if !reflect.DeepEqual(exec.args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", exec.args, wantArgs)
+	}
+}
+
+func TestAcquireNamespaceUpsertOperationLeaseCanFinalizeCancellation(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	returned := operationFixture(now.Add(-time.Hour))
+	returned.ID = "op-namespace-cancel"
+	returned.Type = operations.OperationNamespaceUpsert
+	returned.State = operations.OperationStateCancelled
+	returned.Phase = operations.OperationPhaseNamespaceUpsertValidate
+	returned.NamespaceID = "ns_alpha01"
+	returned.Resource = operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"}
+	returned.LeaseOwner = ""
+	returned.LeaseExpiresAt = nil
+	returned.FinishedAt = &now
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(returned)}}
+	st := &Store{exec: exec}
+
+	got, err := st.AcquireNamespaceUpsertOperationLease(context.Background(), "op-namespace-cancel", operations.LeaseRequest{
+		Owner:        "worker-a",
+		Duration:     30 * time.Minute,
+		Now:          now,
+		CancelPolicy: operations.LeaseCancelPolicyFinalize,
+	})
+	if err != nil {
+		t.Fatalf("AcquireNamespaceUpsertOperationLease finalize: %v", err)
+	}
+	if got.State != operations.OperationStateCancelled || got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("finalized operation = %#v, want cancelled without lease", got)
+	}
+	if exec.args[4] != string(operations.LeaseCancelPolicyFinalize) {
+		t.Fatalf("cancel policy arg = %#v, want finalize", exec.args[4])
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"operation_type = 'namespace_upsert'",
+		"phase = 'validate_namespace_upsert'",
+		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation'",
+	)
+}
+
+func TestAcquireNamespaceUpsertOperationLeaseNoRowsIsUnavailableBeforeStateChange(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	exec := &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}
+	st := &Store{exec: exec}
+
+	_, err := st.AcquireNamespaceUpsertOperationLease(context.Background(), "op-repo", operations.LeaseRequest{
+		Owner:    "worker-a",
+		Duration: 30 * time.Minute,
+		Now:      now,
+	})
+	if !errors.Is(err, operations.ErrLeaseUnavailable) || !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("AcquireNamespaceUpsertOperationLease error = %v, want ErrLeaseUnavailable and sql.ErrNoRows", err)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"UPDATE operations",
+		"WHERE operation_id = $1",
+		"operation_type = 'namespace_upsert'",
+		"phase = 'validate_namespace_upsert'",
+	)
+}
+
+func TestAcquireNamespaceUpsertOperationLeaseRejectsUnsupportedPoliciesBeforeSQL(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	exec := &fakeExecutor{}
+	st := &Store{exec: exec}
+
+	_, err := st.AcquireNamespaceUpsertOperationLease(context.Background(), "op-namespace", operations.LeaseRequest{
+		Owner:        "worker-a",
+		Duration:     time.Minute,
+		Now:          now,
+		RecoveryMode: operations.LeaseRecoveryExplicitAction,
+	})
+	if !errors.Is(err, operations.ErrInvalidLeaseRequest) {
+		t.Fatalf("AcquireNamespaceUpsertOperationLease error = %v, want ErrInvalidLeaseRequest", err)
+	}
+	if exec.query != "" {
+		t.Fatalf("issued SQL for invalid namespace acquire request: %s", exec.query)
 	}
 }
 

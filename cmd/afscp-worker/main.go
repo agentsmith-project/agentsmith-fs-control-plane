@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workerapp"
 )
 
 const (
@@ -41,7 +41,7 @@ func newCommand(stdout io.Writer, stderr io.Writer) command {
 		stdout: stdout,
 		stderr: stderr,
 		newRunner: func() (runOnceRunner, error) {
-			return nil, errors.New("worker dependencies not configured")
+			return workerapp.NewRunOnceRunnerFromEnv()
 		},
 	}
 }

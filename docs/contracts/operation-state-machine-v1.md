@@ -85,6 +85,7 @@ Minimum GA matrix:
 
 | Operation | Resource Lock | Recovery Requirement |
 | --- | --- | --- |
+| namespace_upsert | namespace metadata row | `validate_namespace_upsert` claim/retry/reclaim atomically commits active namespace metadata, succeeded operation, and succeeded audit event; `cancel_requested` may be lease-finalized to `cancelled` within the namespace_upsert scope without touching non-namespace operations |
 | repo_create | target repo exclusive create | inspect allocated path, JVS identity, and doctor result |
 | repo_archive | repo lifecycle exclusive plus session drain | inspect lifecycle status, session terminal state, and retained storage |
 | repo_restore_archived | repo lifecycle exclusive | inspect lifecycle status and repo health |

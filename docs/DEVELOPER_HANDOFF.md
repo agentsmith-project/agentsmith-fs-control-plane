@@ -141,11 +141,12 @@ Partially completed:
   primitive, minimal repo fence held read/create/active release, and read-only
   repo recovery inspection readers. Worker-owned progress/terminal writes must
   use the lease-fenced update primitive, not unguarded `UpdateOperation`. The
-  recovery planner and repo recovery inspection only classify existing durable
-  record values into high-level actions; they are not a recovery loop and do
-  not execute workers or touch JVS/WebDAV/mount/storage mutation. Real external
-  audit delivery worker/sink integration and the recovery loop are not
-  implemented. Resource
+  recovery planner and repo recovery inspection classify existing durable
+  record values into high-level actions. `afscp-worker --run-once` now has an
+  opt-in production bootstrap for the minimal `namespace_upsert` recovery
+  executor only; it does not touch JVS/WebDAV/mount/storage mutation. Real
+  external audit delivery worker/sink integration and repo lifecycle recovery
+  loops are not implemented. Resource
   metadata persistence exists only as control-plane metadata storage; it is not
   real repo lifecycle execution, recovery, or storage mutation.
 - Path resolver guardrails exist, but there is no storage mutation integration.
@@ -154,8 +155,8 @@ Not implemented:
 
 - real volume, namespace, repo, template, export, mount, save, restore, or
   lifecycle handlers
-- real repo lifecycle workers, recovery loop, archive/delete/purge execution, or
-  storage state transitions
+- real repo lifecycle workers, archive/delete/purge execution, or storage state
+  transitions
 - fence enforcement beyond the minimal repo fence adapter slice
 - real external audit delivery worker/sink integration
 - JVS execution or repo initialization
