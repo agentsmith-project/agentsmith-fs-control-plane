@@ -87,8 +87,8 @@ Neutral service skeleton and control-plane primitives now exist:
 The recovery planner and repo recovery inspection are read-only classifiers for
 later recovery worker/runbook decisions. `afscp-worker --run-once` now has an
 opt-in production bootstrap for the minimal `namespace_upsert` and
-`namespace_volume_binding_put` recovery executors only; it does not touch
-JVS/WebDAV/mount/storage mutation. The first
+`namespace_volume_binding_put` recovery executors plus metadata-only
+`volume_ensure`; it does not touch JVS/WebDAV/mount/storage mutation. The first
 PostgreSQL adapter slice now implements operation reader/writer, DB-only
 operation lease claim/reclaim/recover/finalize/renew plus lease-fenced worker
 progress/terminal update primitive, idempotency create-or-reuse, audit outbox

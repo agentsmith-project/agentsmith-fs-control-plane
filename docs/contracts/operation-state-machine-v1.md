@@ -85,6 +85,7 @@ Minimum GA matrix:
 
 | Operation | Resource Lock | Recovery Requirement |
 | --- | --- | --- |
+| volume_ensure | volume metadata row | `validate_volume_ensure` claim/retry/reclaim atomically commits volume metadata, succeeded operation, and succeeded audit event; this is metadata-only and does not provision JuiceFS or perform health checks |
 | namespace_upsert | namespace metadata row | `validate_namespace_upsert` claim/retry/reclaim atomically commits active namespace metadata, succeeded operation, and succeeded audit event; `cancel_requested` may be lease-finalized to `cancelled` within the namespace_upsert scope without touching non-namespace operations |
 | namespace_volume_binding_put | namespace volume binding row | `validate_namespace_volume_binding_put` claim/retry/reclaim atomically commits namespace volume binding metadata, succeeded operation, and succeeded audit event after verifying active namespace and active default volume; `cancel_requested` may be lease-finalized to `cancelled` within the namespace_volume_binding_put scope without touching non-binding operations |
 | repo_create | target repo exclusive create | inspect allocated path, JVS identity, and doctor result |

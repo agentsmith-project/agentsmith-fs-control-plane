@@ -35,6 +35,9 @@ const (
 )
 
 const (
+	OperationPhaseVolumeEnsureValidate  = "validate_volume_ensure"
+	OperationPhaseVolumeEnsureCommitted = "volume_ensure_committed"
+
 	OperationPhaseNamespaceUpsertValidate  = "validate_namespace_upsert"
 	OperationPhaseNamespaceUpsertCommitted = "namespace_upsert_committed"
 

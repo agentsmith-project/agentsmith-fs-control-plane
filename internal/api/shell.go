@@ -49,6 +49,20 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	mux.Handle("/healthz", requestLogHandler(HealthHandler(), config.Logger, slog.LevelInfo, "afscp.health", "health request", "/healthz", ""))
 	mux.Handle("/readyz", requestLogHandler(ReadinessHandler(NeutralReadiness()), config.Logger, slog.LevelInfo, "afscp.readiness", "readiness request", "/readyz", ""))
 
+	volumeHandler := EnsureVolumeHandler(EnsureVolumeHandlerConfig{
+		IntakeStore:       config.OperationIntakeStore,
+		PrincipalResolver: config.PrincipalResolver,
+		DeploymentPolicy: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
+	})
+	volumeHandler = requestLogHandler(volumeHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/volumes/{volumeId}:ensure", "ensureVolume")
+
 	bindingHandler := NamespaceVolumeBindingHandler(NamespaceVolumeBindingHandlerConfig{
 		Reader:            config.NamespaceBindingReader,
 		IntakeStore:       config.OperationIntakeStore,
@@ -82,6 +96,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	// routes without handlers remain fail-closed instead of being silently absent.
 	fallback := internalAPIFallbackHandler(config.Logger, config.AuditSink)
 	mux.Handle("/", routeDispatchHandler(map[string]http.Handler{
+		"ensureVolume":              volumeHandler,
 		"getNamespaceVolumeBinding": getBindingHandler,
 		"putNamespaceVolumeBinding": putBindingHandler,
 		"upsertNamespace":           upsertNamespaceHandler,

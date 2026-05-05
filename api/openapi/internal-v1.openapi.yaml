@@ -130,6 +130,12 @@ paths:
           required: true
           schema:
             $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/VolumeId
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Volume"
       responses:
         "400":
           $ref: "#/components/responses/Error"

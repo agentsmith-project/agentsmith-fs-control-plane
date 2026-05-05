@@ -32,6 +32,9 @@ needed before real handlers and storage mutation work:
 - `fences`: pure repo fence model, held-state semantics, and acquisition checks.
 - `inspection`: operation inspection, recovery classification, and read-only
   repo recovery inspection composition primitives.
+- `volumeexec`: minimal recovery executor for metadata-only `volume_ensure`;
+  it commits volume metadata, the terminal operation update, and the audit event
+  through the dedicated volume ensure store boundary.
 - `namespaceexec`: minimal recovery executor for `namespace_upsert`; it commits
   namespace metadata, the terminal operation update, and the audit event through
   the dedicated namespace upsert store boundary.
@@ -48,8 +51,8 @@ workers/recovery loop, JVS execution, WebDAV export serving, workload mount
 issuance, repo/template lifecycle mutation, storage mutation implementations,
 and fence enforcement beyond the minimal repo fence adapter slice. The worker
 app currently wires only
-`namespace_upsert` and `namespace_volume_binding_put` operation recovery when
-explicitly enabled.
+`volume_ensure`, `namespace_upsert`, and `namespace_volume_binding_put`
+operation recovery when explicitly enabled.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

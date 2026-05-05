@@ -10,9 +10,9 @@ The repo now has neutral Go command entrypoints:
 - `afscp-worker`: bounded async worker entrypoint. `--run-once` defaults to
   fail-closed unless `AFSCP_WORKER_OPERATION_RECOVERY_ENABLED=true`; when
   enabled it wires PostgreSQL operation recovery for the minimal
-  `namespace_upsert` and `namespace_volume_binding_put` executors only. A
-  run-once pass emits its summary, then exits nonzero if operation recovery
-  reports unsupported, manual, or failed records.
+  `volume_ensure`, `namespace_upsert`, and `namespace_volume_binding_put`
+  executors only. A run-once pass emits its summary, then exits nonzero if
+  operation recovery reports unsupported, manual, or failed records.
 - `afscp-export-gateway`: versioned placeholder entrypoint for the WebDAV
   gateway. It has no WebDAV file access or export-session enforcement yet.
 - `afscp-contract-verify`: verifies selected OpenAPI, schema, docs, and Go DTO

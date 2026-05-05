@@ -106,6 +106,49 @@ func TestRunOnceClaimsQueuedNamespaceUpsertAndBindingPutThroughDefaultRunner(t *
 	}
 }
 
+func TestRunOnceClaimsQueuedVolumeEnsureThroughDefaultRunner(t *testing.T) {
+	now := workerAppNow()
+	volumeRecord := workerAppVolumeOperationRecord("op_volume", now)
+	store := newWorkerAppStore(volumeRecord)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want claimed=1", summary)
+	}
+	if store.volume.ID != "vol_123" || store.operation.Type != operations.OperationVolumeEnsure || len(store.auditEvents) != 1 {
+		t.Fatalf("committed volume/operation/audit = %#v/%#v/%#v", store.volume, store.operation, store.auditEvents)
+	}
+}
+
+func TestRunOnceScopedStoreDoesNotStarveVolumeBehindNonScopedRecords(t *testing.T) {
+	now := workerAppNow()
+	repoQueued := workerAppRepoOperationRecord("op_repo_queued", operations.OperationStateQueued, now)
+	volumeRecord := workerAppVolumeOperationRecord("op_volume", now)
+	volumeRecord.CreatedAt = repoQueued.CreatedAt.Add(time.Minute)
+	store := newWorkerAppStore(repoQueued, volumeRecord)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(config.MapSource{"AFSCP_OPERATION_RECOVERY_LIMIT": "1"}), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 1 || summary.Claimed != 1 || summary.Finalized != 0 || summary.Unsupported != 0 || summary.Manual != 0 || summary.Failed != 0 {
+		t.Fatalf("summary = %#v, want only volume claim", summary)
+	}
+	if got := strings.Join(store.acquireIDs, ","); got != volumeRecord.ID {
+		t.Fatalf("acquire IDs = %q, want %s", got, volumeRecord.ID)
+	}
+	if store.records[repoQueued.ID].State != operations.OperationStateQueued {
+		t.Fatalf("repo state = %q, want unchanged queued", store.records[repoQueued.ID].State)
+	}
+}
+
 func TestRunOnceScopedStoreDoesNotStarveNamespaceOrBindingBehindNonScopedRecords(t *testing.T) {
 	now := workerAppNow()
 	repoQueued := workerAppRepoOperationRecord("op_repo_queued", operations.OperationStateQueued, now)
@@ -319,6 +362,32 @@ func TestRunOnceFinalizesNamespaceVolumeBindingPutCancellationWithinScope(t *tes
 	}
 }
 
+func TestRunOnceFinalizesVolumeEnsureCancellationWithinScope(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppVolumeOperationRecord("op_volume_cancel", now)
+	record.State = operations.OperationStateCancelRequested
+	store := newWorkerAppStore(record)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Finalized != 1 || summary.Claimed != 0 || summary.Failed != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want finalized=1 only", summary)
+	}
+	if got := strings.Join(store.acquireIDs, ","); got != record.ID {
+		t.Fatalf("acquire IDs = %q, want %s", got, record.ID)
+	}
+	if got := store.acquirePolicies[record.ID]; got != operations.LeaseCancelPolicyFinalize {
+		t.Fatalf("cancel policy = %q, want finalize", got)
+	}
+	if got := store.records[record.ID]; got.State != operations.OperationStateCancelled || got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("record = %#v, want cancelled without lease", got)
+	}
+}
+
 func TestRunOnceNamespaceVolumeBindingPutBadStateCandidatesBecomeManualError(t *testing.T) {
 	now := workerAppNow()
 	runningInvalid := workerAppBindingOperationRecord("op_binding_running_invalid", now)
@@ -326,6 +395,30 @@ func TestRunOnceNamespaceVolumeBindingPutBadStateCandidatesBecomeManualError(t *
 	runningInvalid.LeaseOwner = ""
 	runningInvalid.LeaseExpiresAt = nil
 	operator := workerAppBindingOperationRecord("op_binding_operator", now)
+	operator.State = operations.OperationStateOperatorInterventionRequired
+	store := newWorkerAppStore(runningInvalid, operator)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want manual count error")
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 2 || summary.Manual != 2 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want scanned=2 manual=2", summary)
+	}
+	if got := strings.Join(store.acquireIDs, ","); got != "" {
+		t.Fatalf("acquire IDs = %q, want no acquire for manual candidates", got)
+	}
+}
+
+func TestRunOnceVolumeEnsureBadStateCandidatesBecomeManualError(t *testing.T) {
+	now := workerAppNow()
+	runningInvalid := workerAppVolumeOperationRecord("op_volume_running_invalid", now)
+	runningInvalid.State = operations.OperationStateRunning
+	runningInvalid.LeaseOwner = ""
+	runningInvalid.LeaseExpiresAt = nil
+	operator := workerAppVolumeOperationRecord("op_volume_operator", now)
 	operator.State = operations.OperationStateOperatorInterventionRequired
 	store := newWorkerAppStore(runningInvalid, operator)
 	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
@@ -476,6 +569,30 @@ func workerAppRepoOperationRecord(operationID string, state operations.Operation
 	}
 }
 
+func workerAppVolumeOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	return operations.OperationRecord{
+		ID:               operationID,
+		Type:             operations.OperationVolumeEnsure,
+		State:            operations.OperationStateQueued,
+		Phase:            operations.OperationPhaseVolumeEnsureValidate,
+		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "", operations.OperationVolumeEnsure, operationID).String(),
+		IdempotencyKey:   operationID,
+		RequestHash:      operations.RequestHash("sha256:volume"),
+		CorrelationID:    "corr-alpha",
+		CallerService:    "agentsmith-api",
+		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:         operations.ResourceRef{Type: "volume", ID: "vol_123"},
+		InputSummary: map[string]any{
+			"volume_id":       "vol_123",
+			"backend":         "juicefs",
+			"isolation_class": "shared",
+			"status":          "active",
+			"capabilities":    map[string]any{"webdav_export": true, "workload_mount": true, "jvs_external_control_root": true, "directory_quota": false},
+		},
+		CreatedAt: now.Add(-time.Hour),
+	}
+}
+
 func workerAppBindingOperationRecord(operationID string, now time.Time) operations.OperationRecord {
 	return operations.OperationRecord{
 		ID:               operationID,
@@ -516,6 +633,7 @@ func workerAppNow() time.Time {
 type fakeWorkerAppStore struct {
 	records         map[string]operations.OperationRecord
 	order           []string
+	volume          resources.Volume
 	namespace       resources.Namespace
 	binding         resources.NamespaceVolumeBinding
 	operation       operations.OperationRecord
@@ -552,6 +670,31 @@ func (store *fakeWorkerAppStore) ListNamespaceUpsertOperationsForRecovery(ctx co
 		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
 			out = append(out, record)
 			continue
+		case operations.OperationStateRunning, operations.OperationStateCancelRequested:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (store *fakeWorkerAppStore) ListVolumeEnsureOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		store.listDeadline = deadline
+	}
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if record.Type != operations.OperationVolumeEnsure || record.Phase != operations.OperationPhaseVolumeEnsureValidate || strings.TrimSpace(record.NamespaceID) != "" {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
 		case operations.OperationStateRunning, operations.OperationStateCancelRequested:
 			if namespaceRecoveryLeaseDue(record, now) {
 				out = append(out, record)
@@ -618,6 +761,24 @@ func (store *fakeWorkerAppStore) AcquireNamespaceUpsertOperationLease(_ context.
 	return decision.Record, nil
 }
 
+func (store *fakeWorkerAppStore) AcquireVolumeEnsureOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if record.Type != operations.OperationVolumeEnsure || record.Phase != operations.OperationPhaseVolumeEnsureValidate || strings.TrimSpace(record.NamespaceID) != "" {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
 func (store *fakeWorkerAppStore) AcquireNamespaceVolumeBindingPutOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	record, ok := store.records[operationID]
 	if !ok {
@@ -645,6 +806,17 @@ func (store *fakeWorkerAppStore) CommitNamespaceUpsertWithLease(_ context.Contex
 	store.operation = operation
 	store.auditEvents = append(store.auditEvents, event)
 	return namespace, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitVolumeEnsureWithLease(_ context.Context, volume resources.Volume, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Volume, operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.volume = volume
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return volume, operation, nil
 }
 
 func (store *fakeWorkerAppStore) CommitNamespaceVolumeBindingPutWithLease(_ context.Context, binding resources.NamespaceVolumeBinding, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error) {

@@ -196,6 +196,37 @@ func TestInternalAPIShellServesNamespaceVolumeBindingPutThroughOperationIntake(t
 	}
 }
 
+func TestInternalAPIShellServesEnsureVolumeThroughOperationIntake(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		DeploymentGlobalCallers: []auth.AllowedCaller{{
+			CallerService: "agentsmith-api",
+			Kind:          auth.CallerKindAdmin,
+			Roles:         []auth.Role{auth.RoleVolumeAdmin},
+		}},
+		OperationIntakeStore: store,
+		GenerateOperationID:  func() string { return "op_volume_shell" },
+		Now:                  fixedNamespaceNow,
+	})
+	rec := httptest.NewRecorder()
+	req := ensureVolumeRequest("/internal/v1/volumes/vol_123:ensure?token=query-secret", ensureVolumeRequestBody("vol_123"))
+	req.Header.Set(auth.HeaderAuthorization, "Bearer auth-secret")
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if store.calls != 1 || store.spec.Scope.OperationType != operations.OperationVolumeEnsure || store.spec.NamespaceID != "" {
+		t.Fatalf("intake calls/spec = %d/%#v, want volume ensure", store.calls, store.spec)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "query-secret") || strings.Contains(body, "auth-secret") {
+		t.Fatalf("response leaked secret: %s", body)
+	}
+}
+
 func TestInternalAPIShellUnknownRoutePathDenied(t *testing.T) {
 	reader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleNamespaceAdmin}})}
 	handler := NewInternalAPIShell(InternalAPIShellConfig{

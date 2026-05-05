@@ -22,6 +22,8 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.OperationRecoveryReader = (*Store)(nil)
 	var _ store.OperationLeaseStore = (*Store)(nil)
 	var _ store.OperationWorkerCommitStore = (*Store)(nil)
+	var _ store.VolumeEnsureOperationCommitStore = (*Store)(nil)
+	var _ store.VolumeEnsureOperationRecoveryStore = (*Store)(nil)
 	var _ store.NamespaceUpsertOperationCommitStore = (*Store)(nil)
 	var _ store.NamespaceUpsertOperationRecoveryStore = (*Store)(nil)
 	var _ store.NamespaceVolumeBindingOperationCommitStore = (*Store)(nil)
@@ -416,6 +418,74 @@ func TestListNamespaceUpsertOperationsForRecoveryRejectsInvalidArgsBeforeSQL(t *
 			_, err := st.ListNamespaceUpsertOperationsForRecovery(context.Background(), tt.now, tt.limit)
 			if err == nil {
 				t.Fatal("ListNamespaceUpsertOperationsForRecovery succeeded, want error")
+			}
+			if exec.query != "" {
+				t.Fatalf("issued SQL for invalid args: %s", exec.query)
+			}
+		})
+	}
+}
+
+func TestListVolumeEnsureOperationsForRecoveryScopesBeforeOrderAndLimit(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := operationFixture(now.Add(-time.Hour))
+	record.ID = "op-volume"
+	record.Type = operations.OperationVolumeEnsure
+	record.State = operations.OperationStateQueued
+	record.Phase = operations.OperationPhaseVolumeEnsureValidate
+	record.Resource = operations.ResourceRef{Type: "volume", ID: "vol_123"}
+	record.LeaseOwner = ""
+	record.LeaseExpiresAt = nil
+	exec := &fakeExecutor{rows: fakeRows{rows: []fakeRow{{values: operationRowValues(record)}}}}
+	st := &Store{exec: exec}
+
+	got, err := st.ListVolumeEnsureOperationsForRecovery(context.Background(), now, 1)
+	if err != nil {
+		t.Fatalf("ListVolumeEnsureOperationsForRecovery: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "op-volume" {
+		t.Fatalf("records = %#v, want op-volume", got)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"SELECT",
+		"FROM operations",
+		"operation_type = 'volume_ensure'",
+		"phase = 'validate_volume_ensure'",
+		"namespace_id = ''",
+		"operation_state = 'queued'",
+		"operation_state = 'running'",
+		"operation_state = 'cancel_requested'",
+		"operator_intervention_required",
+		"ORDER BY created_at, operation_id",
+		"LIMIT $2",
+	)
+	if strings.Contains(exec.query, "UPDATE ") || strings.Contains(exec.query, " FOR UPDATE") {
+		t.Fatalf("volume ensure recovery list must be read-only SELECT, got %s", exec.query)
+	}
+	if !reflect.DeepEqual(exec.args, []any{now, 1}) {
+		t.Fatalf("args = %#v, want now and limit", exec.args)
+	}
+}
+
+func TestListVolumeEnsureOperationsForRecoveryRejectsInvalidArgsBeforeSQL(t *testing.T) {
+	tests := []struct {
+		name  string
+		now   time.Time
+		limit int
+	}{
+		{name: "zero now", limit: 1},
+		{name: "zero limit", now: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)},
+		{name: "negative limit", now: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC), limit: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{}
+			st := &Store{exec: exec}
+
+			_, err := st.ListVolumeEnsureOperationsForRecovery(context.Background(), tt.now, tt.limit)
+			if err == nil {
+				t.Fatal("ListVolumeEnsureOperationsForRecovery succeeded, want error")
 			}
 			if exec.query != "" {
 				t.Fatalf("issued SQL for invalid args: %s", exec.query)
@@ -825,6 +895,61 @@ func TestAcquireNamespaceUpsertOperationLeaseScopesAtomicUpdateBeforeMutation(t 
 	wantArgs := []any{"op-namespace", "worker-a", leaseExpiresAt, now, string(operations.LeaseCancelPolicyNone)}
 	if !reflect.DeepEqual(exec.args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", exec.args, wantArgs)
+	}
+}
+
+func TestAcquireVolumeEnsureOperationLeaseScopesAtomicUpdateBeforeMutation(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	leaseExpiresAt := now.Add(30 * time.Minute)
+	record := operationFixture(now.Add(-time.Hour))
+	record.ID = "op-volume"
+	record.Type = operations.OperationVolumeEnsure
+	record.State = operations.OperationStateRunning
+	record.Phase = operations.OperationPhaseVolumeEnsureValidate
+	record.Resource = operations.ResourceRef{Type: "volume", ID: "vol_123"}
+	record.LeaseOwner = "worker-a"
+	record.LeaseExpiresAt = &leaseExpiresAt
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
+	st := &Store{exec: exec}
+
+	got, err := st.AcquireVolumeEnsureOperationLease(context.Background(), "op-volume", operations.LeaseRequest{Owner: "worker-a", Duration: 30 * time.Minute, Now: now})
+	if err != nil {
+		t.Fatalf("AcquireVolumeEnsureOperationLease: %v", err)
+	}
+	if got.ID != "op-volume" || got.LeaseOwner != "worker-a" {
+		t.Fatalf("leased record = %#v, want op-volume worker-a", got)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"UPDATE operations",
+		"WHERE operation_id = $1",
+		"operation_type = 'volume_ensure'",
+		"phase = 'validate_volume_ensure'",
+		"namespace_id = ''",
+		"(operation_state = 'queued' AND $5 = ''",
+		"(operation_state = 'running' AND $5 = ''",
+		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation'",
+		"RETURNING",
+	)
+	if strings.Contains(exec.query, "SELECT ") {
+		t.Fatalf("AcquireVolumeEnsureOperationLease query must be single UPDATE RETURNING, got %s", exec.query)
+	}
+	wantArgs := []any{"op-volume", "worker-a", leaseExpiresAt, now, string(operations.LeaseCancelPolicyNone)}
+	if !reflect.DeepEqual(exec.args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", exec.args, wantArgs)
+	}
+}
+
+func TestAcquireVolumeEnsureOperationLeaseRejectsMismatchedScopeWithoutMutation(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	st := &Store{exec: &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}}
+
+	_, err := st.AcquireVolumeEnsureOperationLease(context.Background(), "op-repo", operations.LeaseRequest{
+		Owner:    "worker-a",
+		Duration: time.Minute,
+		Now:      now,
+	})
+	if !errors.Is(err, operations.ErrLeaseUnavailable) || !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("AcquireVolumeEnsureOperationLease error = %v, want ErrLeaseUnavailable/sql.ErrNoRows", err)
 	}
 }
 

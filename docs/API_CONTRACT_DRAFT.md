@@ -32,7 +32,7 @@ AFSCP APIs are internal control-plane APIs.
 
 The GA transport uses the required headers in [contracts/afscp-internal-api-v1.md](contracts/afscp-internal-api-v1.md). Header values must map into this canonical context.
 
-`X-AFSCP-Namespace-Id` is required for every namespace-bound request. When a route also carries `namespace_id` in the path, query, or body, all namespace values must match before AFSCP reads or mutates the resource. Volume-global admin operations do not carry a namespace header.
+`X-AFSCP-Namespace-Id` is required for every namespace-bound request. When a route also carries `namespace_id` in the path, query, or body, all namespace values must match before AFSCP reads or mutates the resource. Volume-global admin operations must not carry a namespace header; AFSCP rejects non-empty namespace headers on those routes.
 
 Operation inspection is the exception to request-carried namespace context:
 `GET /internal/v1/operations/{operationId}` does not require
@@ -143,7 +143,6 @@ must not be disguised as `CAPABILITY_DENIED` or `NAMESPACE_NOT_FOUND`.
   "backend": "juicefs",
   "isolation_class": "shared",
   "status": "active",
-  "credential_ref": "secret://afscp/juicefs-default",
   "capabilities": {
     "webdav_export": true,
     "workload_mount": true,
@@ -157,7 +156,7 @@ must not be disguised as `CAPABILITY_DENIED` or `NAMESPACE_NOT_FOUND`.
 }
 ```
 
-`credential_ref` is internal. It must not be returned to ordinary clients, workloads, or non-admin caller responses.
+Credential references, secrets, metadata URLs, and raw/root storage paths are deployment-internal configuration. They are not part of `ensureVolume` requests or ordinary `Volume` responses.
 
 `workload_mount=true` requires JVS control metadata to be outside the workload-visible payload root, or an equivalent verified filtered view. The default AFSCP path uses JVS external control root mode, so `filtered_mount=false` is acceptable: the orchestrator mounts only `payload_volume_subdir`.
 

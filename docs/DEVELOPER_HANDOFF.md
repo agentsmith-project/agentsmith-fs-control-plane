@@ -145,9 +145,9 @@ Partially completed:
   use the lease-fenced update primitive, not unguarded `UpdateOperation`. The
   recovery planner and repo recovery inspection classify existing durable
   record values into high-level actions. `afscp-worker --run-once` now has an
-  opt-in production bootstrap for the minimal `namespace_upsert` and
-  `namespace_volume_binding_put` recovery executors only; it does not touch
-  JVS/WebDAV/mount/storage mutation. Real
+  opt-in production bootstrap for the minimal `volume_ensure`,
+  `namespace_upsert`, and `namespace_volume_binding_put` recovery executors
+  only; it does not touch JVS/WebDAV/mount/storage mutation. Real
   external audit delivery worker/sink integration and repo lifecycle recovery
   loops are not implemented. Resource
   metadata persistence exists only as control-plane metadata storage; it is not

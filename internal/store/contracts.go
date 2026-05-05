@@ -56,6 +56,24 @@ type OperationWorkerCommitStore interface {
 	CommitOperationWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
 }
 
+// VolumeEnsureOperationCommitStore atomically commits volume metadata, a
+// lease-fenced operation update, and its audit outbox event. Implementations
+// must perform all writes in the same durable boundary; they must not compose
+// this by calling UpsertVolume followed by CommitOperationWithLease.
+type VolumeEnsureOperationCommitStore interface {
+	CommitVolumeEnsureWithLease(ctx context.Context, volume resources.Volume, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Volume, operations.OperationRecord, error)
+}
+
+// VolumeEnsureOperationRecoveryStore owns the durable recovery boundary for
+// volume_ensure. Implementations must push the volume_ensure +
+// validate_volume_ensure scope into durable list and acquire predicates before
+// ORDER/LIMIT or lease mutation.
+type VolumeEnsureOperationRecoveryStore interface {
+	ListVolumeEnsureOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireVolumeEnsureOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	VolumeEnsureOperationCommitStore
+}
+
 // NamespaceUpsertOperationCommitStore atomically commits namespace metadata,
 // a lease-fenced operation update, and its audit outbox event. Implementations
 // must perform all three writes in the same durable boundary; they must not

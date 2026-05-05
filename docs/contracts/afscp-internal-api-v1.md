@@ -18,8 +18,9 @@ Namespace-bound requests include namespace create/disable and volume-binding
 operations, repo create/list/get/lifecycle/save/restore, template create/clone,
 export create/get/revoke, workload mount operations, and namespace-bound
 operation inspection. If the request also carries a namespace in the path, query,
-or body, it must equal `X-AFSCP-Namespace-Id`. Volume-global admin operations do
-not carry this header.
+or body, it must equal `X-AFSCP-Namespace-Id`. Volume-global admin operations
+must not carry this header; AFSCP rejects non-empty namespace headers on those
+routes.
 
 ## Caller Authorization
 
@@ -69,6 +70,7 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
 - AFSCP validates caller service authorization before namespace/resource consistency.
 - AFSCP validates namespace/repo/template/export consistency.
 - AFSCP rejects mismatches between `X-AFSCP-Namespace-Id` and any path, query, body, or stored resource namespace.
+- AFSCP rejects non-empty `X-AFSCP-Namespace-Id` on volume-global admin operations.
 - Cross-namespace template clone is rejected by default.
 - Cross-volume template clone is rejected with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
 - Mutations create operation records before executing external effects.

@@ -48,6 +48,15 @@ func TestNamespaceUpsertPhasesAreStable(t *testing.T) {
 	}
 }
 
+func TestVolumeEnsurePhasesAreStable(t *testing.T) {
+	if OperationPhaseVolumeEnsureValidate != "validate_volume_ensure" {
+		t.Fatalf("validate phase = %q, want validate_volume_ensure", OperationPhaseVolumeEnsureValidate)
+	}
+	if OperationPhaseVolumeEnsureCommitted != "volume_ensure_committed" {
+		t.Fatalf("committed phase = %q, want volume_ensure_committed", OperationPhaseVolumeEnsureCommitted)
+	}
+}
+
 func TestNamespaceVolumeBindingPutPhasesAreStable(t *testing.T) {
 	if OperationPhaseNamespaceVolumeBindingPutValidate != "validate_namespace_volume_binding_put" {
 		t.Fatalf("validate phase = %q, want validate_namespace_volume_binding_put", OperationPhaseNamespaceVolumeBindingPutValidate)

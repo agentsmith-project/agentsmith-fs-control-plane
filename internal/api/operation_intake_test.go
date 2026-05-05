@@ -137,7 +137,7 @@ func TestCreateOrReuseOperationIntakeAllowsVolumeGlobalWithoutNamespace(t *testi
 		Resource:            operations.ResourceRef{Type: "volume", ID: "vol_123"},
 		CanonicalRequest:    map[string]any{"volume_id": "vol_123"},
 		InputSummary:        map[string]any{"volume_id": "vol_123"},
-		Phase:               "ensure_volume",
+		Phase:               operations.OperationPhaseVolumeEnsureValidate,
 		GenerateOperationID: func() string { return "op_volume" },
 		Now:                 func() time.Time { return now },
 	})

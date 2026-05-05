@@ -18,12 +18,14 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store/postgres"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/volumeexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
 
 	_ "github.com/lib/pq"
 )
 
 type OperationRecoveryStore interface {
+	store.VolumeEnsureOperationRecoveryStore
 	store.NamespaceUpsertOperationRecoveryStore
 	store.NamespaceVolumeBindingOperationRecoveryStore
 }
@@ -116,10 +118,22 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		}
 		return nil, err
 	}
+	volumeExecutor, err := volumeexec.NewExecutor(volumeexec.Config{
+		CommitStore:  scopedStore,
+		Owner:        opConfig.Owner,
+		Clock:        now,
+		AuditEventID: func() string { return eventID() },
+	})
+	if err != nil {
+		if handle.Close != nil {
+			err = errors.Join(err, handle.Close())
+		}
+		return nil, err
+	}
 	operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
 		Reader:        scopedStore,
 		LeaseStore:    scopedStore,
-		Executor:      multiExecutor{executors: []recovery.OperationExecutor{namespaceExecutor, bindingExecutor}},
+		Executor:      multiExecutor{executors: []recovery.OperationExecutor{volumeExecutor, namespaceExecutor, bindingExecutor}},
 		Owner:         opConfig.Owner,
 		LeaseDuration: opConfig.LeaseDuration,
 		Limit:         opConfig.Limit,
@@ -188,6 +202,10 @@ type operationRecoveryStore struct {
 }
 
 func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	volumeRecords, err := scoped.store.ListVolumeEnsureOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
 	namespaceRecords, err := scoped.store.ListNamespaceUpsertOperationsForRecovery(ctx, now, limit)
 	if err != nil {
 		return nil, err
@@ -196,7 +214,8 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	records := append(namespaceRecords, bindingRecords...)
+	records := append(volumeRecords, namespaceRecords...)
+	records = append(records, bindingRecords...)
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
 			return records[i].ID < records[j].ID
@@ -210,7 +229,11 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 }
 
 func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
-	record, err := scoped.store.AcquireNamespaceUpsertOperationLease(ctx, operationID, request)
+	record, err := scoped.store.AcquireVolumeEnsureOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
+	}
+	record, err = scoped.store.AcquireNamespaceUpsertOperationLease(ctx, operationID, request)
 	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
 		return record, err
 	}
@@ -223,6 +246,10 @@ func (scoped operationRecoveryStore) RenewOperationLease(context.Context, string
 
 func (scoped operationRecoveryStore) UpdateOperationWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, fmt.Errorf("%w: worker operation recovery does not perform generic operation updates", operations.ErrInvalidLeaseRequest)
+}
+
+func (scoped operationRecoveryStore) CommitVolumeEnsureWithLease(ctx context.Context, volume resources.Volume, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Volume, operations.OperationRecord, error) {
+	return scoped.store.CommitVolumeEnsureWithLease(ctx, volume, record, owner, now, event)
 }
 
 func (scoped operationRecoveryStore) CommitNamespaceUpsertWithLease(ctx context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
@@ -280,6 +307,7 @@ var (
 	_ OperationRecoveryStore                           = (*postgres.Store)(nil)
 	_ store.OperationRecoveryReader                    = operationRecoveryStore{}
 	_ store.OperationLeaseStore                        = operationRecoveryStore{}
+	_ store.VolumeEnsureOperationCommitStore           = operationRecoveryStore{}
 	_ store.NamespaceUpsertOperationCommitStore        = operationRecoveryStore{}
 	_ store.NamespaceVolumeBindingOperationCommitStore = operationRecoveryStore{}
 	_ recovery.OperationExecutor                       = multiExecutor{}

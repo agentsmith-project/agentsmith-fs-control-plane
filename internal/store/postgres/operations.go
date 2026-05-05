@@ -115,6 +115,20 @@ func (store *Store) ListNamespaceUpsertOperationsForRecovery(ctx context.Context
 	return scanOperations(rows)
 }
 
+func (store *Store) ListVolumeEnsureOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("list volume ensure operations for recovery: now must be set")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list volume ensure operations for recovery: limit must be positive")
+	}
+	rows, err := store.exec.QueryContext(ctx, volumeEnsureOperationRecoveryCandidatesSQL(), now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanOperations(rows)
+}
+
 func (store *Store) ListNamespaceVolumeBindingPutOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
 	if now.IsZero() {
 		return nil, fmt.Errorf("list namespace volume binding put operations for recovery: now must be set")
@@ -172,6 +186,25 @@ func (store *Store) AcquireNamespaceUpsertOperationLease(ctx context.Context, op
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return operations.OperationRecord{}, operationLeaseUnavailable("acquire namespace upsert", args.operationID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) AcquireVolumeEnsureOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	args, err := operationLeaseRequestArgs(operationID, request)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	if args.recoveryMode != "" {
+		return operations.OperationRecord{}, operationLeaseInvalidRequest("recovery_mode", "volume ensure recovery does not perform explicit recovery actions")
+	}
+	row := store.exec.QueryRowContext(ctx, volumeEnsureOperationAcquireLeaseSQL(), args.operationID, args.owner, args.expiresAt, args.now, args.cancelPolicy)
+	record, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("acquire volume ensure", args.operationID, err)
 		}
 		return operations.OperationRecord{}, err
 	}
@@ -339,6 +372,19 @@ func namespaceUpsertOperationRecoveryCandidatesSQL() string {
 		") ORDER BY created_at, operation_id LIMIT $2"
 }
 
+func volumeEnsureOperationRecoveryCandidatesSQL() string {
+	noLeasePair := "(lease_owner IS NULL AND lease_expires_at IS NULL)"
+	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
+	invalidLeasePair := "((lease_owner IS NULL AND lease_expires_at IS NOT NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) = '') OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NULL))"
+	return operationSelectSQL() + " WHERE " +
+		"operation_type = 'volume_ensure' AND phase = 'validate_volume_ensure' AND namespace_id = '' AND (" +
+		"(operation_state = 'queued') OR " +
+		"(operation_state = 'running' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'cancel_requested' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'operator_intervention_required')" +
+		") ORDER BY created_at, operation_id LIMIT $2"
+}
+
 func namespaceVolumeBindingPutOperationRecoveryCandidatesSQL() string {
 	noLeasePair := "(lease_owner IS NULL AND lease_expires_at IS NULL)"
 	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
@@ -403,6 +449,27 @@ func namespaceUpsertOperationAcquireLeaseSQL() string {
 		"WHERE operation_id = $1 " +
 		"AND operation_type = 'namespace_upsert' " +
 		"AND phase = 'validate_namespace_upsert' " +
+		"AND (" +
+		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
+		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
+		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
+		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+}
+
+func volumeEnsureOperationAcquireLeaseSQL() string {
+	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
+	return "UPDATE operations SET " +
+		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
+		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
+		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
+		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
+		"updated_at = $4 " +
+		"WHERE operation_id = $1 " +
+		"AND operation_type = 'volume_ensure' " +
+		"AND phase = 'validate_volume_ensure' " +
+		"AND namespace_id = '' " +
 		"AND (" +
 		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
