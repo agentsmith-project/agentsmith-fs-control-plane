@@ -3,8 +3,6 @@ package fences
 import (
 	"testing"
 	"time"
-
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
 )
 
 func TestFenceWireValuesAreStable(t *testing.T) {
@@ -28,20 +26,6 @@ func TestFenceWireValuesAreStable(t *testing.T) {
 	for status, want := range statuses {
 		if got := status.String(); got != want {
 			t.Fatalf("%#v String() = %q, want %q", status, got, want)
-		}
-	}
-}
-
-func TestErrorFamiliesMapToStableAPICodes(t *testing.T) {
-	families := map[ErrorFamily]api.ErrorCode{
-		ErrorFamilyInvalidID:                 api.CodeInvalidID,
-		ErrorFamilyWriterSessionFenceHeld:    api.CodeWriterSessionFenceHeld,
-		ErrorFamilyRepoLifecycleFenceHeld:    api.CodeRepoLifecycleFenceHeld,
-		ErrorFamilyOperationRecoveryRequired: api.CodeOperationRecoveryRequired,
-	}
-	for family, code := range families {
-		if string(family) != string(code) {
-			t.Fatalf("family %q does not map to API code %q", family, code)
 		}
 	}
 }

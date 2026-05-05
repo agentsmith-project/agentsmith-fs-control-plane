@@ -75,6 +75,12 @@ func TestRepoCreatePhasesAreStable(t *testing.T) {
 	}
 }
 
+func TestRepoLifecyclePhasesAreStable(t *testing.T) {
+	if OperationPhaseRepoLifecycleValidate != "validate_repo_lifecycle" {
+		t.Fatalf("validate phase = %q, want validate_repo_lifecycle", OperationPhaseRepoLifecycleValidate)
+	}
+}
+
 func TestRouteOperationTypesReturnsDefensiveCopy(t *testing.T) {
 	mapped := RouteOperationTypes()
 	mapped["createRepo"] = OperationMigrationCutover

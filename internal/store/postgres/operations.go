@@ -367,6 +367,14 @@ func (store *Store) CreateOrReuseOperation(ctx context.Context, spec operations.
 	}, nil
 }
 
+func (store *Store) GetOperationByIdempotencyScope(ctx context.Context, scope operations.IdempotencyScope) (operations.OperationRecord, error) {
+	if strings.TrimSpace(scope.CallerService) == "" || strings.TrimSpace(scope.IdempotencyKey) == "" || strings.TrimSpace(string(scope.OperationType)) == "" {
+		return operations.OperationRecord{}, operationLeaseInvalidRequest("idempotency_scope", "operation idempotency scope is incomplete")
+	}
+	row := store.exec.QueryRowContext(ctx, operationSelectByIdempotencyScopeSQL(), scope.CallerService, scope.NamespaceID, string(scope.OperationType), scope.IdempotencyKey)
+	return scanOperation(row)
+}
+
 func (store *Store) CreateOrReuseRepoCreateOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
 	record, err := operations.NewQueuedOperationRecord(spec)
 	if err != nil {
@@ -451,6 +459,10 @@ func repoCreateOperationCreateOrReuseSQL() string {
 
 func operationSelectSQL() string {
 	return "SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM operations"
+}
+
+func operationSelectByIdempotencyScopeSQL() string {
+	return operationSelectSQL() + " WHERE caller_service = $1 AND namespace_id = $2 AND operation_type = $3 AND idempotency_key = $4"
 }
 
 func operationRecoveryCandidatesSQL() string {

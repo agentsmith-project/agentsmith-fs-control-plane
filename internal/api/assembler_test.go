@@ -11,11 +11,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
 )
+
+var _ RepoFenceReader = (store.RepoFenceReader)(nil)
 
 func TestInternalAPIShellServesNamespaceVolumeBindingThroughInjectedHandler(t *testing.T) {
 	now := namespaceBindingHandlerTestNow()
@@ -124,7 +128,7 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 		method string
 		path   string
 	}{
-		{name: "repo archive", method: http.MethodPost, path: "/internal/v1/repos/repo_123:archive"},
+		{name: "save point create", method: http.MethodPost, path: "/internal/v1/repos/repo_123/save-points"},
 	}
 
 	for _, tt := range tests {
@@ -359,6 +363,213 @@ func TestInternalAPIShellServesCreateRepoThroughOperationIntake(t *testing.T) {
 	body := rec.Body.String()
 	if strings.Contains(body, "query-secret") || strings.Contains(body, "auth-secret") {
 		t.Fatalf("response leaked secret: %s", body)
+	}
+}
+
+func TestInternalAPIShellServesRepoLifecycleThroughOperationIntake(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	meta := repoLifecycleMetaFixture(resources.RepoStatusActive)
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:      namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader: meta.bindingReader,
+		NamespaceReader:        meta.namespaceRead,
+		RepoReader:             meta.repoReader,
+		RepoFenceReader:        meta.fenceReader,
+		OperationIntakeStore:   store,
+		GenerateOperationID:    func() string { return "op_lifecycle_shell" },
+		Now:                    fixedNamespaceNow,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoLifecycleRequest("/internal/v1/repos/repo_123:archive?token=query-secret", "ns_123", `{}`))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+	}
+	if store.calls != 1 || store.spec.Scope.OperationType != operations.OperationRepoArchive || store.spec.RepoID != "repo_123" {
+		t.Fatalf("store/spec = %d/%#v, want repo archive", store.calls, store.spec)
+	}
+	if strings.Contains(rec.Body.String(), "query-secret") {
+		t.Fatalf("response leaked query secret: %s", rec.Body.String())
+	}
+}
+
+func TestInternalAPIShellPurgeOverrideUsesDeploymentBreakGlassPolicy(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	meta := repoLifecycleMetaFixture(resources.RepoStatusTombstoned)
+	retention := fixedNamespaceNow().Add(time.Hour)
+	meta.repo.Lifecycle.RetentionExpiresAt = &retention
+	meta.repoReader.repos = []resources.Repo{meta.repo}
+	meta.binding.LifecyclePolicy["break_glass_purge_enabled"] = true
+	meta.bindingReader.binding = meta.binding
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:      namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader: meta.bindingReader,
+		NamespaceReader:        meta.namespaceRead,
+		RepoReader:             meta.repoReader,
+		RepoFenceReader:        meta.fenceReader,
+		OperationIntakeStore:   store,
+		DeploymentGlobalCallers: []auth.AllowedCaller{{
+			CallerService: "agentsmith-api",
+			Kind:          auth.CallerKindOperator,
+			Roles:         []auth.Role{auth.RoleBreakGlassAdmin},
+		}},
+		GenerateOperationID: func() string { return "op_lifecycle_shell" },
+		Now:                 fixedNamespaceNow,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoLifecycleRequest("/internal/v1/repos/repo_123:purge", "ns_123", `{"reason":"raw reason secret","product_confirmation_ref":"confirm-secret","retention_override_requested":true,"operator_approval_ref":"approval-secret"}`))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+	}
+	if store.calls != 1 || store.spec.Scope.OperationType != operations.OperationRepoPurge {
+		t.Fatalf("store/spec = %d/%#v, want purge intake", store.calls, store.spec)
+	}
+	rendered := renderLifecycleArgs(t, store.spec.InputSummary)
+	if !strings.Contains(rendered, `"break_glass_authorized":true`) {
+		t.Fatalf("summary = %s, want break_glass_authorized true", rendered)
+	}
+	for _, forbidden := range []string{"raw reason secret", "confirm-secret", "approval-secret"} {
+		if strings.Contains(rendered, forbidden) || strings.Contains(rec.Body.String(), forbidden) {
+			t.Fatalf("purge override leaked %q summary=%s body=%s", forbidden, rendered, rec.Body.String())
+		}
+	}
+	wantHash, err := operations.HashRequest(repoLifecycleCanonicalRequest{RepoID: "repo_123", Body: purgeRepoRequestDTO{
+		Reason:                     "raw reason secret",
+		ProductConfirmationRef:     "confirm-secret",
+		RetentionOverrideRequested: true,
+		OperatorApprovalRef:        "approval-secret",
+	}})
+	if err != nil {
+		t.Fatalf("hash canonical purge: %v", err)
+	}
+	if store.spec.RequestHash != wantHash {
+		t.Fatalf("request hash = %q, want canonical path+body hash %q", store.spec.RequestHash, wantHash)
+	}
+}
+
+func TestInternalAPIShellPurgeOverrideRejectsWithoutDeploymentBreakGlass(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	meta := repoLifecycleMetaFixture(resources.RepoStatusTombstoned)
+	retention := fixedNamespaceNow().Add(time.Hour)
+	meta.repo.Lifecycle.RetentionExpiresAt = &retention
+	meta.repoReader.repos = []resources.Repo{meta.repo}
+	meta.binding.LifecyclePolicy["break_glass_purge_enabled"] = true
+	meta.bindingReader.binding = meta.binding
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:      namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader: meta.bindingReader,
+		NamespaceReader:        meta.namespaceRead,
+		RepoReader:             meta.repoReader,
+		RepoFenceReader:        meta.fenceReader,
+		OperationIntakeStore:   store,
+		GenerateOperationID:    func() string { return "op_lifecycle_shell" },
+		Now:                    fixedNamespaceNow,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoLifecycleRequest("/internal/v1/repos/repo_123:purge", "ns_123", `{"reason":"raw reason secret","product_confirmation_ref":"confirm-secret","retention_override_requested":true,"operator_approval_ref":"approval-secret"}`))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	if store.calls != 0 {
+		t.Fatalf("intake calls = %d, want none", store.calls)
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodePurgeRequiresOperatorApproval {
+		t.Fatalf("error code = %s, want %s", env.Error.Code, CodePurgeRequiresOperatorApproval)
+	}
+	if strings.Contains(rec.Body.String(), "raw reason secret") || strings.Contains(rec.Body.String(), "confirm-secret") || strings.Contains(rec.Body.String(), "approval-secret") {
+		t.Fatalf("response leaked raw purge detail: %s", rec.Body.String())
+	}
+}
+
+func TestInternalAPIShellPurgeOverrideBreakGlassPolicyFailureFailsClosed(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	meta := repoLifecycleMetaFixture(resources.RepoStatusTombstoned)
+	retention := fixedNamespaceNow().Add(time.Hour)
+	meta.repo.Lifecycle.RetentionExpiresAt = &retention
+	meta.repoReader.repos = []resources.Repo{meta.repo}
+	meta.binding.LifecyclePolicy["break_glass_purge_enabled"] = true
+	meta.bindingReader.binding = meta.binding
+	sink := &fakeAuditSink{}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:      namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader: meta.bindingReader,
+		NamespaceReader:        meta.namespaceRead,
+		RepoReader:             meta.repoReader,
+		RepoFenceReader:        meta.fenceReader,
+		OperationIntakeStore:   store,
+		DeploymentGlobalPolicy: fakeAllowedCallerPolicy{err: errors.New("global policy password=secret failed")},
+		GenerateOperationID:    func() string { return "op_lifecycle_shell" },
+		Now:                    fixedNamespaceNow,
+		AuditSink:              sink,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoLifecycleRequest("/internal/v1/repos/repo_123:purge", "ns_123", `{"reason":"raw reason secret","product_confirmation_ref":"confirm-secret","retention_override_requested":true,"operator_approval_ref":"approval-secret"}`))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body = %s, want 500", rec.Code, rec.Body.String())
+	}
+	if store.calls != 0 {
+		t.Fatalf("intake calls = %d, want none", store.calls)
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeInternalError {
+		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeInternalError)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("audit events = %#v, want denied audit", sink.events)
+	}
+	if strings.Contains(rec.Body.String(), "secret") || strings.Contains(rec.Body.String(), "global policy") || strings.Contains(rec.Body.String(), "password") {
+		t.Fatalf("response leaked policy/input detail: %s", rec.Body.String())
+	}
+}
+
+func TestInternalAPIShellPurgeOverridePreservesClassifiedBreakGlassPolicyError(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	meta := repoLifecycleMetaFixture(resources.RepoStatusTombstoned)
+	retention := fixedNamespaceNow().Add(time.Hour)
+	meta.repo.Lifecycle.RetentionExpiresAt = &retention
+	meta.repoReader.repos = []resources.Repo{meta.repo}
+	meta.binding.LifecyclePolicy["break_glass_purge_enabled"] = true
+	meta.bindingReader.binding = meta.binding
+	sink := &fakeAuditSink{}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:      namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader: meta.bindingReader,
+		NamespaceReader:        meta.namespaceRead,
+		RepoReader:             meta.repoReader,
+		RepoFenceReader:        meta.fenceReader,
+		OperationIntakeStore:   store,
+		DeploymentGlobalPolicy: fakeAllowedCallerPolicy{err: NewAllowedCallerPolicyError(CodeStorageUnavailable, http.StatusServiceUnavailable, true, "durable metadata store is unavailable", "store_unavailable")},
+		GenerateOperationID:    func() string { return "op_lifecycle_shell" },
+		Now:                    fixedNamespaceNow,
+		AuditSink:              sink,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoLifecycleRequest("/internal/v1/repos/repo_123:purge", "ns_123", `{"reason":"raw reason secret","product_confirmation_ref":"confirm-secret","retention_override_requested":true,"operator_approval_ref":"approval-secret"}`))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d body = %s, want 503", rec.Code, rec.Body.String())
+	}
+	if store.calls != 0 {
+		t.Fatalf("intake calls = %d, want none", store.calls)
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeStorageUnavailable || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want STORAGE_UNAVAILABLE retryable", env.Error)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("audit events = %#v, want denied audit", sink.events)
+	}
+	if strings.Contains(rec.Body.String(), "secret") || strings.Contains(rec.Body.String(), "approval") {
+		t.Fatalf("response leaked raw purge detail: %s", rec.Body.String())
 	}
 }
 

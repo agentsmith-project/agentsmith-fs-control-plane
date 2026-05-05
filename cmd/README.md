@@ -5,9 +5,10 @@ The repo now has neutral Go command entrypoints:
 - `afscp-api`: validates config, can build or serve the neutral API shell, and
   exposes `/healthz`, `/readyz`, route metadata fallback, standard error
   envelopes, request logging, capability-denied guardrails, metadata-only
-  namespace handlers, repo create intake, and namespace-bound repo read
-  handlers, plus operation inspection. It does not implement repo
-  lifecycle/JVS lifecycle/WebDAV/mount/save/restore/template handlers yet.
+  namespace handlers, repo create intake, repo lifecycle intake/admission,
+  namespace-bound repo read handlers, plus operation inspection. It does not
+  implement repo lifecycle workers/storage mutation, JVS lifecycle, WebDAV,
+  mount, save/restore, or template handlers yet.
 - `afscp-worker`: bounded async worker entrypoint. `--run-once` defaults to
   fail-closed unless `AFSCP_WORKER_OPERATION_RECOVERY_ENABLED=true`; when
   enabled it wires PostgreSQL operation recovery for the minimal

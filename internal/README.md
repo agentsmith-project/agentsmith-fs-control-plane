@@ -31,10 +31,10 @@ needed before real handlers and storage mutation work:
   transitions.
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
 - `fences`: pure repo fence model, held-state semantics, and acquisition checks.
-- `repoaccess`: pure repo access admission model for later lifecycle,
-  save/restore, export, mount, and template handlers. It validates stored
-  repo/binding/fence invariants and returns stable error-family decisions, but
-  is not yet wired to concrete endpoint handlers.
+- `repoaccess`: pure repo access admission model used by repo lifecycle
+  intake/admission handlers and intended for later save/restore, export, mount,
+  and template handlers. It validates stored repo/binding/fence invariants and
+  returns stable error-family decisions.
 - `sessionstate`: pure export and workload-mount session substrate for
   restore-run writer gating and repo lifecycle drain gating. It is not yet wired
   to WebDAV, mount, lifecycle, or storage handlers.
@@ -65,10 +65,10 @@ needed before real handlers and storage mutation work:
   canonical internal repo root resolution from trusted volume roots plus repo
   IDs.
 
-Repo create intake, namespace-bound repo read handlers, and operation
-inspection exist. Still
-intentionally absent: repo lifecycle/JVS lifecycle/WebDAV/mount/save/restore/
-template endpoint handlers and their repo access/session admission wiring, real external audit delivery worker/sink
+Repo create intake, repo lifecycle operation intake/admission, namespace-bound
+repo read handlers, and operation inspection exist. Still intentionally absent:
+repo lifecycle workers/storage mutation, JVS lifecycle/WebDAV/mount/save/restore/
+template endpoint handlers beyond intake/admission, real external audit delivery worker/sink
 integration, repo lifecycle workers/recovery loop beyond create, WebDAV export
 serving, workload mount issuance, repo/template lifecycle mutation, storage
 mutation implementations beyond JVS repo init, and fence enforcement beyond the

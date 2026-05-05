@@ -2,8 +2,9 @@ package repoaccess
 
 import (
 	"errors"
+	"time"
 
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 )
 
@@ -57,11 +58,47 @@ func (family ErrorFamily) String() string {
 	return string(family)
 }
 
+type FenceKind string
+
+const (
+	FenceKindLifecycle     FenceKind = "lifecycle"
+	FenceKindWriterSession FenceKind = "writer_session"
+)
+
+func (kind FenceKind) String() string {
+	return string(kind)
+}
+
+type FenceStatus string
+
+const (
+	FenceStatusActive           FenceStatus = "active"
+	FenceStatusExpired          FenceStatus = "expired"
+	FenceStatusRecoveryRequired FenceStatus = "recovery_required"
+)
+
+type Fence struct {
+	ID                string
+	RepoID            string
+	Kind              FenceKind
+	HolderOperationID string
+	Status            FenceStatus
+	ExpiresAt         time.Time
+	ReleasedAt        *time.Time
+	RecoveredAt       *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+func (fence Fence) Held() bool {
+	return fence.ReleasedAt == nil && fence.RecoveredAt == nil
+}
+
 type Request struct {
 	Repo           resources.Repo
 	Namespace      resources.Namespace
 	Binding        resources.NamespaceVolumeBinding
-	HeldRepoFences []fences.Fence
+	HeldRepoFences []Fence
 	Intent         Intent
 	Mode           Mode
 }
@@ -122,7 +159,7 @@ func validateStoredState(request Request) error {
 		return err
 	}
 	for _, fence := range request.HeldRepoFences {
-		if err := fences.ValidateFence(fence); err != nil {
+		if err := validateFence(fence); err != nil {
 			return err
 		}
 		if fence.RepoID != request.Repo.ID {
@@ -134,13 +171,36 @@ func validateStoredState(request Request) error {
 
 var errInvalidStoredState = errors.New("invalid stored state")
 
-func denyForHeldLifecycleFence(existing []fences.Fence) (Decision, bool) {
+func validateFence(fence Fence) error {
+	if err := pathresolver.ValidateID(pathresolver.RepoID, fence.RepoID); err != nil {
+		return err
+	}
+	if err := pathresolver.ValidateID(pathresolver.OperationID, fence.HolderOperationID); err != nil {
+		return err
+	}
+	switch fence.Kind {
+	case FenceKindLifecycle, FenceKindWriterSession:
+	default:
+		return errInvalidStoredState
+	}
+	switch fence.Status {
+	case FenceStatusActive, FenceStatusExpired, FenceStatusRecoveryRequired:
+	default:
+		return errInvalidStoredState
+	}
+	if fence.ExpiresAt.IsZero() || fence.CreatedAt.IsZero() || fence.UpdatedAt.IsZero() {
+		return errInvalidStoredState
+	}
+	return nil
+}
+
+func denyForHeldLifecycleFence(existing []Fence) (Decision, bool) {
 	for _, fence := range existing {
 		if !fence.Held() {
 			continue
 		}
-		if fence.Kind == fences.KindLifecycle {
-			if fence.Status == fences.StatusExpired || fence.Status == fences.StatusRecoveryRequired {
+		if fence.Kind == FenceKindLifecycle {
+			if fence.Status == FenceStatusExpired || fence.Status == FenceStatusRecoveryRequired {
 				return deny(ErrorFamilyOperationRecoveryRequired, "held lifecycle fence requires recovery", fence.Kind.String()), true
 			}
 			return deny(ErrorFamilyRepoLifecycleFenceHeld, "held lifecycle fence blocks repo access", fence.Kind.String()), true
@@ -154,10 +214,10 @@ func denyForWriterFence(request Request) (Decision, bool) {
 		return Decision{}, false
 	}
 	for _, fence := range request.HeldRepoFences {
-		if !fence.Held() || fence.Kind != fences.KindWriterSession {
+		if !fence.Held() || fence.Kind != FenceKindWriterSession {
 			continue
 		}
-		if fence.Status == fences.StatusExpired || fence.Status == fences.StatusRecoveryRequired {
+		if fence.Status == FenceStatusExpired || fence.Status == FenceStatusRecoveryRequired {
 			return deny(ErrorFamilyOperationRecoveryRequired, "held writer-session fence requires recovery", fence.Kind.String()), true
 		}
 		return deny(ErrorFamilyWriterSessionFenceHeld, "held writer-session fence blocks writer access", fence.Kind.String()), true

@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 )
 
 func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {
@@ -56,6 +58,20 @@ func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {
 	got[0] = CodeCapabilityDenied
 	if ErrorCodes()[0] != CodeAuthenticationFailed {
 		t.Fatal("ErrorCodes returned mutable backing storage")
+	}
+}
+
+func TestFenceErrorFamiliesMapToStableAPICodes(t *testing.T) {
+	families := map[fences.ErrorFamily]ErrorCode{
+		fences.ErrorFamilyInvalidID:                 CodeInvalidID,
+		fences.ErrorFamilyWriterSessionFenceHeld:    CodeWriterSessionFenceHeld,
+		fences.ErrorFamilyRepoLifecycleFenceHeld:    CodeRepoLifecycleFenceHeld,
+		fences.ErrorFamilyOperationRecoveryRequired: CodeOperationRecoveryRequired,
+	}
+	for family, code := range families {
+		if string(family) != string(code) {
+			t.Fatalf("family %q does not map to API code %q", family, code)
+		}
 	}
 }
 

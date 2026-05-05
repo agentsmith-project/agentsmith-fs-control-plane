@@ -132,6 +132,14 @@ type IdempotencyStore interface {
 	CreateOrReuseOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
+// OperationIdempotencyLookupStore is the read-only side of the operation
+// idempotency boundary. It exists so handlers that must validate durable
+// metadata before creating a new operation can still reuse an already-created
+// operation for the same scope before touching mutable resource state.
+type OperationIdempotencyLookupStore interface {
+	GetOperationByIdempotencyScope(ctx context.Context, scope operations.IdempotencyScope) (operations.OperationRecord, error)
+}
+
 // RepoCreateOperationIntakeStore owns the durable repo_create intake boundary.
 // Implementations must first resolve idempotency for the operation scope and
 // request hash, then reject only brand-new create requests that target an

@@ -32,6 +32,7 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.NamespaceVolumeBindingOperationCommitStore = (*Store)(nil)
 	var _ store.NamespaceVolumeBindingOperationRecoveryStore = (*Store)(nil)
 	var _ store.IdempotencyStore = (*Store)(nil)
+	var _ store.OperationIdempotencyLookupStore = (*Store)(nil)
 	var _ store.AuditSink = (*Store)(nil)
 
 	if got := New(nil); got == nil {
@@ -264,6 +265,33 @@ func TestGetOperationReturnsSQLNoRows(t *testing.T) {
 	_, err := st.GetOperation(context.Background(), "missing")
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("GetOperation error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestGetOperationByIdempotencyScopeSelectsExactScope(t *testing.T) {
+	record := operationFixture(time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC))
+	scope := operations.NewIdempotencyScope("afscp-api", "", operations.OperationRepoCreate, "idem-alpha")
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
+	st := &Store{exec: exec}
+
+	got, err := st.GetOperationByIdempotencyScope(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("GetOperationByIdempotencyScope: %v", err)
+	}
+
+	if got.ID != record.ID || got.RequestHash != record.RequestHash {
+		t.Fatalf("operation = %#v, want %q/%q", got, record.ID, record.RequestHash)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"FROM operations",
+		"caller_service = $1",
+		"namespace_id = $2",
+		"operation_type = $3",
+		"idempotency_key = $4",
+	)
+	wantArgs := []any{"afscp-api", "", string(operations.OperationRepoCreate), "idem-alpha"}
+	if !reflect.DeepEqual(exec.args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", exec.args, wantArgs)
 	}
 }
 

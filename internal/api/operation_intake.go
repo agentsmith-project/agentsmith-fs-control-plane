@@ -18,6 +18,10 @@ type OperationIntakeStore interface {
 	CreateOrReuseOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
+type OperationIdempotencyLookupStore interface {
+	GetOperationByIdempotencyScope(ctx context.Context, scope operations.IdempotencyScope) (operations.OperationRecord, error)
+}
+
 type OperationIntakeConfig struct {
 	Store OperationIntakeStore
 }

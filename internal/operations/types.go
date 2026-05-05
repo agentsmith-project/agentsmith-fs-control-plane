@@ -46,6 +46,8 @@ const (
 
 	OperationPhaseRepoCreateValidate  = "validate_repo_create"
 	OperationPhaseRepoCreateCommitted = "repo_create_committed"
+
+	OperationPhaseRepoLifecycleValidate = "validate_repo_lifecycle"
 )
 
 var operationTypes = []OperationType{

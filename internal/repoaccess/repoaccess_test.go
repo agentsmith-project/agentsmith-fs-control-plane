@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 )
 
@@ -80,11 +79,11 @@ func TestAdmitDeniesTransitionalLifecycleWithFencePriority(t *testing.T) {
 	withoutFence := Admit(activeRequest(IntentStorageSession, ModeReadOnly, resources.RepoStatusArchiving, nil))
 	assertDenied(t, withoutFence, ErrorFamilyOperationRecoveryRequired)
 
-	withFence := Admit(activeRequest(IntentStorageSession, ModeReadOnly, resources.RepoStatusArchiving, []fences.Fence{
-		fenceFixture(fences.KindLifecycle, fences.StatusActive),
+	withFence := Admit(activeRequest(IntentStorageSession, ModeReadOnly, resources.RepoStatusArchiving, []Fence{
+		fenceFixture(FenceKindLifecycle, FenceStatusActive),
 	}))
 	assertDenied(t, withFence, ErrorFamilyRepoLifecycleFenceHeld)
-	if withFence.BlockingFenceKind != fences.KindLifecycle.String() {
+	if withFence.BlockingFenceKind != FenceKindLifecycle.String() {
 		t.Fatalf("blocking fence kind = %q, want lifecycle", withFence.BlockingFenceKind)
 	}
 }
@@ -92,23 +91,23 @@ func TestAdmitDeniesTransitionalLifecycleWithFencePriority(t *testing.T) {
 func TestAdmitHeldFenceRecoveryStatusesRequireOperationRecovery(t *testing.T) {
 	tests := []struct {
 		name string
-		kind fences.Kind
+		kind FenceKind
 	}{
-		{name: "lifecycle", kind: fences.KindLifecycle},
-		{name: "writer", kind: fences.KindWriterSession},
+		{name: "lifecycle", kind: FenceKindLifecycle},
+		{name: "writer", kind: FenceKindWriterSession},
 	}
-	statuses := []fences.Status{fences.StatusExpired, fences.StatusRecoveryRequired}
+	statuses := []FenceStatus{FenceStatusExpired, FenceStatusRecoveryRequired}
 	for _, tt := range tests {
 		for _, status := range statuses {
 			t.Run(tt.name+" "+string(status), func(t *testing.T) {
 				intent := IntentStorageSession
 				mode := ModeReadWrite
-				if tt.kind == fences.KindLifecycle {
+				if tt.kind == FenceKindLifecycle {
 					intent = IntentExportCreate
 					mode = ModeReadOnly
 				}
 
-				decision := Admit(activeRequest(intent, mode, resources.RepoStatusActive, []fences.Fence{
+				decision := Admit(activeRequest(intent, mode, resources.RepoStatusActive, []Fence{
 					fenceFixture(tt.kind, status),
 				}))
 
@@ -133,8 +132,8 @@ func TestAdmitLifecycleFenceBlocksRepoAccessIntents(t *testing.T) {
 		IntentStorageSession,
 	} {
 		t.Run(string(intent), func(t *testing.T) {
-			decision := Admit(activeRequest(intent, ModeReadWrite, resources.RepoStatusActive, []fences.Fence{
-				fenceFixture(fences.KindLifecycle, fences.StatusActive),
+			decision := Admit(activeRequest(intent, ModeReadWrite, resources.RepoStatusActive, []Fence{
+				fenceFixture(FenceKindLifecycle, FenceStatusActive),
 			}))
 
 			assertDenied(t, decision, ErrorFamilyRepoLifecycleFenceHeld)
@@ -145,11 +144,11 @@ func TestAdmitLifecycleFenceBlocksRepoAccessIntents(t *testing.T) {
 func TestAdmitWriterFenceBlocksReadWriteExportsAndMountsOnly(t *testing.T) {
 	for _, intent := range []Intent{IntentExportCreate, IntentWorkloadMount} {
 		t.Run(string(intent), func(t *testing.T) {
-			heldWriter := []fences.Fence{fenceFixture(fences.KindWriterSession, fences.StatusActive)}
+			heldWriter := []Fence{fenceFixture(FenceKindWriterSession, FenceStatusActive)}
 
 			readWrite := Admit(activeRequest(intent, ModeReadWrite, resources.RepoStatusActive, heldWriter))
 			assertDenied(t, readWrite, ErrorFamilyWriterSessionFenceHeld)
-			if readWrite.BlockingFenceKind != fences.KindWriterSession.String() {
+			if readWrite.BlockingFenceKind != FenceKindWriterSession.String() {
 				t.Fatalf("blocking fence kind = %q, want writer_session", readWrite.BlockingFenceKind)
 			}
 
@@ -172,12 +171,12 @@ func TestAdmitWriterFenceBlocksLifecycleOperationAndRestoreRun(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decision := Admit(activeRequest(tt.intent, tt.mode, resources.RepoStatusActive, []fences.Fence{
-				fenceFixture(fences.KindWriterSession, fences.StatusActive),
+			decision := Admit(activeRequest(tt.intent, tt.mode, resources.RepoStatusActive, []Fence{
+				fenceFixture(FenceKindWriterSession, FenceStatusActive),
 			}))
 
 			assertDenied(t, decision, ErrorFamilyWriterSessionFenceHeld)
-			if decision.BlockingFenceKind != fences.KindWriterSession.String() {
+			if decision.BlockingFenceKind != FenceKindWriterSession.String() {
 				t.Fatalf("blocking fence kind = %q, want writer_session", decision.BlockingFenceKind)
 			}
 		})
@@ -226,7 +225,7 @@ func TestAdmitInvalidStoredStateFailsClosedWithoutLeakingSecrets(t *testing.T) {
 		{name: "invalid repo", edit: func(req *Request) { req.Repo.JVSRepoID = "/srv/secret" }},
 		{name: "invalid binding", edit: func(req *Request) { req.Binding.AllowedCallers = nil }},
 		{name: "invalid fence", edit: func(req *Request) {
-			req.HeldRepoFences = []fences.Fence{fenceFixture(fences.KindLifecycle, fences.Status("bad/secret"))}
+			req.HeldRepoFences = []Fence{fenceFixture(FenceKindLifecycle, FenceStatus("bad/secret"))}
 		}},
 	}
 	for _, tt := range tests {
@@ -259,7 +258,7 @@ func TestAdmitRejectsTemplateStorageIdentityForOrdinaryRepoAdmission(t *testing.
 	assertDenied(t, decision, ErrorFamilyInternalError)
 }
 
-func activeRequest(intent Intent, mode Mode, status resources.RepoStatus, held []fences.Fence) Request {
+func activeRequest(intent Intent, mode Mode, status resources.RepoStatus, held []Fence) Request {
 	return Request{
 		Repo:           repoFixture(status),
 		Namespace:      namespaceFixture(resources.NamespaceStatusActive),
@@ -337,9 +336,9 @@ func bindingFixture(status resources.NamespaceStatus) resources.NamespaceVolumeB
 	}
 }
 
-func fenceFixture(kind fences.Kind, status fences.Status) fences.Fence {
+func fenceFixture(kind FenceKind, status FenceStatus) Fence {
 	now := testNow()
-	return fences.Fence{
+	return Fence{
 		ID:                "fence_123",
 		RepoID:            "repo_123",
 		Kind:              kind,

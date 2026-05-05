@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -338,12 +339,26 @@ func TestOperationIntakeHelperDoesNotImportResourceMutationDependencies(t *testi
 
 type fakeOperationIntakeStore struct {
 	calls               int
+	lookupCalls         int
 	spec                operations.QueuedOperationSpec
 	err                 error
+	lookupErr           error
+	lookupRecord        *operations.OperationRecord
 	reused              bool
 	existingOperationID string
 	reusedRecord        *operations.OperationRecord
 	repoAlreadyExists   bool
+}
+
+func (store *fakeOperationIntakeStore) GetOperationByIdempotencyScope(_ context.Context, _ operations.IdempotencyScope) (operations.OperationRecord, error) {
+	store.lookupCalls++
+	if store.lookupErr != nil {
+		return operations.OperationRecord{}, store.lookupErr
+	}
+	if store.lookupRecord != nil {
+		return store.lookupRecord.Sanitized(), nil
+	}
+	return operations.OperationRecord{}, sql.ErrNoRows
 }
 
 func (store *fakeOperationIntakeStore) CreateOrReuseOperation(_ context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {

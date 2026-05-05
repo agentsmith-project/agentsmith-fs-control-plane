@@ -35,7 +35,9 @@ type InternalAPIShellConfig struct {
 	AuditSink                  audit.Sink
 	PrincipalResolver          PrincipalResolver
 	NamespaceBindingReader     NamespaceVolumeBindingReader
+	NamespaceReader            NamespaceReader
 	RepoReader                 RepoReader
+	RepoFenceReader            RepoFenceReader
 	OperationInspectionReader  OperationInspectionStoreReader
 	RepoCreateIntakeStore      RepoCreateOperationIntakeStore
 	DeploymentGlobalPolicy     AllowedCallerPolicy
@@ -93,6 +95,29 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	getRepoHandler := requestLogHandler(repoReadHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}", "getRepo")
 	listReposHandler := requestLogHandler(repoReadHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos", "listRepos")
 
+	repoLifecycleHandler := RepoLifecycleHandler(RepoLifecycleHandlerConfig{
+		RepoReader:        config.RepoReader,
+		NamespaceReader:   config.NamespaceReader,
+		BindingReader:     config.NamespaceBindingReader,
+		FenceReader:       config.RepoFenceReader,
+		IntakeStore:       config.OperationIntakeStore,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		BreakGlassCallers: deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+		OperationID:       config.GenerateOperationID,
+		Now:               config.Now,
+		AuditSink:         config.AuditSink,
+	})
+	archiveRepoHandler := requestLogHandler(repoLifecycleHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}:archive", "archiveRepo")
+	restoreArchivedRepoHandler := requestLogHandler(repoLifecycleHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}:restore-archived", "restoreArchivedRepo")
+	deleteRepoHandler := requestLogHandler(repoLifecycleHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}:delete", "deleteRepo")
+	restoreTombstonedRepoHandler := requestLogHandler(repoLifecycleHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}:restore-tombstoned", "restoreTombstonedRepo")
+	purgeRepoHandler := requestLogHandler(repoLifecycleHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}:purge", "purgeRepo")
+
 	operationInspectionHandler := OperationInspectionHandler(OperationInspectionHandlerConfig{
 		StoreReader: config.OperationInspectionReader,
 		StoredNamespaceAuthorizer: operationInspectionNamespaceBindingAuthorizer{
@@ -140,10 +165,15 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	fallback := internalAPIFallbackHandler(config.Logger, config.AuditSink)
 	mux.Handle("/", routeDispatchHandler(map[string]http.Handler{
 		"createRepo":                createRepoHandler,
+		"archiveRepo":               archiveRepoHandler,
+		"restoreArchivedRepo":       restoreArchivedRepoHandler,
+		"deleteRepo":                deleteRepoHandler,
 		"ensureVolume":              volumeHandler,
 		"getRepo":                   getRepoHandler,
 		"getNamespaceVolumeBinding": getBindingHandler,
 		"listRepos":                 listReposHandler,
+		"purgeRepo":                 purgeRepoHandler,
+		"restoreTombstonedRepo":     restoreTombstonedRepoHandler,
 		"getOperation":              operationInspectionHandler,
 		"putNamespaceVolumeBinding": putBindingHandler,
 		"upsertNamespace":           upsertNamespaceHandler,
