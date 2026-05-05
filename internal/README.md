@@ -12,7 +12,9 @@ needed before real handlers and storage mutation work:
 - `operations`: operation state, lease decisions, idempotency, redaction, and
   typed operation record boundaries.
 - `store`: interfaces for durable operation records, idempotency, and audit
-  sinks. PostgreSQL schema migration exists; no DB adapter implementation yet.
+  sinks. PostgreSQL schema migration exists; the first PostgreSQL adapter slice
+  covers operation reader/writer, idempotency create-or-reuse, and audit outbox
+  append.
 - `audit`: audit event typing, redaction expectations, and pure outbox state
   transitions.
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
@@ -21,9 +23,10 @@ needed before real handlers and storage mutation work:
   primitives.
 - `pathresolver`: path safety helpers, denial tests, and shared resolver corpus.
 
-Still intentionally absent: real endpoint handlers, durable DB mutations, JVS
-execution, WebDAV export serving, workload mount issuance, repo/template
-lifecycle mutation, and storage mutation implementations.
+Still intentionally absent: real endpoint handlers, repo/resource metadata and
+fence adapters, recovery loop, JVS execution, WebDAV export serving, workload
+mount issuance, repo/template lifecycle mutation, and storage mutation
+implementations.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

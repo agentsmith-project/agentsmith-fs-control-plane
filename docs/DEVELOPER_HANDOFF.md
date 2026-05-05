@@ -1,7 +1,7 @@
 # Developer Handoff
 
-Status: neutral Go skeleton and contract guardrails are in place; storage-backed
-implementation is not started.
+Status: neutral Go skeleton, contract guardrails, and the first PostgreSQL
+adapter slice are in place; storage mutation implementation is not started.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -93,6 +93,8 @@ Completed:
 - store interfaces for operation, idempotency, and audit boundaries
 - PostgreSQL migration contract for operations, idempotency, audit outbox, and
   repo fences
+- first PostgreSQL adapter slice for operation reader/writer, idempotency
+  create-or-reuse, and audit outbox append, with focused tests
 - operation lease pure model and tests
 - repo writer/lifecycle fence pure model and tests
 - audit outbox pure model and tests
@@ -109,18 +111,20 @@ Partially completed:
   endpoint handlers are not implemented.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
-  models. The recovery planner only classifies existing durable record values
-  into high-level actions; it is not a recovery loop and does not read/write DB
-  state, execute workers, or touch JVS/WebDAV/mount/storage mutation. Durable
-  PostgreSQL adapters and the recovery loop are not implemented.
+  models. The first PostgreSQL adapter slice implements operation read/write,
+  idempotency create-or-reuse, and audit outbox append. The recovery planner
+  only classifies existing durable record values into high-level actions; it is
+  not a recovery loop and does not execute workers or touch
+  JVS/WebDAV/mount/storage mutation. Repo/resource metadata adapters, fence
+  adapters, and the recovery loop are not implemented.
 - Path resolver guardrails exist, but there is no storage mutation integration.
 
 Not implemented:
 
 - real volume, namespace, repo, template, export, mount, save, restore, or
   lifecycle handlers
-- durable DB-backed metadata, operation, idempotency, fence, or audit outbox
-  mutations
+- durable DB-backed repo/resource metadata or fence mutations
+- DB-backed audit outbox delivery beyond append
 - JVS execution or repo initialization
 - WebDAV export gateway file serving
 - workload mount issuance or orchestrator mount plans
@@ -132,9 +136,10 @@ Continue in dependency order:
 
 1. Finish review and acceptance for the existing contract verifier, denied audit,
    migration contract, lease, fence, outbox, and path resolver guardrails.
-2. Implement durable PostgreSQL adapters for operation/idempotency/fence/audit
-   outbox records, plus recovery inspection over those adapters.
-3. Add recovery loop behavior only after the durable primitives have tests.
+2. Implement the remaining durable PostgreSQL adapters for repo/resource
+   metadata and fences, plus recovery inspection over those adapters.
+3. Add recovery loop behavior only after the remaining durable primitives have
+   tests.
 4. Implement volume and namespace binding APIs.
 5. Implement repo/JVS, export/WebDAV, workload mount, save/restore, template,
    and repo lifecycle handlers only after their dependency gates are accepted.

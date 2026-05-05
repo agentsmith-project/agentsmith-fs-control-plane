@@ -64,6 +64,8 @@ Neutral service skeleton and control-plane primitives now exist:
 - generated schema/OpenAPI plumbing
 - neutral route registration and denied audit shell/AuthGate paths
 - PostgreSQL migration contract
+- first PostgreSQL adapter slice for operation reader/writer, idempotency
+  create-or-reuse, and audit outbox append, with focused tests
 - operation lease pure model/tests
 - repo fence pure model/tests
 - audit outbox pure model/tests
@@ -73,13 +75,15 @@ Neutral service skeleton and control-plane primitives now exist:
 - test harness
 
 The recovery planner is a read-only classifier for later recovery worker/runbook
-decisions; it is not a recovery loop, does not read/write DB state, does not
-execute a worker, and does not touch JVS/WebDAV/mount/storage mutation. Durable
-DB adapters, the recovery loop, real endpoint handlers, JVS execution, WebDAV
-serving, workload mount issuance, and storage mutation are not implemented.
-Continue directly toward GA by finishing guardrail review, implementing durable
-adapters and recovery next, then adding handlers only after their dependency
-gates are accepted.
+decisions; it is not a recovery loop, does not execute a worker, and does not
+touch JVS/WebDAV/mount/storage mutation. The first PostgreSQL adapter slice now
+implements operation reader/writer, idempotency create-or-reuse, and audit
+outbox append. Repo/resource metadata adapters, fence adapters, the recovery
+loop, real endpoint handlers, JVS execution, WebDAV serving, workload mount
+issuance, and storage mutation are not implemented. Continue directly toward GA
+by finishing guardrail review, implementing the remaining durable adapters and
+recovery next, then adding handlers only after their dependency gates are
+accepted.
 
 Storage mutation remains blocked by G-005, recorded in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`. The JVS team has indicated the next
