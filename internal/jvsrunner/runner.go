@@ -259,14 +259,22 @@ func safeOpaqueID(id string) bool {
 		return false
 	}
 	for i := 0; i < len(id); i++ {
-		switch b := id[i]; {
-		case b < 0x21 || b > 0x7e:
-			return false
-		case b == '/' || b == '\\' || b == '=':
+		b := id[i]
+		if i == 0 {
+			if !asciiAlphaNum(b) {
+				return false
+			}
+			continue
+		}
+		if !asciiAlphaNum(b) && b != '_' && b != '.' && b != ':' && b != '-' {
 			return false
 		}
 	}
 	return true
+}
+
+func asciiAlphaNum(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
 func capBytes(value []byte, limit int) []byte {

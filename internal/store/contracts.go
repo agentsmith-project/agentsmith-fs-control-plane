@@ -235,6 +235,7 @@ type NamespaceVolumeBindingStore interface {
 // RepoReader is the read side of the durable repo metadata boundary.
 type RepoReader interface {
 	GetRepo(ctx context.Context, repoID string) (resources.Repo, error)
+	GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error)
 	ListReposByNamespace(ctx context.Context, namespaceID string) ([]resources.Repo, error)
 }
 

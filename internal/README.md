@@ -55,14 +55,15 @@ needed before real handlers and storage mutation work:
   canonical internal repo root resolution from trusted volume roots plus repo
   IDs.
 
-Still intentionally absent: repo/JVS/WebDAV/mount endpoint handlers, real
-external audit delivery worker/sink integration, repo lifecycle
-workers/recovery loop beyond create, WebDAV export serving, workload mount
-issuance, repo/template lifecycle mutation, storage mutation implementations
-beyond JVS repo init, and fence enforcement beyond the minimal repo fence adapter
-slice. The worker app currently wires `volume_ensure`, `namespace_upsert`,
-`namespace_volume_binding_put`, and opt-in `repo_create` operation recovery when
-explicitly enabled.
+Repo create intake and namespace-bound repo read handlers exist. Still
+intentionally absent: repo lifecycle/JVS lifecycle/WebDAV/mount/save/restore/
+template endpoint handlers, real external audit delivery worker/sink
+integration, repo lifecycle workers/recovery loop beyond create, WebDAV export
+serving, workload mount issuance, repo/template lifecycle mutation, storage
+mutation implementations beyond JVS repo init, and fence enforcement beyond the
+minimal repo fence adapter slice. The worker app currently wires
+`volume_ensure`, `namespace_upsert`, `namespace_volume_binding_put`, and opt-in
+`repo_create` operation recovery when explicitly enabled.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

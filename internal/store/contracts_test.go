@@ -1129,6 +1129,14 @@ func (fake *fakeResourceStore) GetRepo(_ context.Context, repoID string) (resour
 	return fake.repos[repoID], nil
 }
 
+func (fake *fakeResourceStore) GetRepoInNamespace(_ context.Context, namespaceID, repoID string) (resources.Repo, error) {
+	repo := fake.repos[repoID]
+	if repo.NamespaceID != namespaceID {
+		return resources.Repo{}, nil
+	}
+	return repo, nil
+}
+
 func (fake *fakeResourceStore) ListReposByNamespace(_ context.Context, namespaceID string) ([]resources.Repo, error) {
 	var out []resources.Repo
 	for _, repo := range fake.repos {

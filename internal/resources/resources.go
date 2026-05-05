@@ -440,8 +440,8 @@ func (repo Repo) Validate() error {
 	if err := pathresolver.ValidateID(pathresolver.VolumeID, repo.VolumeID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(repo.JVSRepoID) == "" {
-		return fmt.Errorf("missing jvs_repo_id")
+	if err := ValidateJVSRepoID(repo.JVSRepoID); err != nil {
+		return err
 	}
 	if !repo.Kind.valid() {
 		return fmt.Errorf("unknown repo kind %q", repo.Kind)
@@ -489,6 +489,31 @@ func (repo Repo) validateCanonicalPathIdentity() error {
 		return fmt.Errorf("unknown repo kind %q", repo.Kind)
 	}
 	return nil
+}
+
+func ValidateJVSRepoID(id string) error {
+	if id == "" {
+		return fmt.Errorf("missing jvs_repo_id")
+	}
+	if len(id) > 128 {
+		return fmt.Errorf("invalid jvs_repo_id")
+	}
+	for idx, r := range id {
+		if idx == 0 {
+			if !asciiAlphaNum(r) {
+				return fmt.Errorf("invalid jvs_repo_id")
+			}
+			continue
+		}
+		if !asciiAlphaNum(r) && r != '_' && r != '.' && r != ':' && r != '-' {
+			return fmt.Errorf("invalid jvs_repo_id")
+		}
+	}
+	return nil
+}
+
+func asciiAlphaNum(r rune) bool {
+	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
 }
 
 func validateObject(name string, object map[string]any) error {

@@ -341,6 +341,16 @@ func TestCreateGetAndListReposPersistImmutableIdentityAndLifecycleMetadata(t *te
 		t.Fatalf("repo = %#v, want recorded identity", got)
 	}
 
+	exec.row = fakeRow{values: repoRowValues(repo)}
+	got, err = st.GetRepoInNamespace(context.Background(), "ns_alpha01", "repo_alpha01")
+	if err != nil {
+		t.Fatalf("GetRepoInNamespace: %v", err)
+	}
+	assertSQLContainsInOrder(t, exec.query, "FROM repos", "WHERE namespace_id = $1", "AND repo_id = $2")
+	if got.ID != repo.ID || got.NamespaceID != repo.NamespaceID || exec.args[0] != "ns_alpha01" || exec.args[1] != "repo_alpha01" {
+		t.Fatalf("repo/args = %#v/%#v, want namespace-scoped repo read", got, exec.args)
+	}
+
 	exec.rows = fakeRows{rows: []fakeRow{{values: repoRowValues(repo)}}}
 	repos, err := st.ListReposByNamespace(context.Background(), "ns_alpha01")
 	if err != nil {

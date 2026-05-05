@@ -163,6 +163,41 @@ func TestNamespaceVolumeBindingResponseJSONShapeAllowedCallersAndPolicyCopies(t 
 	}
 }
 
+func TestRepoResponseJSONShapeOmitsInternalPaths(t *testing.T) {
+	now := resourceDTOTestNow()
+	repo := resources.Repo{
+		ID:                  "repo_123",
+		NamespaceID:         "ns_123",
+		VolumeID:            "vol_123",
+		JVSRepoID:           "jvs_repo_alpha",
+		Kind:                resources.RepoKindRepo,
+		Status:              resources.RepoStatusActive,
+		ControlVolumeSubdir: "afscp/namespaces/ns_123/repos/repo_123/control",
+		PayloadVolumeSubdir: "afscp/namespaces/ns_123/repos/repo_123/payload",
+		Lifecycle: resources.RepoLifecycle{
+			Status:                   resources.RepoStatusActive,
+			LastLifecycleOperationID: "op_repo_create",
+		},
+		CreatedAt: now,
+		UpdatedAt: now.Add(time.Minute),
+	}
+
+	body := mustMarshalJSON(t, RepoResponseFromResource(repo))
+	assertJSONDoesNotLeakFields(t, body, "ControlVolumeSubdir", "PayloadVolumeSubdir", "control_volume_subdir", "payload_volume_subdir", "UpdatedAt", "updated_at", "/srv", "secret")
+
+	var got map[string]any
+	mustUnmarshalJSON(t, body, &got)
+	assertOnlyJSONKeys(t, got, "repo_id", "namespace_id", "volume_id", "repo_kind", "jvs_repo_id", "status", "lifecycle", "created_at")
+	if got["repo_id"] != "repo_123" || got["namespace_id"] != "ns_123" || got["volume_id"] != "vol_123" || got["jvs_repo_id"] != "jvs_repo_alpha" || got["status"] != "active" {
+		t.Fatalf("repo JSON = %#v, want schema field values", got)
+	}
+	lifecycle := got["lifecycle"].(map[string]any)
+	assertOnlyJSONKeys(t, lifecycle, "status", "retention_expires_at", "last_lifecycle_operation_id")
+	if lifecycle["status"] != "active" || lifecycle["retention_expires_at"] != nil || lifecycle["last_lifecycle_operation_id"] != "op_repo_create" {
+		t.Fatalf("lifecycle = %#v, want active lifecycle", lifecycle)
+	}
+}
+
 func mustMarshalJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	body, err := json.Marshal(value)

@@ -34,6 +34,28 @@ type NamespaceVolumeBindingResponse struct {
 	Status            resources.NamespaceStatus `json:"status"`
 }
 
+type RepoResponse struct {
+	RepoID      string                `json:"repo_id"`
+	NamespaceID string                `json:"namespace_id"`
+	VolumeID    string                `json:"volume_id"`
+	RepoKind    resources.RepoKind    `json:"repo_kind"`
+	JVSRepoID   string                `json:"jvs_repo_id"`
+	Status      resources.RepoStatus  `json:"status"`
+	Lifecycle   RepoLifecycleResponse `json:"lifecycle"`
+	CreatedAt   time.Time             `json:"created_at"`
+}
+
+type RepoLifecycleResponse struct {
+	Status                   resources.RepoStatus  `json:"status"`
+	RetentionExpiresAt       *time.Time            `json:"retention_expires_at"`
+	LastLifecycleOperationID *string               `json:"last_lifecycle_operation_id"`
+	PreDeleteStatus          *resources.RepoStatus `json:"pre_delete_status,omitempty"`
+}
+
+type ListReposResponse struct {
+	Repos []RepoResponse `json:"repos"`
+}
+
 type AllowedCallerResponse struct {
 	CallerService string                 `json:"caller_service"`
 	Roles         []resources.CallerRole `json:"roles"`
@@ -75,6 +97,46 @@ func NamespaceVolumeBindingResponseFromResource(binding resources.NamespaceVolum
 		MountPolicy:       projectStringAnyMap(binding.MountPolicy, mountPolicyKeys),
 		TemplatePolicy:    projectStringAnyMap(binding.TemplatePolicy, templatePolicyKeys),
 		Status:            binding.Status,
+	}
+}
+
+func RepoResponseFromResource(repo resources.Repo) RepoResponse {
+	return RepoResponse{
+		RepoID:      repo.ID,
+		NamespaceID: repo.NamespaceID,
+		VolumeID:    repo.VolumeID,
+		RepoKind:    repo.Kind,
+		JVSRepoID:   repo.JVSRepoID,
+		Status:      repo.Status,
+		Lifecycle:   repoLifecycleResponseFromResource(repo.Lifecycle),
+		CreatedAt:   repo.CreatedAt,
+	}
+}
+
+func ListReposResponseFromResources(repos []resources.Repo) ListReposResponse {
+	out := make([]RepoResponse, 0, len(repos))
+	for _, repo := range repos {
+		out = append(out, RepoResponseFromResource(repo))
+	}
+	return ListReposResponse{Repos: out}
+}
+
+func repoLifecycleResponseFromResource(lifecycle resources.RepoLifecycle) RepoLifecycleResponse {
+	var operationID *string
+	if lifecycle.LastLifecycleOperationID != "" {
+		value := lifecycle.LastLifecycleOperationID
+		operationID = &value
+	}
+	var preDeleteStatus *resources.RepoStatus
+	if lifecycle.PreDeleteStatus != "" {
+		value := lifecycle.PreDeleteStatus
+		preDeleteStatus = &value
+	}
+	return RepoLifecycleResponse{
+		Status:                   lifecycle.Status,
+		RetentionExpiresAt:       copyTimePtr(lifecycle.RetentionExpiresAt),
+		LastLifecycleOperationID: operationID,
+		PreDeleteStatus:          preDeleteStatus,
 	}
 }
 

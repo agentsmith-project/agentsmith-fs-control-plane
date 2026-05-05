@@ -926,6 +926,8 @@ const validSchema = `
         "PATH_DENIED",
         "CAPABILITY_DENIED",
         "IDEMPOTENCY_CONFLICT",
+        "REPO_ALREADY_EXISTS",
+        "REPO_NOT_FOUND",
         "ACTIVE_WRITER_SESSIONS",
         "WRITER_SESSION_FENCE_HELD",
         "STALE_WRITER_SESSION_UNCERTAIN",

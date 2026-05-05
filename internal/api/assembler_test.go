@@ -124,7 +124,7 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 		method string
 		path   string
 	}{
-		{name: "repo list", method: http.MethodGet, path: "/internal/v1/repos"},
+		{name: "repo archive", method: http.MethodPost, path: "/internal/v1/repos/repo_123:archive"},
 	}
 
 	for _, tt := range tests {
@@ -153,6 +153,43 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 				t.Fatalf("partial shell capability denied message mentions neutral shell: %q", env.Error.Message)
 			}
 		})
+	}
+}
+
+func TestInternalAPIShellServesRepoReadRoutesThroughRepoReader(t *testing.T) {
+	repoReader := &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
+		CallerService: "agentsmith-api",
+		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
+	})}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:      namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader: bindingReader,
+		RepoReader:             repoReader,
+	})
+
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, repoReadRequest(http.MethodGet, "/internal/v1/repos/repo_123?token=query-secret", "ns_123"))
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d body = %s, want 200", getRec.Code, getRec.Body.String())
+	}
+	if repoReader.getInNamespaceCalls != 1 || repoReader.getCalls != 0 || repoReader.lastNamespaceID != "ns_123" || repoReader.lastRepoID != "repo_123" {
+		t.Fatalf("get scoped/global calls ns/repo = %d/%d %q/%q, want scoped ns_123/repo_123", repoReader.getInNamespaceCalls, repoReader.getCalls, repoReader.lastNamespaceID, repoReader.lastRepoID)
+	}
+
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, repoReadRequest(http.MethodGet, "/internal/v1/repos?namespace_id=ns_123", "ns_123"))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body = %s, want 200", listRec.Code, listRec.Body.String())
+	}
+	if repoReader.listCalls != 1 || repoReader.lastNamespaceID != "ns_123" {
+		t.Fatalf("list calls/ns = %d/%q, want ns_123", repoReader.listCalls, repoReader.lastNamespaceID)
+	}
+	for _, body := range []string{getRec.Body.String(), listRec.Body.String()} {
+		if strings.Contains(body, "query-secret") {
+			t.Fatalf("repo read response leaked query secret: %s", body)
+		}
+		assertRepoReadResponseDoesNotLeak(t, body)
 	}
 }
 

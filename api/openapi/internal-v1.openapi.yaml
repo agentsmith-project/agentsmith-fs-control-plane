@@ -338,7 +338,7 @@ paths:
           in: query
           required: false
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoLifecycleStatus
       responses:
         "400":
           $ref: "#/components/responses/Error"

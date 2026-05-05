@@ -1,8 +1,9 @@
 # Developer Handoff
 
 Status: neutral Go skeleton, contract guardrails, resource metadata
-persistence, and the first PostgreSQL adapter slices are in place; storage
-mutation implementation is not started.
+persistence, metadata recovery workers, and opt-in `repo_create` JVS execution
+are in place; broader repo lifecycle, WebDAV, mount, save/restore, template,
+and audit delivery workers remain unimplemented.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -111,6 +112,15 @@ Completed:
   RepoTemplate publication lifecycle and handlers remain unimplemented
 - minimal PostgreSQL repo fence adapter for held fence read, create, and active
   release, with focused tests
+- repo create intake for durable `repo_create` operations
+- JVS v0.4.8 runner foundations for fixed `init` and `doctor --strict`
+  commands
+- opt-in `repo_create` recovery through `afscp-worker --run-once`, `repoexec`,
+  JVS `init`/`doctor --strict`, dedicated PostgreSQL atomic commit, and fence
+  release when the explicit repo create recovery gate is enabled
+- namespace-bound repo read handlers for `GET /internal/v1/repos/{repoId}` and
+  `GET /internal/v1/repos?namespace_id=&lifecycle_status=`, exposed through
+  `InternalAPIShell` as repo storage projections without product catalog fields
 - operation lease pure model and tests
 - repo writer/lifecycle fence pure model and tests
 - audit outbox pure model and tests
@@ -132,7 +142,9 @@ Partially completed:
 
 - API shell routes known contract paths to capability-denied responses, with
   metadata-only namespace upsert and namespace volume binding intake/read
-  handlers implemented. Repo, JVS, WebDAV, mount, and storage-backed handlers
+  handlers implemented, plus repo create intake and namespace-bound repo read
+  storage projections. Repo lifecycle, JVS lifecycle, WebDAV, mount,
+  save/restore, template, and storage-backed handlers beyond repo create/read
   remain unimplemented.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
@@ -146,26 +158,26 @@ Partially completed:
   recovery planner and repo recovery inspection classify existing durable
   record values into high-level actions. `afscp-worker --run-once` now has an
   opt-in production bootstrap for the minimal `volume_ensure`,
-  `namespace_upsert`, and `namespace_volume_binding_put` recovery executors
-  only; it does not touch JVS/WebDAV/mount/storage mutation. Real
-  external audit delivery worker/sink integration and repo lifecycle recovery
-  loops are not implemented. Resource
-  metadata persistence exists only as control-plane metadata storage; it is not
-  real repo lifecycle execution, recovery, or storage mutation.
-- Path resolver guardrails exist, but there is no storage mutation integration.
+  `namespace_upsert`, `namespace_volume_binding_put`, and explicit-gated
+  `repo_create` recovery executors. With the repo create gate enabled,
+  `repo_create` runs JVS `init` plus `doctor --strict` and commits through the
+  dedicated PostgreSQL repo-create boundary with fence release; it does not
+  implement repo lifecycle archive/delete/restore/purge, save/restore,
+  template, WebDAV, mount, or external audit delivery.
+- Path resolver guardrails exist and are used by repo create recovery; broader
+  WebDAV, mount, file API, and lifecycle integration remains absent.
 
 Not implemented:
 
-- real volume, namespace, repo, template, export, mount, save, restore, or
-  lifecycle handlers
-- real repo lifecycle workers, archive/delete/purge execution, or storage state
+- real repo lifecycle archive/delete/restore/purge workers or storage state
   transitions
+- real template, export, mount, save, restore, or lifecycle handlers
 - fence enforcement beyond the minimal repo fence adapter slice
 - real external audit delivery worker/sink integration
-- JVS execution or repo initialization
+- JVS execution beyond repo create `init`/`doctor --strict`
 - WebDAV export gateway file serving
 - workload mount issuance or orchestrator mount plans
-- storage mutation, drain, fence enforcement, or lifecycle mutation
+- session drain, broader fence enforcement, or lifecycle mutation
 
 ## Contract Implementation Order
 
@@ -178,11 +190,13 @@ Continue in dependency order:
 3. Add recovery loop behavior only after the remaining durable primitives have
    tests.
 4. Implement volume and namespace binding APIs.
-5. Implement repo/JVS, export/WebDAV, workload mount, save/restore, template,
-   and repo lifecycle handlers only after their dependency gates are accepted.
-   G-005 is closed by JVS v0.4.8 evidence; repo/JVS/storage handlers may now
-   proceed only through accepted contracts, fences, session drain, operation
-   leases, audit behavior, and focused tests.
+5. Continue from implemented repo create intake and explicit-gated
+   `repo_create` JVS recovery toward the remaining repo lifecycle,
+   export/WebDAV, workload mount, save/restore, and template handlers only
+   after their dependency gates are accepted. G-005 is closed by JVS v0.4.8
+   evidence; remaining repo/JVS/storage work may proceed only through accepted
+   contracts, fences, session drain, operation leases, audit behavior, and
+   focused tests.
 
 ## JVS Gate Status
 
@@ -190,9 +204,10 @@ G-005 is closed. JVS v0.4.8 is pinned and smoke-tested in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`; the v0.4.7 blocker evidence
 remains historical in `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
 
-This only closes the JVS gate. Real storage mutation still requires accepted
-contracts, fences, session drain, operation leases, audit behavior, and focused
-tests. AFSCP must not delete private JVS files directly.
+This closes the JVS gate and repo create now has an explicit-gated worker path.
+Remaining storage mutation still requires accepted contracts, fences, session
+drain, operation leases, audit behavior, and focused tests. AFSCP must not
+delete private JVS files directly.
 
 ## Repo Lifecycle Rules
 

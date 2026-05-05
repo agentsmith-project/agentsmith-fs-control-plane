@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -253,6 +254,15 @@ func TestRepoValidateCoversLifecycleAndRecordedPathIdentity(t *testing.T) {
 		{name: "bad volume id", edit: func(repo *Repo) { repo.VolumeID = "" }},
 		{name: "unknown kind", edit: func(repo *Repo) { repo.Kind = "workspace" }},
 		{name: "unknown status", edit: func(repo *Repo) { repo.Status = "deleted" }},
+		{name: "empty jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = "" }},
+		{name: "too long jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = strings.Repeat("a", 129) }},
+		{name: "control jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = "jvs\nrepo" }},
+		{name: "whitespace jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = "jvs repo" }},
+		{name: "slash jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = "jvs/repo" }},
+		{name: "backslash jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = `jvs\repo` }},
+		{name: "equals jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = "jvs=repo" }},
+		{name: "schema-disallowed punctuation jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = "jvs;repo" }},
+		{name: "raw path jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = "/srv/secret" }},
 		{name: "lifecycle mismatch", edit: func(repo *Repo) { repo.Lifecycle.Status = RepoStatusArchived }},
 		{name: "missing control subdir", edit: func(repo *Repo) { repo.ControlVolumeSubdir = "" }},
 		{name: "raw path identity", edit: func(repo *Repo) { repo.PayloadVolumeSubdir = "/var/lib/repos/repo_alpha" }},

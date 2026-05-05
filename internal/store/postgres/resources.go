@@ -157,6 +157,17 @@ func (store *Store) GetRepo(ctx context.Context, repoID string) (resources.Repo,
 	return scanRepo(row)
 }
 
+func (store *Store) GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error) {
+	if err := pathresolver.ValidateID(pathresolver.NamespaceID, namespaceID); err != nil {
+		return resources.Repo{}, err
+	}
+	if err := pathresolver.ValidateID(pathresolver.RepoID, repoID); err != nil {
+		return resources.Repo{}, err
+	}
+	row := store.exec.QueryRowContext(ctx, repoSelectSQL()+" WHERE namespace_id = $1 AND repo_id = $2", namespaceID, repoID)
+	return scanRepo(row)
+}
+
 func (store *Store) ListReposByNamespace(ctx context.Context, namespaceID string) (repos []resources.Repo, err error) {
 	if err := pathresolver.ValidateID(pathresolver.NamespaceID, namespaceID); err != nil {
 		return nil, err

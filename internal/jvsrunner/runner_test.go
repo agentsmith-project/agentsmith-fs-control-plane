@@ -198,12 +198,18 @@ func TestInitRejectsUnsafeRepoID(t *testing.T) {
 	longID := strings.Repeat("a", 129)
 	tests := []string{
 		"",
+		"_jvs_repo",
+		"-jvs-repo",
+		".jvs.repo",
+		":jvs:repo",
 		"jvs/repo",
 		`jvs\repo`,
 		"jvs repo",
 		"jvs\trepo",
 		"jvs\nrepo",
 		"jvs=repo",
+		"jvs;repo",
+		"jvs[repo",
 		"jvs_repo_/srv/afscp/secret",
 		longID,
 	}
@@ -223,6 +229,35 @@ func TestInitRejectsUnsafeRepoID(t *testing.T) {
 				t.Fatal("Init succeeded, want error")
 			}
 			assertErrorDoesNotLeak(t, err)
+		})
+	}
+}
+
+func TestInitAcceptsSchemaAlignedRepoIDs(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{
+		"jvs_repo_alpha",
+		"jvs-template-alpha",
+		"550e8400-e29b-41d4-a716-446655440000",
+	}
+	for _, repoID := range tests {
+		repoID := repoID
+		t.Run(repoID, func(t *testing.T) {
+			t.Parallel()
+
+			runner := newTestRunner(t, &fakeCommandRunner{
+				result: CommandResult{Stdout: initStdoutWith(t, func(env map[string]any) {
+					env["data"].(map[string]any)["repo_id"] = repoID
+				})},
+			})
+			summary, err := runner.Init(context.Background(), testPayloadRoot, testControlRoot)
+			if err != nil {
+				t.Fatalf("Init returned error: %v", err)
+			}
+			if summary.RepoID != repoID {
+				t.Fatalf("repo id = %q, want %q", summary.RepoID, repoID)
+			}
 		})
 	}
 }
@@ -260,8 +295,23 @@ func TestDoctorStrictFailsClosedForInvalidEnvelope(t *testing.T) {
 		{name: "missing repo id", stdout: func(t *testing.T) []byte {
 			return doctorStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "repo_id") })
 		}},
-		{name: "unsafe repo id", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "jvs/repo" })
+		{name: "unsafe repo id semicolon", stdout: func(t *testing.T) []byte {
+			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "jvs;repo" })
+		}},
+		{name: "unsafe repo id equals", stdout: func(t *testing.T) []byte {
+			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "bad=id" })
+		}},
+		{name: "unsafe repo id slash", stdout: func(t *testing.T) []byte {
+			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "bad/id" })
+		}},
+		{name: "unsafe repo id backslash", stdout: func(t *testing.T) []byte {
+			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = `bad\id` })
+		}},
+		{name: "unsafe repo id whitespace", stdout: func(t *testing.T) []byte {
+			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "bad id" })
+		}},
+		{name: "unsafe repo id control", stdout: func(t *testing.T) []byte {
+			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "bad\nid" })
 		}},
 		{name: "wrong workspace", stdout: func(t *testing.T) []byte {
 			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["workspace"] = "dev" })

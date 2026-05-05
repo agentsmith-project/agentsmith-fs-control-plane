@@ -101,6 +101,8 @@ GA error families:
 - `PATH_DENIED`
 - `CAPABILITY_DENIED`
 - `IDEMPOTENCY_CONFLICT`
+- `REPO_ALREADY_EXISTS`
+- `REPO_NOT_FOUND`
 - `STORAGE_UNAVAILABLE`
 - `INTERNAL_ERROR`
 - `ACTIVE_WRITER_SESSIONS`
@@ -424,9 +426,15 @@ retention-policy approval or an approved operator break-glass purge.
 Product display-name rename and catalog detach are not AFSCP repo lifecycle
 operations.
 
+Repo get is namespace-bound. Missing repos return `REPO_NOT_FOUND`; repos from
+another namespace must not be revealed.
+
 Repo list is a namespace-bound storage inventory projection for trusted callers
-and operators. It must not become a product catalog API: no display names,
-business objects, raw paths, or storage credentials are returned.
+and operators. The `X-AFSCP-Namespace-Id` header must match the required
+`namespace_id` query parameter. `lifecycle_status`, when supplied, must be one
+of the repo lifecycle statuses. Repo list must not become a product catalog API:
+no display names, business objects, raw paths, or storage credentials are
+returned.
 
 `PurgeRepoRequest` must carry a caller-side confirmation or approval reference
 and a reason. If the caller requests a retention override, the request must use

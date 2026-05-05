@@ -126,6 +126,10 @@ response only for a new repo create request targeting an existing repo. It is
 distinct from `IDEMPOTENCY_CONFLICT`, which is reserved for reusing the same
 idempotency key with a different request body.
 
+Repo read APIs are namespace-bound. Missing repos, including repos that exist
+under a different namespace than the request namespace, use the stable
+`REPO_NOT_FOUND` response and must not reveal cross-namespace existence.
+
 `STORAGE_UNAVAILABLE` is for durable control-plane metadata/store outages,
 timeouts, or connection/query failures and should map to HTTP 503 with
 `retryable=true`. `INTERNAL_ERROR` is for handler, invariant, serialization, or
