@@ -1,0 +1,250 @@
+package sessionstate
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestRestoreRunWriterGateExportSemantics(t *testing.T) {
+	now := testNow()
+	tests := []struct {
+		name        string
+		session     ExportSession
+		wantAllowed bool
+		wantFamily  ErrorFamily
+	}{
+		{name: "read write active live", session: exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(time.Hour)), wantFamily: ErrorFamilyActiveWriterSessions},
+		{name: "read write revoking live", session: exportFixture(AccessModeReadWrite, ExportStatusRevoking, now.Add(time.Hour)), wantFamily: ErrorFamilyActiveWriterSessions},
+		{name: "read write active expired", session: exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(-time.Minute)), wantFamily: ErrorFamilyStaleWriterSessionUncertain},
+		{name: "read only active ignored", session: exportFixture(AccessModeReadOnly, ExportStatusActive, now.Add(time.Hour)), wantAllowed: true},
+		{name: "terminal revoked ignored", session: exportFixture(AccessModeReadWrite, ExportStatusRevoked, now.Add(-time.Hour)), wantAllowed: true},
+		{name: "terminal expired ignored", session: exportFixture(AccessModeReadWrite, ExportStatusExpired, now.Add(-time.Hour)), wantAllowed: true},
+		{name: "terminal failed ignored", session: exportFixture(AccessModeReadWrite, ExportStatusFailed, now.Add(time.Hour)), wantAllowed: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision := RestoreRunWriterGate(GateRequest{
+				NamespaceID:    "ns_123",
+				RepoID:         "repo_123",
+				Now:            now,
+				ExportSessions: []ExportSession{tt.session},
+			})
+			assertDecision(t, decision, tt.wantAllowed, tt.wantFamily)
+		})
+	}
+}
+
+func TestRestoreRunWriterGateMountSemantics(t *testing.T) {
+	now := testNow()
+	tests := []struct {
+		name        string
+		mount       WorkloadMountBinding
+		wantAllowed bool
+		wantFamily  ErrorFamily
+	}{
+		{name: "read write issued live", mount: mountFixture(false, MountStatusIssued, now.Add(time.Hour)), wantFamily: ErrorFamilyActiveWriterSessions},
+		{name: "read write active live", mount: mountFixture(false, MountStatusActive, now.Add(time.Hour)), wantFamily: ErrorFamilyActiveWriterSessions},
+		{name: "read write releasing expired", mount: mountFixture(false, MountStatusReleasing, now.Add(-time.Minute)), wantFamily: ErrorFamilyStaleWriterSessionUncertain},
+		{name: "read only active ignored", mount: mountFixture(true, MountStatusActive, now.Add(time.Hour)), wantAllowed: true},
+		{name: "terminal released ignored", mount: mountFixture(false, MountStatusReleased, now.Add(-time.Hour)), wantAllowed: true},
+		{name: "terminal revoked ignored", mount: mountFixture(false, MountStatusRevoked, now.Add(-time.Hour)), wantAllowed: true},
+		{name: "terminal failed ignored", mount: mountFixture(false, MountStatusFailed, now.Add(time.Hour)), wantAllowed: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision := RestoreRunWriterGate(GateRequest{
+				NamespaceID: "ns_123",
+				RepoID:      "repo_123",
+				Now:         now,
+				Mounts:      []WorkloadMountBinding{tt.mount},
+			})
+			assertDecision(t, decision, tt.wantAllowed, tt.wantFamily)
+		})
+	}
+}
+
+func TestLifecycleDrainGateBlocksAnyNonTerminalAccess(t *testing.T) {
+	now := testNow()
+	tests := []struct {
+		name       string
+		exports    []ExportSession
+		mounts     []WorkloadMountBinding
+		wantFamily ErrorFamily
+	}{
+		{name: "read only export live", exports: []ExportSession{exportFixture(AccessModeReadOnly, ExportStatusActive, now.Add(time.Hour))}, wantFamily: ErrorFamilyActiveSessionsBlockLifecycle},
+		{name: "read write export stale", exports: []ExportSession{exportFixture(AccessModeReadWrite, ExportStatusRevoking, now.Add(-time.Minute))}, wantFamily: ErrorFamilyStaleSessionsBlockLifecycle},
+		{name: "read only mount live", mounts: []WorkloadMountBinding{mountFixture(true, MountStatusPending, now.Add(time.Hour))}, wantFamily: ErrorFamilyActiveSessionsBlockLifecycle},
+		{name: "read write mount stale", mounts: []WorkloadMountBinding{mountFixture(false, MountStatusReleasing, now.Add(-time.Minute))}, wantFamily: ErrorFamilyStaleSessionsBlockLifecycle},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision := LifecycleDrainGate(GateRequest{
+				NamespaceID:    "ns_123",
+				RepoID:         "repo_123",
+				Now:            now,
+				ExportSessions: tt.exports,
+				Mounts:         tt.mounts,
+			})
+			assertDecision(t, decision, false, tt.wantFamily)
+		})
+	}
+}
+
+func TestLifecycleDrainGateIgnoresTerminalSessions(t *testing.T) {
+	now := testNow()
+	decision := LifecycleDrainGate(GateRequest{
+		NamespaceID: "ns_123",
+		RepoID:      "repo_123",
+		Now:         now,
+		ExportSessions: []ExportSession{
+			exportFixture(AccessModeReadOnly, ExportStatusRevoked, now.Add(-time.Hour)),
+			exportFixture(AccessModeReadWrite, ExportStatusExpired, now.Add(-time.Hour)),
+		},
+		Mounts: []WorkloadMountBinding{
+			mountFixture(true, MountStatusReleased, now.Add(-time.Hour)),
+			mountFixture(false, MountStatusExpired, now.Add(-time.Hour)),
+		},
+	})
+
+	assertDecision(t, decision, true, "")
+}
+
+func TestGateAggregatesActiveBeforeStale(t *testing.T) {
+	now := testNow()
+	restore := RestoreRunWriterGate(GateRequest{
+		NamespaceID: "ns_123",
+		RepoID:      "repo_123",
+		Now:         now,
+		ExportSessions: []ExportSession{
+			exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(-time.Minute)),
+			exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(time.Hour)),
+		},
+	})
+	assertDecision(t, restore, false, ErrorFamilyActiveWriterSessions)
+
+	lifecycle := LifecycleDrainGate(GateRequest{
+		NamespaceID: "ns_123",
+		RepoID:      "repo_123",
+		Now:         now,
+		Mounts: []WorkloadMountBinding{
+			mountFixture(false, MountStatusActive, now.Add(-time.Minute)),
+			mountFixture(false, MountStatusActive, now.Add(time.Hour)),
+		},
+	})
+	assertDecision(t, lifecycle, false, ErrorFamilyActiveSessionsBlockLifecycle)
+}
+
+func TestGateIgnoresOtherRepoSessions(t *testing.T) {
+	now := testNow()
+	otherRepo := exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(time.Hour))
+	otherRepo.RepoID = "repo_other"
+	otherRepoMount := mountFixture(false, MountStatusActive, now.Add(time.Hour))
+	otherRepoMount.RepoID = "repo_other"
+	otherRepoMount.NamespaceID = "ns_other"
+
+	restore := RestoreRunWriterGate(GateRequest{
+		NamespaceID:    "ns_123",
+		RepoID:         "repo_123",
+		Now:            now,
+		ExportSessions: []ExportSession{otherRepo},
+		Mounts:         []WorkloadMountBinding{otherRepoMount},
+	})
+	assertDecision(t, restore, true, "")
+
+	lifecycle := LifecycleDrainGate(GateRequest{
+		NamespaceID:    "ns_123",
+		RepoID:         "repo_123",
+		Now:            now,
+		ExportSessions: []ExportSession{otherRepo},
+		Mounts:         []WorkloadMountBinding{otherRepoMount},
+	})
+	assertDecision(t, lifecycle, true, "")
+}
+
+func TestGateFailsClosedForSameRepoNamespaceMismatch(t *testing.T) {
+	now := testNow()
+	badExport := exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(time.Hour))
+	badExport.NamespaceID = "ns_other"
+	badMount := mountFixture(false, MountStatusActive, now.Add(time.Hour))
+	badMount.NamespaceID = "ns_other"
+
+	for _, decision := range []Decision{
+		RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
+		LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{badMount}}),
+	} {
+		assertDecision(t, decision, false, ErrorFamilyInternalError)
+		rendered := strings.ToLower(decision.ErrorFamily.String() + " " + decision.Reason + " " + decision.BlockingKind)
+		for _, leaked := range []string{"ns_other", "repo_123", "active", "/srv", "secret"} {
+			if strings.Contains(rendered, leaked) {
+				t.Fatalf("decision leaked %q: %#v", leaked, decision)
+			}
+		}
+	}
+}
+
+func TestGateInvalidSameRepoSessionFailsClosedWithoutSecretLeak(t *testing.T) {
+	now := testNow()
+	badExport := exportFixture(AccessModeReadWrite, ExportStatus("active/secret"), now.Add(time.Hour))
+	badMount := mountFixture(false, MountStatusActive, time.Time{})
+
+	for _, decision := range []Decision{
+		RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
+		LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{badMount}}),
+	} {
+		assertDecision(t, decision, false, ErrorFamilyInternalError)
+		rendered := strings.ToLower(decision.ErrorFamily.String() + " " + decision.Reason + " " + decision.BlockingKind)
+		for _, leaked := range []string{"secret", "active/secret", "/srv", "token"} {
+			if strings.Contains(rendered, leaked) {
+				t.Fatalf("decision leaked %q: %#v", leaked, decision)
+			}
+		}
+	}
+}
+
+func TestGateInvalidTargetFailsClosed(t *testing.T) {
+	decision := RestoreRunWriterGate(GateRequest{NamespaceID: "namespace", RepoID: "repo_123", Now: testNow()})
+	assertDecision(t, decision, false, ErrorFamilyInternalError)
+
+	decision = LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123"})
+	assertDecision(t, decision, false, ErrorFamilyInternalError)
+}
+
+func assertDecision(t *testing.T, decision Decision, wantAllowed bool, wantFamily ErrorFamily) {
+	t.Helper()
+	if decision.Allowed != wantAllowed || decision.ErrorFamily != wantFamily {
+		t.Fatalf("decision = %#v, want allowed=%v family=%s", decision, wantAllowed, wantFamily)
+	}
+	if wantAllowed && decision.Action != ActionAllow {
+		t.Fatalf("action = %s, want allow", decision.Action)
+	}
+	if !wantAllowed && decision.Action != ActionDeny {
+		t.Fatalf("action = %s, want deny", decision.Action)
+	}
+}
+
+func exportFixture(mode AccessMode, status ExportStatus, expiresAt time.Time) ExportSession {
+	return ExportSession{
+		ID:          "export_123",
+		NamespaceID: "ns_123",
+		RepoID:      "repo_123",
+		Mode:        mode,
+		Status:      status,
+		ExpiresAt:   expiresAt,
+	}
+}
+
+func mountFixture(readOnly bool, status MountStatus, leaseExpiresAt time.Time) WorkloadMountBinding {
+	return WorkloadMountBinding{
+		ID:             "wmb_123",
+		NamespaceID:    "ns_123",
+		RepoID:         "repo_123",
+		ReadOnly:       readOnly,
+		Status:         status,
+		LeaseExpiresAt: leaseExpiresAt,
+	}
+}
+
+func testNow() time.Time {
+	return time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+}

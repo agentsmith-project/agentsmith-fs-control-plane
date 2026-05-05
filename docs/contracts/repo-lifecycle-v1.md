@@ -55,6 +55,10 @@ state unless a separate reviewed contract adds an explicit target-state option.
 The repo access admission pure model exists in code for shared pre-handler
 decisions across future lifecycle, save/restore, export, mount, and template
 handlers. It is not yet wired to those concrete endpoint handlers.
+The session substrate pure model also exists for restore-run writer gating and
+lifecycle drain gating over export and workload-mount sessions. It is not yet
+wired to the WebDAV gateway, workload-mount plan, lifecycle handlers, or
+storage adapters.
 
 ## Lifecycle Fence
 

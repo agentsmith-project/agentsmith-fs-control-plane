@@ -133,6 +133,9 @@ read-write export creation, and read-write workload mount binding creation.
 
 Required GA behavior:
 
+- the session substrate pure model exists for restore-run writer gating and
+  lifecycle drain decisions, but is not yet wired to WebDAV gateway, workload
+  mount, lifecycle handlers, or storage adapters
 - restore-run acquires the fence before checking active writer sessions
 - while the fence is held, new read-write exports and workload mount bindings are rejected with `WRITER_SESSION_FENCE_HELD`
 - read-only exports and read-only mount bindings do not count as writer sessions, but still respect namespace status and capability policy

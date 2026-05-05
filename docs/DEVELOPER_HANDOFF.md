@@ -128,6 +128,9 @@ Completed:
 - repo access admission pure model for active/archived/tombstoned/purged repo
   status, namespace/binding status, writer-session fences, lifecycle fences,
   and lifecycle source-status rules; it is not wired to concrete handlers yet
+- session substrate pure model for export and workload-mount session state,
+  restore-run writer gating, and repo lifecycle drain gating; it is not wired to
+  WebDAV gateway, mount plan, lifecycle handlers, or storage adapters yet
 - audit outbox pure model and tests
 - pure recovery planner/classification for operation, fence, audit outbox, and
   repo recovery inspection durable records
@@ -149,7 +152,7 @@ Partially completed:
   metadata-only namespace upsert and namespace volume binding intake/read
   handlers implemented, plus repo create intake and namespace-bound repo read
   storage projections, and operation inspection. Repo lifecycle, JVS lifecycle, WebDAV, mount,
-  save/restore, template, repo access admission wiring, and storage-backed handlers beyond repo create/read
+  save/restore, template, repo access/session admission wiring, and storage-backed handlers beyond repo create/read
   remain unimplemented.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
@@ -177,7 +180,7 @@ Not implemented:
 - real repo lifecycle archive/delete/restore/purge workers or storage state
   transitions
 - real template, export, mount, save, restore, or lifecycle handlers
-- concrete handler wiring for the repo access admission model and fence enforcement beyond the minimal repo fence adapter slice
+- concrete handler wiring for the repo access/session admission models and fence enforcement beyond the minimal repo fence adapter slice
 - real external audit delivery worker/sink integration
 - JVS execution beyond repo create `init`/`doctor --strict`
 - WebDAV export gateway file serving
