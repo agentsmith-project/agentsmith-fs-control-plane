@@ -57,8 +57,8 @@ func AuthGateWithAuditSink(next http.Handler, principalResolver PrincipalResolve
 			return
 		}
 
-		if denied, code, message, labels := requiredRoleDenied(r, requestContext, route, callerPolicy); denied {
-			writeValidationErrorWithAudit(w, r, route, requestContext, code, http.StatusForbidden, message, labels, sink)
+		if denied, code, status, retryable, message, labels := requiredRoleDenied(r, requestContext, route, callerPolicy); denied {
+			writePolicyDeniedErrorWithAudit(w, r, route, requestContext, code, status, retryable, message, labels, sink)
 			return
 		}
 
@@ -80,27 +80,56 @@ func resolvePrincipal(resolver PrincipalResolver, r *http.Request) (auth.Authent
 	return resolver.ResolvePrincipal(r)
 }
 
-func requiredRoleDenied(r *http.Request, requestContext auth.RequestContext, route RouteMetadata, policy AllowedCallerPolicy) (bool, ErrorCode, string, []string) {
+type AllowedCallerPolicyError struct {
+	Code      ErrorCode
+	Status    int
+	Retryable bool
+	Message   string
+	Labels    []string
+}
+
+func NewAllowedCallerPolicyError(code ErrorCode, status int, retryable bool, message string, labels ...string) *AllowedCallerPolicyError {
+	return &AllowedCallerPolicyError{
+		Code:      code,
+		Status:    status,
+		Retryable: retryable,
+		Message:   message,
+		Labels:    append([]string(nil), labels...),
+	}
+}
+
+func (err *AllowedCallerPolicyError) Error() string {
+	if err == nil {
+		return ""
+	}
+	return string(err.Code)
+}
+
+func requiredRoleDenied(r *http.Request, requestContext auth.RequestContext, route RouteMetadata, policy AllowedCallerPolicy) (bool, ErrorCode, int, bool, string, []string) {
 	if route.RequiredRole == "" {
-		return false, "", "", nil
+		return false, "", 0, false, "", nil
 	}
 	if policy == nil {
-		return true, CodeCallerNotAllowed, "caller service is not allowed for route", []string{"allowed_caller_policy_missing"}
+		return true, CodeCallerNotAllowed, http.StatusForbidden, false, "caller service is not allowed for route", []string{"allowed_caller_policy_missing"}
 	}
 
 	allowedCallers, err := policy.AllowedCallers(r)
 	if err != nil {
-		return true, CodeCallerNotAllowed, "caller service is not allowed for route", []string{"allowed_caller_policy_failed"}
+		var policyErr *AllowedCallerPolicyError
+		if errors.As(err, &policyErr) && policyErr != nil {
+			return true, policyErr.Code, policyErr.Status, policyErr.Retryable, policyErr.Message, policyErr.Labels
+		}
+		return true, CodeInternalError, http.StatusInternalServerError, false, "internal server error", []string{"allowed_caller_policy_failed"}
 	}
 	switch auth.CallerRoleDenialReasonFor(requestContext.CallerService, route.RequiredRole, allowedCallers) {
 	case auth.CallerRoleAllowed:
-		return false, "", "", nil
+		return false, "", 0, false, "", nil
 	case auth.CallerServiceNotAllowed:
-		return true, CodeCallerNotAllowed, "caller service is not allowed for route", []string{"caller_not_allowed"}
+		return true, CodeCallerNotAllowed, http.StatusForbidden, false, "caller service is not allowed for route", []string{"caller_not_allowed"}
 	case auth.CallerRoleNotAllowed:
-		return true, CodeRoleNotAllowed, "caller role is not allowed for route", []string{"required_role_not_allowed"}
+		return true, CodeRoleNotAllowed, http.StatusForbidden, false, "caller role is not allowed for route", []string{"required_role_not_allowed"}
 	default:
-		return true, CodeRoleNotAllowed, "caller role is not allowed for route", []string{"required_role_not_allowed"}
+		return true, CodeRoleNotAllowed, http.StatusForbidden, false, "caller role is not allowed for route", []string{"required_role_not_allowed"}
 	}
 }
 
@@ -135,6 +164,10 @@ func writeValidationError(w http.ResponseWriter, r *http.Request, route RouteMet
 }
 
 func writeValidationErrorWithAudit(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, code ErrorCode, status int, message string, validationErrors []string, sink audit.Sink) {
+	writePolicyDeniedErrorWithAudit(w, r, route, requestContext, code, status, false, message, validationErrors, sink)
+}
+
+func writePolicyDeniedErrorWithAudit(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, code ErrorCode, status int, retryable bool, message string, validationErrors []string, sink audit.Sink) {
 	var operationID *string
 	if route.OperationID != "" {
 		operationID = &route.OperationID
@@ -148,7 +181,7 @@ func writeValidationErrorWithAudit(w http.ResponseWriter, r *http.Request, route
 	envelope := NewErrorEnvelope(
 		code,
 		message,
-		false,
+		retryable,
 		CorrelationIDFromRequest(r),
 		operationID,
 		details,

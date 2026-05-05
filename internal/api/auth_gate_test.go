@@ -307,6 +307,102 @@ func TestAuthGateDeniesProductCallerWithoutRequiredRole(t *testing.T) {
 	}
 }
 
+func TestAuthGateMapsClassifiedAllowedCallerPolicyErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantCode  ErrorCode
+		wantHTTP  int
+		retryable bool
+	}{
+		{name: "storage unavailable", err: NewAllowedCallerPolicyError(CodeStorageUnavailable, http.StatusServiceUnavailable, true, "durable metadata store is unavailable", "store_unavailable"), wantCode: CodeStorageUnavailable, wantHTTP: http.StatusServiceUnavailable, retryable: true},
+		{name: "namespace not found", err: NewAllowedCallerPolicyError(CodeNamespaceNotFound, http.StatusNotFound, false, "namespace was not found", "namespace_not_found"), wantCode: CodeNamespaceNotFound, wantHTTP: http.StatusNotFound},
+		{name: "invalid namespace", err: NewAllowedCallerPolicyError(CodeInvalidID, http.StatusBadRequest, false, "invalid namespace id", "invalid_namespace_id"), wantCode: CodeInvalidID, wantHTTP: http.StatusBadRequest},
+		{name: "namespace mismatch", err: NewAllowedCallerPolicyError(CodeResourceNamespaceMismatch, http.StatusBadRequest, false, "request namespace does not match route namespace", "namespace_mismatch"), wantCode: CodeResourceNamespaceMismatch, wantHTTP: http.StatusBadRequest},
+		{name: "internal invariant", err: NewAllowedCallerPolicyError(CodeInternalError, http.StatusInternalServerError, false, "internal server error", "policy_invariant_failed"), wantCode: CodeInternalError, wantHTTP: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sink := &fakeAuditSink{}
+			req := httptest.NewRequest(http.MethodGet, "/fake", nil)
+			req.Header.Set(auth.HeaderAuthorization, "Bearer service-token")
+			req.Header.Set(auth.HeaderCorrelationID, "corr_policy")
+			req.Header.Set(auth.HeaderNamespaceID, "ns_123")
+			req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+			handler := AuthGateWithAuditSink(
+				http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("next handler was called") }),
+				fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "service-account:agentsmith-api", CanonicalCallerService: "agentsmith-api"}},
+				fakeRouteClassResolver{route: RouteMetadata{Method: http.MethodGet, Path: "/fake", OperationID: "fakeRepoRead", Class: auth.RouteClassNamespaceBound, RequiredRole: auth.RoleRepoAdmin}},
+				fakeAllowedCallerPolicy{err: errors.Join(tt.err, errors.New("postgres dsn password=secret-password"))},
+				sink,
+			)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantHTTP {
+				t.Fatalf("status = %d body = %s, want %d", rec.Code, rec.Body.String(), tt.wantHTTP)
+			}
+			var envelope ErrorEnvelope
+			if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("error envelope did not decode: %v", err)
+			}
+			if envelope.Error.Code != tt.wantCode || envelope.Error.Retryable != tt.retryable {
+				t.Fatalf("error = %#v, want code %s retryable %v", envelope.Error, tt.wantCode, tt.retryable)
+			}
+			for _, leaked := range []string{"postgres", "dsn", "secret-password"} {
+				if strings.Contains(rec.Body.String(), leaked) {
+					t.Fatalf("classified policy error leaked raw error %q: %s", leaked, rec.Body.String())
+				}
+			}
+			if len(sink.events) != 1 {
+				t.Fatalf("audit events = %#v, want one", sink.events)
+			}
+			if got := sink.events[0].Details["error_code"]; got != string(tt.wantCode) {
+				t.Fatalf("audit error_code = %#v, want %s", got, tt.wantCode)
+			}
+			auditBody := auditEventString(t, sink.events[0])
+			if strings.Contains(auditBody, "secret-password") || strings.Contains(auditBody, "postgres") {
+				t.Fatalf("audit event leaked raw policy error: %s", auditBody)
+			}
+		})
+	}
+}
+
+func TestAuthGateMapsUnclassifiedAllowedCallerPolicyErrorToInternalError(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/fake", nil)
+	req.Header.Set(auth.HeaderAuthorization, "Bearer service-token")
+	req.Header.Set(auth.HeaderCorrelationID, "corr_policy")
+	req.Header.Set(auth.HeaderNamespaceID, "ns_123")
+	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	handler := AuthGate(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("next handler was called") }),
+		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "service-account:agentsmith-api", CanonicalCallerService: "agentsmith-api"}},
+		fakeRouteClassResolver{route: RouteMetadata{Method: http.MethodGet, Path: "/fake", OperationID: "fakeRepoRead", Class: auth.RouteClassNamespaceBound, RequiredRole: auth.RoleRepoAdmin}},
+		fakeAllowedCallerPolicy{err: errors.New("postgres dsn password=secret-password")},
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body = %s, want 500", rec.Code, rec.Body.String())
+	}
+	var envelope ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("error envelope did not decode: %v", err)
+	}
+	if envelope.Error.Code != CodeInternalError || envelope.Error.Retryable {
+		t.Fatalf("error = %#v, want INTERNAL_ERROR retryable false", envelope.Error)
+	}
+	for _, leaked := range []string{"postgres", "dsn", "secret-password"} {
+		if strings.Contains(rec.Body.String(), leaked) {
+			t.Fatalf("unclassified policy error leaked raw error %q: %s", leaked, rec.Body.String())
+		}
+	}
+}
+
 func TestAuthGateDeniesCallerKindThatCannotUseConfiguredRole(t *testing.T) {
 	body := &trackingReadCloser{}
 	req := httptest.NewRequest(http.MethodGet, "/fake", body)
