@@ -12,9 +12,10 @@ needed before real handlers and storage mutation work:
 - `operations`: operation state, idempotency, redaction, and typed operation
   record boundaries.
 - `store`: interfaces for durable operation records, idempotency, and audit
-  sinks. No database implementation or migrations are present yet.
+  sinks. PostgreSQL schema migration exists; no DB adapter implementation yet.
 - `audit`: audit event typing and redaction expectations.
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
+- `fences`: pure repo fence model, held-state semantics, and acquisition checks.
 - `inspection`: recovery inspection primitives.
 - `pathresolver`: path safety helpers and denial tests.
 
