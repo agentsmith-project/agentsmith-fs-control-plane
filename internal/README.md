@@ -17,7 +17,8 @@ needed before real handlers and storage mutation work:
   transitions.
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
 - `fences`: pure repo fence model, held-state semantics, and acquisition checks.
-- `inspection`: recovery inspection primitives.
+- `inspection`: recovery inspection and pure read-only recovery classification
+  primitives.
 - `pathresolver`: path safety helpers, denial tests, and shared resolver corpus.
 
 Still intentionally absent: real endpoint handlers, durable DB mutations, JVS

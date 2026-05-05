@@ -67,14 +67,19 @@ Neutral service skeleton and control-plane primitives now exist:
 - operation lease pure model/tests
 - repo fence pure model/tests
 - audit outbox pure model/tests
+- pure recovery planner/classification for operation, fence, and audit outbox
+  durable records
 - path resolver shared corpus
 - test harness
 
-Durable DB adapters, the recovery loop, real endpoint handlers, JVS execution,
-WebDAV serving, workload mount issuance, and storage mutation are not
-implemented. Continue directly toward GA by finishing guardrail review,
-implementing durable adapters and recovery next, then adding handlers only after
-their dependency gates are accepted.
+The recovery planner is a read-only classifier for later recovery worker/runbook
+decisions; it is not a recovery loop, does not read/write DB state, does not
+execute a worker, and does not touch JVS/WebDAV/mount/storage mutation. Durable
+DB adapters, the recovery loop, real endpoint handlers, JVS execution, WebDAV
+serving, workload mount issuance, and storage mutation are not implemented.
+Continue directly toward GA by finishing guardrail review, implementing durable
+adapters and recovery next, then adding handlers only after their dependency
+gates are accepted.
 
 Storage mutation remains blocked by G-005, recorded in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`. The JVS team has indicated the next

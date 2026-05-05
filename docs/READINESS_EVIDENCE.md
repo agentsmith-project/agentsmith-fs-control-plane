@@ -16,10 +16,14 @@ Status values:
 
 Current implementation evidence includes pushed control-plane primitives for the
 PostgreSQL migration contract, operation lease pure model/tests, repo fence pure
-model/tests, audit outbox pure model/tests, path resolver shared corpus, and
-denied audit behavior in the neutral shell/AuthGate paths. Durable PostgreSQL
-adapters, recovery loop, real endpoint handlers, JVS/WebDAV/mount/storage
-mutation, and other external integrations remain unimplemented.
+model/tests, audit outbox pure model/tests, pure recovery planner/classification
+for operation, fence, and audit outbox durable records, path resolver shared
+corpus, and denied audit behavior in the neutral shell/AuthGate paths. The
+planner is only a read-only classifier for later worker/runbook decisions; it
+does not read/write DB state, execute a recovery loop or worker, or touch
+JVS/WebDAV/mount/storage mutation. Durable PostgreSQL adapters, recovery loop,
+real endpoint handlers, JVS/WebDAV/mount/storage mutation, and other external
+integrations remain unimplemented.
 
 ## Gate Ledger
 
@@ -39,7 +43,7 @@ mutation, and other external integrations remain unimplemented.
 | G-010C | Repo retention and purge authorization | in_review | AFSCP maintainer | Product owner, security owner, operations owner | `docs/adr/0008-repo-lifecycle-policy.md`, `api/schemas/afscp-internal-v1.schema.json` | lifecycle policy and purge confirmation drafted | 2026-05-05 | Product/security acceptance required |
 | G-010D | Repo lifecycle recovery and runbooks | in_review | AFSCP maintainer | Operations owner, security owner | `docs/contracts/repo-lifecycle-v1.md`, `docs/OPERATIONAL_READINESS.md`, `docs/runbooks/ga-runbooks.md` | recovery phases, runbooks, and drill expectations drafted | 2026-05-05 | Drill evidence still required before GA |
 | G-010E | Repo lifecycle audit and redaction | in_review | AFSCP maintainer | Security owner, calling product owner | `docs/OPERATIONS_AND_AUDIT.md`, `docs/contracts/repo-lifecycle-v1.md` | lifecycle audit events and redaction rules drafted | 2026-05-05 | Redaction tests still required |
-| G-011 | Operation recovery and audit | in_review | AFSCP maintainer | Operations owner, security owner | `docs/adr/0007-operation-store-and-audit-outbox.md`, `docs/contracts/operation-state-machine-v1.md`, `docs/OPERATIONAL_READINESS.md`, `migrations/0001_control_plane_persistence.sql`, `internal/store/migration_contract_test.go`, `internal/operations`, `internal/audit` | PostgreSQL operation store and outbox selected; migration contract, operation lease pure model/tests, and audit outbox pure model/tests exist | 2026-05-05 | Durable DB adapter and recovery loop still pending |
+| G-011 | Operation recovery and audit | in_review | AFSCP maintainer | Operations owner, security owner | `docs/adr/0007-operation-store-and-audit-outbox.md`, `docs/contracts/operation-state-machine-v1.md`, `docs/OPERATIONAL_READINESS.md`, `migrations/0001_control_plane_persistence.sql`, `internal/store/migration_contract_test.go`, `internal/operations`, `internal/audit`, `internal/inspection` | PostgreSQL operation store and outbox selected; migration contract, operation lease pure model/tests, audit outbox pure model/tests, and read-only recovery classification exist | 2026-05-05 | Durable DB adapter and recovery loop still pending |
 | G-012 | Namespace disable and policy-change behavior | in_review | AFSCP maintainer | Product owner, security owner | `docs/contracts/namespace-volume-binding-v1.md`, `docs/SECURITY_AND_TENANCY.md` | namespace disable semantics drafted | 2026-05-05 | Product/security acceptance required |
 | G-013 | Required runbooks and drills | in_review | Operations owner | AFSCP maintainer, security owner | `docs/runbooks/README.md`, `docs/runbooks/ga-runbooks.md`, `docs/OPERATIONAL_READINESS.md` | runbook catalog, scenario runbooks, and drill evidence format drafted | 2026-05-05 | Drills still required before GA |
 | G-014 | Observability and alerting | in_review | Operations owner | Platform owner, security owner | `docs/OPERATIONAL_READINESS.md` | alert classes and threshold requirements drafted | 2026-05-05 | Numeric SLO thresholds still deployment-dependent |

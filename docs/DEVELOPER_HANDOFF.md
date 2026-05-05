@@ -96,6 +96,8 @@ Completed:
 - operation lease pure model and tests
 - repo writer/lifecycle fence pure model and tests
 - audit outbox pure model and tests
+- pure recovery planner/classification for operation, fence, and audit outbox
+  durable records
 - path resolver guardrails and shared corpus
 - denied audit coverage in the neutral shell and AuthGate paths
 - contract verifier covering selected OpenAPI, schema, docs, and Go DTO drift
@@ -106,7 +108,10 @@ Partially completed:
 - API shell routes known contract paths to capability-denied responses, but real
   endpoint handlers are not implemented.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
-  pure operation lease, repo fence, and audit outbox models. Durable
+  pure operation lease, repo fence, audit outbox, and recovery classification
+  models. The recovery planner only classifies existing durable record values
+  into high-level actions; it is not a recovery loop and does not read/write DB
+  state, execute workers, or touch JVS/WebDAV/mount/storage mutation. Durable
   PostgreSQL adapters and the recovery loop are not implemented.
 - Path resolver guardrails exist, but there is no storage mutation integration.
 
