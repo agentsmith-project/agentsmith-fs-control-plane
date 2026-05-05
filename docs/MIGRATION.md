@@ -12,16 +12,16 @@ P0 should not force-migrate existing caller data.
 
 1. Verify source legacy resource health.
 2. Put the source into read-only/maintenance mode, or define an explicit initial-copy plus delta-sync plan.
-3. Create target repo through AFSCP under the target namespace.
-4. Copy payload data from old backend to target repo path.
+3. Create target repo through AFSCP under the target namespace, using the separated control/payload layout.
+4. Copy payload data from old backend to the target payload root.
 5. Record manifest counts, hashes where feasible, source generation, and copy timestamp.
 6. Run delta sync until the final cutover window if writes were allowed during initial copy.
 7. Freeze source writes for final sync.
-8. Initialize JVS repo or import baseline metadata.
+8. Verify JVS external control metadata or import baseline metadata.
 9. Create a `migration-baseline` save point.
 10. Run `jvs doctor --strict`.
 11. Test WebDAV export access and confirm the calling product no longer needs direct JuiceFS credentials for ordinary user access.
-12. Test workload mount only when the target runtime has verified `.jvs` protection; otherwise confirm the expected capability error.
+12. Test workload mount only after confirming the target plan mounts `payload_volume_subdir` and never exposes the control root; otherwise confirm the expected capability error.
 13. Update the calling product's backend reference.
 14. Preserve rollback metadata, source generation, and cutover timestamp.
 15. Archive old backend only after operator approval.

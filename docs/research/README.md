@@ -8,7 +8,7 @@ Known superseding decisions in the root docs:
 
 - AFSCP core is product-agnostic; AgentSmith-specific notebook task, file library, project, and workspace semantics belong only in integration mapping.
 - `namespace` is the AFSCP isolation concept. AgentSmith may map one workspace to one namespace, but AFSCP does not store AgentSmith workspace semantics.
-- `repo_path` is the JVS `main` workspace real folder; P0 does not add a child `workspace/` payload directory.
+- P0 repo layout uses JVS external control root mode: AFSCP stores control metadata under a private `control/` root and exposes only the separate `payload/` root.
 - Product callers receive workload mount bindings; only the dedicated orchestrator receives Secret-bearing mount plans.
 - P0 restore-run rejects active read-write export/workload sessions by default.
 - Repo archive/delete/rename/detach lifecycle APIs are P1.

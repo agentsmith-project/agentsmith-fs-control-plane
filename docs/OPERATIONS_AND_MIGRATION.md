@@ -64,7 +64,7 @@ P1:
 6. Add repo templates and same-namespace clone.
 7. Route only feature-flagged callers or namespaces to AFSCP after their ordinary client path no longer depends on direct JuiceFS credentials.
 8. Route new repos to AFSCP only after export access is validated for that caller.
-9. Add workload mount binding/orchestrator integration only after `.jvs` protection is proven; otherwise return capability errors.
+9. Add workload mount binding/orchestrator integration only after the JVS external-control/payload-only mount contract is implemented; otherwise return capability errors.
 10. Keep legacy repos on old paths.
 11. Plan legacy migration as a separate release.
 
@@ -76,12 +76,12 @@ Explicit migration flow should be:
 
 1. Verify source legacy repo health.
 2. Put the source into maintenance/read-only mode or establish a delta-sync capable migration plan.
-3. Create target repo through AFSCP under the namespace volume binding.
-4. Copy/import payload data.
+3. Create target repo through AFSCP under the namespace volume binding, using the separated control/payload layout.
+4. Copy/import payload data into the target payload root.
 5. Record manifest counts, hashes where feasible, source generation, and copy timestamp.
 6. Run delta sync until the final cutover window.
 7. Freeze writes for final sync.
-8. Initialize or import JVS metadata and create a migration baseline save point.
+8. Verify external JVS control metadata or import JVS metadata and create a migration baseline save point.
 9. Run `jvs doctor --strict`.
 10. Switch the calling product's backend reference.
 11. Preserve rollback metadata and cutover timestamp.

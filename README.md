@@ -32,14 +32,14 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 ## Repository Contents
 
 - [docs/HANDOFF.md](docs/HANDOFF.md): start here.
-- [docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md](docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md): current technical blocker and feasibility review.
+- [docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md](docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md): feasibility review with 2026-05-04 JVS external-control resolution update.
 - [docs/TEAM_REVIEW_2026-05-03.md](docs/TEAM_REVIEW_2026-05-03.md): product/architecture/security review closure.
 - [docs/DECOUPLING_REVIEW.md](docs/DECOUPLING_REVIEW.md): decoupling analysis and revised boundary.
 - [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md): product-agnostic requirements.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): component boundaries and target architecture.
 - [docs/API_CONTRACT_DRAFT.md](docs/API_CONTRACT_DRAFT.md): draft internal API and data contracts.
 - [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md): AgentSmith integration mapping, kept outside the core model.
-- [docs/SECURITY_AND_TENANCY.md](docs/SECURITY_AND_TENANCY.md): credential, namespace, path, export, and `.jvs` protection model.
+- [docs/SECURITY_AND_TENANCY.md](docs/SECURITY_AND_TENANCY.md): credential, namespace, path, export, and JVS control metadata protection model.
 - [docs/MVP_PLAN.md](docs/MVP_PLAN.md): delivery plan and backlog guardrails.
 - [docs/OPERATIONS_AND_MIGRATION.md](docs/OPERATIONS_AND_MIGRATION.md): operations, migration, and rollout strategy.
 - [docs/PRODUCT_BOUNDARY.md](docs/PRODUCT_BOUNDARY.md): hard product boundaries and non-goals.

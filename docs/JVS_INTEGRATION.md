@@ -30,6 +30,31 @@ See:
 - `/home/percy/works/mbos-v1/jvs/docs/24_REPO_CLONE_PRODUCT_PLAN.md`
 - `/home/percy/works/mbos-v1/jvs/docs/25_REPO_WORKSPACE_LIFECYCLE_PRODUCT_PLAN.md`
 
+## External Control Root Mode
+
+AFSCP-managed repos should use JVS external control roots for P0.
+
+Repo create command shape:
+
+```bash
+jvs init <payload_root_path> --control-root <control_root_path> --workspace main --json
+```
+
+Routine command shape:
+
+```bash
+jvs --control-root <control_root_path> --workspace main <command> --json
+```
+
+External control root rules accepted for AFSCP:
+
+- `payload_root_path` is the JVS `main` workspace folder and contains user files only.
+- `control_root_path` contains JVS control metadata and is not mounted/exported.
+- A bare payload folder cannot auto-discover the control root; AFSCP runner must pass `--control-root` and `--workspace main`.
+- `--repo` is not the selector for external control root repos.
+- Current JVS external control root contract is main-only.
+- JVS has repo/workspace lifecycle commands for ordinary repos, but the current external control root contract fails lifecycle commands closed. This is not a P0 blocker because AFSCP P0 does not expose repo archive/delete/rename/detach or additional workspace lifecycle APIs.
+
 ## Operation Rules
 
 - Every mutating JVS action must have an AFSCP operation record.
@@ -41,6 +66,16 @@ See:
 - The packaged JVS binary must be built from the pinned commit; CI should smoke-test the required commands instead of trusting a stale local artifact.
 - AFSCP should run JVS commands from a clean working directory outside another JVS repo, or explicitly validate that the runner CWD cannot affect target resolution.
 - Cross-resource operations must use deterministic lock ordering.
+
+## Required Separation Smoke Test
+
+Before enabling workload mounts, CI should prove the pinned JVS binary can:
+
+1. `jvs init <payload> --control-root <control> --workspace main --json`.
+2. Create a save point from the separated repo.
+3. Confirm `<payload>/.jvs` is absent and `<control>/.jvs` is present.
+4. Clone with `jvs --control-root <control> --workspace main repo clone <target_payload> --target-control-root <target_control> --save-points main --json`.
+5. Confirm `<target_payload>/.jvs` is absent and `jvs --control-root <target_control> --workspace main doctor --strict --json` reports success.
 
 ## Resource Locks
 
@@ -55,10 +90,10 @@ See:
 Creating a repo should:
 
 1. Resolve namespace and volume policy.
-2. Allocate a canonical repo path.
-3. Create the repo folder.
-4. Run `jvs init <repo_path> --json`.
-5. Store `repo_id`, `namespace_id`, `volume_id`, `repo_path`, and `jvs_repo_id`.
+2. Allocate canonical `control_root_path` and `payload_root_path`.
+3. Ensure parent directories exist and the payload root is ready for adoption.
+4. Run `jvs init <payload_root_path> --control-root <control_root_path> --workspace main --json`.
+5. Store `repo_id`, `namespace_id`, `volume_id`, `control_root_path`, `payload_root_path`, `control_volume_subdir`, `payload_volume_subdir`, and `jvs_repo_id`.
 6. Return only IDs and status to ordinary callers. Raw paths remain internal.
 
 ## Template Flow
@@ -69,7 +104,7 @@ Creating a repo template should:
 2. Caller invokes AFSCP with source repo, target template identity, namespace context, actor, correlation ID, and idempotency key.
 3. AFSCP resolves the source repo and validates the namespace boundary.
 4. AFSCP creates a fresh source save point under an exclusive source repo JVS lock and records it as the template's `source_save_point_id`.
-5. AFSCP allocates a new template repo path under the same namespace root.
+5. AFSCP allocates new template control and payload roots under the same namespace root.
 6. AFSCP clones the source repo into the template repo with the pinned `clone_history_mode`.
 7. AFSCP returns the template repo identity and JVS repo identity.
 
@@ -77,15 +112,15 @@ The P0 template is immutable after publication. Replacing a template means creat
 
 P0 does not accept caller-provided historical `source_save_point_id` for template creation. JVS `repo clone` clones the current source repo/workspace; creating a template from an older save point requires a future staging restore/import flow.
 
-P0 must not hard-code `--save-points all` until the pinned JVS version supports durable imported-save-point protection. If that support is not accepted, use `--save-points main` and record `clone_history_mode=main` on the template. If the source becomes dirty after the template save point is created and before clone, fail with `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE`.
+For external control root repos, P0 should use `--save-points main` and record `clone_history_mode=main`, because JVS fails closed for `--save-points all` in this profile until imported-history protection is available. If the source becomes dirty after the template save point is created and before clone, fail with `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE`.
 
 Using a template should:
 
 1. Caller authorizes the request in its own product domain.
 2. AFSCP validates that source template repo and target namespace are the same namespace.
 3. AFSCP validates volume policy. If the template volume differs from the target namespace default volume, P0 rejects with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
-4. AFSCP creates a new target repo path.
-5. AFSCP runs `jvs --repo <template_repo_path> repo clone <target_repo_path> --save-points <clone_history_mode> --json`.
+4. AFSCP creates new target control and payload roots.
+5. AFSCP runs `jvs --control-root <template_control_root_path> --workspace main repo clone <target_payload_root_path> --target-control-root <target_control_root_path> --save-points <clone_history_mode> --json`.
 6. AFSCP returns the new target repo metadata to the caller.
 
 Both clone steps create independent JVS repo identities. Modifying a cloned repo must not affect the source repo or template repo.
@@ -100,4 +135,4 @@ Template creation must also prevent source writes between the fresh save point a
 
 Restore preview/run must model JVS dirty-state decisions explicitly. P0 should fail closed on dirty repos unless the API exposes a supported `discard_unsaved` or `save_first` mode and audits that choice.
 
-`jvs repo clone` requires the target folder to not exist. AFSCP should allocate the target path but must not pre-create the clone target directory before invoking JVS.
+External control root `jvs repo clone` permits target payload and target control roots to be missing or empty, but fails closed if they are non-empty. AFSCP should allocate the target paths but must not pre-populate the clone target roots before invoking JVS.

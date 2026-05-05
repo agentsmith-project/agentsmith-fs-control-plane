@@ -25,7 +25,7 @@ A generic control plane can be tested with conformance cases:
 - repo create/save/restore/clone
 - template clone boundaries
 - export TTL and revoke
-- `.jvs` protection
+- JVS control metadata protection
 - operation recovery
 
 Those tests do not need AgentSmith product fixtures.

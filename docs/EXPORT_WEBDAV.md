@@ -47,41 +47,41 @@ Do not return JuiceFS metadata URL, bucket URL, access key, or secret key.
 - Support read-only and read-write modes.
 - Support TTL and revoke.
 - Log access with correlation/export IDs.
-- Chroot export to repo root.
-- Hide or block `.jvs`.
+- Chroot export to the repo payload root.
+- Never expose JVS control metadata.
 - Reject path traversal.
 - Apply the same resolver/filter policy to GET, PUT, DELETE, MKCOL, MOVE, COPY, PROPFIND, PROPPATCH, LOCK, and UNLOCK.
-- Reject creation, rename, copy, move, or propfind of root-level `.jvs`.
+- Reject creation, rename, copy, move, or propfind of root-level `.jvs` as defense-in-depth and legacy safety.
 - Reject encoded or double-encoded path traversal and `.jvs` bypass attempts.
-- Prevent symlink escape from the exported repo root.
+- Prevent symlink escape from the exported payload root.
 - Expired or revoked credentials must fail future requests and close or reject active sessions where supported.
 - Redact credentials from logs.
 - Audit export create, credential issuance, revoke, expiry, and denied path attempts.
 
 ## Gateway Requirement
 
-P0 WebDAV export must be served by an AFSCP-controlled policy gateway. Stock `juicefs webdav` can be a reference or backend capability, but it is not enough by itself because AFSCP must apply the canonical path resolver and `.jvs` filter across every method, including `MOVE` and `COPY` destination paths.
+P0 WebDAV export must be served by an AFSCP-controlled policy gateway. Stock `juicefs webdav` can be a reference or backend capability, but it is not enough by itself because AFSCP must apply the canonical path resolver, payload-root chroot, and method policy across every method, including `MOVE` and `COPY` destination paths.
 
-Do not rely on a directory listing deny list, a reverse proxy path prefix check, or a method allowlist as the complete `.jvs` protection mechanism.
+Do not rely on a directory listing deny list, a reverse proxy path prefix check, or a method allowlist as the complete policy boundary.
 
 ## Method Policy
 
-All methods use the same path resolver and `.jvs` filter.
+All methods use the same payload-root resolver. Root-level `.jvs` source or destination paths are denied even though AFSCP-managed payload roots should not contain `.jvs`.
 
 | Method | read_only | read_write |
 | --- | --- | --- |
 | `OPTIONS` | allow | allow |
 | `HEAD` | allow | allow |
 | `GET` | allow | allow |
-| `PROPFIND` | allow except `.jvs` | allow except `.jvs` |
-| `PUT` | deny | allow except `.jvs` |
-| `DELETE` | deny | allow except `.jvs` |
-| `MKCOL` | deny | allow except `.jvs` |
-| `MOVE` | deny | allow except `.jvs` source or destination |
-| `COPY` | deny | allow except `.jvs` source or destination |
-| `PROPPATCH` | deny | allow except `.jvs` |
-| `LOCK` | deny unless gateway requires no-op read lock | allow except `.jvs` |
-| `UNLOCK` | deny unless paired with allowed no-op lock | allow except `.jvs` |
+| `PROPFIND` | allow except root `.jvs` | allow except root `.jvs` |
+| `PUT` | deny | allow except root `.jvs` |
+| `DELETE` | deny | allow except root `.jvs` |
+| `MKCOL` | deny | allow except root `.jvs` |
+| `MOVE` | deny | allow except root `.jvs` source or destination |
+| `COPY` | deny | allow except root `.jvs` source or destination |
+| `PROPPATCH` | deny | allow except root `.jvs` |
+| `LOCK` | deny unless gateway requires no-op read lock | allow except root `.jvs` |
+| `UNLOCK` | deny unless paired with allowed no-op lock | allow except root `.jvs` |
 
 Denied mutating method attempts on read-only exports must be audited with export ID, method, normalized path, actor/caller context, and reason.
 

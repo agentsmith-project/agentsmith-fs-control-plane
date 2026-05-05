@@ -19,13 +19,13 @@ Important: do not use `agentsmith-oss` for current-state analysis. It is an old 
 
 ## Day 1 Sequence
 
-1. Read `docs/TEAM_REVIEW_2026-05-03.md` and `docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md`, then confirm the P0 gates are still accepted.
+1. Read `docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md` and its 2026-05-04 update note, then confirm the P0 gates are still accepted.
 2. Record the runtime language/framework in a new ADR.
 3. Start only the neutral service skeleton: package layout, health endpoint, config loading, logging, test harness, and empty route registration.
 4. Freeze internal auth and caller-service authorization.
 5. Convert `docs/API_CONTRACT_DRAFT.md` into JSON schemas and the P0 internal OpenAPI.
 6. Pin the JVS binary/commit and add CLI smoke tests for the commands AFSCP depends on.
-7. Freeze the `.jvs` mount protection strategy with orchestrator owners before enabling workload mounts.
+7. Freeze the JVS external control root layout and payload-only mount contract with orchestrator owners before enabling workload mounts.
 8. Freeze operation store schema, writer-session fence, and recovery matrix before implementing storage handlers.
 
 ## Revised Boundary
@@ -131,5 +131,5 @@ Client/desktop connector owns:
 3. Finalize internal service auth, caller identity, and namespace caller authorization.
 4. Generate P0 OpenAPI before implementing handlers.
 5. Finalize operation store schema, writer-session fence, and recovery matrix.
-6. Finalize `.jvs` protection strategy before enabling workload mounts; stock JuiceFS CSI subdir alone is not sufficient.
+6. Finalize JVS external control root and payload-only mount behavior before enabling workload mounts; stock JuiceFS CSI must mount the payload subdir, not the repo container directory.
 7. Confirm first-consumer mapping in `docs/INTEGRATION_GUIDE.md` without moving those concepts into core AFSCP.

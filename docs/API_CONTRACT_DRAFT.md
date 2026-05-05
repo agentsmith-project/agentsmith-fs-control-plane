@@ -45,7 +45,8 @@ The P0 transport uses the required headers in [contracts/afscp-internal-api-v1.m
   "credential_ref": "secret://afscp/juicefs-default",
   "capabilities": {
     "webdav_export": true,
-    "workload_mount": false,
+    "workload_mount": true,
+    "jvs_external_control_root": true,
     "filtered_mount": false,
     "directory_quota": false,
     "csi_driver": "juicefs.csi.io",
@@ -57,7 +58,7 @@ The P0 transport uses the required headers in [contracts/afscp-internal-api-v1.m
 
 `credential_ref` is internal. It must not be returned to ordinary clients, workloads, or non-admin caller responses.
 
-`workload_mount=true` requires a verified `.jvs` protection strategy for JVS repos. Stock JuiceFS CSI subdirectory mounts do not hide root-level `.jvs` inside the mounted repo. A shared JuiceFS volume with `filtered_mount=false` may still support repo provisioning, JVS operations, templates, and WebDAV exports, but must reject workload mount bindings until the runtime can protect `.jvs` or JVS metadata is outside the workload-visible payload root.
+`workload_mount=true` requires JVS control metadata to be outside the workload-visible payload root, or an equivalent verified filtered view. The default AFSCP path uses JVS external control root mode, so `filtered_mount=false` is acceptable: the orchestrator mounts only `payload_volume_subdir`.
 
 ### NamespaceVolumeBinding
 
@@ -82,7 +83,7 @@ The P0 transport uses the required headers in [contracts/afscp-internal-api-v1.m
   },
   "mount_policy": {
     "workload_mount_enabled": true,
-    "workload_mount_requires_jvs_filter": true,
+    "workload_mount_requires_jvs_external_control_root": true,
     "allow_privileged_workload": false
   },
   "template_policy": {
@@ -95,7 +96,7 @@ The P0 transport uses the required headers in [contracts/afscp-internal-api-v1.m
 
 Calling products must not provide authoritative raw filesystem paths. AFSCP computes canonical namespace roots from `namespace_id`, `volume_id`, and its own volume configuration.
 
-`mount_policy.workload_mount_enabled=true` is a namespace permission, not proof that the selected volume/runtime can mount JVS repos safely. AFSCP must also check `Volume.capabilities.workload_mount` and the `.jvs` protection gate before issuing a mount binding or orchestrator plan.
+`mount_policy.workload_mount_enabled=true` is a namespace permission, not proof that the selected volume/runtime can mount JVS repos safely. AFSCP must also check `Volume.capabilities.workload_mount`, require JVS external control roots for new repos, and issue only payload-root mount plans.
 
 ### Repo
 
@@ -113,7 +114,7 @@ Ordinary repo responses expose IDs and status only.
 }
 ```
 
-`repo_path`, `volume_subdir`, `.jvs` paths, and JuiceFS root details are internal implementation state. Admin/debug APIs may expose them behind break-glass controls, but ordinary product callers should not depend on them.
+`control_root_path`, `payload_root_path`, `control_volume_subdir`, `payload_volume_subdir`, `.jvs` paths, and JuiceFS root details are internal implementation state. Admin/debug APIs may expose them behind break-glass controls, but ordinary product callers should not depend on them.
 
 ### RepoTemplate
 
@@ -169,7 +170,7 @@ Product callers create a mount binding and receive an opaque identifier suitable
   "mount_binding_id": "wmb_123",
   "namespace_id": "ns_123",
   "repo_id": "repo_123",
-  "volume_id": "vol_filtered",
+  "volume_id": "vol_default",
   "mount_path": "/workspace",
   "read_only": false,
   "status": "issued",
@@ -182,26 +183,26 @@ The privileged orchestrator service obtains an `OrchestratorMountPlan` for a bin
 ```json
 {
   "mount_binding_id": "wmb_123",
-  "volume_id": "vol_filtered",
-  "volume_subdir": "afscp/namespaces/ns_123/repos/repo_123",
+  "volume_id": "vol_default",
+  "payload_volume_subdir": "afscp/namespaces/ns_123/repos/repo_123/payload",
   "mount_path": "/workspace",
   "read_only": false,
   "secret_ref": {
     "namespace": "storage-system",
-    "name": "juicefs-vol-filtered"
+    "name": "juicefs-vol-default"
   },
   "security_policy": {
     "run_as_non_root": true,
     "allow_privileged": false,
     "drop_capabilities": ["CAP_DAC_OVERRIDE"],
-    "jvs_metadata_protected": true
+    "jvs_control_outside_payload": true
   }
 }
 ```
 
-This example assumes the selected volume/runtime has `workload_mount=true` and verified `.jvs` protection. The `vol_default` example above has `workload_mount=false`; a workload binding request against it must fail with a capability error while export and JVS operations may still proceed.
+This example assumes an AFSCP-managed repo created with JVS external control root mode. AFSCP must not return `control_volume_subdir` or `control_root_path` in the orchestrator plan.
 
-`volume_subdir` is relative to the JuiceFS filesystem root and must have no leading slash. The AFSCP-managed subroot is `afscp/`, so repo subdirs include that prefix. `secret_ref` is visible only to the dedicated orchestrator identity.
+`payload_volume_subdir` is relative to the JuiceFS filesystem root and must have no leading slash. The AFSCP-managed subroot is `afscp/`, so repo payload subdirs include that prefix. `secret_ref` is visible only to the dedicated orchestrator identity.
 
 ## Internal Endpoints
 
@@ -347,4 +348,4 @@ Minimum P0 operation matrix:
 | template_clone | template read gate plus target repo exclusive create | none | inspect target repo path |
 | export_create | repo export lock plus writer-session fence for read_write mode | reject if repo not active or restore fence is held | revoke leaked partial credential |
 | export_revoke | export session lock | revoke idempotently | repeat returns terminal state |
-| mount_binding_create | repo mount lock plus writer-session fence for read_write mode | reject mount unless `.jvs` protection gate passes; reject read_write when restore fence is held | repeat returns existing binding |
+| mount_binding_create | repo mount lock plus writer-session fence for read_write mode | reject mount unless repo uses external control root or equivalent verified protection; reject read_write when restore fence is held | repeat returns existing binding |

@@ -25,6 +25,6 @@ Suggested local development assumptions once implementation begins:
 5. Confirm mount binding lease/status lifecycle.
 6. Confirm export session and access credential fields.
 7. Confirm writer-session fence behavior.
-8. Confirm `.jvs` protection plan.
+8. Confirm JVS external-control/payload-only mount plan.
 9. Confirm AFSCP core uses product-agnostic `volume`, `namespace`, `repo`, `template`, `export`, and `mount` terms.
 10. Confirm that `agentsmith-oss` is not used for current-state analysis.

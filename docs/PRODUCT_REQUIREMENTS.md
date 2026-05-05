@@ -20,7 +20,7 @@ AFSCP should provide a generic storage control plane that manages shared or dedi
 - Namespace bindings define which caller services and roles may operate in that namespace.
 - Different namespaces can use different volumes, isolation classes, quota defaults, and export policies.
 - New repos are created under a namespace and volume selected by policy.
-- Repos are JVS-managed filesystem roots with stable IDs and controlled paths.
+- Repos are JVS-managed payload workspaces with external control roots, stable IDs, and controlled paths.
 - AFSCP runs JVS operations for save points, restore preview/run, history, and repo clone.
 - AFSCP manages namespace-scoped immutable repo templates in P0.
 - Same-namespace template clone creates an independent repo with a new JVS repo identity.
@@ -28,7 +28,7 @@ AFSCP should provide a generic storage control plane that manages shared or dedi
 - Clients can access authorized repos through controlled exports, initially WebDAV.
 - Workloads can mount authorized repos through controlled mount bindings and orchestrator-only mount plans.
 - Ordinary clients and workloads must not see JuiceFS root credentials.
-- Workload mounts must not expose `.jvs`; if the runtime cannot hide or block `.jvs`, workload mounts are rejected.
+- Workload mounts expose only the repo payload root. JVS control metadata must stay outside that mounted/exported root.
 - Ordinary concurrent reads and writes are allowed. AFSCP does not enforce a product-level single-writer model.
 - Restore-run is a version mutation and must use a writer-session fence to reject active read-write export/workload sessions and block new read-write sessions in P0 unless an explicit audited operator break-glass flow is implemented.
 - Version merge and conflict resolution are out of scope.
@@ -57,12 +57,12 @@ AFSCP should provide a generic storage control plane that manages shared or dedi
 2. A namespace can be created/bound to a volume with caller-service authorization and without exposing raw filesystem paths to callers.
 3. New repos are created through AFSCP and initialized as JVS repos.
 4. New repos use a managed shared volume by default instead of creating one JuiceFS DB/bucket per repo.
-5. Workload mount bindings either mount the repo root through a verified `.jvs`-protected runtime or fail closed with a capability error, without exposing JuiceFS root credentials or Secret references to the workload or ordinary product caller.
+5. Workload mount bindings mount the repo payload root, not the JVS control root or repo container directory, without exposing JuiceFS root credentials or Secret references to the workload or ordinary product caller.
 6. Client export flow returns WebDAV export credentials rather than JuiceFS direct mount credentials.
 7. JVS save point, history, restore preview, and restore-run work through AFSCP; restore-run blocks new read-write sessions and rejects active read-write sessions by default.
 8. A source repo can be saved/cloned into a namespace-scoped immutable repo template.
 9. A template can be cloned within the same namespace into an independent repo with a new JVS repo identity.
 10. Cross-namespace template clone is rejected by default.
-11. WebDAV/export cannot access `.jvs`.
-12. Workload mounts cannot lookup, read, write, create, rename, unlink, chmod, chown, hardlink, or symlink root-level `.jvs`, or are rejected until a filtered/protected view is available.
+11. WebDAV/export cannot access JVS control metadata and rejects root-level `.jvs` access/creation attempts.
+12. Workload mounts do not contain root-level `.jvs` for AFSCP-managed repos; legacy embedded-control repos are rejected until migrated or protected by a verified filtered view.
 13. All mutating operations produce durable operation records and audit events.

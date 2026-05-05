@@ -59,6 +59,7 @@ Suggested AFSCP local targets:
 ## JVS
 
 - GitHub: https://github.com/agentsmith-project/jvs
+- Local rebuilt binary checked for handoff: `/home/percy/works/mbos-v1/jvs/bin/jvs`
 - `/home/percy/works/mbos-v1/jvs/docs/02_CLI_SPEC.md`
 - `/home/percy/works/mbos-v1/jvs/docs/06_RESTORE_SPEC.md`
 - `/home/percy/works/mbos-v1/jvs/docs/09_SECURITY_MODEL.md`

@@ -77,14 +77,14 @@ AFSCP should generate a generic workload mount binding for product callers and a
 Required changes:
 
 - Add a v2 binding endpoint or compatible evolution.
-- Accept `mount_binding_id`, `namespace_id`, `repo_id`, `volume_id`, `volume_subdir`, `mount_path`, `read_only`, and orchestrator-only `secret_ref`.
+- Accept `mount_binding_id`, `namespace_id`, `repo_id`, `volume_id`, `payload_volume_subdir`, `mount_path`, `read_only`, and orchestrator-only `secret_ref`.
 - Stop accepting arbitrary `metadata_url` as the business API contract for new repos.
 - Continue v1 compatibility for legacy file libraries until explicit migration.
 - Ensure workload Pods do not receive JuiceFS credentials.
 - Ensure AgentSmith API services do not receive or reference JuiceFS root Secrets.
 - Keep non-root workload defaults and service account token restrictions.
 - Add mount binding heartbeat, release, revoke, and reconciliation semantics. Pod keepalive is not the same as a storage mount binding lease.
-- Prove `.jvs` protection before enabling AFSCP-backed writable workload homes. Stock JuiceFS CSI subdirectory mounting does not satisfy this by itself.
+- Consume only AFSCP payload-only mount plans for AFSCP-backed workload homes. Stock JuiceFS CSI subdirectory mounting is acceptable only when the selected subdir is the repo payload root and JVS control metadata is outside that mounted subtree.
 
 Current paths to inspect:
 
@@ -121,7 +121,7 @@ Current paths to inspect:
 4. Add AgentSmith mapping from file-library records to AFSCP repo IDs without exposing AFSCP to file-library vocabulary.
 5. Provision new file library backends as AFSCP repos.
 6. Add WebDAV export flow for Desktop/Web and disable ordinary direct JuiceFS access for AFSCP-backed repos.
-7. Add workload mount binding/orchestrator adapter for sandbox-manager after the `.jvs` protection strategy is proven.
+7. Add workload mount binding/orchestrator adapter for sandbox-manager after the external-control/payload-only mount contract is accepted.
 8. Route save/history/restore through AFSCP.
 9. Save notebook task result by asking AFSCP to clone source repo into a repo template, then let AgentSmith store catalog metadata.
 10. Clone template by asking AFSCP to clone same-namespace template into a new repo.

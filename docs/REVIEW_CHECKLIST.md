@@ -11,7 +11,7 @@ Use this checklist before beginning implementation.
 - [ ] Restore-run is treated as a version mutation, blocks new read-write sessions, and rejects active read-write sessions in P0.
 - [ ] Ordinary client access uses controlled exports rather than raw JuiceFS.
 - [ ] Legacy compatibility and migration sequencing are accepted as caller integration work.
-- [ ] P0 repo layout is accepted: `repo_path` is the JVS `main` workspace real folder, with no child `workspace/` payload directory.
+- [ ] P0 repo layout is accepted: each repo has an AFSCP-only JVS external control root and a separate payload root mounted/exported to clients and workloads.
 
 ## Architecture
 
@@ -31,8 +31,8 @@ Use this checklist before beginning implementation.
 - [ ] Ordinary product callers never receive JuiceFS Secret references.
 - [ ] Orchestrator-only mount plans are protected by a dedicated caller role.
 - [ ] WebDAV is served by an AFSCP-controlled policy gateway or equivalent wrapper; stock `juicefs webdav` alone is not accepted.
-- [ ] WebDAV blocks `.jvs` across every method, including `MOVE` and `COPY` destination paths.
-- [ ] Workload mounts block lookup, read, write, create, rename, unlink, chmod, chown, hardlink, and symlink operations targeting root-level `.jvs`, or are rejected.
+- [ ] WebDAV exposes only payload roots, never JVS control roots, and rejects root-level `.jvs` access/creation attempts as defense-in-depth.
+- [ ] Workload mounts expose only `payload_volume_subdir`; embedded-control repos are rejected until migrated or protected by a verified filtered view.
 - [ ] Mount binding lease/status lifecycle defines revoke-request versus confirmed-unmounted terminal states and is integrated with restore-run.
 - [ ] Path resolver rejects traversal and namespace mismatch.
 - [ ] Template clone is checked by namespace, resource, and P0 volume rules in AFSCP.

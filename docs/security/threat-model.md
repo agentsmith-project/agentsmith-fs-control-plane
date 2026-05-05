@@ -5,7 +5,7 @@
 - JuiceFS metadata and object store credentials.
 - Managed volume root.
 - Repo payload data.
-- JVS `.jvs` metadata.
+- JVS control metadata.
 - Namespace volume bindings.
 - Export credentials.
 - Operation records and audit logs.
@@ -47,15 +47,16 @@ Controls:
 - namespace/repo consistency checks
 - traversal and symlink tests
 
-### `.jvs` Tampering
+### JVS Control Metadata Tampering
 
 Risk: client or workload modifies JVS metadata.
 
 Controls:
 
-- WebDAV filter
-- workload filtered mount/view or equivalent gate that blocks all `.jvs` lookup/read/write/create/rename/unlink/chmod/chown/link attempts
-- reject workload mounts if `.jvs` cannot be hidden or blocked
+- AFSCP-managed repos use JVS external control roots.
+- WebDAV and workload mounts expose only payload roots.
+- WebDAV rejects root-level `.jvs` access and creation attempts as defense-in-depth.
+- Embedded-control repos are rejected for workload mounts until migrated or protected by a verified filtered view.
 - `jvs doctor --strict`
 
 ### Cross-Namespace Template Leak

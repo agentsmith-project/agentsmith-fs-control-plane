@@ -75,19 +75,19 @@ The resolver must reject:
 - namespace/repo mismatches
 - caller-provided filesystem paths
 
-## `.jvs` Protection
+## JVS Control Metadata Protection
 
 JVS metadata must be protected from clients, workloads, and exports.
 
 P0 access gate:
 
-- WebDAV must hide or block `.jvs`.
-- Workload mounts must hide or block `.jvs`, including read-only mounts.
-- Permission-only controls are not sufficient by themselves for workload mounts.
-- The selected runtime must block lookup, read, write, create, rename, unlink, chmod, chown, hardlink, and symlink operations targeting root-level `.jvs`.
+- AFSCP-managed repos use JVS external control roots.
+- WebDAV and workload mounts expose only the payload root.
+- Payload roots must not contain `.jvs`.
+- WebDAV must still reject root-level `.jvs` access or creation attempts as defense-in-depth.
 - AFSCP should run `jvs doctor --strict` after sensitive operations.
 
-If these controls cannot be verified for a volume/runtime, workload mounts must be rejected until a filtered mount/view or equivalent gate is implemented.
+Permission-only controls on embedded `.jvs` are not sufficient by themselves for workload mounts. If a legacy embedded-control repo is encountered, workload mounts must be rejected until the repo is migrated to external control root mode or protected by a verified filtered mount/view.
 
 ## Admin/Debug Direct Mount
 

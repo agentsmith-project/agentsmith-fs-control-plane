@@ -6,7 +6,7 @@ The P0 security review must cover:
 
 - JuiceFS credential boundary.
 - Namespace path isolation.
-- `.jvs` protection.
+- JVS control metadata protection.
 - WebDAV chroot/filter behavior.
 - Workload non-root and credential restrictions.
 - Cross-namespace template clone rejection.

@@ -13,17 +13,23 @@ AFSCP resolves repo paths from structured IDs. Callers never provide raw filesys
 
 ## Outputs
 
-- internal `repo_path`
-- orchestrator `volume_subdir`
-- internal `jvs_control_path`
+- internal `control_root_path`
+- internal `payload_root_path`
+- internal `control_volume_subdir`
+- orchestrator `payload_volume_subdir`
 
-`repo_path` is the absolute JVS repo root used only by AFSCP. `volume_subdir` is relative to the JuiceFS filesystem root and is the only path-like value that may appear in an orchestrator mount plan.
+`control_root_path` is the absolute JVS external control root used only by AFSCP. `payload_root_path` is the absolute JVS `main` workspace folder.
 
-P0 `volume_subdir` includes the AFSCP managed subroot prefix:
+`payload_volume_subdir` is relative to the JuiceFS filesystem root and is the only path-like value that may appear in an ordinary orchestrator mount plan. It points to the repo payload root, never to the control root.
+
+P0 subdirs include the AFSCP managed subroot prefix:
 
 ```text
-afscp/namespaces/<namespace_id>/repos/<repo_id>
-afscp/namespaces/<namespace_id>/templates/<template_id>
+control_volume_subdir = afscp/namespaces/<namespace_id>/repos/<repo_id>/control
+payload_volume_subdir = afscp/namespaces/<namespace_id>/repos/<repo_id>/payload
+
+template control_volume_subdir = afscp/namespaces/<namespace_id>/templates/<template_id>/control
+template payload_volume_subdir = afscp/namespaces/<namespace_id>/templates/<template_id>/payload
 ```
 
 ## ID Grammar
@@ -50,8 +56,9 @@ Reject empty IDs, path separators, percent-encoded separators, Unicode slash-lik
 - Use dirfd/openat-style segment traversal with `O_NOFOLLOW` or equivalent for file APIs and export implementations.
 - Do not concatenate user input into raw paths.
 - Do not normalize case in a way that merges two distinct IDs.
-- `.jvs` is never exposed through user/export/workload payload paths.
-- Workload and export payload paths must block lookup, read, write, create, rename, unlink, chmod, chown, hardlink, and symlink operations targeting root-level `.jvs`.
+- Control roots are never exposed through user/export/workload payload paths.
+- `.jvs` is never present in AFSCP-managed payload roots.
+- WebDAV/export still rejects root-level `.jvs` access and creation attempts as defense-in-depth.
 - Canonical namespace root mismatch is an authorization boundary violation.
 
 ## Test Corpus

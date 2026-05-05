@@ -48,7 +48,7 @@ Internal modules:
 - `repos`: repo creation, path resolver, P1 lifecycle hooks.
 - `jvs`: CLI wrapper or library adapter, JSON parsing, resource locks.
 - `templates`: namespace-scoped repo template clone executor.
-- `exports`: WebDAV export, short-lived credentials, `.jvs` filtering.
+- `exports`: WebDAV export, short-lived credentials, payload-root chroot, and defense-in-depth path filtering.
 - `mounts`: workload mount binding and orchestrator-only plan builder.
 - `operations`: operation store, idempotency, retry, audit/event outbox.
 
@@ -76,17 +76,21 @@ Suggested path shape:
     <namespace_id>/
       repos/
         <repo_id>/
-          .jvs/
-          <user files>
+          control/
+            .jvs/
+          payload/
+            <user files>
       templates/
         <template_id>/
-          .jvs/
-          <template files>
+          control/
+            .jvs/
+          payload/
+            <template files>
 ```
 
-`<repo_id>/` is the JVS `main` workspace real folder. Callers must never pass raw filesystem paths. AFSCP resolves paths from structured IDs and namespace context.
+`control/` is the JVS external control root. `payload/` is the JVS `main` workspace and the only subtree exposed to workloads or WebDAV. Callers must never pass raw filesystem paths. AFSCP resolves paths from structured IDs and namespace context.
 
-Workload mounting this root requires a runtime that hides or blocks `.jvs`. A shared JuiceFS volume can still be valid for provisioning, JVS operations, templates, and WebDAV exports even when workload mounts are disabled until that protection exists.
+Workload mounts use the payload subdir only. They do not mount the repo container directory or JVS control root.
 
 ## Data Authority
 
@@ -96,8 +100,8 @@ Workload mounting this root requires a runtime that hides or blocks `.jvs`. A sh
 | Namespace-to-volume and allowed caller policy | AFSCP, optionally configured by admin/trusted caller |
 | Volume runtime state | AFSCP |
 | JuiceFS root credentials | AFSCP/K8s Secret |
-| Repo path and JVS repo ID | AFSCP |
-| Repo template path and JVS repo ID | AFSCP |
+| Repo control/payload paths and JVS repo ID | AFSCP |
+| Repo template control/payload paths and JVS repo ID | AFSCP |
 | JVS operation status | AFSCP |
 | Workload runtime mount status and Secret/PV/PVC execution | External orchestrator |
 | User-visible audit projection | Calling product, using AFSCP events |

@@ -12,21 +12,39 @@ Suggested layout under each JuiceFS filesystem root:
     <namespace_id>/
       repos/
         <repo_id>/
-          .jvs/
-          <user files and directories>
+          control/
+            .jvs/
+          payload/
+            <user files and directories>
       templates/
         <template_id>/
-          .jvs/
-          <template user files and directories>
+          control/
+            .jvs/
+          payload/
+            <template user files and directories>
       trash/
         <repo_id>/
 ```
 
-`<repo_id>/` is both the internal AFSCP `repo_path` and the JVS `main` workspace real folder. AFSCP runs `jvs init <repo_path>` and `jvs --repo <repo_path> ...` against this directory.
+AFSCP should use JVS external control root mode for new repos.
 
-Workload mounts and WebDAV exports expose the same repo root as the user payload root. `.jvs/` is JVS control metadata inside that root. WebDAV/export and workload mounts must hide or block it for read and write.
+`control/` is the JVS external control root selected with `--control-root`. It contains JVS control metadata and is never mounted into workload containers or exported to clients.
 
-Do not add an extra `workspace/` directory between `repo_path` and user files in P0. JVS registers the initialized folder itself as workspace `main`; adding a separate payload folder would make save, restore, and repo clone operate on the wrong level unless JVS later adds explicit support for out-of-root control metadata.
+`payload/` is the JVS `main` workspace folder and the only subtree exposed through WebDAV and workload mounts. It must not contain `.jvs/`.
+
+AFSCP initializes a repo with:
+
+```bash
+jvs init <payload_root_path> --control-root <control_root_path> --workspace main --json
+```
+
+AFSCP runs later JVS commands with:
+
+```bash
+jvs --control-root <control_root_path> --workspace main <command> --json
+```
+
+The older embedded-control layout, where `.jvs/` sits inside the mounted workspace root, is not the P0 layout for AFSCP-managed repos. Legacy embedded-control repos require migration or a verified filtered view before workload mounting.
 
 ## Repo Fields
 
@@ -36,20 +54,27 @@ Required fields:
 - `repo_id`
 - `volume_id`
 - `repo_kind`
-- `repo_path`
-- `volume_subdir`
+- `control_root_path`
+- `payload_root_path`
+- `control_volume_subdir`
+- `payload_volume_subdir`
 - `jvs_repo_id`
 - `status`
 
-`repo_path` is the internal canonical JVS repo root and the `main` workspace real path. `volume_subdir` is the AFSCP-generated JuiceFS subdirectory relative to the JuiceFS filesystem root that a privileged orchestrator may consume; in P0 it points at the same directory as `repo_path`, not `repo_path/workspace`.
+`control_root_path` is the absolute JVS external control root used only by AFSCP/JVS runner.
 
-For the layout above, `volume_subdir` includes the managed subroot prefix:
+`payload_root_path` is the absolute JVS `main` workspace folder. It is the root for user files, WebDAV export, and workload mounts.
+
+`payload_volume_subdir` is the AFSCP-generated JuiceFS subdirectory relative to the JuiceFS filesystem root that a privileged orchestrator may consume. It points at `payload/`, not the repo container directory and not the control root.
+
+For the layout above, subdirs include the managed subroot prefix:
 
 ```text
-afscp/namespaces/<namespace_id>/repos/<repo_id>
+control_volume_subdir = afscp/namespaces/<namespace_id>/repos/<repo_id>/control
+payload_volume_subdir = afscp/namespaces/<namespace_id>/repos/<repo_id>/payload
 ```
 
-`repo_path` and `volume_subdir` should be treated as implementation state. Ordinary product APIs should use IDs. Only the privileged orchestrator plan may include `volume_subdir`, and it must never include a leading slash or full host path.
+These paths and subdirs should be treated as implementation state. Ordinary product APIs should use IDs. Only the privileged orchestrator plan may include `payload_volume_subdir`, and it must never include a leading slash or full host path. `control_root_path` and `control_volume_subdir` must never be returned to ordinary product callers, workloads, or client connectors.
 
 ## Path Resolver Rules
 
@@ -68,23 +93,24 @@ The resolver must reject:
 - symlink escape
 - display-name-derived paths
 - mismatched namespace/repo IDs
-- direct access to `.jvs` from user/export/workload contexts
+- direct access to control roots or `.jvs` from user/export/workload contexts
 - percent-encoded separators or double-decoded traversal
 - root-level `.jvs` create, rename, copy, move, or propfind attempts
 
 Filesystem implementations should use dirfd/openat-style traversal with symlink protection where possible. The same resolver test corpus should cover WebDAV, migration/import, file APIs, and workload mount plan generation.
 
-## `.jvs` Protection Gate
+## Control Metadata Protection Gate
 
-P0 exports and workload mounts must pass a `.jvs` protection gate before enablement.
+P0 exports and workload mounts must expose `payload/` only.
 
-Acceptable P0 strategies:
+Required P0 checks:
 
-- protocol gateway filters `.jvs` for WebDAV and rejects all methods that target it
-- filtered mount/view hides `.jvs` from workload containers
-- equivalent filesystem/runtime gate blocks lookup, read, write, create, rename, unlink, chmod, chown, hardlink, and symlink operations targeting root-level `.jvs`
+- `payload_root_path` must not contain root-level `.jvs`.
+- `control_root_path` and `payload_root_path` must be distinct and must not contain each other.
+- WebDAV and workload mounts use `payload_root_path` / `payload_volume_subdir`, never the repo container directory or control root.
+- WebDAV still rejects attempts to create or access root-level `.jvs` as defense-in-depth and for legacy/migration safety.
 
-Permission-only controls on `.jvs` are not sufficient by themselves because the repo root is writable user payload. If the runtime cannot enforce one of the strategies above, AFSCP must reject workload mounts for that volume/namespace until a filtered view is implemented.
+Permission-only controls on embedded `.jvs` are not sufficient. AFSCP-managed new repos avoid that problem by using JVS external control roots. If a legacy embedded-control repo is encountered, AFSCP must reject workload mounts until the repo is migrated to separated control metadata or a verified filtered view is implemented.
 
 ## Volume Sharding
 

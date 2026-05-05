@@ -17,7 +17,7 @@ Product callers receive a caller-visible mount binding:
   "mount_binding_id": "wmb_123",
   "namespace_id": "ns_123",
   "repo_id": "repo_123",
-  "volume_id": "vol_filtered",
+  "volume_id": "vol_default",
   "mount_path": "/workspace",
   "read_only": false,
   "status": "issued",
@@ -30,26 +30,26 @@ Only the dedicated orchestrator receives the privileged mount plan:
 ```json
 {
   "mount_binding_id": "wmb_123",
-  "volume_id": "vol_filtered",
-  "volume_subdir": "afscp/namespaces/ns_123/repos/repo_123",
+  "volume_id": "vol_default",
+  "payload_volume_subdir": "afscp/namespaces/ns_123/repos/repo_123/payload",
   "mount_path": "/workspace",
   "read_only": false,
   "secret_ref": {
     "namespace": "storage-system",
-    "name": "juicefs-vol-filtered"
+    "name": "juicefs-vol-default"
   },
   "security_policy": {
     "run_as_non_root": true,
     "allow_privileged": false,
     "drop_capabilities": ["CAP_DAC_OVERRIDE"],
-    "jvs_metadata_protected": true
+    "jvs_control_outside_payload": true
   }
 }
 ```
 
-This example assumes a selected volume/runtime that has verified `.jvs` protection. A volume without that capability must return a capability error instead of issuing this binding.
+This example assumes an AFSCP-managed repo created with JVS external control root mode. The orchestrator mounts only the payload subdir. It does not receive the JVS control root.
 
-The final field names should be agreed with the orchestrator that consumes this plan. `volume_subdir` is relative to the JuiceFS filesystem root and has no leading slash. The AFSCP-managed subroot is `afscp/`, so repo subdirs include that prefix.
+The final field names should be agreed with the orchestrator that consumes this plan. `payload_volume_subdir` is relative to the JuiceFS filesystem root and has no leading slash. The AFSCP-managed subroot is `afscp/`, so repo payload subdirs include that prefix.
 
 Any shape that returns an absolute payload path and Secret reference to an ordinary product caller is rejected for P0 because it mixes product authorization with platform mount assembly.
 
@@ -57,11 +57,11 @@ Any shape that returns an absolute payload path and Secret reference to an ordin
 
 AFSCP:
 
-- resolves `volume_subdir`
+- resolves `payload_volume_subdir`
 - chooses volume
 - chooses Secret reference for orchestrator-only plan
 - validates namespace/repo consistency
-- ensures `.jvs` is protected before enabling workload mounts
+- ensures the repo uses JVS external control root mode before enabling workload mounts
 - audits mount binding and orchestrator plan issuance
 - tracks lease/status for active read-write mount sessions
 - blocks new read-write bindings when a repo restore fence is held
@@ -80,7 +80,7 @@ Workload:
 - sees only mounted repo payload path
 - receives no JuiceFS root credentials
 - should run non-root by default
-- must not be able to read or write `.jvs`
+- must not see JVS control metadata
 
 ## Binding Lifecycle
 
@@ -106,23 +106,19 @@ Rules:
 - AFSCP can revoke a binding; the orchestrator must unmount or stop using it and report final status.
 - `revoked` is terminal only after the orchestrator confirms that the runtime can no longer write. A revoke request waiting for runtime teardown remains `releasing` and continues to block restore-run.
 
-## `.jvs` Protection
+## JVS Control Metadata Protection
 
-P0 workload mounts must not expose `.jvs` for read or write, even when the mount is read-only.
+P0 workload mounts expose only the JVS payload root. For AFSCP-managed new repos, JVS control metadata is in the external control root and is outside the mounted subtree.
 
-Permission-only protection on `.jvs` is not sufficient by itself because a writable parent directory may still allow rename/unlink/link/chmod/chown attempts against the entry. P0 requires a filtered view or equivalent filesystem/runtime gate that blocks lookup, read, write, create, rename, unlink, chmod, chown, and hardlink/symlink operations targeting root-level `.jvs`.
+Permission-only protection on embedded `.jvs` is not sufficient because a writable parent directory may still allow rename/unlink/link/chmod/chown attempts against the entry. If a legacy embedded-control repo is encountered, AFSCP must reject workload mounts until the repo is migrated to external control root mode or protected by a verified filtered view.
 
 ## JuiceFS CSI Feasibility Note
 
-JuiceFS CSI can mount a selected filesystem subdirectory as the volume root, and Kubernetes `volumeMounts.subPath` can mount a subpath from an already-bound volume. Those mechanisms select the root of the mount. They do not hide a child path such as `.jvs` inside that selected root.
+JuiceFS CSI can mount a selected filesystem subdirectory as the volume root, and Kubernetes `volumeMounts.subPath` can mount a subpath from an already-bound volume. AFSCP uses that capability to mount the `payload/` subdir.
 
-Therefore, a plan that mounts the current JVS repo root through stock JuiceFS CSI must set `jvs_metadata_protected=false` and fail closed. It may become valid only when one of these is true:
+Do not mount the repo container directory. It contains both `control/` and `payload/`, and would expose the control root. The orchestrator must map `payload_volume_subdir` to a JuiceFS CSI-supported form, such as `mountOptions: ["subdir=afscp/.../payload"]` or a controlled Kubernetes `subPath`.
 
-- JVS control metadata is outside the workload-visible payload root.
-- The orchestrator provides a verified filtered filesystem view.
-- An equivalent runtime gate blocks all `.jvs` operations listed above.
-
-The orchestrator must also map `volume_subdir` to a JuiceFS CSI-supported form, such as `mountOptions: ["subdir=afscp/..."]` or a controlled Kubernetes `subPath`. Do not assume `volumeAttributes["subdir"]` is portable without verifying the pinned CSI driver version.
+Do not assume `volumeAttributes["subdir"]` is portable without verifying the pinned CSI driver version.
 
 ## Compatibility
 
