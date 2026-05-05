@@ -54,7 +54,7 @@ Development handoff:
 
 ## Implementation Admission
 
-Neutral service skeleton may start from the handoff docs:
+Neutral service skeleton and control-plane primitives now exist:
 
 - Go module bootstrap
 - package layout
@@ -62,12 +62,25 @@ Neutral service skeleton may start from the handoff docs:
 - health/readiness endpoint
 - logging
 - generated schema/OpenAPI plumbing
-- empty route registration
+- neutral route registration and denied audit shell/AuthGate paths
+- PostgreSQL migration contract
+- operation lease pure model/tests
+- repo fence pure model/tests
+- audit outbox pure model/tests
+- path resolver shared corpus
 - test harness
 
-Storage mutation handlers remain blocked until the specific contract gates they
-depend on are accepted. The most important open blocker is G-005, recorded in
-`docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
+Durable DB adapters, the recovery loop, real endpoint handlers, JVS execution,
+WebDAV serving, workload mount issuance, and storage mutation are not
+implemented. Continue directly toward GA by finishing guardrail review,
+implementing durable adapters and recovery next, then adding handlers only after
+their dependency gates are accepted.
+
+Storage mutation remains blocked by G-005, recorded in
+`docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`. The JVS team has indicated the next
+release will add the required capability, but AFSCP cannot close G-005 or
+implement real storage mutation until a new GitHub release binary is pinned,
+re-smoked, and accepted as evidence.
 
 ## Non-Negotiable Guardrails
 
@@ -81,5 +94,5 @@ depend on are accepted. The most important open blocker is G-005, recorded in
 - Do not implement repo delete as raw filesystem delete.
 - Do not enable WebDAV, workload mount, restore-run, or repo lifecycle behavior
   without the relevant session drain/fence semantics.
-- Do not close G-005 until the JVS restore-plan blocker is resolved.
-
+- Do not close G-005 until the JVS restore-plan blocker is resolved with a new
+  GitHub release binary and passing smoke evidence.

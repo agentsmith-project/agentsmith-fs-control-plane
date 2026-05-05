@@ -91,6 +91,13 @@ Completed:
 - operation envelope types
 - auth role and namespace guardrails
 - store interfaces for operation, idempotency, and audit boundaries
+- PostgreSQL migration contract for operations, idempotency, audit outbox, and
+  repo fences
+- operation lease pure model and tests
+- repo writer/lifecycle fence pure model and tests
+- audit outbox pure model and tests
+- path resolver guardrails and shared corpus
+- denied audit coverage in the neutral shell and AuthGate paths
 - contract verifier covering selected OpenAPI, schema, docs, and Go DTO drift
 - focused tests for the above
 
@@ -98,9 +105,9 @@ Partially completed:
 
 - API shell routes known contract paths to capability-denied responses, but real
   endpoint handlers are not implemented.
-- Operation, idempotency, audit, inspection, and store boundaries exist, but no
-  durable PostgreSQL mutations, migrations, worker leases, or recovery loop are
-  implemented.
+- Operation, idempotency, audit, inspection, and store boundaries exist, with
+  pure operation lease, repo fence, and audit outbox models. Durable
+  PostgreSQL adapters and the recovery loop are not implemented.
 - Path resolver guardrails exist, but there is no storage mutation integration.
 
 Not implemented:
@@ -118,25 +125,16 @@ Not implemented:
 
 Continue in dependency order:
 
-1. contract verifier route parity: compare Go route metadata against OpenAPI
-   paths, operation IDs, mutating headers, namespace requirements, and role
-   classifications.
-2. denied audit: emit and verify redacted audit events for capability-denied,
-   path-denied, caller-role-denied, namespace-mismatch, and sensitive-path
-   denial paths.
-3. control-plane persistence primitives: PostgreSQL migrations and
-   implementations for operation records, idempotency uniqueness, metadata
-   records, fences, and audit outbox.
-4. operation store, leases, and recovery inspection over the durable primitives.
-5. volume and namespace binding APIs.
-6. repo create with external control root JVS init, only after G-005 is fixed.
-7. export session records and WebDAV gateway policy tests.
-8. workload mount binding records and orchestrator fake tests.
-9. writer-session fence.
-10. save/history/restore-preview.
-11. restore-run, only after the JVS restore-plan blocker is fixed.
-12. template create/clone.
-13. repo lifecycle archive/delete/restore/purge.
+1. Finish review and acceptance for the existing contract verifier, denied audit,
+   migration contract, lease, fence, outbox, and path resolver guardrails.
+2. Implement durable PostgreSQL adapters for operation/idempotency/fence/audit
+   outbox records, plus recovery inspection over those adapters.
+3. Add recovery loop behavior only after the durable primitives have tests.
+4. Implement volume and namespace binding APIs.
+5. Implement repo/JVS, export/WebDAV, workload mount, save/restore, template,
+   and repo lifecycle handlers only after their dependency gates are accepted.
+   Real storage mutation remains blocked by G-005 until the new JVS release
+   binary is smoke-tested and accepted.
 
 ## Current Blocker
 
@@ -145,9 +143,11 @@ that completed restore-run leaves a restore plan that blocks `doctor --strict`
 and can block `repo clone`. See
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
 
-Do not implement restore-run, clone-after-restore assumptions, or repo
-reactivation flows until the JVS owner resolves this or accepts a command-level
-cleanup contract. AFSCP must not delete private JVS files directly.
+The JVS team has indicated the next release will add the capability AFSCP needs.
+AFSCP cannot close G-005, implement real storage mutation, or rely on
+clone-after-restore behavior until a new GitHub release binary is pinned,
+re-smoked, and accepted as evidence. AFSCP must not delete private JVS files
+directly.
 
 ## Repo Lifecycle Rules
 
