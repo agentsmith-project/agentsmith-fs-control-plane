@@ -10,9 +10,12 @@ import (
 	"testing"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 )
 
 func TestRunVersion(t *testing.T) {
+	t.Setenv("AFSCP_STORAGE_ENABLED", "maybe")
+
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -30,6 +33,8 @@ func TestRunVersion(t *testing.T) {
 }
 
 func TestRunNoArgsIsNoop(t *testing.T) {
+	t.Setenv("AFSCP_STORAGE_ENABLED", "maybe")
+
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -43,6 +48,287 @@ func TestRunNoArgsIsNoop(t *testing.T) {
 	}
 	if got := stderr.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunDryRunUsesConfiguredListenAddress(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var constructed int
+	var served int
+
+	cmd := command{
+		stdout: &stdout,
+		stderr: &stderr,
+		loadConfig: func() (config.Config, error) {
+			return config.Config{ListenAddr: "127.0.0.1:9090"}, nil
+		},
+		newNeutralShell: func() http.Handler {
+			constructed++
+			return http.NewServeMux()
+		},
+		serve: func(string, http.Handler) error {
+			served++
+			return nil
+		},
+	}
+
+	code := cmd.run([]string{"--dry-run"})
+
+	if code != 0 {
+		t.Fatalf("run returned %d, want 0", code)
+	}
+	if constructed != 1 {
+		t.Fatalf("neutral shell constructed %d times, want 1", constructed)
+	}
+	if served != 0 {
+		t.Fatalf("server started %d times, want 0", served)
+	}
+	if got, want := stdout.String(), "afscp-api neutral shell configured for 127.0.0.1:9090\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunServeUsesConfiguredListenAddress(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var constructed int
+	var served int
+	var gotAddr string
+
+	cmd := command{
+		stdout: &stdout,
+		stderr: &stderr,
+		loadConfig: func() (config.Config, error) {
+			return config.Config{ListenAddr: "127.0.0.1:9090"}, nil
+		},
+		newNeutralShell: func() http.Handler {
+			constructed++
+			return http.NewServeMux()
+		},
+		serve: func(addr string, _ http.Handler) error {
+			served++
+			gotAddr = addr
+			return nil
+		},
+	}
+
+	code := cmd.run([]string{"--serve"})
+
+	if code != 0 {
+		t.Fatalf("run returned %d, want 0", code)
+	}
+	if constructed != 1 {
+		t.Fatalf("neutral shell constructed %d times, want 1", constructed)
+	}
+	if served != 1 {
+		t.Fatalf("server started %d times, want 1", served)
+	}
+	if gotAddr != "127.0.0.1:9090" {
+		t.Fatalf("server addr = %q, want %q", gotAddr, "127.0.0.1:9090")
+	}
+	if got := stdout.String(); got != "" {
+		t.Fatalf("stdout = %q, want empty", got)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunExplicitListenOverridesConfiguredListenAddress(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var constructed int
+
+	cmd := command{
+		stdout: &stdout,
+		stderr: &stderr,
+		loadConfig: func() (config.Config, error) {
+			return config.Config{ListenAddr: ":8080"}, nil
+		},
+		newNeutralShell: func() http.Handler {
+			constructed++
+			return http.NewServeMux()
+		},
+		serve: func(string, http.Handler) error {
+			t.Fatal("server should not start during dry-run")
+			return nil
+		},
+	}
+
+	code := cmd.run([]string{"--dry-run", "--listen", "127.0.0.1:0"})
+
+	if code != 0 {
+		t.Fatalf("run returned %d, want 0", code)
+	}
+	if constructed != 1 {
+		t.Fatalf("neutral shell constructed %d times, want 1", constructed)
+	}
+	if got, want := stdout.String(), "afscp-api neutral shell configured for 127.0.0.1:0\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunLoadsListenAddressFromEnv(t *testing.T) {
+	t.Setenv("AFSCP_LISTEN_ADDR", "127.0.0.1:9091")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var constructed int
+	var served int
+
+	cmd := newCommand(&stdout, &stderr)
+	cmd.newNeutralShell = func() http.Handler {
+		constructed++
+		return http.NewServeMux()
+	}
+	cmd.serve = func(string, http.Handler) error {
+		served++
+		return nil
+	}
+
+	code := cmd.run([]string{"--dry-run"})
+
+	if code != 0 {
+		t.Fatalf("run returned %d, want 0", code)
+	}
+	if constructed != 1 {
+		t.Fatalf("neutral shell constructed %d times, want 1", constructed)
+	}
+	if served != 0 {
+		t.Fatalf("server started %d times, want 0", served)
+	}
+	if got, want := stdout.String(), "afscp-api neutral shell configured for 127.0.0.1:9091\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunRejectsInvalidEnvListenBeforeConstructingShell(t *testing.T) {
+	t.Setenv("AFSCP_LISTEN_ADDR", ":8080")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var constructed int
+	var served int
+
+	cmd := newCommand(&stdout, &stderr)
+	cmd.newNeutralShell = func() http.Handler {
+		constructed++
+		return http.NewServeMux()
+	}
+	cmd.serve = func(string, http.Handler) error {
+		served++
+		return nil
+	}
+
+	code := cmd.run([]string{"--serve"})
+
+	if code != 2 {
+		t.Fatalf("run returned %d, want 2", code)
+	}
+	if constructed != 0 {
+		t.Fatalf("neutral shell constructed %d times, want 0", constructed)
+	}
+	if served != 0 {
+		t.Fatalf("server started %d times, want 0", served)
+	}
+	if got := stdout.String(); got != "" {
+		t.Fatalf("stdout = %q, want empty", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "invalid config listen address") {
+		t.Fatalf("stderr = %q, want invalid config listen address error", got)
+	}
+}
+
+func TestRunRejectsInvalidConfigBeforeConstructingShell(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		loadConfig func() (config.Config, error)
+		wantError  string
+	}{
+		{
+			name: "dry-run invalid config value",
+			args: []string{"--dry-run"},
+			loadConfig: func() (config.Config, error) {
+				return config.Load(config.MapSource{"AFSCP_STORAGE_ENABLED": "maybe"})
+			},
+			wantError: "invalid config",
+		},
+		{
+			name: "serve invalid config value",
+			args: []string{"--serve"},
+			loadConfig: func() (config.Config, error) {
+				return config.Load(config.MapSource{"AFSCP_STORAGE_ENABLED": "maybe"})
+			},
+			wantError: "invalid config",
+		},
+		{
+			name: "dry-run invalid configured listen",
+			args: []string{"--dry-run"},
+			loadConfig: func() (config.Config, error) {
+				return config.Config{ListenAddr: ":8080"}, nil
+			},
+			wantError: "invalid config listen address",
+		},
+		{
+			name: "serve invalid configured listen",
+			args: []string{"--serve"},
+			loadConfig: func() (config.Config, error) {
+				return config.Config{ListenAddr: ":8080"}, nil
+			},
+			wantError: "invalid config listen address",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			var constructed int
+			var served int
+
+			cmd := command{
+				stdout:     &stdout,
+				stderr:     &stderr,
+				loadConfig: tt.loadConfig,
+				newNeutralShell: func() http.Handler {
+					constructed++
+					return http.NewServeMux()
+				},
+				serve: func(string, http.Handler) error {
+					served++
+					return nil
+				},
+			}
+
+			code := cmd.run(tt.args)
+
+			if code != 2 {
+				t.Fatalf("run returned %d, want 2", code)
+			}
+			if constructed != 0 {
+				t.Fatalf("neutral shell constructed %d times, want 0", constructed)
+			}
+			if served != 0 {
+				t.Fatalf("server started %d times, want 0", served)
+			}
+			if got := stdout.String(); got != "" {
+				t.Fatalf("stdout = %q, want empty", got)
+			}
+			if got := stderr.String(); !strings.Contains(got, tt.wantError) {
+				t.Fatalf("stderr = %q, want %q", got, tt.wantError)
+			}
+		})
 	}
 }
 
@@ -75,6 +361,9 @@ func TestRunRejectsInvalidListenAddressBeforeConstructingShell(t *testing.T) {
 			cmd := command{
 				stdout: &stdout,
 				stderr: &stderr,
+				loadConfig: func() (config.Config, error) {
+					return config.Config{ListenAddr: "127.0.0.1:9090"}, nil
+				},
 				newNeutralShell: func() http.Handler {
 					constructed++
 					return http.NewServeMux()
@@ -115,6 +404,9 @@ func TestRunDryRunConstructsNeutralShellWithoutServing(t *testing.T) {
 	cmd := command{
 		stdout: &stdout,
 		stderr: &stderr,
+		loadConfig: func() (config.Config, error) {
+			return config.Config{ListenAddr: "127.0.0.1:9090"}, nil
+		},
 		newNeutralShell: func() http.Handler {
 			constructed++
 			return http.NewServeMux()
@@ -155,6 +447,9 @@ func TestRunServeUsesInjectedServerRunner(t *testing.T) {
 	cmd := command{
 		stdout: &stdout,
 		stderr: &stderr,
+		loadConfig: func() (config.Config, error) {
+			return config.Config{ListenAddr: "127.0.0.1:9090"}, nil
+		},
 		newNeutralShell: func() http.Handler {
 			constructed++
 			return http.NewServeMux()
@@ -200,6 +495,9 @@ func TestRunServeReportsRunnerError(t *testing.T) {
 	cmd := command{
 		stdout: &stdout,
 		stderr: &stderr,
+		loadConfig: func() (config.Config, error) {
+			return config.Config{ListenAddr: "127.0.0.1:8080"}, nil
+		},
 		newNeutralShell: func() http.Handler {
 			return http.NewServeMux()
 		},
@@ -218,6 +516,63 @@ func TestRunServeReportsRunnerError(t *testing.T) {
 	}
 	if got, want := stderr.String(), "afscp-api: runner failed\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestRunConfiguredCapabilitiesDoNotMakeNeutralShellReady(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var gotHandler http.Handler
+
+	cmd := command{
+		stdout: &stdout,
+		stderr: &stderr,
+		loadConfig: func() (config.Config, error) {
+			return config.Config{
+				ListenAddr: "127.0.0.1:0",
+				Capabilities: config.Capabilities{
+					Storage: config.Capability{Enabled: true, Ready: true},
+					JVS:     config.Capability{Enabled: true, Ready: true},
+					WebDAV:  config.Capability{Enabled: true, Ready: true},
+					Mount:   config.Capability{Enabled: true, Ready: true},
+				},
+			}, nil
+		},
+		newNeutralShell: api.NewNeutralShell,
+		serve: func(_ string, handler http.Handler) error {
+			gotHandler = handler
+			return nil
+		},
+	}
+
+	code := cmd.run([]string{"--serve"})
+
+	if code != 0 {
+		t.Fatalf("run returned %d, want 0", code)
+	}
+	if gotHandler == nil {
+		t.Fatal("server handler is nil")
+	}
+
+	rec := httptest.NewRecorder()
+	gotHandler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness response did not decode as JSON: %v: %s", err, rec.Body.String())
+	}
+	if body.Ready {
+		t.Fatal("neutral shell reported ready after enabled config capabilities")
+	}
+	if got := body.Capabilities[api.CapabilityStorage]; got.Enabled || got.Ready || !got.Gated {
+		t.Fatalf("storage capability escaped neutral guardrail: %#v", got)
+	}
+	if got := stdout.String(); got != "" {
+		t.Fatalf("stdout = %q, want empty", got)
 	}
 }
 

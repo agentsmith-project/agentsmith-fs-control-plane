@@ -14,7 +14,7 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	if got, want := cfg.ServiceName, "afscp"; got != want {
 		t.Fatalf("ServiceName = %q, want %q", got, want)
 	}
-	if got, want := cfg.ListenAddr, ":8080"; got != want {
+	if got, want := cfg.ListenAddr, "127.0.0.1:8080"; got != want {
 		t.Fatalf("ListenAddr = %q, want %q", got, want)
 	}
 	if got, want := cfg.Environment, "development"; got != want {

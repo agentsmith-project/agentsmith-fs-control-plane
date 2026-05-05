@@ -8,7 +8,7 @@ import (
 
 const (
 	defaultServiceName = "afscp"
-	defaultListenAddr  = ":8080"
+	defaultListenAddr  = "127.0.0.1:8080"
 	defaultEnvironment = "development"
 )
 

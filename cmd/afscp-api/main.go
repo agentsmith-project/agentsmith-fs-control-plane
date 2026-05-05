@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 )
 
@@ -29,14 +30,16 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 type command struct {
 	stdout          io.Writer
 	stderr          io.Writer
+	loadConfig      func() (config.Config, error)
 	newNeutralShell func() http.Handler
 	serve           func(string, http.Handler) error
 }
 
 func newCommand(stdout io.Writer, stderr io.Writer) command {
 	return command{
-		stdout: stdout,
-		stderr: stderr,
+		stdout:     stdout,
+		stderr:     stderr,
+		loadConfig: config.LoadFromEnv,
 		newNeutralShell: func() http.Handler {
 			return api.NewNeutralShellWithLogger(observability.NewJSONLogger(stderr, nil))
 		},
@@ -51,10 +54,11 @@ func (cmd command) run(args []string) int {
 	showVersion := flags.Bool("version", false, "print version")
 	dryRun := flags.Bool("dry-run", false, "construct neutral API shell without serving")
 	serve := flags.Bool("serve", false, "serve neutral API shell")
-	listen := flags.String("listen", "127.0.0.1:8080", "listen address for neutral API shell")
+	listen := flags.String("listen", "", "listen address for neutral API shell")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
+	listenExplicit := flagWasSet(flags, "listen")
 
 	if *showVersion {
 		fmt.Fprintf(cmd.stdout, "%s %s\n", commandName, version)
@@ -65,9 +69,24 @@ func (cmd command) run(args []string) int {
 		return 0
 	}
 
-	listenAddr, err := validateListenAddress(*listen)
+	cfg, err := cmd.loadConfig()
 	if err != nil {
-		fmt.Fprintf(cmd.stderr, "%s: invalid --listen: %v\n", commandName, err)
+		fmt.Fprintf(cmd.stderr, "%s: invalid config: %v\n", commandName, err)
+		return 2
+	}
+
+	listenAddr := cfg.ListenAddr
+	if listenExplicit {
+		listenAddr = *listen
+	}
+
+	listenAddr, err = validateListenAddress(listenAddr)
+	if err != nil {
+		if listenExplicit {
+			fmt.Fprintf(cmd.stderr, "%s: invalid --listen: %v\n", commandName, err)
+			return 2
+		}
+		fmt.Fprintf(cmd.stderr, "%s: invalid config listen address: %v\n", commandName, err)
 		return 2
 	}
 
@@ -84,6 +103,16 @@ func (cmd command) run(args []string) int {
 	}
 
 	return 0
+}
+
+func flagWasSet(flags *flag.FlagSet, name string) bool {
+	wasSet := false
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == name {
+			wasSet = true
+		}
+	})
+	return wasSet
 }
 
 func validateListenAddress(addr string) (string, error) {
