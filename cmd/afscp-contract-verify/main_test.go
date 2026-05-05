@@ -260,6 +260,35 @@ const cliValidSchema = `
         "error": { "type": ["object", "null"] }
       }
     },
+    "OperationType": {
+      "type": "string",
+      "enum": [
+        "volume_ensure",
+        "namespace_upsert",
+        "namespace_disable",
+        "namespace_volume_binding_put",
+        "repo_create",
+        "repo_archive",
+        "repo_restore_archived",
+        "repo_delete",
+        "repo_restore_tombstoned",
+        "repo_purge",
+        "save_point_create",
+        "restore_preview",
+        "restore_run",
+        "template_create",
+        "template_clone",
+        "export_create",
+        "export_revoke",
+        "export_session_reconcile",
+        "mount_binding_create",
+        "mount_binding_status_update",
+        "mount_binding_heartbeat",
+        "mount_binding_release",
+        "mount_binding_revoke",
+        "migration_cutover"
+      ]
+    },
     "ErrorCode": {
       "type": "string",
       "enum": [

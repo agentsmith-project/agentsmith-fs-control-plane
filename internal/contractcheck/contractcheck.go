@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
 
 const (
@@ -37,8 +38,10 @@ const (
 	CodeSchemaOperationRecordPropertyMissing               = "schema.operation_record_property_missing"
 	CodeSchemaOperationRecordAdditionalPropertiesInvalid   = "schema.operation_record_additional_properties_invalid"
 	CodeSchemaOperationRecordNullableInvalid               = "schema.operation_record_nullable_invalid"
+	CodeSchemaOperationRecordTypeEnumInvalid               = "schema.operation_record_type_enum_invalid"
 	CodeSchemaErrorCodeEnumGoDrift                         = "schema.error_code_enum_go_drift"
 	CodeSchemaCallerRoleEnumGoDrift                        = "schema.caller_role_enum_go_drift"
+	CodeSchemaOperationTypeEnumGoDrift                     = "schema.operation_type_enum_go_drift"
 	CodeSchemaInvalidJSON                                  = "schema.invalid_json"
 
 	CodeDocsOperationBoundaryMissing       = "docs.operation_boundary_missing"
@@ -51,6 +54,9 @@ const (
 	CodeGoAPIOperationEnvelopeMissing          = "go.api_operation_envelope_missing"
 	CodeGoAPIOperationEnvelopePropertyMissing  = "go.api_operation_envelope_property_missing"
 	CodeGoAPIOperationEnvelopeNestedOperation  = "go.api_operation_envelope_nested_operation"
+	CodeGoRouteOperationTypeMissing            = "go.route_operation_type_missing"
+	CodeGoRouteOperationTypeUnknownRoute       = "go.route_operation_type_unknown_route"
+	CodeGoRouteOperationTypeNonMutating        = "go.route_operation_type_non_mutating"
 )
 
 // Finding is a machine-readable contract verifier finding.
@@ -96,6 +102,7 @@ func VerifyFiles(openAPIPath, schemaPath, apiContractPath, apiDraftPath string) 
 	var findings []Finding
 	findings = append(findings, verifyOpenAPI(openAPIPath, string(openAPI))...)
 	findings = append(findings, verifySchema(schemaPath, string(schema))...)
+	findings = append(findings, verifyRouteOperationTypeMapping(openAPIPath, string(openAPI), api.InternalV1RouteMetadata(), operations.RouteOperationTypes())...)
 	findings = append(findings, verifyDocs(apiContractPath, apiDraftPath, string(apiContract), string(apiDraft))...)
 	if repoRoot, ok := findRepoRoot(schemaPath); ok {
 		findings = append(findings, verifyGoDTOBoundary(repoRoot)...)
@@ -259,6 +266,7 @@ func verifySchema(path, body string) []Finding {
 
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "ErrorCode", apiErrorCodeStrings(), CodeSchemaErrorCodeEnumGoDrift)...)
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "CallerRole", authRoleStrings(), CodeSchemaCallerRoleEnumGoDrift)...)
+	findings = append(findings, verifySchemaEnumParity(path, body, defs, "OperationType", operationTypeStrings(), CodeSchemaOperationTypeEnumGoDrift)...)
 
 	exportSession, _ := defs["ExportSession"].(map[string]any)
 	exportSessionFields := []string{
@@ -419,6 +427,14 @@ func verifySchema(path, body string) []Finding {
 				Message: "OperationRecord nullable required field(s) must accept null: " + strings.Join(invalid, ", "),
 			})
 		}
+		if !propertyRefEquals(operationRecord, "operation_type", "#/$defs/OperationType") {
+			findings = append(findings, Finding{
+				Code:    CodeSchemaOperationRecordTypeEnumInvalid,
+				File:    path,
+				Line:    findLine(body, `"operation_type"`),
+				Message: "OperationRecord.operation_type must reference #/$defs/OperationType",
+			})
+		}
 	}
 
 	return findings
@@ -471,6 +487,72 @@ func authRoleStrings() []string {
 		values[i] = string(role)
 	}
 	return values
+}
+
+func operationTypeStrings() []string {
+	types := operations.OperationTypes()
+	values := make([]string, len(types))
+	for i, typ := range types {
+		values[i] = string(typ)
+	}
+	return values
+}
+
+func verifyRouteOperationTypeMapping(path, body string, routes []api.RouteMetadata, routeTypes map[string]operations.OperationType) []Finding {
+	routeByOperationID := make(map[string]api.RouteMetadata, len(routes))
+	knownOperationTypes := make(map[operations.OperationType]bool, len(operations.OperationTypes()))
+	for _, typ := range operations.OperationTypes() {
+		knownOperationTypes[typ] = true
+	}
+
+	var findings []Finding
+	for _, route := range routes {
+		routeByOperationID[route.OperationID] = route
+		if !route.Mutating {
+			continue
+		}
+		typ, ok := routeTypes[route.OperationID]
+		if !ok {
+			findings = append(findings, Finding{
+				Code:    CodeGoRouteOperationTypeMissing,
+				File:    path,
+				Line:    findLine(body, route.OperationID),
+				Message: fmt.Sprintf("mutating route operationId %q must map to a durable operations.OperationType", route.OperationID),
+			})
+			continue
+		}
+		if !knownOperationTypes[typ] {
+			findings = append(findings, Finding{
+				Code:    CodeGoRouteOperationTypeMissing,
+				File:    path,
+				Line:    findLine(body, route.OperationID),
+				Message: fmt.Sprintf("mutating route operationId %q maps to unknown operations.OperationType %q", route.OperationID, typ),
+			})
+		}
+	}
+
+	for operationID, typ := range routeTypes {
+		route, ok := routeByOperationID[operationID]
+		if !ok {
+			findings = append(findings, Finding{
+				Code:    CodeGoRouteOperationTypeUnknownRoute,
+				File:    path,
+				Line:    findLine(body, operationID),
+				Message: fmt.Sprintf("route operation type mapping references unknown operationId %q", operationID),
+			})
+			continue
+		}
+		if !route.Mutating {
+			findings = append(findings, Finding{
+				Code:    CodeGoRouteOperationTypeNonMutating,
+				File:    path,
+				Line:    findLine(body, operationID),
+				Message: fmt.Sprintf("route operation type mapping references non-mutating operationId %q with operation type %q", operationID, typ),
+			})
+		}
+	}
+
+	return findings
 }
 
 func enumMismatchMessage(got, want []string) string {
@@ -985,6 +1067,16 @@ func propertiesMap(def map[string]any) map[string]any {
 	}
 	properties, _ := def["properties"].(map[string]any)
 	return properties
+}
+
+func propertyRefEquals(def map[string]any, field, ref string) bool {
+	properties := propertiesMap(def)
+	property, ok := properties[field].(map[string]any)
+	if !ok {
+		return false
+	}
+	got, ok := property["$ref"].(string)
+	return ok && got == ref
 }
 
 func schemaAllowsNull(schema any) bool {

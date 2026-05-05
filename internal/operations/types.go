@@ -8,30 +8,105 @@ import (
 type OperationType string
 
 const (
-	OperationRepoCreate               OperationType = "repo_create"
-	OperationRepoArchive              OperationType = "repo_archive"
-	OperationRepoRestoreArchived      OperationType = "repo_restore_archived"
-	OperationRepoDelete               OperationType = "repo_delete"
-	OperationRepoRestoreTombstoned    OperationType = "repo_restore_tombstoned"
-	OperationRepoPurge                OperationType = "repo_purge"
-	OperationSavePointCreate          OperationType = "save_point_create"
-	OperationRestorePreview           OperationType = "restore_preview"
-	OperationRestoreRun               OperationType = "restore_run"
-	OperationTemplateCreate           OperationType = "template_create"
-	OperationTemplateClone            OperationType = "template_clone"
-	OperationExportCreate             OperationType = "export_create"
-	OperationExportRevoke             OperationType = "export_revoke"
-	OperationExportSessionReconcile   OperationType = "export_session_reconcile"
-	OperationMountBindingCreate       OperationType = "mount_binding_create"
-	OperationMountBindingStatusUpdate OperationType = "mount_binding_status_update"
-	OperationMountBindingHeartbeat    OperationType = "mount_binding_heartbeat"
-	OperationMountBindingRelease      OperationType = "mount_binding_release"
-	OperationMountBindingRevoke       OperationType = "mount_binding_revoke"
-	OperationMigrationCutover         OperationType = "migration_cutover"
+	OperationVolumeEnsure              OperationType = "volume_ensure"
+	OperationNamespaceUpsert           OperationType = "namespace_upsert"
+	OperationNamespaceDisable          OperationType = "namespace_disable"
+	OperationNamespaceVolumeBindingPut OperationType = "namespace_volume_binding_put"
+	OperationRepoCreate                OperationType = "repo_create"
+	OperationRepoArchive               OperationType = "repo_archive"
+	OperationRepoRestoreArchived       OperationType = "repo_restore_archived"
+	OperationRepoDelete                OperationType = "repo_delete"
+	OperationRepoRestoreTombstoned     OperationType = "repo_restore_tombstoned"
+	OperationRepoPurge                 OperationType = "repo_purge"
+	OperationSavePointCreate           OperationType = "save_point_create"
+	OperationRestorePreview            OperationType = "restore_preview"
+	OperationRestoreRun                OperationType = "restore_run"
+	OperationTemplateCreate            OperationType = "template_create"
+	OperationTemplateClone             OperationType = "template_clone"
+	OperationExportCreate              OperationType = "export_create"
+	OperationExportRevoke              OperationType = "export_revoke"
+	OperationExportSessionReconcile    OperationType = "export_session_reconcile"
+	OperationMountBindingCreate        OperationType = "mount_binding_create"
+	OperationMountBindingStatusUpdate  OperationType = "mount_binding_status_update"
+	OperationMountBindingHeartbeat     OperationType = "mount_binding_heartbeat"
+	OperationMountBindingRelease       OperationType = "mount_binding_release"
+	OperationMountBindingRevoke        OperationType = "mount_binding_revoke"
+	OperationMigrationCutover          OperationType = "migration_cutover"
 )
+
+var operationTypes = []OperationType{
+	OperationVolumeEnsure,
+	OperationNamespaceUpsert,
+	OperationNamespaceDisable,
+	OperationNamespaceVolumeBindingPut,
+	OperationRepoCreate,
+	OperationRepoArchive,
+	OperationRepoRestoreArchived,
+	OperationRepoDelete,
+	OperationRepoRestoreTombstoned,
+	OperationRepoPurge,
+	OperationSavePointCreate,
+	OperationRestorePreview,
+	OperationRestoreRun,
+	OperationTemplateCreate,
+	OperationTemplateClone,
+	OperationExportCreate,
+	OperationExportRevoke,
+	OperationExportSessionReconcile,
+	OperationMountBindingCreate,
+	OperationMountBindingStatusUpdate,
+	OperationMountBindingHeartbeat,
+	OperationMountBindingRelease,
+	OperationMountBindingRevoke,
+	OperationMigrationCutover,
+}
+
+var routeOperationTypes = map[string]OperationType{
+	"ensureVolume":                     OperationVolumeEnsure,
+	"upsertNamespace":                  OperationNamespaceUpsert,
+	"disableNamespace":                 OperationNamespaceDisable,
+	"putNamespaceVolumeBinding":        OperationNamespaceVolumeBindingPut,
+	"createRepo":                       OperationRepoCreate,
+	"archiveRepo":                      OperationRepoArchive,
+	"restoreArchivedRepo":              OperationRepoRestoreArchived,
+	"deleteRepo":                       OperationRepoDelete,
+	"restoreTombstonedRepo":            OperationRepoRestoreTombstoned,
+	"purgeRepo":                        OperationRepoPurge,
+	"createSavePoint":                  OperationSavePointCreate,
+	"restorePreview":                   OperationRestorePreview,
+	"restoreRun":                       OperationRestoreRun,
+	"createRepoTemplate":               OperationTemplateCreate,
+	"cloneRepoTemplate":                OperationTemplateClone,
+	"createExport":                     OperationExportCreate,
+	"revokeExport":                     OperationExportRevoke,
+	"createWorkloadMountBinding":       OperationMountBindingCreate,
+	"updateWorkloadMountBindingStatus": OperationMountBindingStatusUpdate,
+	"heartbeatWorkloadMountBinding":    OperationMountBindingHeartbeat,
+	"releaseWorkloadMountBinding":      OperationMountBindingRelease,
+	"revokeWorkloadMountBinding":       OperationMountBindingRevoke,
+}
 
 func (typ OperationType) String() string {
 	return string(typ)
+}
+
+func OperationTypes() []OperationType {
+	types := make([]OperationType, len(operationTypes))
+	copy(types, operationTypes)
+	return types
+}
+
+func RouteOperationTypes() map[string]OperationType {
+	mapped := make(map[string]OperationType, len(routeOperationTypes))
+	for operationID, typ := range routeOperationTypes {
+		mapped[operationID] = typ
+	}
+	return mapped
+}
+
+func OperationTypeForRouteOperationID(operationID string) (OperationType, bool) {
+	typ, ok := routeOperationTypes[operationID]
+	return typ, ok
 }
 
 type CallerContext struct {

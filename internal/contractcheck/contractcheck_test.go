@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
 
 func TestVerifyFilesCatchesOpenAPIGuardrailFailures(t *testing.T) {
@@ -446,6 +448,7 @@ func TestVerifyFilesCatchesSchemaEnumGoParityDrift(t *testing.T) {
 	driftedSchema := validSchema
 	driftedSchema = strings.Replace(driftedSchema, `        "CALLER_NOT_ALLOWED",`+"\n", "", 1)
 	driftedSchema = strings.Replace(driftedSchema, `        "operation_inspector",`+"\n", "", 1)
+	driftedSchema = strings.Replace(driftedSchema, `        "repo_create",`+"\n", "", 1)
 
 	paths := writeContractFixture(t, contractFixture{
 		openapi: validOpenAPI,
@@ -461,8 +464,37 @@ func TestVerifyFilesCatchesSchemaEnumGoParityDrift(t *testing.T) {
 
 	assertHasFinding(t, findings, CodeSchemaErrorCodeEnumGoDrift)
 	assertHasFinding(t, findings, CodeSchemaCallerRoleEnumGoDrift)
+	assertHasFinding(t, findings, CodeSchemaOperationTypeEnumGoDrift)
 	assertFindingCount(t, findings, CodeSchemaErrorCodeEnumGoDrift, 1)
 	assertFindingCount(t, findings, CodeSchemaCallerRoleEnumGoDrift, 1)
+	assertFindingCount(t, findings, CodeSchemaOperationTypeEnumGoDrift, 1)
+}
+
+func TestVerifyRouteOperationTypeMappingCatchesMissingMutatingRoute(t *testing.T) {
+	routes := []api.RouteMetadata{
+		{Method: "POST", Path: "/internal/v1/repos", OperationID: "createRepo", Class: auth.RouteClassNamespaceBound, Mutating: true},
+	}
+
+	findings := verifyRouteOperationTypeMapping("routes", "", routes, nil)
+
+	assertHasFinding(t, findings, CodeGoRouteOperationTypeMissing)
+}
+
+func TestVerifyRouteOperationTypeMappingCatchesExtraReadOrUnknownRoute(t *testing.T) {
+	routes := []api.RouteMetadata{
+		{Method: "GET", Path: "/internal/v1/repos", OperationID: "listRepos", Class: auth.RouteClassNamespaceBound, Mutating: false},
+		{Method: "POST", Path: "/internal/v1/repos", OperationID: "createRepo", Class: auth.RouteClassNamespaceBound, Mutating: true},
+	}
+	routeTypes := map[string]operations.OperationType{
+		"listRepos":  operations.OperationRepoCreate,
+		"unknownOp":  operations.OperationRepoCreate,
+		"createRepo": operations.OperationRepoCreate,
+	}
+
+	findings := verifyRouteOperationTypeMapping("routes", "", routes, routeTypes)
+
+	assertHasFinding(t, findings, CodeGoRouteOperationTypeNonMutating)
+	assertHasFinding(t, findings, CodeGoRouteOperationTypeUnknownRoute)
 }
 
 func TestVerifyFilesCatchesOperationRecordRequiredAndPropertyDrift(t *testing.T) {
@@ -525,6 +557,7 @@ func TestVerifyFilesCatchesOperationRecordRequiredAndPropertyDrift(t *testing.T)
 	assertHasFinding(t, findings, CodeSchemaOperationRecordRequiredMissing)
 	assertHasFinding(t, findings, CodeSchemaOperationRecordPropertyMissing)
 	assertHasFinding(t, findings, CodeSchemaOperationRecordAdditionalPropertiesInvalid)
+	assertHasFinding(t, findings, CodeSchemaOperationRecordTypeEnumInvalid)
 }
 
 func TestVerifyFilesCatchesGoOperationDTOAmbiguityWhenRepoSourceIsAvailable(t *testing.T) {
@@ -804,6 +837,35 @@ const validSchema = `
         "result": { "type": ["object", "null"] },
         "error": { "type": ["object", "null"] }
       }
+    },
+    "OperationType": {
+      "type": "string",
+      "enum": [
+        "volume_ensure",
+        "namespace_upsert",
+        "namespace_disable",
+        "namespace_volume_binding_put",
+        "repo_create",
+        "repo_archive",
+        "repo_restore_archived",
+        "repo_delete",
+        "repo_restore_tombstoned",
+        "repo_purge",
+        "save_point_create",
+        "restore_preview",
+        "restore_run",
+        "template_create",
+        "template_clone",
+        "export_create",
+        "export_revoke",
+        "export_session_reconcile",
+        "mount_binding_create",
+        "mount_binding_status_update",
+        "mount_binding_heartbeat",
+        "mount_binding_release",
+        "mount_binding_revoke",
+        "migration_cutover"
+      ]
     },
     "ErrorCode": {
       "type": "string",

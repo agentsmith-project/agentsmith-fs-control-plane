@@ -4,7 +4,67 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
 )
+
+func TestOperationTypesAreStableAndComplete(t *testing.T) {
+	got := operationTypeStringsForTest(OperationTypes())
+	want := []string{
+		"volume_ensure",
+		"namespace_upsert",
+		"namespace_disable",
+		"namespace_volume_binding_put",
+		"repo_create",
+		"repo_archive",
+		"repo_restore_archived",
+		"repo_delete",
+		"repo_restore_tombstoned",
+		"repo_purge",
+		"save_point_create",
+		"restore_preview",
+		"restore_run",
+		"template_create",
+		"template_clone",
+		"export_create",
+		"export_revoke",
+		"export_session_reconcile",
+		"mount_binding_create",
+		"mount_binding_status_update",
+		"mount_binding_heartbeat",
+		"mount_binding_release",
+		"mount_binding_revoke",
+		"migration_cutover",
+	}
+	if !stringSlicesEqual(got, want) {
+		t.Fatalf("OperationTypes() = %#v, want %#v", got, want)
+	}
+}
+
+func TestRouteOperationTypesCoverMutatingInternalV1Routes(t *testing.T) {
+	for _, route := range api.InternalV1RouteMetadata() {
+		got, ok := OperationTypeForRouteOperationID(route.OperationID)
+		if route.Mutating && !ok {
+			t.Fatalf("missing operation type mapping for mutating route operationId %q", route.OperationID)
+		}
+		if !route.Mutating && ok {
+			t.Fatalf("read route operationId %q unexpectedly maps to operation type %q", route.OperationID, got)
+		}
+	}
+}
+
+func TestRouteOperationTypesReturnsDefensiveCopy(t *testing.T) {
+	mapped := RouteOperationTypes()
+	mapped["createRepo"] = OperationMigrationCutover
+
+	got, ok := OperationTypeForRouteOperationID("createRepo")
+	if !ok {
+		t.Fatalf("createRepo route operation type missing")
+	}
+	if got != OperationRepoCreate {
+		t.Fatalf("createRepo route operation type = %q, want %q", got, OperationRepoCreate)
+	}
+}
 
 func TestOperationRecordJSONMatchesSchemaBoundaryShape(t *testing.T) {
 	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
@@ -204,4 +264,24 @@ func jsonStringForTest(t *testing.T, raw json.RawMessage) string {
 		t.Fatalf("unmarshal JSON string %s: %v", raw, err)
 	}
 	return value
+}
+
+func operationTypeStringsForTest(types []OperationType) []string {
+	values := make([]string, len(types))
+	for i, typ := range types {
+		values[i] = typ.String()
+	}
+	return values
+}
+
+func stringSlicesEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
