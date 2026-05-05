@@ -38,6 +38,7 @@ identity by repeating the same service in another `allowed_callers` entry.
 
 Ordinary namespace binding roles may include product-scoped roles such as:
 
+- `namespace_admin`
 - `repo_admin`
 - `repo_lifecycle_admin`
 - `restore_admin`
@@ -57,6 +58,13 @@ deployment/global policy roles, not ordinary namespace binding roles. They must
 not be used to replace
 namespace-scoped product roles or `operation_inspector` in ordinary caller
 policy.
+
+Binding-scoped `namespace_admin` authorizes ordinary read-only namespace
+administration and namespace-scoped inspection where policy permits. It does not
+authorize namespace create, namespace disable, or volume-binding update.
+Namespace governance and first-binding bootstrap operations are authorized by
+deployment namespace policy so a binding cannot self-authorize its own creation
+or lock out the initial namespace setup path.
 
 AFSCP must check `caller_service` and role before each namespace-bound operation. Denied checks are audited.
 `operation_inspector` grants namespace-scoped operation inspection of redacted records. `operator_admin` grants global/operator inspection and repair through deployment policy only.
