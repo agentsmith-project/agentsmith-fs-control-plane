@@ -51,15 +51,19 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 
 	bindingHandler := NamespaceVolumeBindingHandler(NamespaceVolumeBindingHandlerConfig{
 		Reader:            config.NamespaceBindingReader,
+		IntakeStore:       config.OperationIntakeStore,
 		PrincipalResolver: config.PrincipalResolver,
 		AllowedCallers: RouteAwareAllowedCallerPolicy{
 			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
 			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
 			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
 		},
-		AuditSink: config.AuditSink,
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
 	})
-	bindingHandler = requestLogHandler(bindingHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/namespaces/{namespaceId}/volume-binding", "getNamespaceVolumeBinding")
+	getBindingHandler := requestLogHandler(bindingHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/namespaces/{namespaceId}/volume-binding", "getNamespaceVolumeBinding")
+	putBindingHandler := requestLogHandler(bindingHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/namespaces/{namespaceId}/volume-binding", "putNamespaceVolumeBinding")
 	upsertNamespaceHandler := NamespaceUpsertHandler(NamespaceUpsertHandlerConfig{
 		IntakeStore:       config.OperationIntakeStore,
 		PrincipalResolver: config.PrincipalResolver,
@@ -78,7 +82,8 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	// routes without handlers remain fail-closed instead of being silently absent.
 	fallback := internalAPIFallbackHandler(config.Logger, config.AuditSink)
 	mux.Handle("/", routeDispatchHandler(map[string]http.Handler{
-		"getNamespaceVolumeBinding": bindingHandler,
+		"getNamespaceVolumeBinding": getBindingHandler,
+		"putNamespaceVolumeBinding": putBindingHandler,
 		"upsertNamespace":           upsertNamespaceHandler,
 	}, fallback))
 	return mux

@@ -24,6 +24,8 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.OperationWorkerCommitStore = (*Store)(nil)
 	var _ store.NamespaceUpsertOperationCommitStore = (*Store)(nil)
 	var _ store.NamespaceUpsertOperationRecoveryStore = (*Store)(nil)
+	var _ store.NamespaceVolumeBindingOperationCommitStore = (*Store)(nil)
+	var _ store.NamespaceVolumeBindingOperationRecoveryStore = (*Store)(nil)
 	var _ store.IdempotencyStore = (*Store)(nil)
 	var _ store.AuditSink = (*Store)(nil)
 
@@ -422,6 +424,77 @@ func TestListNamespaceUpsertOperationsForRecoveryRejectsInvalidArgsBeforeSQL(t *
 	}
 }
 
+func TestListNamespaceVolumeBindingPutOperationsForRecoveryScopesBeforeOrderAndLimit(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := operationFixture(now.Add(-time.Hour))
+	record.ID = "op-binding"
+	record.Type = operations.OperationNamespaceVolumeBindingPut
+	record.State = operations.OperationStateQueued
+	record.Phase = operations.OperationPhaseNamespaceVolumeBindingPutValidate
+	record.NamespaceID = "ns_alpha01"
+	record.Resource = operations.ResourceRef{Type: "namespace_volume_binding", ID: "ns_alpha01"}
+	record.LeaseOwner = ""
+	record.LeaseExpiresAt = nil
+	exec := &fakeExecutor{rows: fakeRows{rows: []fakeRow{{values: operationRowValues(record)}}}}
+	st := &Store{exec: exec}
+
+	got, err := st.ListNamespaceVolumeBindingPutOperationsForRecovery(context.Background(), now, 1)
+	if err != nil {
+		t.Fatalf("ListNamespaceVolumeBindingPutOperationsForRecovery: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "op-binding" {
+		t.Fatalf("records = %#v, want op-binding", got)
+	}
+	if !exec.rows.closed {
+		t.Fatal("rows were not closed")
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"SELECT",
+		"FROM operations",
+		"operation_type = 'namespace_volume_binding_put'",
+		"phase = 'validate_namespace_volume_binding_put'",
+		"operation_state = 'queued'",
+		"operation_state = 'running'",
+		"operation_state = 'cancel_requested'",
+		"operator_intervention_required",
+		"ORDER BY created_at, operation_id",
+		"LIMIT $2",
+	)
+	if strings.Contains(exec.query, "UPDATE ") || strings.Contains(exec.query, " FOR UPDATE") {
+		t.Fatalf("binding recovery list must be read-only SELECT, got %s", exec.query)
+	}
+	if !reflect.DeepEqual(exec.args, []any{now, 1}) {
+		t.Fatalf("args = %#v, want now and limit", exec.args)
+	}
+}
+
+func TestListNamespaceVolumeBindingPutOperationsForRecoveryRejectsInvalidArgsBeforeSQL(t *testing.T) {
+	tests := []struct {
+		name  string
+		now   time.Time
+		limit int
+	}{
+		{name: "zero now", limit: 1},
+		{name: "zero limit", now: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)},
+		{name: "negative limit", now: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC), limit: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{}
+			st := &Store{exec: exec}
+
+			_, err := st.ListNamespaceVolumeBindingPutOperationsForRecovery(context.Background(), tt.now, tt.limit)
+			if err == nil {
+				t.Fatal("ListNamespaceVolumeBindingPutOperationsForRecovery succeeded, want error")
+			}
+			if exec.query != "" {
+				t.Fatalf("issued SQL for invalid args: %s", exec.query)
+			}
+		})
+	}
+}
+
 func TestListOperationsForRecoveryClosesRowsAndPropagatesRowsAndScanErrors(t *testing.T) {
 	valid := operationFixture(time.Date(2026, 5, 5, 11, 0, 0, 0, time.UTC))
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
@@ -752,6 +825,65 @@ func TestAcquireNamespaceUpsertOperationLeaseScopesAtomicUpdateBeforeMutation(t 
 	wantArgs := []any{"op-namespace", "worker-a", leaseExpiresAt, now, string(operations.LeaseCancelPolicyNone)}
 	if !reflect.DeepEqual(exec.args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", exec.args, wantArgs)
+	}
+}
+
+func TestAcquireNamespaceVolumeBindingPutOperationLeaseScopesAtomicUpdateBeforeMutation(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	leaseExpiresAt := now.Add(30 * time.Minute)
+	record := operationFixture(now.Add(-time.Hour))
+	record.ID = "op-binding"
+	record.Type = operations.OperationNamespaceVolumeBindingPut
+	record.State = operations.OperationStateRunning
+	record.Phase = operations.OperationPhaseNamespaceVolumeBindingPutValidate
+	record.NamespaceID = "ns_alpha01"
+	record.Resource = operations.ResourceRef{Type: "namespace_volume_binding", ID: "ns_alpha01"}
+	record.LeaseOwner = "worker-a"
+	record.LeaseExpiresAt = &leaseExpiresAt
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
+	st := &Store{exec: exec}
+
+	got, err := st.AcquireNamespaceVolumeBindingPutOperationLease(context.Background(), "op-binding", operations.LeaseRequest{
+		Owner:    " worker-a ",
+		Duration: 30 * time.Minute,
+		Now:      now,
+	})
+	if err != nil {
+		t.Fatalf("AcquireNamespaceVolumeBindingPutOperationLease: %v", err)
+	}
+	if got.ID != "op-binding" || got.LeaseOwner != "worker-a" || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(leaseExpiresAt) {
+		t.Fatalf("leased record = %#v, want op-binding worker-a", got)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"UPDATE operations",
+		"WHERE operation_id = $1",
+		"operation_type = 'namespace_volume_binding_put'",
+		"phase = 'validate_namespace_volume_binding_put'",
+		"(operation_state = 'queued' AND $5 = ''",
+		"(operation_state = 'running' AND $5 = ''",
+		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation'",
+		"RETURNING",
+	)
+	if strings.Contains(exec.query, "SELECT ") {
+		t.Fatalf("AcquireNamespaceVolumeBindingPutOperationLease query must be single UPDATE RETURNING, got %s", exec.query)
+	}
+	wantArgs := []any{"op-binding", "worker-a", leaseExpiresAt, now, string(operations.LeaseCancelPolicyNone)}
+	if !reflect.DeepEqual(exec.args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", exec.args, wantArgs)
+	}
+}
+
+func TestAcquireNamespaceVolumeBindingPutOperationLeaseRejectsMismatchedScopeWithoutMutation(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	st := &Store{exec: &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}}
+
+	_, err := st.AcquireNamespaceVolumeBindingPutOperationLease(context.Background(), "op-repo", operations.LeaseRequest{
+		Owner:    "worker-a",
+		Duration: time.Minute,
+		Now:      now,
+	})
+	if !errors.Is(err, operations.ErrLeaseUnavailable) || !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("AcquireNamespaceVolumeBindingPutOperationLease error = %v, want ErrLeaseUnavailable/sql.ErrNoRows", err)
 	}
 }
 

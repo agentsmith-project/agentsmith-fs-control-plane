@@ -11,9 +11,192 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 )
+
+func TestNamespaceVolumeBindingHandlerCreatesOperationIntake(t *testing.T) {
+	now := namespaceBindingHandlerTestNow()
+	store := &fakeOperationIntakeStore{}
+	handler := namespaceBindingPutHandlerForTest(store, func() string { return "op_binding" }, func() time.Time { return now }, namespaceBindingAllowedPolicy(auth.RoleNamespaceAdmin))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, namespaceBindingRequestWithBody(http.MethodPut, "/internal/v1/namespaces/ns_123/volume-binding", "ns_123", namespaceBindingRequestBody("ns_123")))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if store.calls != 1 {
+		t.Fatalf("intake calls = %d, want 1", store.calls)
+	}
+	spec := store.spec
+	wantScope := operations.NewIdempotencyScope("agentsmith-api", "ns_123", operations.OperationNamespaceVolumeBindingPut, "idem_binding")
+	if spec.OperationID != "op_binding" || spec.Scope != wantScope {
+		t.Fatalf("spec op/scope = %q/%#v, want op_binding/%#v", spec.OperationID, spec.Scope, wantScope)
+	}
+	if spec.Scope.OperationType != operations.OperationNamespaceVolumeBindingPut {
+		t.Fatalf("spec type = %q, want namespace_volume_binding_put", spec.Scope.OperationType)
+	}
+	if spec.Phase != operations.OperationPhaseNamespaceVolumeBindingPutValidate {
+		t.Fatalf("phase = %q, want %s", spec.Phase, operations.OperationPhaseNamespaceVolumeBindingPutValidate)
+	}
+	if spec.NamespaceID != "ns_123" || spec.Resource.Type != "namespace_volume_binding" || spec.Resource.ID != "ns_123" {
+		t.Fatalf("namespace/resource = %q/%#v", spec.NamespaceID, spec.Resource)
+	}
+	if spec.CorrelationID != "corr_binding" || spec.CallerService != "agentsmith-api" {
+		t.Fatalf("correlation/caller = %q/%q", spec.CorrelationID, spec.CallerService)
+	}
+	if spec.AuthorizedActor.Type != "system" || spec.AuthorizedActor.ID != "svc-binding" {
+		t.Fatalf("actor = %#v", spec.AuthorizedActor)
+	}
+	if spec.InputSummary["namespace_id"] != "ns_123" || spec.InputSummary["default_volume_id"] != "vol_123" {
+		t.Fatalf("input summary = %#v, want reconstructable binding fields", spec.InputSummary)
+	}
+	if _, ok := spec.InputSummary["allowed_callers"]; !ok {
+		t.Fatalf("input summary missing allowed_callers: %#v", spec.InputSummary)
+	}
+	if len(spec.ExternalResourceIDs) != 0 {
+		t.Fatalf("external ids = %#v, want none", spec.ExternalResourceIDs)
+	}
+
+	env := decodeOperationEnvelope(t, rec.Body.Bytes())
+	if env.OperationID != "op_binding" || env.OperationState != OperationStateQueued {
+		t.Fatalf("envelope id/state = %q/%q, want op_binding/queued", env.OperationID, env.OperationState)
+	}
+	if env.Resource.Type != "namespace_volume_binding" || env.Resource.ID != "ns_123" {
+		t.Fatalf("envelope resource = %#v", env.Resource)
+	}
+	assertOperationEnvelopeDoesNotLeakInternalFields(t, env)
+}
+
+func TestNamespaceVolumeBindingHandlerReusesExistingOperation(t *testing.T) {
+	store := &fakeOperationIntakeStore{existingOperationID: "op_existing_binding", reused: true}
+	handler := namespaceBindingPutHandlerForTest(store, func() string { return "op_new_binding" }, fixedNamespaceNow, namespaceBindingAllowedPolicy(auth.RoleNamespaceAdmin))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, namespaceBindingRequestWithBody(http.MethodPut, "/internal/v1/namespaces/ns_123/volume-binding", "ns_123", namespaceBindingRequestBody("ns_123")))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	env := decodeOperationEnvelope(t, rec.Body.Bytes())
+	if env.OperationID != "op_existing_binding" || env.OperationState != OperationStateQueued {
+		t.Fatalf("envelope = %#v, want reused existing queued operation", env)
+	}
+}
+
+func TestNamespaceVolumeBindingHandlerPutMapsIntakeErrorsWithoutLeakingStoreDetail(t *testing.T) {
+	tests := []struct {
+		name     string
+		store    *fakeOperationIntakeStore
+		generate OperationIDGenerator
+		wantCode ErrorCode
+		status   int
+		retry    bool
+	}{
+		{name: "conflict", store: &fakeOperationIntakeStore{err: operations.ErrIdempotencyConflict}, generate: func() string { return "op_binding" }, wantCode: CodeIdempotencyConflict, status: http.StatusConflict},
+		{name: "store outage", store: &fakeOperationIntakeStore{err: errors.New("postgres dsn password=secret failed")}, generate: func() string { return "op_binding" }, wantCode: CodeStorageUnavailable, status: http.StatusServiceUnavailable, retry: true},
+		{name: "nil store", generate: func() string { return "op_binding" }, wantCode: CodeInternalError, status: http.StatusInternalServerError},
+		{name: "empty operation id", store: &fakeOperationIntakeStore{}, generate: func() string { return "" }, wantCode: CodeInternalError, status: http.StatusInternalServerError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := namespaceBindingPutHandlerForTest(tt.store, tt.generate, fixedNamespaceNow, namespaceBindingAllowedPolicy(auth.RoleNamespaceAdmin))
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, namespaceBindingRequestWithBody(http.MethodPut, "/internal/v1/namespaces/ns_123/volume-binding", "ns_123", namespaceBindingRequestBody("ns_123")))
+
+			if rec.Code != tt.status {
+				t.Fatalf("status = %d body = %s, want %d", rec.Code, rec.Body.String(), tt.status)
+			}
+			env := decodeErrorEnvelope(t, rec.Body.Bytes())
+			if env.Error.Code != tt.wantCode || env.Error.Retryable != tt.retry {
+				t.Fatalf("error = %#v, want code/retry %s/%v", env.Error, tt.wantCode, tt.retry)
+			}
+			if strings.Contains(rec.Body.String(), "secret") || strings.Contains(rec.Body.String(), "postgres") {
+				t.Fatalf("error leaked raw detail: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestNamespaceVolumeBindingHandlerPutValidationDeniesBeforeIntakeAndAudits(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		headerNS   string
+		body       string
+		wantCode   ErrorCode
+		wantStatus int
+	}{
+		{name: "invalid path namespace", path: "/internal/v1/namespaces/bad_ns/volume-binding", headerNS: "bad_ns", body: namespaceBindingRequestBody("bad_ns"), wantCode: CodeInvalidID, wantStatus: http.StatusBadRequest},
+		{name: "missing namespace header", path: "/internal/v1/namespaces/ns_123/volume-binding", body: namespaceBindingRequestBody("ns_123"), wantCode: CodeResourceNamespaceMismatch, wantStatus: http.StatusBadRequest},
+		{name: "mismatched namespace header", path: "/internal/v1/namespaces/ns_123/volume-binding", headerNS: "ns_456", body: namespaceBindingRequestBody("ns_123"), wantCode: CodeResourceNamespaceMismatch, wantStatus: http.StatusBadRequest},
+		{name: "mismatched body namespace", path: "/internal/v1/namespaces/ns_123/volume-binding", headerNS: "ns_123", body: namespaceBindingRequestBody("ns_456"), wantCode: CodeResourceNamespaceMismatch, wantStatus: http.StatusBadRequest},
+		{name: "unknown field", path: "/internal/v1/namespaces/ns_123/volume-binding", headerNS: "ns_123", body: strings.Replace(namespaceBindingRequestBody("ns_123"), `"status":"active"`, `"status":"active","extra":true`, 1), wantCode: CodeInvalidID, wantStatus: http.StatusBadRequest},
+		{name: "malformed json", path: "/internal/v1/namespaces/ns_123/volume-binding", headerNS: "ns_123", body: `{"namespace_id":`, wantCode: CodeInvalidID, wantStatus: http.StatusBadRequest},
+		{name: "invalid policy", path: "/internal/v1/namespaces/ns_123/volume-binding", headerNS: "ns_123", body: strings.Replace(namespaceBindingRequestBody("ns_123"), `"max_session_seconds":3600`, `"max_session_seconds":30`, 1), wantCode: CodeInvalidID, wantStatus: http.StatusBadRequest},
+		{name: "secret-like policy", path: "/internal/v1/namespaces/ns_123/volume-binding", headerNS: "ns_123", body: strings.Replace(namespaceBindingRequestBody("ns_123"), `"max_session_seconds":3600`, `"max_session_seconds":3600,"credential_ref":"secret-ref"`, 1), wantCode: CodeInvalidID, wantStatus: http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeOperationIntakeStore{}
+			sink := &fakeAuditSink{}
+			handler := namespaceBindingPutHandlerForTestWithAudit(store, func() string { return "op_binding" }, fixedNamespaceNow, namespaceBindingAllowedPolicy(auth.RoleNamespaceAdmin), sink)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, namespaceBindingRequestWithBody(http.MethodPut, tt.path, tt.headerNS, tt.body))
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d body = %s, want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			if store.calls != 0 {
+				t.Fatalf("intake calls = %d, want 0", store.calls)
+			}
+			env := decodeErrorEnvelope(t, rec.Body.Bytes())
+			if env.Error.Code != tt.wantCode || env.Error.Retryable {
+				t.Fatalf("error = %#v, want code %s retryable false", env.Error, tt.wantCode)
+			}
+			if len(sink.events) != 1 {
+				t.Fatalf("audit events = %#v, want validation denial", sink.events)
+			}
+			for _, leaked := range []string{"secret-ref", "credential_ref"} {
+				if strings.Contains(rec.Body.String(), leaked) {
+					t.Fatalf("validation response leaked %q: %s", leaked, rec.Body.String())
+				}
+			}
+		})
+	}
+}
+
+func TestNamespaceVolumeBindingHandlerPutUsesDeploymentPolicyNotBindingPolicy(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	bindingReader := &fakeNamespaceVolumeBindingReader{err: sql.ErrNoRows}
+	handler := NamespaceVolumeBindingHandler(NamespaceVolumeBindingHandlerConfig{
+		Reader:            bindingReader,
+		IntakeStore:       store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentNamespace: namespaceBindingAllowedPolicy(auth.RoleNamespaceAdmin),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: bindingReader},
+		},
+		OperationID: func() string { return "op_binding" },
+		Now:         fixedNamespaceNow,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, namespaceBindingRequestWithBody(http.MethodPut, "/internal/v1/namespaces/ns_123/volume-binding", "ns_123", namespaceBindingRequestBody("ns_123")))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200 through deployment policy", rec.Code, rec.Body.String())
+	}
+	if bindingReader.calls != 0 {
+		t.Fatalf("binding reader calls = %d, want 0 for PUT authz/intake", bindingReader.calls)
+	}
+}
 
 func TestNamespaceVolumeBindingHandlerReturnsBindingDTO(t *testing.T) {
 	now := namespaceBindingHandlerTestNow()
@@ -338,12 +521,46 @@ func namespaceBindingRequest(method, path, namespaceID string) *http.Request {
 	return req
 }
 
+func namespaceBindingRequestWithBody(method, path, namespaceID string, body string) *http.Request {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
+	req.Header.Set(HeaderCorrelationID, "corr_binding")
+	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderIdempotencyKey, "idem_binding")
+	req.Header.Set(auth.HeaderActorType, "system")
+	req.Header.Set(auth.HeaderActorID, "svc-binding")
+	if namespaceID != "" {
+		req.Header.Set(auth.HeaderNamespaceID, namespaceID)
+	}
+	return req
+}
+
 func namespaceBindingHandler(reader NamespaceVolumeBindingReader) http.Handler {
 	return NamespaceVolumeBindingHandler(NamespaceVolumeBindingHandlerConfig{
 		Reader:            reader,
 		PrincipalResolver: namespaceBindingPrincipalResolver(),
 		AllowedCallers:    namespaceBindingAllowedPolicy(auth.RoleNamespaceAdmin),
 	})
+}
+
+func namespaceBindingPutHandlerForTest(store OperationIntakeStore, generate OperationIDGenerator, now func() time.Time, policy AllowedCallerPolicy) http.Handler {
+	return namespaceBindingPutHandlerForTestWithAudit(store, generate, now, policy, nil)
+}
+
+func namespaceBindingPutHandlerForTestWithAudit(store OperationIntakeStore, generate OperationIDGenerator, now func() time.Time, policy AllowedCallerPolicy, sink auditSinkForBindingTest) http.Handler {
+	return NamespaceVolumeBindingHandler(NamespaceVolumeBindingHandlerConfig{
+		Reader:            &fakeNamespaceVolumeBindingReader{},
+		IntakeStore:       store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    policy,
+		OperationID:       generate,
+		Now:               now,
+		AuditSink:         sink,
+	})
+}
+
+type auditSinkForBindingTest interface {
+	Emit(context.Context, audit.Event) error
 }
 
 func namespaceBindingHandlerWithAudit(reader NamespaceVolumeBindingReader, sink *fakeAuditSink) http.Handler {
@@ -378,4 +595,8 @@ func decodeErrorEnvelope(t *testing.T, body []byte) ErrorEnvelope {
 
 func namespaceBindingHandlerTestNow() time.Time {
 	return time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+}
+
+func namespaceBindingRequestBody(namespaceID string) string {
+	return `{"namespace_id":"` + namespaceID + `","default_volume_id":"vol_123","allowed_callers":[{"caller_service":"agentsmith-api","roles":["repo_admin","operation_inspector"]}],"quota_bytes_default":4096,"export_policy":{"webdav_enabled":true,"max_session_seconds":3600},"lifecycle_policy":{"tombstone_retention_seconds":604800,"purge_requires_lifecycle_admin":true,"break_glass_purge_enabled":false},"mount_policy":{"workload_mount_enabled":true,"workload_mount_requires_jvs_external_control_root":true,"allow_privileged_workload":false},"template_policy":{"namespace_templates_enabled":true,"cross_namespace_clone_enabled":false},"status":"active"}`
 }

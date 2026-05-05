@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 )
 
@@ -125,7 +126,6 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 	}{
 		{name: "repo create", method: http.MethodPost, path: "/internal/v1/repos"},
 		{name: "repo list", method: http.MethodGet, path: "/internal/v1/repos"},
-		{name: "put namespace binding exact sibling", method: http.MethodPut, path: "/internal/v1/namespaces/ns_123/volume-binding"},
 	}
 
 	for _, tt := range tests {
@@ -154,6 +154,45 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 				t.Fatalf("partial shell capability denied message mentions neutral shell: %q", env.Error.Message)
 			}
 		})
+	}
+}
+
+func TestInternalAPIShellServesNamespaceVolumeBindingPutThroughOperationIntake(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	reader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
+		CallerService: "agentsmith-api",
+		Roles:         []resources.CallerRole{resources.CallerRoleNamespaceAdmin},
+	})}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:      namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader: reader,
+		DeploymentNamespaceCallers: []auth.AllowedCaller{{
+			CallerService: "agentsmith-api",
+			Kind:          auth.CallerKindProduct,
+			Roles:         []auth.Role{auth.RoleNamespaceAdmin},
+		}},
+		OperationIntakeStore: store,
+		GenerateOperationID:  func() string { return "op_binding_shell" },
+		Now:                  fixedNamespaceNow,
+	})
+	rec := httptest.NewRecorder()
+	req := namespaceBindingRequestWithBody(http.MethodPut, "/internal/v1/namespaces/ns_123/volume-binding?token=query-secret", "ns_123", namespaceBindingRequestBody("ns_123"))
+	req.Header.Set(auth.HeaderAuthorization, "Bearer auth-secret")
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if reader.calls != 0 {
+		t.Fatalf("binding reader calls = %d, want 0 for PUT", reader.calls)
+	}
+	if store.calls != 1 || store.spec.Scope.OperationType != operations.OperationNamespaceVolumeBindingPut {
+		t.Fatalf("intake calls/spec = %d/%#v, want binding put", store.calls, store.spec)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "query-secret") || strings.Contains(body, "auth-secret") {
+		t.Fatalf("response leaked secret: %s", body)
 	}
 }
 

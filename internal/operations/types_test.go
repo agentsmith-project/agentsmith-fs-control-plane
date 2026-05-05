@@ -48,6 +48,15 @@ func TestNamespaceUpsertPhasesAreStable(t *testing.T) {
 	}
 }
 
+func TestNamespaceVolumeBindingPutPhasesAreStable(t *testing.T) {
+	if OperationPhaseNamespaceVolumeBindingPutValidate != "validate_namespace_volume_binding_put" {
+		t.Fatalf("validate phase = %q, want validate_namespace_volume_binding_put", OperationPhaseNamespaceVolumeBindingPutValidate)
+	}
+	if OperationPhaseNamespaceVolumeBindingPutCommitted != "namespace_volume_binding_put_committed" {
+		t.Fatalf("committed phase = %q, want namespace_volume_binding_put_committed", OperationPhaseNamespaceVolumeBindingPutCommitted)
+	}
+}
+
 func TestRouteOperationTypesReturnsDefensiveCopy(t *testing.T) {
 	mapped := RouteOperationTypes()
 	mapped["createRepo"] = OperationMigrationCutover

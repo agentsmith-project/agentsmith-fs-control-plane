@@ -338,12 +338,24 @@ func (store *cmdWorkerAppStore) ListNamespaceUpsertOperationsForRecovery(context
 	return nil, nil
 }
 
+func (store *cmdWorkerAppStore) ListNamespaceVolumeBindingPutOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 func (store *cmdWorkerAppStore) AcquireNamespaceUpsertOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) AcquireNamespaceVolumeBindingPutOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
 
 func (store *cmdWorkerAppStore) CommitNamespaceUpsertWithLease(context.Context, resources.Namespace, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (resources.Namespace, operations.OperationRecord, error) {
 	return resources.Namespace{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitNamespaceVolumeBindingPutWithLease(context.Context, resources.NamespaceVolumeBinding, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error) {
+	return resources.NamespaceVolumeBinding{}, operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
 func (runner *fakeRunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error) {

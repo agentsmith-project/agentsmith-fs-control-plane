@@ -82,6 +82,56 @@ func TestRunOnceClaimsQueuedNamespaceUpsertThroughDefaultRunner(t *testing.T) {
 	}
 }
 
+func TestRunOnceClaimsQueuedNamespaceUpsertAndBindingPutThroughDefaultRunner(t *testing.T) {
+	now := workerAppNow()
+	namespaceRecord := workerAppOperationRecord(now)
+	bindingRecord := workerAppBindingOperationRecord("op_binding", now)
+	bindingRecord.CreatedAt = namespaceRecord.CreatedAt.Add(time.Minute)
+	store := newWorkerAppStore(namespaceRecord, bindingRecord)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 2 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want claimed=2 failed=0 unsupported=0 manual=0", summary)
+	}
+	if store.namespace.ID != "ns_alpha01" || store.binding.NamespaceID != "ns_alpha01" || store.binding.DefaultVolumeID != "vol_123" {
+		t.Fatalf("committed namespace/binding = %#v/%#v", store.namespace, store.binding)
+	}
+	if len(store.auditEvents) != 2 {
+		t.Fatalf("audit events = %#v, want namespace and binding events", store.auditEvents)
+	}
+}
+
+func TestRunOnceScopedStoreDoesNotStarveNamespaceOrBindingBehindNonScopedRecords(t *testing.T) {
+	now := workerAppNow()
+	repoQueued := workerAppRepoOperationRecord("op_repo_queued", operations.OperationStateQueued, now)
+	namespaceRecord := workerAppOperationRecord(now)
+	namespaceRecord.CreatedAt = repoQueued.CreatedAt.Add(time.Minute)
+	bindingRecord := workerAppBindingOperationRecord("op_binding", now)
+	bindingRecord.CreatedAt = repoQueued.CreatedAt.Add(2 * time.Minute)
+	store := newWorkerAppStore(repoQueued, namespaceRecord, bindingRecord)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(config.MapSource{"AFSCP_OPERATION_RECOVERY_LIMIT": "2"}), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 2 || summary.Claimed != 2 || summary.Finalized != 0 || summary.Unsupported != 0 || summary.Manual != 0 || summary.Failed != 0 {
+		t.Fatalf("summary = %#v, want namespace and binding claimed despite earlier repo", summary)
+	}
+	if got := strings.Join(store.acquireIDs, ","); got != namespaceRecord.ID+","+bindingRecord.ID {
+		t.Fatalf("acquire IDs = %q, want namespace then binding", got)
+	}
+	if store.records[repoQueued.ID].State != operations.OperationStateQueued {
+		t.Fatalf("repo state = %q, want unchanged queued", store.records[repoQueued.ID].State)
+	}
+}
+
 func TestNewRunOnceRunnerStoreFactoryErrorsFailClosed(t *testing.T) {
 	_, err := NewRunOnceRunner(Options{
 		Source: workerAppConfigSource(nil),
@@ -243,6 +293,56 @@ func TestRunOnceFinalizesNamespaceUpsertCancellationWithinScope(t *testing.T) {
 	}
 }
 
+func TestRunOnceFinalizesNamespaceVolumeBindingPutCancellationWithinScope(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppBindingOperationRecord("op_binding_cancel", now)
+	record.State = operations.OperationStateCancelRequested
+	store := newWorkerAppStore(record)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Finalized != 1 || summary.Claimed != 0 || summary.Failed != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want finalized=1 only", summary)
+	}
+	if got := strings.Join(store.acquireIDs, ","); got != record.ID {
+		t.Fatalf("acquire IDs = %q, want %s", got, record.ID)
+	}
+	if got := store.acquirePolicies[record.ID]; got != operations.LeaseCancelPolicyFinalize {
+		t.Fatalf("cancel policy = %q, want finalize", got)
+	}
+	if got := store.records[record.ID]; got.State != operations.OperationStateCancelled || got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("record = %#v, want cancelled without lease", got)
+	}
+}
+
+func TestRunOnceNamespaceVolumeBindingPutBadStateCandidatesBecomeManualError(t *testing.T) {
+	now := workerAppNow()
+	runningInvalid := workerAppBindingOperationRecord("op_binding_running_invalid", now)
+	runningInvalid.State = operations.OperationStateRunning
+	runningInvalid.LeaseOwner = ""
+	runningInvalid.LeaseExpiresAt = nil
+	operator := workerAppBindingOperationRecord("op_binding_operator", now)
+	operator.State = operations.OperationStateOperatorInterventionRequired
+	store := newWorkerAppStore(runningInvalid, operator)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want manual count error")
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 2 || summary.Manual != 2 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want scanned=2 manual=2", summary)
+	}
+	if got := strings.Join(store.acquireIDs, ","); got != "" {
+		t.Fatalf("acquire IDs = %q, want no acquire for manual candidates", got)
+	}
+}
+
 func TestRunOnceNamespaceUpsertBadStateCandidatesBecomeManualError(t *testing.T) {
 	now := workerAppNow()
 	runningInvalid := workerAppOperationRecord(now)
@@ -285,7 +385,7 @@ func TestNamespaceUpsertRecoveryStoreRejectsMismatchedAcquireWithoutMutation(t *
 	for _, record := range tests {
 		t.Run(record.ID, func(t *testing.T) {
 			store := newWorkerAppStore(record)
-			scoped := namespaceUpsertRecoveryStore{store: store}
+			scoped := operationRecoveryStore{store: store}
 
 			_, err := scoped.AcquireOperationLease(context.Background(), record.ID, operations.LeaseRequest{
 				Owner:    "worker-a",
@@ -376,6 +476,39 @@ func workerAppRepoOperationRecord(operationID string, state operations.Operation
 	}
 }
 
+func workerAppBindingOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	return operations.OperationRecord{
+		ID:               operationID,
+		Type:             operations.OperationNamespaceVolumeBindingPut,
+		State:            operations.OperationStateQueued,
+		Phase:            operations.OperationPhaseNamespaceVolumeBindingPutValidate,
+		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationNamespaceVolumeBindingPut, operationID).String(),
+		IdempotencyKey:   operationID,
+		RequestHash:      operations.RequestHash("sha256:binding"),
+		CorrelationID:    "corr-alpha",
+		CallerService:    "agentsmith-api",
+		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:         operations.ResourceRef{Type: "namespace_volume_binding", ID: "ns_alpha01"},
+		NamespaceID:      "ns_alpha01",
+		InputSummary:     workerAppBindingInputSummary("ns_alpha01"),
+		CreatedAt:        now.Add(-time.Hour),
+	}
+}
+
+func workerAppBindingInputSummary(namespaceID string) map[string]any {
+	return map[string]any{
+		"namespace_id":        namespaceID,
+		"default_volume_id":   "vol_123",
+		"allowed_callers":     []any{map[string]any{"caller_service": "agentsmith-api", "roles": []any{"repo_admin", "operation_inspector"}}},
+		"quota_bytes_default": float64(4096),
+		"export_policy":       map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
+		"lifecycle_policy":    map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
+		"mount_policy":        map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false},
+		"template_policy":     map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false},
+		"status":              "active",
+	}
+}
+
 func workerAppNow() time.Time {
 	return time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 }
@@ -384,6 +517,7 @@ type fakeWorkerAppStore struct {
 	records         map[string]operations.OperationRecord
 	order           []string
 	namespace       resources.Namespace
+	binding         resources.NamespaceVolumeBinding
 	operation       operations.OperationRecord
 	auditEvents     []audit.Event
 	listDeadline    time.Time
@@ -412,6 +546,32 @@ func (store *fakeWorkerAppStore) ListNamespaceUpsertOperationsForRecovery(ctx co
 			break
 		}
 		if record.Type != operations.OperationNamespaceUpsert || record.Phase != operations.OperationPhaseNamespaceUpsertValidate {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+			continue
+		case operations.OperationStateRunning, operations.OperationStateCancelRequested:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (store *fakeWorkerAppStore) ListNamespaceVolumeBindingPutOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		store.listDeadline = deadline
+	}
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if record.Type != operations.OperationNamespaceVolumeBindingPut || record.Phase != operations.OperationPhaseNamespaceVolumeBindingPutValidate {
 			continue
 		}
 		switch record.State {
@@ -458,6 +618,24 @@ func (store *fakeWorkerAppStore) AcquireNamespaceUpsertOperationLease(_ context.
 	return decision.Record, nil
 }
 
+func (store *fakeWorkerAppStore) AcquireNamespaceVolumeBindingPutOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if record.Type != operations.OperationNamespaceVolumeBindingPut || record.Phase != operations.OperationPhaseNamespaceVolumeBindingPutValidate {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
 func (store *fakeWorkerAppStore) CommitNamespaceUpsertWithLease(_ context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
 	operation := record.Record()
 	operation.LeaseOwner = ""
@@ -467,6 +645,17 @@ func (store *fakeWorkerAppStore) CommitNamespaceUpsertWithLease(_ context.Contex
 	store.operation = operation
 	store.auditEvents = append(store.auditEvents, event)
 	return namespace, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitNamespaceVolumeBindingPutWithLease(_ context.Context, binding resources.NamespaceVolumeBinding, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.binding = binding
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return binding, operation, nil
 }
 
 type fakeOperationRecoveryRunner struct {

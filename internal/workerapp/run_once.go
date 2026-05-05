@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"sync/atomic"
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/namespacebindingexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/namespaceexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
@@ -23,6 +25,7 @@ import (
 
 type OperationRecoveryStore interface {
 	store.NamespaceUpsertOperationRecoveryStore
+	store.NamespaceVolumeBindingOperationRecoveryStore
 }
 
 type StoreFactory func(context.Context, string) (StoreHandle, error)
@@ -83,13 +86,13 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		}
 		return nil, err
 	}
-	scopedStore := namespaceUpsertRecoveryStore{store: handle.Store}
+	scopedStore := operationRecoveryStore{store: handle.Store}
 
 	eventID := options.AuditEventID
 	if eventID == nil {
 		eventID = NewAuditEventID
 	}
-	executor, err := namespaceexec.NewExecutor(namespaceexec.Config{
+	namespaceExecutor, err := namespaceexec.NewExecutor(namespaceexec.Config{
 		CommitStore:  scopedStore,
 		Owner:        opConfig.Owner,
 		Clock:        now,
@@ -101,10 +104,22 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		}
 		return nil, err
 	}
+	bindingExecutor, err := namespacebindingexec.NewExecutor(namespacebindingexec.Config{
+		CommitStore:  scopedStore,
+		Owner:        opConfig.Owner,
+		Clock:        now,
+		AuditEventID: func() string { return eventID() },
+	})
+	if err != nil {
+		if handle.Close != nil {
+			err = errors.Join(err, handle.Close())
+		}
+		return nil, err
+	}
 	operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
 		Reader:        scopedStore,
 		LeaseStore:    scopedStore,
-		Executor:      executor,
+		Executor:      multiExecutor{executors: []recovery.OperationExecutor{namespaceExecutor, bindingExecutor}},
 		Owner:         opConfig.Owner,
 		LeaseDuration: opConfig.LeaseDuration,
 		Limit:         opConfig.Limit,
@@ -168,28 +183,54 @@ func nowFunc(clock func() time.Time) func() time.Time {
 	return func() time.Time { return time.Now().UTC() }
 }
 
-type namespaceUpsertRecoveryStore struct {
+type operationRecoveryStore struct {
 	store OperationRecoveryStore
 }
 
-func (scoped namespaceUpsertRecoveryStore) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
-	return scoped.store.ListNamespaceUpsertOperationsForRecovery(ctx, now, limit)
+func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	namespaceRecords, err := scoped.store.ListNamespaceUpsertOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	bindingRecords, err := scoped.store.ListNamespaceVolumeBindingPutOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	records := append(namespaceRecords, bindingRecords...)
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].ID < records[j].ID
+		}
+		return records[i].CreatedAt.Before(records[j].CreatedAt)
+	})
+	if len(records) > limit {
+		records = records[:limit]
+	}
+	return records, nil
 }
 
-func (scoped namespaceUpsertRecoveryStore) AcquireOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
-	return scoped.store.AcquireNamespaceUpsertOperationLease(ctx, operationID, request)
+func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, err := scoped.store.AcquireNamespaceUpsertOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
+	}
+	return scoped.store.AcquireNamespaceVolumeBindingPutOperationLease(ctx, operationID, request)
 }
 
-func (scoped namespaceUpsertRecoveryStore) RenewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
-	return operations.OperationRecord{}, fmt.Errorf("%w: namespace upsert recovery does not renew leases", operations.ErrInvalidLeaseRequest)
+func (scoped operationRecoveryStore) RenewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, fmt.Errorf("%w: worker operation recovery does not renew leases", operations.ErrInvalidLeaseRequest)
 }
 
-func (scoped namespaceUpsertRecoveryStore) UpdateOperationWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
-	return operations.OperationRecord{}, fmt.Errorf("%w: namespace upsert recovery does not perform generic operation updates", operations.ErrInvalidLeaseRequest)
+func (scoped operationRecoveryStore) UpdateOperationWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, fmt.Errorf("%w: worker operation recovery does not perform generic operation updates", operations.ErrInvalidLeaseRequest)
 }
 
-func (scoped namespaceUpsertRecoveryStore) CommitNamespaceUpsertWithLease(ctx context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
+func (scoped operationRecoveryStore) CommitNamespaceUpsertWithLease(ctx context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
 	return scoped.store.CommitNamespaceUpsertWithLease(ctx, namespace, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitNamespaceVolumeBindingPutWithLease(ctx context.Context, binding resources.NamespaceVolumeBinding, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error) {
+	return scoped.store.CommitNamespaceVolumeBindingPutWithLease(ctx, binding, record, owner, now, event)
 }
 
 func operationRecoveryCountError(result recovery.OperationBatchResult) error {
@@ -199,9 +240,47 @@ func operationRecoveryCountError(result recovery.OperationBatchResult) error {
 	return fmt.Errorf("operation recovery incomplete: unsupported=%d manual=%d failed=%d", result.Unsupported, result.Manual, result.Failed)
 }
 
+type multiExecutor struct {
+	executors []recovery.OperationExecutor
+}
+
+func (executor multiExecutor) SupportsOperationRecovery(ctx context.Context, record operations.OperationRecord, plan recovery.RecoveryPlan) recovery.OperationSupport {
+	var reason string
+	for _, candidate := range executor.executors {
+		if candidate == nil {
+			continue
+		}
+		support := candidate.SupportsOperationRecovery(ctx, record, plan)
+		if support.Supported {
+			return support
+		}
+		if reason == "" {
+			reason = support.Reason
+		}
+	}
+	if reason == "" {
+		reason = "unsupported_operation_recovery"
+	}
+	return recovery.OperationSupport{Reason: reason}
+}
+
+func (executor multiExecutor) ExecuteOperationRecovery(ctx context.Context, record operations.OperationRecord, plan recovery.RecoveryPlan) error {
+	for _, candidate := range executor.executors {
+		if candidate == nil {
+			continue
+		}
+		if candidate.SupportsOperationRecovery(ctx, record, plan).Supported {
+			return candidate.ExecuteOperationRecovery(ctx, record, plan)
+		}
+	}
+	return errors.New("unsupported operation recovery")
+}
+
 var (
-	_ OperationRecoveryStore                    = (*postgres.Store)(nil)
-	_ store.OperationRecoveryReader             = namespaceUpsertRecoveryStore{}
-	_ store.OperationLeaseStore                 = namespaceUpsertRecoveryStore{}
-	_ store.NamespaceUpsertOperationCommitStore = namespaceUpsertRecoveryStore{}
+	_ OperationRecoveryStore                           = (*postgres.Store)(nil)
+	_ store.OperationRecoveryReader                    = operationRecoveryStore{}
+	_ store.OperationLeaseStore                        = operationRecoveryStore{}
+	_ store.NamespaceUpsertOperationCommitStore        = operationRecoveryStore{}
+	_ store.NamespaceVolumeBindingOperationCommitStore = operationRecoveryStore{}
+	_ recovery.OperationExecutor                       = multiExecutor{}
 )

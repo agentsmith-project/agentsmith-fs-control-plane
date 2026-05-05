@@ -130,8 +130,10 @@ Completed:
 
 Partially completed:
 
-- API shell routes known contract paths to capability-denied responses, but real
-  endpoint handlers are not implemented.
+- API shell routes known contract paths to capability-denied responses, with
+  metadata-only namespace upsert and namespace volume binding intake/read
+  handlers implemented. Repo, JVS, WebDAV, mount, and storage-backed handlers
+  remain unimplemented.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
   models. The first PostgreSQL adapter slice implements operation read/write,
@@ -143,8 +145,9 @@ Partially completed:
   use the lease-fenced update primitive, not unguarded `UpdateOperation`. The
   recovery planner and repo recovery inspection classify existing durable
   record values into high-level actions. `afscp-worker --run-once` now has an
-  opt-in production bootstrap for the minimal `namespace_upsert` recovery
-  executor only; it does not touch JVS/WebDAV/mount/storage mutation. Real
+  opt-in production bootstrap for the minimal `namespace_upsert` and
+  `namespace_volume_binding_put` recovery executors only; it does not touch
+  JVS/WebDAV/mount/storage mutation. Real
   external audit delivery worker/sink integration and repo lifecycle recovery
   loops are not implemented. Resource
   metadata persistence exists only as control-plane metadata storage; it is not

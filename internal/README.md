@@ -35,16 +35,21 @@ needed before real handlers and storage mutation work:
 - `namespaceexec`: minimal recovery executor for `namespace_upsert`; it commits
   namespace metadata, the terminal operation update, and the audit event through
   the dedicated namespace upsert store boundary.
+- `namespacebindingexec`: minimal recovery executor for `namespace_volume_binding_put`;
+  it commits binding metadata, the terminal operation update, and the audit
+  event through the dedicated namespace volume binding store boundary.
 - `workerapp`: production `afscp-worker --run-once` bootstrap for the
-  opt-in `namespace_upsert` operation recovery runner.
+  opt-in namespace metadata operation recovery runner.
 - `pathresolver`: path safety helpers, denial tests, and shared resolver corpus.
 
-Still intentionally absent: real endpoint handlers, real external audit delivery
-worker/sink integration, repo lifecycle workers/recovery loop, JVS execution,
-WebDAV export serving, workload mount issuance, repo/template lifecycle
-mutation, storage mutation implementations, and fence enforcement beyond the
-minimal repo fence adapter slice. The worker app currently wires only
-`namespace_upsert` operation recovery when explicitly enabled.
+Still intentionally absent: repo/JVS/WebDAV/mount endpoint handlers, real
+external audit delivery worker/sink integration, repo lifecycle
+workers/recovery loop, JVS execution, WebDAV export serving, workload mount
+issuance, repo/template lifecycle mutation, storage mutation implementations,
+and fence enforcement beyond the minimal repo fence adapter slice. The worker
+app currently wires only
+`namespace_upsert` and `namespace_volume_binding_put` operation recovery when
+explicitly enabled.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

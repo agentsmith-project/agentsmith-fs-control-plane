@@ -80,6 +80,28 @@ type NamespaceUpsertOperationRecoveryStore interface {
 	NamespaceUpsertOperationCommitStore
 }
 
+// NamespaceVolumeBindingOperationCommitStore atomically commits namespace
+// volume binding metadata, a lease-fenced operation update, and its audit
+// outbox event. Implementations must perform all writes in the same durable
+// boundary; they must not compose this by calling PutNamespaceVolumeBinding
+// followed by CommitOperationWithLease. The durable boundary must verify the
+// stored operation, active namespace, active default volume, binding metadata,
+// lease fence, terminal operation update, and audit event all describe the same
+// namespace_volume_binding_put for the same namespace resource.
+type NamespaceVolumeBindingOperationCommitStore interface {
+	CommitNamespaceVolumeBindingPutWithLease(ctx context.Context, binding resources.NamespaceVolumeBinding, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error)
+}
+
+// NamespaceVolumeBindingOperationRecoveryStore owns the durable recovery
+// boundary for namespace_volume_binding_put. Implementations must push the
+// namespace_volume_binding_put + validate_namespace_volume_binding_put scope
+// into durable list and acquire predicates before ORDER/LIMIT or lease mutation.
+type NamespaceVolumeBindingOperationRecoveryStore interface {
+	ListNamespaceVolumeBindingPutOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireNamespaceVolumeBindingPutOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	NamespaceVolumeBindingOperationCommitStore
+}
+
 // IdempotencyStore owns the durable create-or-reuse boundary for queued operations.
 //
 // Implementations must make CreateOrReuseOperation atomic by enforcing

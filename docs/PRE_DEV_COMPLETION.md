@@ -86,8 +86,9 @@ Neutral service skeleton and control-plane primitives now exist:
 
 The recovery planner and repo recovery inspection are read-only classifiers for
 later recovery worker/runbook decisions. `afscp-worker --run-once` now has an
-opt-in production bootstrap for the minimal `namespace_upsert` recovery
-executor only; it does not touch JVS/WebDAV/mount/storage mutation. The first
+opt-in production bootstrap for the minimal `namespace_upsert` and
+`namespace_volume_binding_put` recovery executors only; it does not touch
+JVS/WebDAV/mount/storage mutation. The first
 PostgreSQL adapter slice now implements operation reader/writer, DB-only
 operation lease claim/reclaim/recover/finalize/renew plus lease-fenced worker
 progress/terminal update primitive, idempotency create-or-reuse, audit outbox
@@ -97,9 +98,9 @@ Worker-owned progress/terminal writes must use the lease-fenced update
 primitive, not unguarded `UpdateOperation`. Resource metadata persistence for
 volumes, namespaces, namespace volume bindings, and repo/repo lifecycle metadata
 also exists as control-plane state only. Real external audit delivery
-worker/sink integration, repo lifecycle workers, real endpoint handlers, JVS
-execution, WebDAV serving, workload mount issuance, and storage mutation are not
-implemented. Continue directly toward GA by finishing guardrail review,
+worker/sink integration, repo lifecycle workers, repo/JVS/WebDAV/mount endpoint
+handlers, JVS execution, WebDAV serving, workload mount issuance, and storage
+mutation are not implemented. Continue directly toward GA by finishing guardrail review,
 reviewing the read-only repo recovery inspection, then adding remaining recovery
 loop behavior and handlers only after their dependency gates are accepted.
 

@@ -37,6 +37,9 @@ const (
 const (
 	OperationPhaseNamespaceUpsertValidate  = "validate_namespace_upsert"
 	OperationPhaseNamespaceUpsertCommitted = "namespace_upsert_committed"
+
+	OperationPhaseNamespaceVolumeBindingPutValidate  = "validate_namespace_volume_binding_put"
+	OperationPhaseNamespaceVolumeBindingPutCommitted = "namespace_volume_binding_put_committed"
 )
 
 var operationTypes = []OperationType{
