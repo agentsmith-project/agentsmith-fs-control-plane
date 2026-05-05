@@ -129,6 +129,9 @@ Client/desktop connector owns:
 
 1. Bootstrap Go service skeleton from `docs/DEVELOPER_HANDOFF.md`.
 2. Do not implement storage mutation handlers until the relevant gate in `docs/READINESS_EVIDENCE.md` is closed.
-3. Resolve the JVS restore-plan blocker recorded in `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md` before restore-run, clone-after-restore, or lifecycle reactivation handlers.
+3. Treat G-005 as closed by
+   `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`; repo/JVS/storage handlers
+   still require the other accepted contracts, fences, session drain, operation
+   leases, audit behavior, and focused tests.
 4. Keep generated clients and handlers aligned with `api/openapi/internal-v1.openapi.yaml` and `api/schemas/afscp-internal-v1.schema.json`.
 5. Close GA-blocking risks in `docs/RISK_REGISTER.md` or approve residual risk under `docs/DEVELOPMENT_GOVERNANCE.md` when waivable.

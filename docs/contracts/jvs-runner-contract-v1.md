@@ -10,15 +10,20 @@ Before endpoint implementation, the team must pin the supported JVS release
 version, binary asset name, checksum, and tested CLI spec. The runner contract
 should be updated whenever JVS JSON schemas or exit codes change.
 
-The first handoff pin is `v0.4.7` from
-`https://github.com/agentsmith-project/jvs/releases/tag/v0.4.7`. For
+The accepted handoff pin is `v0.4.8` from
+`https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8`. For
 `linux/amd64`, use asset `jvs-linux-amd64` with SHA-256
-`4ec030d62b24d980192af550d04cb4b7455299b285b68c91843386cfa5157e6d`.
+`f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521`.
 Package or download the released binary; do not compile JVS from source as the
 GA handoff path. CI must verify the checksum, verify Sigstore/cosign bundles
 where supported, and smoke-test the required command surface and a minimal
 `init -> save -> history -> restore preview -> restore-run -> repo clone ->
 doctor --strict` flow.
+
+The release has matching `jvs-linux-amd64.bundle` and `SHA256SUMS.bundle`
+assets. Local smoke recorded bundle presence; local cosign verification was not
+performed because `cosign` was not installed. The CLI has no `--version`, so
+version checks use the pinned release asset and checksum.
 
 ## Rules
 
@@ -29,7 +34,15 @@ doctor --strict` flow.
 - `jvs doctor --strict` is part of repo create, restore-run, and clone validation.
 - Dirty source state must be surfaced as a stable caller-visible error unless the operation first creates an explicit save point.
 - Template clone history mode must be pinned to the supported JVS version. `--save-points all` is allowed only after durable imported-save-point protection is supported; otherwise GA uses `--save-points main`.
-- JVS commands should run from a clean working directory outside another JVS repo, or the runner must prove CWD cannot affect target resolution.
+- With external control roots, JVS run commands after `init` should use the
+  payload root as CWD; the runner must avoid inheriting an unrelated JVS repo
+  CWD.
+- `--control-root` cannot be combined with `--repo`. After `init`, run commands
+  from the payload root CWD with `--control-root <control> --workspace main
+  --json`.
+- Pending restore previews are public recovery state. AFSCP must inspect
+  `restore_state`, fail closed on `E_RECOVERY_BLOCKING`, and use
+  `restore discard <plan_id>` for cleanup; it must not delete private JVS files.
 
 ## Required Commands
 

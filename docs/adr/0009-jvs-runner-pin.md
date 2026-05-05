@@ -1,6 +1,6 @@
 # ADR 0009: Pin Released JVS Runner Binary Before Storage Mutations
 
-Status: accepted with upstream blocker for development handoff
+Status: accepted for development handoff; G-005 closed by v0.4.8 smoke evidence
 
 ## Context
 
@@ -11,19 +11,19 @@ undocumented JSON shape.
 JVS is published as GitHub release binaries. AFSCP should consume a verified
 release asset; it should not require rebuilding JVS locally during GA handoff.
 
-Pinned release for the first AFSCP runner contract:
+Pinned release for the AFSCP runner contract:
 
 ```text
-release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.7
-version: v0.4.7
+release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8
+version: v0.4.8
 asset: jvs-linux-amd64
-sha256: 4ec030d62b24d980192af550d04cb4b7455299b285b68c91843386cfa5157e6d
+sha256: f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521
 signature bundle: jvs-linux-amd64.bundle
 ```
 
 ## Decision
 
-Pin the first AFSCP JVS runner contract to the GitHub release asset above for
+Pin the AFSCP JVS runner contract to the GitHub release asset above for
 development handoff. Before storage mutation implementation, the development
 team must:
 
@@ -51,17 +51,17 @@ Required smoke surface:
 - clean CWD behavior
 - redacted JSON capture
 
-Current blocker:
+Accepted evidence:
 
-During pre-dev smoke with the pinned `v0.4.7` release binary, `restore --run
-<plan>` returned `ok=true`, but a completed restore plan remained under the
-control root. A following `doctor --strict` returned non-zero and reported
-`healthy=false` with `E_RECOVERY_BLOCKING`. Earlier smoke also showed `repo
-clone` can be blocked by the same stale restore plan. This blocks closing G-005
-and storage mutation handlers until JVS behavior is fixed or the runner
-contract defines a reviewed safe cleanup/resolution command.
+Pre-dev smoke with the pinned `v0.4.8` release binary passed the required
+external control-root, save/history, restore preview/run, post-restore recovery
+status, doctor, and clone-after-restore checks. After restore-run, recovery
+status returned `ok=true` with no plans, and `doctor --strict` returned healthy.
 
-Evidence: `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
+Evidence:
+
+- accepted: `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`
+- historical blocker: `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`
 
 ## Consequences
 
@@ -69,12 +69,12 @@ Positive:
 
 - Prevents implementing restore-run or clone against ambiguous JVS recovery
   state.
-- Gives the JVS owner a precise blocker to resolve.
+- Records that the v0.4.7 restore-run recovery plan residual blocker is resolved
+  by v0.4.8 evidence.
 - Keeps AFSCP storage mutation handlers behind evidence instead of hope.
 
 Tradeoffs:
 
-- Neutral service skeleton can start, but storage mutations remain blocked until
-  G-005 closes.
-- The development team must coordinate with the JVS owner before enabling
-  restore-run, clone-after-restore, or lifecycle reactivation flows.
+- G-005 is closed. This only closes the JVS gate.
+- Real repo/JVS/storage handlers may proceed only through accepted contracts,
+  fences, session drain, operation leases, audit behavior, and focused tests.

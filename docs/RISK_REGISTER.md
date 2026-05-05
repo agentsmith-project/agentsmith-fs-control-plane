@@ -11,7 +11,7 @@ ambiguity, or caller-visible contract break are non-waivable for GA.
 | ID | Risk | Severity | GA Blocker | Waivable | Owner Role | Status | Decision | Approver Roles | Accepted Until | Evidence Link | Mitigation | Evidence To Close |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | R-001 | Narrative API contracts are implemented before schemas, OpenAPI, and stable errors are frozen | high | yes | no | AFSCP maintainer | in_review | must close | AFSCP maintainer, product owner | n/a | `api/schemas/afscp-internal-v1.schema.json`, `api/openapi/internal-v1.openapi.yaml` | Keep schema/OpenAPI parity with narrative contracts and standard envelopes before handlers | Reviewed generated clients and error catalog |
-| R-002 | JVS runner behavior differs from AFSCP assumptions | high | yes | no | AFSCP maintainer, JVS owner | blocked | must close | AFSCP maintainer, JVS owner | n/a | `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md` | Pin released JVS binary/version/checksum; resolve restore-plan blocker; freeze argv, JSON, exit codes, dirty-state mapping, clean-CWD behavior | ADR, runner contract update, passing CI smoke evidence |
+| R-002 | JVS runner behavior differs from AFSCP assumptions | high | yes | no | AFSCP maintainer, JVS owner | closed | closed by v0.4.8 evidence | AFSCP maintainer, JVS owner | n/a | `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md` | JVS v0.4.8 release binary/checksum pinned; restore-run recovery plan residual blocker resolved; runner contract updated with CWD/argv rule | ADR, runner contract update, passing smoke evidence |
 | R-003 | WebDAV gateway misses path, method, destination, symlink, or credential revocation edge cases | critical | yes | no | AFSCP maintainer, security owner | in_review | must close | Security owner, AFSCP maintainer | n/a | `docs/adr/0010-webdav-export-gateway.md`, `docs/contracts/export-access-webdav-v1.md` | AFSCP-controlled gateway contract, shared resolver corpus, method-level tests, credential lifecycle review | WebDAV conformance tests and audit redaction tests |
 | R-004 | Workload orchestrator still consumes caller-provided JuiceFS metadata or exposes Secret refs outside orchestrator role | critical | yes | no | Orchestrator owner, AFSCP maintainer | in_review | must close | Security owner, orchestrator owner | n/a | `docs/adr/0011-workload-orchestrator-contract.md`, `docs/contracts/workload-mount-binding-v1.md` | Adopt orchestrator-only mount plan with payload-only subdir, heartbeat/release/revoke, Secret RBAC | Accepted orchestrator contract, sandbox v2 review, RBAC evidence |
 | R-005 | Restore-run races active or stale read-write sessions | critical | yes | no | AFSCP maintainer, operations owner | in_review | must close | Security owner, operations owner | n/a | `docs/adr/0012-path-resolver-and-fences.md`, `docs/contracts/operation-state-machine-v1.md` | Writer-session fence contract, active session accounting, stale lease reconciliation, fail-closed restore | Fence contract tests, recovery tests, restore rejection tests |
@@ -30,6 +30,6 @@ ambiguity, or caller-visible contract break are non-waivable for GA.
 
 Pre-dev maturity is high for product direction and major security decisions.
 The remaining work is mostly contract acceptance, implementation tests, and
-operational evidence, not feature expansion. R-002 is explicitly blocked on JVS
-restore-plan behavior before storage mutation handlers can safely depend on
-restore-run or clone-after-restore assumptions.
+operational evidence, not feature expansion. R-002 is closed by JVS v0.4.8
+release evidence. This only closes the JVS runner risk; real storage mutation
+still depends on the other gates and guardrails.

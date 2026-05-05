@@ -1,6 +1,9 @@
 # JVS Smoke Evidence 2026-05-05
 
-Status: blocker recorded for JVS runner gate G-005.
+Status: historical blocker evidence for JVS runner gate G-005.
+
+Superseded by accepted v0.4.8 evidence in
+`docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`.
 
 ## Environment
 

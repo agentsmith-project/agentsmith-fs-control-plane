@@ -3,8 +3,9 @@
 Status: prepared for development handoff.
 
 This package completes the documentation, contract, and decision work that can
-be finished inside this repository before service implementation begins. It also
-records the one upstream blocker discovered during evidence gathering.
+be finished inside this repository before service implementation begins. The
+JVS upstream blocker found during evidence gathering is now closed by v0.4.8
+smoke evidence.
 
 ## Completed Artifacts
 
@@ -44,7 +45,8 @@ Operational readiness:
 - `docs/OPERATIONS_AND_AUDIT.md`
 - `docs/OPERATIONAL_READINESS.md`
 - `docs/runbooks/README.md`
-- `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`
+- `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`
+- `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md` historical v0.4.7 blocker evidence
 - `docs/RISK_REGISTER.md`
 - `docs/READINESS_EVIDENCE.md`
 
@@ -100,11 +102,10 @@ mutation are not implemented. Continue directly toward GA by finishing guardrail
 review, reviewing the read-only repo recovery inspection, then adding recovery
 loop behavior and handlers only after their dependency gates are accepted.
 
-Storage mutation remains blocked by G-005, recorded in
-`docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`. The JVS team has indicated the next
-release will add the required capability, but AFSCP cannot close G-005 or
-implement real storage mutation until a new JVS GitHub release binary is
-pinned, re-smoked, and accepted as evidence.
+G-005 is closed by JVS v0.4.8 evidence in
+`docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`. This only closes the JVS gate.
+Repo/JVS/storage handlers may now proceed only through accepted contracts,
+fences, session drain, operation leases, audit behavior, and focused tests.
 
 ## Non-Negotiable Guardrails
 
@@ -118,5 +119,6 @@ pinned, re-smoked, and accepted as evidence.
 - Do not implement repo delete as raw filesystem delete.
 - Do not enable WebDAV, workload mount, restore-run, or repo lifecycle behavior
   without the relevant session drain/fence semantics.
-- Do not close G-005 until the JVS restore-plan blocker is resolved with a new
-  JVS GitHub release binary and passing smoke evidence.
+- Do not treat G-005 closure as implementation approval for storage mutation;
+  use accepted contracts, fences, session drain, operation leases, audit
+  behavior, and focused tests.

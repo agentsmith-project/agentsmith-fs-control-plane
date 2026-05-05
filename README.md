@@ -39,9 +39,10 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 - [docs/DEVELOPMENT_GOVERNANCE.md](docs/DEVELOPMENT_GOVERNANCE.md): review, contract, ADR, and risk governance.
 - [docs/RISK_REGISTER.md](docs/RISK_REGISTER.md): live pre-dev risk register.
 - [docs/READINESS_EVIDENCE.md](docs/READINESS_EVIDENCE.md): GA gate evidence ledger.
-- [docs/PRE_DEV_COMPLETION.md](docs/PRE_DEV_COMPLETION.md): pre-dev artifact completion package and current blockers.
+- [docs/PRE_DEV_COMPLETION.md](docs/PRE_DEV_COMPLETION.md): pre-dev artifact completion package and current gate status.
 - [docs/DEVELOPER_HANDOFF.md](docs/DEVELOPER_HANDOFF.md): coding team entrypoint.
-- [docs/JVS_SMOKE_EVIDENCE_2026-05-05.md](docs/JVS_SMOKE_EVIDENCE_2026-05-05.md): current JVS smoke evidence and blocker.
+- [docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md](docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md): accepted JVS v0.4.8 smoke evidence for G-005.
+- [docs/JVS_SMOKE_EVIDENCE_2026-05-05.md](docs/JVS_SMOKE_EVIDENCE_2026-05-05.md): historical JVS v0.4.7 blocker evidence.
 - [docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md](docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md): historical feasibility review with 2026-05-04 JVS external-control resolution update.
 - [docs/TEAM_REVIEW_2026-05-03.md](docs/TEAM_REVIEW_2026-05-03.md): historical product/architecture/security review closure.
 - [docs/DECOUPLING_REVIEW.md](docs/DECOUPLING_REVIEW.md): decoupling analysis and revised boundary.
@@ -65,12 +66,13 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 
 ## Implementation Rule
 
-Current implementation is neutral skeleton/contract plumbing only: service
-entrypoints, route metadata, auth/error/envelope helpers, operation/path
-contracts, and contract tests. Endpoint handlers, export handlers, durable
-operation-store mutations, JVS-backed storage mutations, and GA claims remain
-blocked until the relevant gates in `docs/GA_PRE_DEV_READINESS.md` are accepted;
-storage mutations also remain blocked by JVS gate G-005.
+Current implementation is neutral skeleton/contract plumbing plus focused
+control-plane primitives. Endpoint handlers, export handlers, JVS-backed storage
+mutations, and GA claims remain blocked until the relevant gates in
+`docs/GA_PRE_DEV_READINESS.md` and `docs/READINESS_EVIDENCE.md` are accepted.
+G-005 is closed by JVS v0.4.8 smoke evidence; repo/JVS/storage handlers may now
+proceed only through accepted contracts, fences, session drain, operation
+leases, audit behavior, and focused tests.
 
 ## License
 

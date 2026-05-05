@@ -41,7 +41,7 @@ Read in this order:
 7. `api/openapi/internal-v1.openapi.yaml`
 8. `api/schemas/afscp-internal-v1.schema.json`
 9. `docs/RISK_REGISTER.md`
-10. `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`
+10. `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`
 
 ## Runtime And Build
 
@@ -176,21 +176,19 @@ Continue in dependency order:
 4. Implement volume and namespace binding APIs.
 5. Implement repo/JVS, export/WebDAV, workload mount, save/restore, template,
    and repo lifecycle handlers only after their dependency gates are accepted.
-   Real storage mutation remains blocked by G-005 until the new JVS GitHub
-   release binary is smoke-tested and accepted.
+   G-005 is closed by JVS v0.4.8 evidence; repo/JVS/storage handlers may now
+   proceed only through accepted contracts, fences, session drain, operation
+   leases, audit behavior, and focused tests.
 
-## Current Blocker
+## JVS Gate Status
 
-G-005 is not closed. Smoke with the pinned JVS `v0.4.7` release binary found
-that completed restore-run leaves a restore plan that blocks `doctor --strict`
-and can block `repo clone`. See
-`docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
+G-005 is closed. JVS v0.4.8 is pinned and smoke-tested in
+`docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`; the v0.4.7 blocker evidence
+remains historical in `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
 
-The JVS team has indicated the next release will add the capability AFSCP needs.
-AFSCP cannot close G-005, implement real storage mutation, or rely on
-clone-after-restore behavior until a new JVS GitHub release binary is pinned,
-re-smoked, and accepted as evidence. AFSCP must not delete private JVS files
-directly.
+This only closes the JVS gate. Real storage mutation still requires accepted
+contracts, fences, session drain, operation leases, audit behavior, and focused
+tests. AFSCP must not delete private JVS files directly.
 
 ## Repo Lifecycle Rules
 

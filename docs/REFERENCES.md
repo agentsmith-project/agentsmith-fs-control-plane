@@ -59,8 +59,8 @@ Suggested AFSCP local targets:
 ## JVS
 
 - GitHub: https://github.com/agentsmith-project/jvs
-- Release binary used for handoff smoke: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.7
-- `jvs-linux-amd64` SHA-256: `4ec030d62b24d980192af550d04cb4b7455299b285b68c91843386cfa5157e6d`
+- Release binary used for accepted handoff smoke: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8
+- `jvs-linux-amd64` SHA-256: `f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521`
 - `/home/percy/works/mbos-v1/jvs/docs/02_CLI_SPEC.md`
 - `/home/percy/works/mbos-v1/jvs/docs/06_RESTORE_SPEC.md`
 - `/home/percy/works/mbos-v1/jvs/docs/09_SECURITY_MODEL.md`
