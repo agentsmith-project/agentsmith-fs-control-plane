@@ -1,9 +1,11 @@
 # Developer Handoff
 
-Status: ready for implementation team pickup.
+Status: neutral Go skeleton and contract guardrails are in place; storage-backed
+implementation is not started.
 
-This is the starting document for the coding team. It assumes the team is
-building AFSCP directly toward GA, not through P0/P1 product stages.
+This is the current handoff document for the coding team. It assumes the team is
+building AFSCP directly toward GA, not through P0/P1 product stages, and should
+continue from the existing skeleton instead of restarting it.
 
 ## What AFSCP Is
 
@@ -44,12 +46,13 @@ Read in this order:
 
 ADR 0005 selects Go.
 
-Expected first implementation shape:
+Current implementation shape:
 
 ```text
 cmd/afscp-api
 cmd/afscp-worker
 cmd/afscp-export-gateway
+cmd/afscp-contract-verify
 internal/api
 internal/auth
 internal/config
@@ -57,55 +60,83 @@ internal/store
 internal/operations
 internal/audit
 internal/pathresolver
-internal/jvsrunner
-internal/repos
-internal/exports
-internal/mounts
-internal/templates
+internal/contractcheck
+internal/inspection
 internal/observability
 ```
 
-Initial command:
+Verification commands:
 
 ```bash
-go test ./...
+go test -count=1 ./...
+go run ./cmd/afscp-contract-verify \
+  -openapi api/openapi/internal-v1.openapi.yaml \
+  -schema api/schemas/afscp-internal-v1.schema.json \
+  -api-contract docs/contracts/afscp-internal-api-v1.md \
+  -api-draft docs/API_CONTRACT_DRAFT.md
 ```
 
-## First Coding PR
+## Current Status
 
-The first coding PR should include only neutral skeleton work:
+Completed:
 
 - Go module bootstrap
-- binary entrypoints
+- binary entrypoints for API, worker, export gateway, and contract verifier
 - config loading
 - structured logging
 - health/readiness endpoints
-- empty route registration from OpenAPI paths
+- route metadata for internal v1 paths, including method, operation ID, route
+  class, mutating flag, and required role
 - error envelope helpers
 - operation envelope types
-- test harness
+- auth role and namespace guardrails
+- store interfaces for operation, idempotency, and audit boundaries
+- contract verifier covering selected OpenAPI, schema, docs, and Go DTO drift
+- focused tests for the above
 
-It must not implement storage mutations, WebDAV file access, JVS execution, or
-mount issuance.
+Partially completed:
+
+- API shell routes known contract paths to capability-denied responses, but real
+  endpoint handlers are not implemented.
+- Operation, idempotency, audit, inspection, and store boundaries exist, but no
+  durable PostgreSQL mutations, migrations, worker leases, or recovery loop are
+  implemented.
+- Path resolver guardrails exist, but there is no storage mutation integration.
+
+Not implemented:
+
+- real volume, namespace, repo, template, export, mount, save, restore, or
+  lifecycle handlers
+- durable DB-backed metadata, operation, idempotency, fence, or audit outbox
+  mutations
+- JVS execution or repo initialization
+- WebDAV export gateway file serving
+- workload mount issuance or orchestrator mount plans
+- storage mutation, drain, fence enforcement, or lifecycle mutation
 
 ## Contract Implementation Order
 
-After skeleton, implement in dependency order:
+Continue in dependency order:
 
-1. config, logging, request context, standard envelopes
-2. service authentication and caller role checks
-3. PostgreSQL migrations for metadata, operations, fences, and audit outbox
-4. path resolver and resolver corpus tests
-5. operation store, idempotency, leases, and recovery inspection
-6. volume and namespace binding APIs
-7. repo create with external control root JVS init, only after G-005 is fixed
-8. export session records and WebDAV gateway policy tests
-9. workload mount binding records and orchestrator fake tests
-10. writer-session fence
-11. save/history/restore-preview
-12. restore-run, only after JVS restore-plan blocker is fixed
-13. template create/clone
-14. repo lifecycle archive/delete/restore/purge
+1. contract verifier route parity: compare Go route metadata against OpenAPI
+   paths, operation IDs, mutating headers, namespace requirements, and role
+   classifications.
+2. denied audit: emit and verify redacted audit events for capability-denied,
+   path-denied, caller-role-denied, namespace-mismatch, and sensitive-path
+   denial paths.
+3. control-plane persistence primitives: PostgreSQL migrations and
+   implementations for operation records, idempotency uniqueness, metadata
+   records, fences, and audit outbox.
+4. operation store, leases, and recovery inspection over the durable primitives.
+5. volume and namespace binding APIs.
+6. repo create with external control root JVS init, only after G-005 is fixed.
+7. export session records and WebDAV gateway policy tests.
+8. workload mount binding records and orchestrator fake tests.
+9. writer-session fence.
+10. save/history/restore-preview.
+11. restore-run, only after the JVS restore-plan blocker is fixed.
+12. template create/clone.
+13. repo lifecycle archive/delete/restore/purge.
 
 ## Current Blocker
 

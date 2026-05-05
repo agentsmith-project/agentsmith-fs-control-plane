@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 )
 
@@ -20,6 +21,10 @@ type AllowedCallerPolicy interface {
 }
 
 func AuthGate(next http.Handler, principalResolver PrincipalResolver, routeResolver RouteClassResolver, callerPolicy AllowedCallerPolicy) http.Handler {
+	return AuthGateWithAuditSink(next, principalResolver, routeResolver, callerPolicy, nil)
+}
+
+func AuthGateWithAuditSink(next http.Handler, principalResolver PrincipalResolver, routeResolver RouteClassResolver, callerPolicy AllowedCallerPolicy, sink audit.Sink) http.Handler {
 	if next == nil {
 		next = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	}
@@ -28,12 +33,18 @@ func AuthGate(next http.Handler, principalResolver PrincipalResolver, routeResol
 		route, ok := resolveRouteClass(routeResolver, r)
 		if !ok {
 			PathDeniedHandler().ServeHTTP(w, r)
+			emitDeniedAuditEvent(r.Context(), sink, r, deniedAuditEvent{
+				Type:   audit.EventTypePathDenied,
+				Status: http.StatusNotFound,
+				Code:   CodePathDenied,
+				Reason: "path denied",
+			})
 			return
 		}
 
 		principal, err := resolvePrincipal(principalResolver, r)
 		if err != nil {
-			writeValidationError(w, r, route, CodeAuthenticationFailed, http.StatusUnauthorized, "authenticated principal validation failed", []string{"principal_resolver_failed"})
+			writeValidationErrorWithAudit(w, r, route, auth.RequestContext{}, CodeAuthenticationFailed, http.StatusUnauthorized, "authenticated principal validation failed", []string{"principal_resolver_failed"}, sink)
 			return
 		}
 
@@ -42,12 +53,12 @@ func AuthGate(next http.Handler, principalResolver PrincipalResolver, routeResol
 			Mutating: route.Mutating,
 		})
 		if err != nil {
-			writeAuthGateValidationError(w, r, route, err)
+			writeAuthGateValidationError(w, r, route, requestContext, err, sink)
 			return
 		}
 
 		if denied, code, message, labels := requiredRoleDenied(r, requestContext, route, callerPolicy); denied {
-			writeValidationError(w, r, route, code, http.StatusForbidden, message, labels)
+			writeValidationErrorWithAudit(w, r, route, requestContext, code, http.StatusForbidden, message, labels, sink)
 			return
 		}
 
@@ -93,7 +104,12 @@ func requiredRoleDenied(r *http.Request, requestContext auth.RequestContext, rou
 	}
 }
 
-func writeAuthGateValidationError(w http.ResponseWriter, r *http.Request, route RouteMetadata, err error) {
+func writeAuthGateValidationError(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, err error, sink audit.Sink) {
+	code, status, message, labels := authGateValidationError(err)
+	writeValidationErrorWithAudit(w, r, route, requestContext, code, status, message, labels, sink)
+}
+
+func authGateValidationError(err error) (ErrorCode, int, string, []string) {
 	code := CodeAuthenticationFailed
 	status := http.StatusBadRequest
 	message := "authenticated request validation failed"
@@ -105,7 +121,7 @@ func writeAuthGateValidationError(w http.ResponseWriter, r *http.Request, route 
 		message = "namespace header is required for namespace-bound route"
 	}
 
-	writeValidationError(w, r, route, code, status, message, validationErrorLabels(err))
+	return code, status, message, validationErrorLabels(err)
 }
 
 func authenticationFailed(err error) bool {
@@ -115,6 +131,10 @@ func authenticationFailed(err error) bool {
 }
 
 func writeValidationError(w http.ResponseWriter, r *http.Request, route RouteMetadata, code ErrorCode, status int, message string, validationErrors []string) {
+	writeValidationErrorWithAudit(w, r, route, auth.RequestContext{}, code, status, message, validationErrors, nil)
+}
+
+func writeValidationErrorWithAudit(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, code ErrorCode, status int, message string, validationErrors []string, sink audit.Sink) {
 	var operationID *string
 	if route.OperationID != "" {
 		operationID = &route.OperationID
@@ -135,6 +155,15 @@ func writeValidationError(w http.ResponseWriter, r *http.Request, route RouteMet
 	)
 
 	_ = WriteErrorEnvelope(w, status, envelope)
+	emitDeniedAuditEvent(r.Context(), sink, r, deniedAuditEvent{
+		Type:             audit.EventTypeAuthzDenied,
+		Route:            route,
+		Status:           status,
+		Code:             code,
+		Reason:           message,
+		ValidationErrors: validationErrors,
+		RequestContext:   requestContext,
+	})
 }
 
 func validationErrorLabels(err error) []string {

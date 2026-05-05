@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/contractcheck"
 )
 
@@ -152,7 +153,11 @@ func writeCLIFile(t *testing.T, path, body string) {
 	}
 }
 
-const cliValidOpenAPI = `
+var cliValidOpenAPI = cliValidRouteParityOpenAPI()
+
+func cliValidRouteParityOpenAPI() string {
+	var builder strings.Builder
+	builder.WriteString(`
 openapi: 3.1.0
 components:
   parameters:
@@ -175,23 +180,52 @@ components:
       name: X-AFSCP-Namespace-Id
       in: header
 paths:
-  /internal/v1/repos:
-    get:
-      operationId: listRepos
-      parameters:
-        - $ref: "#/components/parameters/CorrelationId"
+`)
+	for _, route := range api.InternalV1RouteMetadata() {
+		builder.WriteString("  ")
+		builder.WriteString(route.Path)
+		builder.WriteString(":\n    ")
+		builder.WriteString(strings.ToLower(route.Method))
+		builder.WriteString(":\n      operationId: ")
+		builder.WriteString(route.OperationID)
+		builder.WriteString("\n      parameters:\n")
+		if cliIsMutatingMethod(route.Method) {
+			builder.WriteString(`        - $ref: "#/components/parameters/IdempotencyKey"
+`)
+		}
+		builder.WriteString(`        - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
-        - $ref: "#/components/parameters/NamespaceId"
-    post:
-      operationId: createRepo
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/CorrelationId"
-        - $ref: "#/components/parameters/CallerService"
-        - $ref: "#/components/parameters/NamespaceId"
-        - $ref: "#/components/parameters/ActorType"
+`)
+		if cliIsNamespaceBoundOperation(route.OperationID) {
+			builder.WriteString(`        - $ref: "#/components/parameters/NamespaceId"
+`)
+		}
+		if cliIsMutatingMethod(route.Method) {
+			builder.WriteString(`        - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
-`
+`)
+		}
+	}
+	return builder.String()
+}
+
+func cliIsMutatingMethod(method string) bool {
+	switch strings.ToLower(method) {
+	case "post", "put", "patch", "delete":
+		return true
+	default:
+		return false
+	}
+}
+
+func cliIsNamespaceBoundOperation(operationID string) bool {
+	switch operationID {
+	case "ensureVolume", "getVolumeHealth", "getOperation":
+		return false
+	default:
+		return true
+	}
+}
 
 const cliValidSchema = `
 {

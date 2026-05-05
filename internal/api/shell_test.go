@@ -2,7 +2,9 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 )
 
@@ -41,7 +44,7 @@ func TestNeutralShellDeniesKnownInternalRoutesWithoutReadingRequestBody(t *testi
 				t.Fatalf("test route operation ID = %q, want %q", metadata.OperationID, route.OperationID)
 			}
 
-			body := &trackingReadCloser{}
+			body := &trackingReadCloser{payload: []byte("body-secret")}
 			req := httptest.NewRequest(route.Method, path, body)
 			req.Header.Set(HeaderCorrelationID, "corr_shell")
 			rec := httptest.NewRecorder()
@@ -94,7 +97,7 @@ func TestNeutralShellUnknownRoutesReturnStablePathDeniedEnvelope(t *testing.T) {
 		{name: "known path wrong method", method: http.MethodDelete, path: "/internal/v1/repos"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			body := &trackingReadCloser{}
+			body := &trackingReadCloser{payload: []byte("body-secret")}
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(tc.method, tc.path, body)
 			req.Header.Set(HeaderCorrelationID, "corr_unknown")
@@ -164,7 +167,7 @@ func TestNeutralShellWithLoggerEmitsStructuredDeniedRequestLogs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
 			handler := NewNeutralShellWithLogger(observability.NewJSONLogger(&logs, nil))
-			body := &trackingReadCloser{}
+			body := &trackingReadCloser{payload: []byte("body-secret")}
 			req := httptest.NewRequest(tc.method, tc.path, body)
 			req.Header.Set(HeaderCorrelationID, "corr_log")
 			req.Header.Set("Authorization", "Bearer request-authorization-token")
@@ -216,6 +219,113 @@ func TestNeutralShellWithLoggerEmitsStructuredDeniedRequestLogs(t *testing.T) {
 	}
 }
 
+func TestNeutralShellWithAuditSinkEmitsDeniedEventsWithoutSensitiveRequestData(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		method       string
+		path         string
+		wantStatus   int
+		wantType     audit.EventType
+		wantResource string
+	}{
+		{
+			name:         "capability denied",
+			method:       http.MethodPost,
+			path:         "/internal/v1/repos/repo_123:archive?token=query-token",
+			wantStatus:   http.StatusForbidden,
+			wantType:     audit.EventTypeCapabilityDenied,
+			wantResource: "/internal/v1/repos/{repoId}:archive",
+		},
+		{
+			name:         "path denied",
+			method:       http.MethodGet,
+			path:         "/not-a-route?token=query-token",
+			wantStatus:   http.StatusNotFound,
+			wantType:     audit.EventTypePathDenied,
+			wantResource: "unmatched",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &fakeAuditSink{}
+			handler := NewNeutralShellWithAuditSink(sink)
+			body := &trackingReadCloser{payload: []byte("body-secret")}
+			req := httptest.NewRequest(tc.method, tc.path, body)
+			req.Header.Set(HeaderCorrelationID, "corr_audit")
+			req.Header.Set("Authorization", "Bearer request-authorization-token")
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if body.reads != 0 {
+				t.Fatalf("neutral shell read request body %d time(s)", body.reads)
+			}
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d: %s", tc.wantStatus, rec.Code, rec.Body.String())
+			}
+			if len(sink.events) != 1 {
+				t.Fatalf("expected one audit event, got %d", len(sink.events))
+			}
+
+			event := sink.events[0]
+			if event.Type != tc.wantType {
+				t.Fatalf("event Type = %q, want %q", event.Type, tc.wantType)
+			}
+			if event.Outcome != audit.OutcomeDenied {
+				t.Fatalf("event Outcome = %q, want %q", event.Outcome, audit.OutcomeDenied)
+			}
+			if event.CorrelationID != "corr_audit" {
+				t.Fatalf("event CorrelationID = %q, want corr_audit", event.CorrelationID)
+			}
+			if event.OperationID != "" {
+				t.Fatalf("denied audit event OperationID = %q, want empty", event.OperationID)
+			}
+			if event.Resource.Type != "route" {
+				t.Fatalf("event Resource.Type = %q, want route", event.Resource.Type)
+			}
+			if event.Resource.ID != tc.wantResource {
+				t.Fatalf("event Resource.ID = %q, want %q", event.Resource.ID, tc.wantResource)
+			}
+			if got, want := event.Details["method"], tc.method; got != want {
+				t.Fatalf("event Details[method] = %#v, want %#v", got, want)
+			}
+			if got, want := event.Details["path"], strings.Split(tc.path, "?")[0]; got != want {
+				t.Fatalf("event Details[path] = %#v, want %#v", got, want)
+			}
+
+			rendered := auditEventString(t, event)
+			for _, leaked := range []string{"request-authorization-token", "query-token", "body-secret"} {
+				if strings.Contains(rendered, leaked) {
+					t.Fatalf("denied audit event leaked %q in %s", leaked, rendered)
+				}
+			}
+		})
+	}
+}
+
+func TestNeutralShellAuditSinkFailurePreservesDeniedResponse(t *testing.T) {
+	sink := &fakeAuditSink{err: errors.New("audit sink unavailable")}
+	handler := NewNeutralShellWithAuditSink(sink)
+	req := httptest.NewRequest(http.MethodGet, "/not-a-route?token=query-token", &trackingReadCloser{payload: []byte("body-secret")})
+	req.Header.Set(HeaderCorrelationID, "corr_audit_fail")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNotFound, rec.Code, rec.Body.String())
+	}
+	var envelope ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("error envelope did not decode: %v", err)
+	}
+	if envelope.Error.Code != CodePathDenied {
+		t.Fatalf("expected %s, got %s", CodePathDenied, envelope.Error.Code)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("expected one attempted audit event, got %d", len(sink.events))
+	}
+}
+
 func TestNeutralShellWithLoggerEmitsStructuredHealthLog(t *testing.T) {
 	var logs bytes.Buffer
 	handler := NewNeutralShellWithLogger(observability.NewJSONLogger(&logs, nil))
@@ -244,11 +354,17 @@ func TestNeutralShellWithLoggerEmitsStructuredHealthLog(t *testing.T) {
 }
 
 type trackingReadCloser struct {
-	reads int
+	reads   int
+	payload []byte
+	sent    bool
 }
 
-func (b *trackingReadCloser) Read(_ []byte) (int, error) {
+func (b *trackingReadCloser) Read(p []byte) (int, error) {
 	b.reads++
+	if len(b.payload) > 0 && !b.sent {
+		b.sent = true
+		return copy(p, b.payload), nil
+	}
 	return 0, io.EOF
 }
 
@@ -294,4 +410,24 @@ func decodeSingleStructuredLogEntry(t *testing.T, body []byte) map[string]any {
 		t.Fatalf("structured log did not decode as JSON: %v: %s", err, string(body))
 	}
 	return entry
+}
+
+type fakeAuditSink struct {
+	events []audit.Event
+	err    error
+}
+
+func (sink *fakeAuditSink) Emit(_ context.Context, event audit.Event) error {
+	sink.events = append(sink.events, event)
+	return sink.err
+}
+
+func auditEventString(t *testing.T, event audit.Event) string {
+	t.Helper()
+
+	body, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal audit event: %v", err)
+	}
+	return string(body)
 }

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 )
 
@@ -113,7 +115,7 @@ func TestAuthGateAllowsVolumeGlobalAndOperationInspectionWithoutNamespace(t *tes
 		{name: "operation inspection", class: auth.RouteClassOperationInspection},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			body := &trackingReadCloser{}
+			body := &trackingReadCloser{payload: []byte("body-secret")}
 			req := httptest.NewRequest(http.MethodGet, "/fake", body)
 			req.Header.Set(auth.HeaderAuthorization, "Bearer service-token")
 			req.Header.Set(auth.HeaderCorrelationID, "corr_auth_gate")
@@ -353,6 +355,221 @@ func TestAuthGateDeniesCallerKindThatCannotUseConfiguredRole(t *testing.T) {
 	}
 	if envelope.Error.Code != CodeRoleNotAllowed {
 		t.Fatalf("expected %s, got %s", CodeRoleNotAllowed, envelope.Error.Code)
+	}
+}
+
+func TestAuthGateWithAuditSinkEmitsDeniedEventsWithoutSensitiveRequestData(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		principalResolver PrincipalResolver
+		callerPolicy      AllowedCallerPolicy
+		route             RouteMetadata
+		wantStatus        int
+		wantCode          ErrorCode
+		wantCallerService string
+	}{
+		{
+			name:              "authentication denial",
+			principalResolver: fakePrincipalResolver{err: errors.New("principal resolver failed")},
+			route: RouteMetadata{
+				Method:      http.MethodGet,
+				Path:        "/fake/{resourceId}",
+				OperationID: "fakeVolumeGlobal",
+				Class:       auth.RouteClassVolumeGlobal,
+				Mutating:    false,
+			},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   CodeAuthenticationFailed,
+		},
+		{
+			name: "namespace denial",
+			principalResolver: fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
+				Subject:                "service-account:agentsmith-api",
+				CanonicalCallerService: "agentsmith-api",
+			}},
+			route: RouteMetadata{
+				Method:      http.MethodGet,
+				Path:        "/fake/{resourceId}",
+				OperationID: "fakeNamespaceBound",
+				Class:       auth.RouteClassNamespaceBound,
+				Mutating:    false,
+			},
+			wantStatus:        http.StatusBadRequest,
+			wantCode:          CodeResourceNamespaceMismatch,
+			wantCallerService: "agentsmith-api",
+		},
+		{
+			name: "caller denial",
+			principalResolver: fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
+				Subject:                "service-account:agentsmith-api",
+				CanonicalCallerService: "agentsmith-api",
+			}},
+			route: RouteMetadata{
+				Method:       http.MethodGet,
+				Path:         "/fake/{resourceId}",
+				OperationID:  "fakeRepoRead",
+				Class:        auth.RouteClassNamespaceBound,
+				Mutating:     false,
+				RequiredRole: auth.RoleRepoAdmin,
+			},
+			wantStatus:        http.StatusForbidden,
+			wantCode:          CodeCallerNotAllowed,
+			wantCallerService: "agentsmith-api",
+		},
+		{
+			name: "role denial",
+			principalResolver: fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
+				Subject:                "service-account:agentsmith-api",
+				CanonicalCallerService: "agentsmith-api",
+			}},
+			callerPolicy: fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{
+				{
+					CallerService: "agentsmith-api",
+					Kind:          auth.CallerKindProduct,
+					Roles:         []auth.Role{auth.RoleRepoAdmin},
+				},
+			}},
+			route: RouteMetadata{
+				Method:       http.MethodGet,
+				Path:         "/fake/{resourceId}",
+				OperationID:  "fakeExportRead",
+				Class:        auth.RouteClassNamespaceBound,
+				Mutating:     false,
+				RequiredRole: auth.RoleExportAdmin,
+			},
+			wantStatus:        http.StatusForbidden,
+			wantCode:          CodeRoleNotAllowed,
+			wantCallerService: "agentsmith-api",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &fakeAuditSink{}
+			body := &trackingReadCloser{payload: []byte("body-secret")}
+			req := httptest.NewRequest(tc.route.Method, "/fake/resource_123?token=query-token", body)
+			req.Header.Set(auth.HeaderAuthorization, "Bearer request-authorization-token")
+			req.Header.Set(auth.HeaderCorrelationID, "corr_auth_audit")
+			req.Header.Set(auth.HeaderNamespaceID, "ns_123")
+			req.Header.Set(auth.HeaderActorType, "user")
+			req.Header.Set(auth.HeaderActorID, "user_123")
+
+			if tc.name == "namespace denial" {
+				req.Header.Del(auth.HeaderNamespaceID)
+			}
+
+			handler := AuthGateWithAuditSink(
+				http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+					t.Fatal("next handler was called")
+				}),
+				tc.principalResolver,
+				fakeRouteClassResolver{route: tc.route},
+				tc.callerPolicy,
+				sink,
+			)
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if body.reads != 0 {
+				t.Fatalf("auth gate read request body %d time(s)", body.reads)
+			}
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d: %s", tc.wantStatus, rec.Code, rec.Body.String())
+			}
+			var envelope ErrorEnvelope
+			if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("error envelope did not decode: %v", err)
+			}
+			if envelope.Error.Code != tc.wantCode {
+				t.Fatalf("expected %s, got %s", tc.wantCode, envelope.Error.Code)
+			}
+			if len(sink.events) != 1 {
+				t.Fatalf("expected one audit event, got %d", len(sink.events))
+			}
+
+			event := sink.events[0]
+			if event.Type != audit.EventTypeAuthzDenied {
+				t.Fatalf("event Type = %q, want %q", event.Type, audit.EventTypeAuthzDenied)
+			}
+			if event.Outcome != audit.OutcomeDenied {
+				t.Fatalf("event Outcome = %q, want %q", event.Outcome, audit.OutcomeDenied)
+			}
+			if event.CorrelationID != "corr_auth_audit" {
+				t.Fatalf("event CorrelationID = %q, want corr_auth_audit", event.CorrelationID)
+			}
+			if event.OperationID != "" {
+				t.Fatalf("denied audit event OperationID = %q, want empty", event.OperationID)
+			}
+			if event.Resource.Type != "route" || event.Resource.ID != "/fake/{resourceId}" {
+				t.Fatalf("event Resource = %#v, want route /fake/{resourceId}", event.Resource)
+			}
+			if got, want := event.Resource.NamespaceID, strings.TrimSpace(req.Header.Get(auth.HeaderNamespaceID)); got != want {
+				t.Fatalf("event Resource.NamespaceID = %#v, want %#v", got, want)
+			}
+			if tc.wantCallerService != "" && event.CallerService != tc.wantCallerService {
+				t.Fatalf("event CallerService = %q, want %q", event.CallerService, tc.wantCallerService)
+			}
+			if got, want := event.Details["method"], tc.route.Method; got != want {
+				t.Fatalf("event Details[method] = %#v, want %#v", got, want)
+			}
+			if got, want := event.Details["path"], "/fake/resource_123"; got != want {
+				t.Fatalf("event Details[path] = %#v, want %#v", got, want)
+			}
+			if got, want := event.Details["error_code"], string(tc.wantCode); got != want {
+				t.Fatalf("event Details[error_code] = %#v, want %#v", got, want)
+			}
+
+			rendered := auditEventString(t, event)
+			for _, leaked := range []string{"request-authorization-token", "query-token", "body-secret"} {
+				if strings.Contains(rendered, leaked) {
+					t.Fatalf("denied audit event leaked %q in %s", leaked, rendered)
+				}
+			}
+		})
+	}
+}
+
+func TestAuthGateAuditSinkFailurePreservesDeniedResponse(t *testing.T) {
+	sink := &fakeAuditSink{err: errors.New("audit sink unavailable")}
+	req := httptest.NewRequest(http.MethodGet, "/fake/resource_123", &trackingReadCloser{payload: []byte("body-secret")})
+	req.Header.Set(auth.HeaderAuthorization, "Bearer service-token")
+	req.Header.Set(auth.HeaderCorrelationID, "corr_auth_audit_fail")
+	req.Header.Set(auth.HeaderNamespaceID, "ns_123")
+
+	handler := AuthGateWithAuditSink(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("next handler was called")
+		}),
+		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
+			Subject:                "service-account:agentsmith-api",
+			CanonicalCallerService: "agentsmith-api",
+		}},
+		fakeRouteClassResolver{route: RouteMetadata{
+			Method:       http.MethodGet,
+			Path:         "/fake/{resourceId}",
+			OperationID:  "fakeRepoRead",
+			Class:        auth.RouteClassNamespaceBound,
+			Mutating:     false,
+			RequiredRole: auth.RoleRepoAdmin,
+		}},
+		nil,
+		sink,
+	)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusForbidden, rec.Code, rec.Body.String())
+	}
+	var envelope ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("error envelope did not decode: %v", err)
+	}
+	if envelope.Error.Code != CodeCallerNotAllowed {
+		t.Fatalf("expected %s, got %s", CodeCallerNotAllowed, envelope.Error.Code)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("expected one attempted audit event, got %d", len(sink.events))
 	}
 }
 

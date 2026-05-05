@@ -1,14 +1,17 @@
 # Source
 
-Application source code has not been added yet.
+AFSCP source currently lives in the Go module under `cmd/` and `internal/`.
+This `src/` directory is retained as a placeholder and should not be treated as
+the source-of-truth for implementation status.
 
-The first implementation PR should follow [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) and include:
+Current implementation status:
 
-- Go module bootstrap from ADR 0005.
-- Service skeleton.
-- Health endpoint.
-- Config loading.
-- Structured logging.
-- Operation store migration or schema.
-- No storage mutation until security and API contracts are reviewed.
-- No caller-specific business concepts in core packages.
+- Go module and neutral service skeleton exist.
+- Command entrypoints exist for API, worker, export gateway, and contract
+  verification.
+- Config loading, structured logging, auth policy guardrails, standard errors,
+  operation DTOs, route metadata, and contract verifier checks exist.
+- Real endpoint handlers, durable DB mutations, JVS/WebDAV/mount/storage
+  mutations, and operation worker execution are not implemented yet.
+
+Continue from [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md).

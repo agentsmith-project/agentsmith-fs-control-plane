@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
 )
 
 func TestVerifyFilesCatchesOpenAPIGuardrailFailures(t *testing.T) {
@@ -214,6 +216,102 @@ paths:
 	assertHasFinding(t, findings, "openapi.operations_missing")
 }
 
+func TestVerifyFilesCatchesOpenAPIExtraRouteOperation(t *testing.T) {
+	openapi := strings.Replace(validOpenAPI, `
+paths:
+`, `
+paths:
+  /internal/v1/unregistered:
+    get:
+      operationId: unregisteredOperation
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
+`, 1)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: openapi,
+		schema:  validSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, CodeOpenAPIRouteOperationExtra)
+}
+
+func TestVerifyFilesCatchesOpenAPIMissingRouteOperation(t *testing.T) {
+	openapi := strings.Replace(validOpenAPI, `
+  /internal/v1/repos:
+    get:
+      operationId: listRepos
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
+`, "", 1)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: openapi,
+		schema:  validSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, CodeOpenAPIRouteOperationMissing)
+}
+
+func TestVerifyFilesCatchesOpenAPIRouteOperationIDMismatch(t *testing.T) {
+	openapi := strings.Replace(validOpenAPI, "operationId: listRepos", "operationId: listRepositories", 1)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: openapi,
+		schema:  validSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, CodeOpenAPIRouteOperationIDMismatch)
+}
+
+func TestVerifyFilesCatchesOpenAPIRouteMethodPathDrift(t *testing.T) {
+	openapi := strings.Replace(validOpenAPI, `
+  /internal/v1/repos:
+    get:
+      operationId: listRepos
+`, `
+  /internal/v1/repos:search:
+    post:
+      operationId: listRepos
+`, 1)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: openapi,
+		schema:  validSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, CodeOpenAPIRouteOperationMissing)
+	assertHasFinding(t, findings, CodeOpenAPIRouteOperationExtra)
+}
+
 func TestVerifyFilesOnlyExemptsKnownVolumeGlobalOperations(t *testing.T) {
 	paths := writeContractFixture(t, contractFixture{
 		openapi: `
@@ -363,6 +461,8 @@ func TestVerifyFilesCatchesSchemaEnumGoParityDrift(t *testing.T) {
 
 	assertHasFinding(t, findings, CodeSchemaErrorCodeEnumGoDrift)
 	assertHasFinding(t, findings, CodeSchemaCallerRoleEnumGoDrift)
+	assertFindingCount(t, findings, CodeSchemaErrorCodeEnumGoDrift, 1)
+	assertFindingCount(t, findings, CodeSchemaCallerRoleEnumGoDrift, 1)
 }
 
 func TestVerifyFilesCatchesOperationRecordRequiredAndPropertyDrift(t *testing.T) {
@@ -533,6 +633,20 @@ func assertHasFinding(t *testing.T, findings []Finding, code string) {
 	t.Fatalf("expected finding code %q in %+v", code, findings)
 }
 
+func assertFindingCount(t *testing.T, findings []Finding, code string, want int) {
+	t.Helper()
+
+	count := 0
+	for _, finding := range findings {
+		if finding.Code == code {
+			count++
+		}
+	}
+	if count != want {
+		t.Fatalf("expected finding code %q count %d, got %d in %+v", code, want, count, findings)
+	}
+}
+
 func assertNoFindingMessageContains(t *testing.T, findings []Finding, needle, code string) {
 	t.Helper()
 
@@ -602,7 +716,11 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
-const validOpenAPI = `
+var validOpenAPI = validRouteParityOpenAPI()
+
+func validRouteParityOpenAPI() string {
+	var builder strings.Builder
+	builder.WriteString(`
 openapi: 3.1.0
 components:
   parameters:
@@ -625,32 +743,34 @@ components:
       name: X-AFSCP-Namespace-Id
       in: header
 paths:
-  /internal/v1/volumes/{volumeId}:ensure:
-    post:
-      operationId: ensureVolume
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/CorrelationId"
+`)
+	for _, route := range api.InternalV1RouteMetadata() {
+		builder.WriteString("  ")
+		builder.WriteString(route.Path)
+		builder.WriteString(":\n    ")
+		builder.WriteString(strings.ToLower(route.Method))
+		builder.WriteString(":\n      operationId: ")
+		builder.WriteString(route.OperationID)
+		builder.WriteString("\n      parameters:\n")
+		if isMutatingMethod(route.Method) {
+			builder.WriteString(`        - $ref: "#/components/parameters/IdempotencyKey"
+`)
+		}
+		builder.WriteString(`        - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
-        - $ref: "#/components/parameters/ActorType"
+`)
+		if isNamespaceBoundOperation(openAPIOperation{OperationID: route.OperationID}) {
+			builder.WriteString(`        - $ref: "#/components/parameters/NamespaceId"
+`)
+		}
+		if isMutatingMethod(route.Method) {
+			builder.WriteString(`        - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
-  /internal/v1/repos:
-    get:
-      operationId: listRepos
-      parameters:
-        - $ref: "#/components/parameters/CorrelationId"
-        - $ref: "#/components/parameters/CallerService"
-        - $ref: "#/components/parameters/NamespaceId"
-    post:
-      operationId: createRepo
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/CorrelationId"
-        - $ref: "#/components/parameters/CallerService"
-        - $ref: "#/components/parameters/NamespaceId"
-        - $ref: "#/components/parameters/ActorType"
-        - $ref: "#/components/parameters/ActorId"
-`
+`)
+		}
+	}
+	return builder.String()
+}
 
 const validSchema = `
 {

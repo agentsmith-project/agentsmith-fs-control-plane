@@ -4,18 +4,27 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 )
 
 func NewNeutralShell() http.Handler {
-	return NewNeutralShellWithLogger(nil)
+	return NewNeutralShellWithLoggerAndAuditSink(nil, nil)
 }
 
 func NewNeutralShellWithLogger(logger *slog.Logger) http.Handler {
+	return NewNeutralShellWithLoggerAndAuditSink(logger, nil)
+}
+
+func NewNeutralShellWithAuditSink(sink audit.Sink) http.Handler {
+	return NewNeutralShellWithLoggerAndAuditSink(nil, sink)
+}
+
+func NewNeutralShellWithLoggerAndAuditSink(logger *slog.Logger, sink audit.Sink) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", requestLogHandler(HealthHandler(), logger, slog.LevelInfo, "afscp.health", "health request", "/healthz", ""))
 	mux.Handle("/readyz", requestLogHandler(ReadinessHandler(NeutralReadiness()), logger, slog.LevelInfo, "afscp.readiness", "readiness request", "/readyz", ""))
-	mux.Handle("/", neutralFallbackHandler(logger))
+	mux.Handle("/", neutralFallbackHandler(logger, sink))
 	return mux
 }
 
@@ -56,36 +65,51 @@ func PathDeniedHandler() http.Handler {
 	})
 }
 
-func neutralFallbackHandler(logger *slog.Logger) http.Handler {
+func neutralFallbackHandler(logger *slog.Logger, sink audit.Sink) http.Handler {
 	capabilityDenied := CapabilityDeniedHandler()
 	pathDenied := PathDeniedHandler()
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if metadata, ok := RouteMetadataForRequest(r); ok {
-			serveWithRequestLog(
+			serveDeniedWithRequestLogAndAudit(
 				w,
 				r,
 				capabilityDenied,
 				logger,
+				sink,
 				slog.LevelWarn,
 				"afscp.request.capability_denied",
 				"capability denied",
 				metadata.Path,
 				metadata.OperationID,
+				audit.EventTypeCapabilityDenied,
+				CodeCapabilityDenied,
+				map[string]any{
+					"disabled_capabilities": []string{
+						CapabilityStorage,
+						CapabilityJVS,
+						CapabilityWebDAVExport,
+						CapabilityWorkloadMount,
+					},
+				},
 			)
 			return
 		}
 
-		serveWithRequestLog(
+		serveDeniedWithRequestLogAndAudit(
 			w,
 			r,
 			pathDenied,
 			logger,
+			sink,
 			slog.LevelWarn,
 			"afscp.request.path_denied",
 			"path denied",
 			"unmatched",
 			"",
+			audit.EventTypePathDenied,
+			CodePathDenied,
+			nil,
 		)
 	})
 }
@@ -111,6 +135,41 @@ func serveWithRequestLog(w http.ResponseWriter, r *http.Request, next http.Handl
 
 	fields := requestLogFields(r, route, operationID, recorder.statusCode())
 	observability.LogEvent(r.Context(), logger, level, event, message, fields)
+}
+
+func serveDeniedWithRequestLogAndAudit(
+	w http.ResponseWriter,
+	r *http.Request,
+	next http.Handler,
+	logger *slog.Logger,
+	sink audit.Sink,
+	level slog.Level,
+	logEvent string,
+	message string,
+	route string,
+	operationID string,
+	auditType audit.EventType,
+	code ErrorCode,
+	auditDetails map[string]any,
+) {
+	metadata := RouteMetadata{Path: route, OperationID: operationID}
+	recorder := &responseStatusRecorder{ResponseWriter: w}
+	next.ServeHTTP(recorder, r)
+
+	status := recorder.statusCode()
+	if logger != nil {
+		fields := requestLogFields(r, route, operationID, status)
+		observability.LogEvent(r.Context(), logger, level, logEvent, message, fields)
+	}
+
+	emitDeniedAuditEvent(r.Context(), sink, r, deniedAuditEvent{
+		Type:    auditType,
+		Route:   metadata,
+		Status:  status,
+		Code:    code,
+		Reason:  message,
+		Details: auditDetails,
+	})
 }
 
 func requestLogFields(r *http.Request, route string, operationID string, status int) map[string]any {

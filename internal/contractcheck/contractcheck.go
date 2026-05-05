@@ -22,6 +22,9 @@ const (
 	CodeOpenAPINamespaceParameterMissing = "openapi.namespace_id_parameter_missing"
 	CodeOpenAPIMutatingHeaderMissing     = "openapi.mutating_header_missing"
 	CodeOpenAPIOperationsMissing         = "openapi.operations_missing"
+	CodeOpenAPIRouteOperationExtra       = "openapi.route_operation_extra"
+	CodeOpenAPIRouteOperationMissing     = "openapi.route_operation_missing"
+	CodeOpenAPIRouteOperationIDMismatch  = "openapi.route_operation_id_mismatch"
 
 	CodeSchemaExportSessionRequiredMissing                 = "schema.export_session_required_missing"
 	CodeSchemaExportSessionPropertyMissing                 = "schema.export_session_property_missing"
@@ -158,6 +161,82 @@ func verifyOpenAPI(path, body string) []Finding {
 				})
 			}
 		}
+	}
+
+	findings = append(findings, verifyOpenAPIRouteParity(path, body, operations)...)
+
+	return findings
+}
+
+type openAPIRouteKey struct {
+	Method string
+	Path   string
+}
+
+func (key openAPIRouteKey) String() string {
+	return key.Method + " " + key.Path
+}
+
+func verifyOpenAPIRouteParity(openAPIPath, body string, operations []openAPIOperation) []Finding {
+	var findings []Finding
+
+	expectedByKey := make(map[openAPIRouteKey]api.RouteMetadata)
+	for _, route := range api.InternalV1RouteMetadata() {
+		key := openAPIRouteKey{
+			Method: strings.ToUpper(strings.TrimSpace(route.Method)),
+			Path:   route.Path,
+		}
+		expectedByKey[key] = route
+	}
+
+	actualByKey := make(map[openAPIRouteKey]openAPIOperation)
+	for _, op := range operations {
+		key := openAPIRouteKey{
+			Method: strings.ToUpper(strings.TrimSpace(op.Method)),
+			Path:   op.Path,
+		}
+		actualByKey[key] = op
+	}
+
+	for _, route := range api.InternalV1RouteMetadata() {
+		key := openAPIRouteKey{
+			Method: strings.ToUpper(strings.TrimSpace(route.Method)),
+			Path:   route.Path,
+		}
+		op, ok := actualByKey[key]
+		if !ok {
+			findings = append(findings, Finding{
+				Code:    CodeOpenAPIRouteOperationMissing,
+				File:    openAPIPath,
+				Line:    findLine(body, route.Path),
+				Message: fmt.Sprintf("OpenAPI paths must include %s operationId %q from internal/api route metadata", key.String(), route.OperationID),
+			})
+			continue
+		}
+		if op.OperationID != route.OperationID {
+			findings = append(findings, Finding{
+				Code:    CodeOpenAPIRouteOperationIDMismatch,
+				File:    openAPIPath,
+				Line:    op.Line,
+				Message: fmt.Sprintf("%s must use operationId %q from internal/api route metadata, got %q", key.String(), route.OperationID, op.OperationID),
+			})
+		}
+	}
+
+	for _, op := range operations {
+		key := openAPIRouteKey{
+			Method: strings.ToUpper(strings.TrimSpace(op.Method)),
+			Path:   op.Path,
+		}
+		if _, ok := expectedByKey[key]; ok {
+			continue
+		}
+		findings = append(findings, Finding{
+			Code:    CodeOpenAPIRouteOperationExtra,
+			File:    openAPIPath,
+			Line:    op.Line,
+			Message: fmt.Sprintf("OpenAPI paths must not include %s operationId %q outside internal/api route metadata", key.String(), op.operationName()),
+		})
 	}
 
 	return findings

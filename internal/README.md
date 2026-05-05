@@ -1,24 +1,26 @@
 # Internal Packages
 
-No internal application packages are implemented yet. The coding team should use
-[docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) as the package
-layout source.
+Initial neutral application packages are present. They define the guardrails
+needed before real handlers and storage mutation work:
 
-Suggested future package areas:
+- `api`: neutral HTTP shell, health/readiness responses, route metadata,
+  capability-denied fallback, standard errors, and operation envelope DTOs.
+- `auth`: caller kinds, role policy, namespace mismatch helpers, and route class
+  tests.
+- `config`: environment-backed config and capability gates.
+- `observability`: structured JSON logging and redaction helpers.
+- `operations`: operation state, idempotency, redaction, and typed operation
+  record boundaries.
+- `store`: interfaces for durable operation records, idempotency, and audit
+  sinks. No database implementation or migrations are present yet.
+- `audit`: audit event typing and redaction expectations.
+- `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
+- `inspection`: recovery inspection primitives.
+- `pathresolver`: path safety helpers and denial tests.
 
-- api
-- auth
-- config
-- volumes
-- namespaces
-- repos
-- pathresolver
-- jvsrunner
-- operations
-- templates
-- exports
-- mounts
-- audit
-- store
-- secrets
-- observability
+Still intentionally absent: real endpoint handlers, durable DB mutations, JVS
+execution, WebDAV export serving, workload mount issuance, repo/template
+lifecycle mutation, and storage mutation implementations.
+
+Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
+handoff and next development order.
