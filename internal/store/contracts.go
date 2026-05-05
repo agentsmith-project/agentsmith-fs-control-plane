@@ -75,11 +75,13 @@ type AuditSink interface {
 // AuditOutboxDeliveryStore owns DB-only, at-least-once audit outbox state transitions.
 //
 // The current audit_outbox schema has no delivery_owner column. ClaimDueAuditOutboxRecords
-// therefore validates owner for caller discipline but does not persist it and does not provide
-// owner fencing; callers must treat claimed records as at-least-once work.
+// and RecoverStaleAuditOutboxRecords therefore validate owner for caller discipline but do
+// not persist it and do not provide owner fencing; callers must treat claimed/recovered
+// records as at-least-once work.
 type AuditOutboxDeliveryStore interface {
 	ListDueAuditOutboxRecords(ctx context.Context, now time.Time, limit int) ([]audit.OutboxRecord, error)
 	ClaimDueAuditOutboxRecords(ctx context.Context, owner string, now time.Time, limit int) ([]audit.OutboxRecord, error)
+	RecoverStaleAuditOutboxRecords(ctx context.Context, owner string, staleThreshold time.Duration, limit int, failure audit.DeliveryFailure) ([]audit.OutboxRecord, error)
 	MarkAuditOutboxDelivered(ctx context.Context, eventID string, now time.Time) error
 	MarkAuditOutboxDeliveryFailed(ctx context.Context, eventID string, failure audit.DeliveryFailure) error
 }

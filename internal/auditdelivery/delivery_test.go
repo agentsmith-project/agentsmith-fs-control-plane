@@ -216,6 +216,15 @@ type fakeAuditOutboxDeliveryStore struct {
 	markDeliveredErr   error
 	markFailedCalls    []markFailedCall
 	markFailedErr      error
+
+	recoveredStale        []audit.OutboxRecord
+	recoverStaleErr       error
+	recoverStaleCalls     int
+	recoverStaleContext   context.Context
+	recoverStaleOwner     string
+	recoverStaleThreshold time.Duration
+	recoverStaleLimit     int
+	recoverStaleFailure   audit.DeliveryFailure
 }
 
 type markDeliveredCall struct {
@@ -251,6 +260,21 @@ func (store *fakeAuditOutboxDeliveryStore) ClaimDueAuditOutboxRecords(ctx contex
 func (store *fakeAuditOutboxDeliveryStore) MarkAuditOutboxDelivered(ctx context.Context, eventID string, now time.Time) error {
 	store.markDeliveredCalls = append(store.markDeliveredCalls, markDeliveredCall{ctx: ctx, eventID: eventID, now: now})
 	return store.markDeliveredErr
+}
+
+func (store *fakeAuditOutboxDeliveryStore) RecoverStaleAuditOutboxRecords(ctx context.Context, owner string, staleThreshold time.Duration, limit int, failure audit.DeliveryFailure) ([]audit.OutboxRecord, error) {
+	store.recoverStaleCalls++
+	store.recoverStaleContext = ctx
+	store.recoverStaleOwner = owner
+	store.recoverStaleThreshold = staleThreshold
+	store.recoverStaleLimit = limit
+	store.recoverStaleFailure = failure
+	if store.recoverStaleErr != nil {
+		return nil, store.recoverStaleErr
+	}
+	out := make([]audit.OutboxRecord, len(store.recoveredStale))
+	copy(out, store.recoveredStale)
+	return out, nil
 }
 
 func (store *fakeAuditOutboxDeliveryStore) MarkAuditOutboxDeliveryFailed(ctx context.Context, eventID string, failure audit.DeliveryFailure) error {

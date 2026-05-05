@@ -93,6 +93,49 @@ func (store *Store) ClaimDueAuditOutboxRecords(ctx context.Context, owner string
 	return scanAuditOutboxRecords(rows)
 }
 
+func (store *Store) RecoverStaleAuditOutboxRecords(ctx context.Context, owner string, staleThreshold time.Duration, limit int, failure audit.DeliveryFailure) ([]audit.OutboxRecord, error) {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return nil, auditOutboxInvalidRequest("owner", "missing delivery owner")
+	}
+	if staleThreshold <= 0 {
+		return nil, auditOutboxInvalidRequest("stale_threshold", "stale threshold must be positive")
+	}
+	if limit <= 0 {
+		return nil, auditOutboxInvalidRequest("limit", "limit must be positive")
+	}
+	if failure.Now.IsZero() {
+		return nil, auditOutboxInvalidRequest("now", "recovery time must be set")
+	}
+	if failure.MaxAttempts <= 0 {
+		return nil, auditOutboxInvalidRequest("max_attempts", "max attempts must be positive")
+	}
+	if failure.Backoff < 0 {
+		return nil, auditOutboxInvalidRequest("backoff", "retry backoff cannot be negative")
+	}
+	lastError := audit.RedactString(strings.TrimSpace(failure.LastError))
+	if lastError == "" {
+		lastError = "delivery failed"
+	}
+	staleBefore := failure.Now.Add(-staleThreshold)
+
+	rows, err := store.exec.QueryContext(ctx, auditOutboxRecoverStaleDeliveringSQL(),
+		failure.MaxAttempts,
+		string(audit.OutboxStatusFailed),
+		string(audit.OutboxStatusRetryWait),
+		failure.Now.Add(failure.Backoff),
+		lastError,
+		failure.Now,
+		string(audit.OutboxStatusDelivering),
+		staleBefore,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanAuditOutboxRecords(rows)
+}
+
 func (store *Store) MarkAuditOutboxDelivered(ctx context.Context, eventID string, now time.Time) error {
 	if strings.TrimSpace(eventID) == "" {
 		return auditOutboxInvalidRequest("event_id", "missing audit event id")
@@ -167,6 +210,18 @@ func auditOutboxClaimDueSQL() string {
 		"SELECT audit_event_id FROM audit_outbox " +
 		"WHERE (delivery_status = $3 OR (delivery_status = $4 AND next_retry_at <= $2)) " +
 		"ORDER BY event_time, audit_event_id LIMIT $5 FOR UPDATE SKIP LOCKED" +
+		") RETURNING " + auditOutboxSelectColumnsSQL()
+}
+
+func auditOutboxRecoverStaleDeliveringSQL() string {
+	return "UPDATE audit_outbox " +
+		"SET delivery_status = CASE WHEN delivery_attempt >= $1 THEN $2 ELSE $3 END, " +
+		"next_retry_at = CASE WHEN delivery_attempt >= $1 THEN NULL ELSE $4 END, " +
+		"last_error = $5, delivered_at = NULL, updated_at = $6 " +
+		"WHERE audit_event_id IN (" +
+		"SELECT audit_event_id FROM audit_outbox " +
+		"WHERE delivery_status = $7 AND updated_at <= $8 " +
+		"ORDER BY updated_at, audit_event_id LIMIT $9 FOR UPDATE SKIP LOCKED" +
 		") RETURNING " + auditOutboxSelectColumnsSQL()
 }
 

@@ -351,6 +351,159 @@ func TestClaimDueAuditOutboxRecordsRejectsInvalidRequestBeforeSQL(t *testing.T) 
 	}
 }
 
+func TestRecoverStaleAuditOutboxRecordsAtomicallyUpdatesRetryWaitAndFailed(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	staleThreshold := 10 * time.Minute
+	staleBefore := now.Add(-staleThreshold)
+	retryAt := now.Add(5 * time.Minute)
+	retry := auditOutboxRecordFixture(now)
+	retry.Status = audit.OutboxStatusRetryWait
+	retry.DeliveryAttempt = 2
+	retry.NextRetryAt = &retryAt
+	retry.LastError = "stale_delivering_recovered_for_replay"
+	retry.UpdatedAt = now
+	failed := auditOutboxRecordFixture(now)
+	failed.EventID = "audit-failed"
+	failed.Status = audit.OutboxStatusFailed
+	failed.DeliveryAttempt = 3
+	failed.LastError = "stale_delivering_recovered_for_replay"
+	failed.UpdatedAt = now
+	exec := &fakeExecutor{rows: fakeRows{rows: []fakeRow{
+		{values: auditOutboxRowValues(retry)},
+		{values: auditOutboxRowValues(failed)},
+	}}}
+	st := &Store{exec: exec}
+
+	got, err := st.RecoverStaleAuditOutboxRecords(context.Background(), "deliverer-1", staleThreshold, 25, audit.DeliveryFailure{
+		MaxAttempts: 3,
+		Backoff:     5 * time.Minute,
+		LastError:   "stale_delivering_recovered_for_replay token=stale-secret",
+		Now:         now,
+	})
+	if err != nil {
+		t.Fatalf("RecoverStaleAuditOutboxRecords: %v", err)
+	}
+
+	assertSQLContainsInOrder(t, exec.query,
+		"UPDATE audit_outbox",
+		"delivery_status = CASE WHEN delivery_attempt >= $1 THEN $2 ELSE $3 END",
+		"next_retry_at = CASE WHEN delivery_attempt >= $1 THEN NULL ELSE $4 END",
+		"last_error = $5",
+		"updated_at = $6",
+		"WHERE audit_event_id IN",
+		"SELECT audit_event_id",
+		"FROM audit_outbox",
+		"delivery_status = $7",
+		"updated_at <= $8",
+		"ORDER BY updated_at, audit_event_id",
+		"LIMIT $9",
+		"FOR UPDATE SKIP LOCKED",
+		"RETURNING",
+	)
+	assertAuditOutboxSQLBoundary(t, exec.query)
+	if strings.Contains(exec.query, "$1 <> ''") {
+		t.Fatalf("recover stale SQL must not consume owner as SQL condition: %s", exec.query)
+	}
+	if strings.Contains(exec.query, "ListDue") || strings.Contains(exec.query, "ClaimDue") {
+		t.Fatalf("recover stale must not use due claim helpers: %s", exec.query)
+	}
+	wantArgs := []any{
+		3,
+		string(audit.OutboxStatusFailed),
+		string(audit.OutboxStatusRetryWait),
+		now.Add(5 * time.Minute),
+		"stale_delivering_recovered_for_replay token=[REDACTED]",
+		now,
+		string(audit.OutboxStatusDelivering),
+		staleBefore,
+		25,
+	}
+	for idx, want := range wantArgs {
+		if exec.args[idx] != want {
+			t.Fatalf("arg %d = %#v, want %#v", idx+1, exec.args[idx], want)
+		}
+	}
+	if len(got) != 2 || got[0].Status != audit.OutboxStatusRetryWait || got[0].NextRetryAt == nil || got[1].Status != audit.OutboxStatusFailed || got[1].NextRetryAt != nil {
+		t.Fatalf("recovered = %#v, want retry_wait then failed", got)
+	}
+	if !exec.rows.closed {
+		t.Fatal("rows were not closed")
+	}
+}
+
+func TestRecoverStaleAuditOutboxRecordsRejectsInvalidRequestBeforeSQL(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	validFailure := audit.DeliveryFailure{MaxAttempts: 3, Backoff: time.Minute, LastError: "stale", Now: now}
+	tests := []struct {
+		name           string
+		owner          string
+		staleThreshold time.Duration
+		limit          int
+		failure        audit.DeliveryFailure
+	}{
+		{name: "missing owner", owner: " ", staleThreshold: time.Minute, limit: 1, failure: validFailure},
+		{name: "zero stale threshold", owner: "deliverer-1", limit: 1, failure: validFailure},
+		{name: "negative stale threshold", owner: "deliverer-1", staleThreshold: -time.Minute, limit: 1, failure: validFailure},
+		{name: "zero limit", owner: "deliverer-1", staleThreshold: time.Minute, failure: validFailure},
+		{name: "negative limit", owner: "deliverer-1", staleThreshold: time.Minute, limit: -1, failure: validFailure},
+		{name: "zero max attempts", owner: "deliverer-1", staleThreshold: time.Minute, limit: 1, failure: audit.DeliveryFailure{Now: now}},
+		{name: "negative backoff", owner: "deliverer-1", staleThreshold: time.Minute, limit: 1, failure: audit.DeliveryFailure{MaxAttempts: 3, Backoff: -time.Second, Now: now}},
+		{name: "zero now", owner: "deliverer-1", staleThreshold: time.Minute, limit: 1, failure: audit.DeliveryFailure{MaxAttempts: 3}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{}
+			st := &Store{exec: exec}
+			_, err := st.RecoverStaleAuditOutboxRecords(context.Background(), tt.owner, tt.staleThreshold, tt.limit, tt.failure)
+			if !errors.Is(err, audit.ErrInvalidOutboxRequest) {
+				t.Fatalf("RecoverStaleAuditOutboxRecords error = %v, want audit.ErrInvalidOutboxRequest", err)
+			}
+			if exec.query != "" {
+				t.Fatalf("query = %q, want no SQL", exec.query)
+			}
+		})
+	}
+}
+
+func TestRecoverStaleAuditOutboxRecordsReturnsEmptyAndPropagatesRowsAndScanErrors(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	failure := audit.DeliveryFailure{MaxAttempts: 3, Backoff: time.Minute, LastError: "stale", Now: now}
+	t.Run("empty", func(t *testing.T) {
+		exec := &fakeExecutor{rows: fakeRows{}}
+		st := &Store{exec: exec}
+		got, err := st.RecoverStaleAuditOutboxRecords(context.Background(), "deliverer-1", time.Minute, 10, failure)
+		if err != nil {
+			t.Fatalf("RecoverStaleAuditOutboxRecords empty: %v", err)
+		}
+		if len(got) != 0 || !exec.rows.closed {
+			t.Fatalf("got=%#v closed=%v, want empty closed rows", got, exec.rows.closed)
+		}
+	})
+
+	valid := auditOutboxRecordFixture(now)
+	tests := []struct {
+		name string
+		rows fakeRows
+	}{
+		{name: "rows err", rows: fakeRows{rows: []fakeRow{{values: auditOutboxRowValues(valid)}}, err: errors.New("rows failed")}},
+		{name: "scan err", rows: fakeRows{rows: []fakeRow{{err: errors.New("scan failed")}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{rows: tt.rows}
+			st := &Store{exec: exec}
+			_, err := st.RecoverStaleAuditOutboxRecords(context.Background(), "deliverer-1", time.Minute, 10, failure)
+			if err == nil {
+				t.Fatal("RecoverStaleAuditOutboxRecords succeeded, want error")
+			}
+			if !exec.rows.closed {
+				t.Fatal("rows were not closed after error")
+			}
+		})
+	}
+}
+
 func TestMarkAuditOutboxDeliveredGuardsDeliveringAndDoesNotMutatePayloadBoundary(t *testing.T) {
 	deliveredAt := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	exec := &fakeExecutor{rowsAffected: 1}

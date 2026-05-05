@@ -526,6 +526,22 @@ func TestAuditOutboxDeliveryStoreContractCoversDBOnlyStateAdapter(t *testing.T) 
 		t.Fatalf("owner = %q, want validated owner", fake.owner)
 	}
 
+	recovered, err := fake.RecoverStaleAuditOutboxRecords(context.Background(), "deliverer-1", 30*time.Second, 10, audit.DeliveryFailure{
+		MaxAttempts: 3,
+		Backoff:     time.Minute,
+		LastError:   "stale token=contract-secret",
+		Now:         now.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("recover stale audit outbox records: %v", err)
+	}
+	if len(recovered) != 1 || recovered[0].Status != audit.OutboxStatusRetryWait || strings.Contains(recovered[0].LastError, "contract-secret") {
+		t.Fatalf("recovered records = %#v, want retry_wait with redacted error", recovered)
+	}
+
+	fake.records[0].Status = audit.OutboxStatusDelivering
+	fake.records[0].UpdatedAt = now
+	fake.records[0].LastError = ""
 	if err := fake.MarkAuditOutboxDelivered(context.Background(), "audit-1", now.Add(time.Minute)); err != nil {
 		t.Fatalf("mark audit outbox delivered: %v", err)
 	}
@@ -721,6 +737,30 @@ func (fake *fakeAuditOutboxDeliveryStore) ClaimDueAuditOutboxRecords(ctx context
 		}
 	}
 	return due, nil
+}
+
+func (fake *fakeAuditOutboxDeliveryStore) RecoverStaleAuditOutboxRecords(_ context.Context, owner string, staleThreshold time.Duration, limit int, failure audit.DeliveryFailure) ([]audit.OutboxRecord, error) {
+	fake.owner = strings.TrimSpace(owner)
+	if fake.owner == "" || staleThreshold <= 0 || limit <= 0 {
+		return nil, audit.ErrInvalidOutboxRequest
+	}
+	staleBefore := failure.Now.Add(-staleThreshold)
+	var recovered []audit.OutboxRecord
+	for idx := range fake.records {
+		if len(recovered) >= limit {
+			break
+		}
+		if fake.records[idx].Status != audit.OutboxStatusDelivering || fake.records[idx].UpdatedAt.After(staleBefore) {
+			continue
+		}
+		updated, err := audit.MarkDeliveryFailed(fake.records[idx], failure)
+		if err != nil {
+			return nil, err
+		}
+		fake.records[idx] = updated
+		recovered = append(recovered, updated)
+	}
+	return recovered, nil
 }
 
 func (fake *fakeAuditOutboxDeliveryStore) MarkAuditOutboxDelivered(_ context.Context, eventID string, now time.Time) error {
