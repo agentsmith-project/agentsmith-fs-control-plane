@@ -45,7 +45,7 @@ AFSCP must reject and audit:
 - workload mount binding create/get
 - workload mount binding status/heartbeat/release/revoke
 - orchestrator mount plan get
-- operation get/list
+- operation get
 
 Product display-name rename and catalog detach are outside AFSCP. Repo storage
 lifecycle is in GA through [repo-lifecycle-v1.md](repo-lifecycle-v1.md).

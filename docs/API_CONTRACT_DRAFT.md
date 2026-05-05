@@ -436,6 +436,12 @@ Export create must define:
 - credential hashing or encryption at rest
 - access log and audit redaction fields
 
+The machine contract uses `ExportCreateOperationEnvelope` for create responses.
+Its `result` contains `ExportCreateResult`, which includes the redacted
+`ExportSession` plus the one-time `ExportAccessCredential`. `GET
+/internal/v1/exports/{exportId}` returns only `ExportSession` and must not return
+the WebDAV password again.
+
 ### Workload Mounts
 
 ```http
@@ -461,6 +467,11 @@ binding creation with `CAPABILITY_DENIED` instead of issuing a degraded binding.
 ```http
 GET /internal/v1/operations/{operationId}
 ```
+
+`GET /operations/{operationId}` returns a redacted `OperationRecord`, not the
+standard mutation response envelope. Operation list/search is not part of the
+first GA internal OpenAPI surface; it can be added later for operator tooling
+after access policy and pagination are reviewed.
 
 ## Operation Requirements
 

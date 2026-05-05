@@ -3,6 +3,9 @@ info:
   title: AFSCP Internal API
   version: 1.0.0
   description: Product-agnostic internal storage control plane API.
+  license:
+    name: Proprietary internal
+    identifier: LicenseRef-Proprietary
 servers:
   - url: https://afscp.internal
 security:
@@ -26,22 +29,16 @@ components:
       required: true
       schema:
         type: string
-    NamespaceIdHeader:
-      name: X-AFSCP-Namespace-Id
-      in: header
-      required: false
-      schema:
-        type: string
     ActorType:
       name: X-AFSCP-Actor-Type
       in: header
-      required: false
+      required: true
       schema:
         type: string
     ActorId:
       name: X-AFSCP-Actor-Id
       in: header
-      required: false
+      required: true
       schema:
         type: string
     CallerService:
@@ -55,12 +52,22 @@ components:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OperationEnvelope
     ErrorEnvelope:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/ErrorEnvelope
+    Namespace:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/Namespace
+    UpsertNamespaceRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/UpsertNamespaceRequest
+    DisableNamespaceRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/DisableNamespaceRequest
     Volume:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/Volume
+    VolumeHealth:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/VolumeHealth
     NamespaceVolumeBinding:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/NamespaceVolumeBinding
     Repo:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/Repo
+    SavePoint:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/SavePoint
     CreateRepoRequest:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateRepoRequest
     LifecycleRequest:
@@ -81,12 +88,18 @@ components:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateExportRequest
     ExportSession:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/ExportSession
+    ExportCreateOperationEnvelope:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/ExportCreateOperationEnvelope
     CreateWorkloadMountBindingRequest:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateWorkloadMountBindingRequest
+    MountBindingStatusUpdateRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/MountBindingStatusUpdateRequest
     WorkloadMountBinding:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/WorkloadMountBinding
     OrchestratorMountPlan:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OrchestratorMountPlan
+    OperationRecord:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OperationRecord
   responses:
     Error:
       description: Standard error envelope.
@@ -98,18 +111,110 @@ paths:
   /internal/v1/volumes/{volumeId}:ensure:
     post:
       operationId: ensureVolume
+      summary: Ensure a managed volume exists.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
+        - name: volumeId
+          in: path
+          required: true
+          schema:
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/VolumeId
+      responses:
+        "400":
+          $ref: "#/components/responses/Error"
+        "200":
+          description: Volume ensured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/volumes/{volumeId}/health:
+    get:
+      operationId: getVolumeHealth
+      summary: Get volume health.
+      parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
         - name: volumeId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/VolumeId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "200":
-          description: Volume ensured.
+          description: Volume health.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolumeHealth"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/namespaces/{namespaceId}:
+    put:
+      operationId: upsertNamespace
+      summary: Create or update a namespace record.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/NamespaceId
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertNamespaceRequest"
+      responses:
+        "400":
+          $ref: "#/components/responses/Error"
+        "200":
+          description: Namespace upsert operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/namespaces/{namespaceId}:disable:
+    post:
+      operationId: disableNamespace
+      summary: Disable a namespace.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
+        - name: namespaceId
+          in: path
+          required: true
+          schema:
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/NamespaceId
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisableNamespaceRequest"
+      responses:
+        "400":
+          $ref: "#/components/responses/Error"
+        "202":
+          description: Namespace disable operation.
           content:
             application/json:
               schema:
@@ -119,15 +224,18 @@ paths:
   /internal/v1/namespaces/{namespaceId}/volume-binding:
     put:
       operationId: putNamespaceVolumeBinding
+      summary: Upsert namespace volume binding and policy.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: namespaceId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/NamespaceId
       requestBody:
         required: true
         content:
@@ -135,6 +243,8 @@ paths:
             schema:
               $ref: "#/components/schemas/NamespaceVolumeBinding"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "200":
           description: Binding upserted.
           content:
@@ -145,6 +255,7 @@ paths:
           $ref: "#/components/responses/Error"
     get:
       operationId: getNamespaceVolumeBinding
+      summary: Get namespace volume binding and policy.
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
@@ -152,8 +263,10 @@ paths:
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/NamespaceId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "200":
           description: Binding.
           content:
@@ -165,10 +278,13 @@ paths:
   /internal/v1/repos:
     post:
       operationId: createRepo
+      summary: Create a repo.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
       requestBody:
         required: true
         content:
@@ -176,6 +292,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateRepoRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "200":
           description: Repo create operation.
           content:
@@ -186,6 +304,7 @@ paths:
           $ref: "#/components/responses/Error"
     get:
       operationId: listRepos
+      summary: List namespace repos.
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
@@ -200,6 +319,8 @@ paths:
           schema:
             type: string
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "200":
           description: Namespace-bound storage inventory, not product catalog.
           content:
@@ -217,6 +338,7 @@ paths:
   /internal/v1/repos/{repoId}:
     get:
       operationId: getRepo
+      summary: Get a repo.
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
@@ -224,8 +346,10 @@ paths:
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "200":
           description: Repo.
           content:
@@ -237,21 +361,26 @@ paths:
   /internal/v1/repos/{repoId}:archive:
     post:
       operationId: archiveRepo
+      summary: Archive a repo.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: repoId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       requestBody:
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/LifecycleRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Archive operation.
           content:
@@ -263,21 +392,26 @@ paths:
   /internal/v1/repos/{repoId}:restore-archived:
     post:
       operationId: restoreArchivedRepo
+      summary: Restore an archived repo.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: repoId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       requestBody:
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/LifecycleRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Restore archived operation.
           content:
@@ -289,21 +423,26 @@ paths:
   /internal/v1/repos/{repoId}:delete:
     post:
       operationId: deleteRepo
+      summary: Delete a repo to tombstone.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: repoId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       requestBody:
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/LifecycleRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Delete to tombstone operation.
           content:
@@ -315,21 +454,26 @@ paths:
   /internal/v1/repos/{repoId}:restore-tombstoned:
     post:
       operationId: restoreTombstonedRepo
+      summary: Restore a tombstoned repo.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: repoId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       requestBody:
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/LifecycleRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Restore tombstoned operation.
           content:
@@ -341,15 +485,18 @@ paths:
   /internal/v1/repos/{repoId}:purge:
     post:
       operationId: purgeRepo
+      summary: Permanently purge a repo.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: repoId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       requestBody:
         required: true
         content:
@@ -357,6 +504,8 @@ paths:
             schema:
               $ref: "#/components/schemas/PurgeRepoRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Purge operation.
           content:
@@ -368,15 +517,18 @@ paths:
   /internal/v1/repos/{repoId}/save-points:
     post:
       operationId: createSavePoint
+      summary: Create a save point.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: repoId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       requestBody:
         required: true
         content:
@@ -384,6 +536,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateSavePointRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Save point operation.
           content:
@@ -392,18 +546,49 @@ paths:
                 $ref: "#/components/schemas/OperationEnvelope"
         default:
           $ref: "#/components/responses/Error"
-  /internal/v1/repos/{repoId}/restore-preview:
-    post:
-      operationId: restorePreview
+    get:
+      operationId: listSavePoints
+      summary: List save points.
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
         - name: repoId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
+      responses:
+        "400":
+          $ref: "#/components/responses/Error"
+        "200":
+          description: Save point list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [save_points]
+                properties:
+                  save_points:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SavePoint"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}/restore-preview:
+    post:
+      operationId: restorePreview
+      summary: Create a restore preview.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       requestBody:
         required: true
         content:
@@ -411,6 +596,8 @@ paths:
             schema:
               $ref: "#/components/schemas/RestorePreviewRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Restore preview operation.
           content:
@@ -422,15 +609,18 @@ paths:
   /internal/v1/repos/{repoId}/restore-run:
     post:
       operationId: restoreRun
+      summary: Run a restore from a preview.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: repoId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       requestBody:
         required: true
         content:
@@ -438,6 +628,8 @@ paths:
             schema:
               $ref: "#/components/schemas/RestoreRunRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Restore run operation.
           content:
@@ -449,10 +641,13 @@ paths:
   /internal/v1/repo-templates:
     post:
       operationId: createRepoTemplate
+      summary: Create a repo template.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
       requestBody:
         required: true
         content:
@@ -460,6 +655,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateRepoTemplateRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Template create operation.
           content:
@@ -471,15 +668,18 @@ paths:
   /internal/v1/repo-templates/{templateId}:clone:
     post:
       operationId: cloneRepoTemplate
+      summary: Clone a repo template.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: templateId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/TemplateId
       requestBody:
         required: true
         content:
@@ -487,6 +687,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CloneRepoTemplateRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Template clone operation.
           content:
@@ -498,15 +700,18 @@ paths:
   /internal/v1/repos/{repoId}/exports:
     post:
       operationId: createExport
+      summary: Create a WebDAV export.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: repoId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       requestBody:
         required: true
         content:
@@ -514,17 +719,20 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateExportRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Export create operation.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/OperationEnvelope"
+                $ref: "#/components/schemas/ExportCreateOperationEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /internal/v1/exports/{exportId}:
     get:
       operationId: getExport
+      summary: Get an export session.
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
@@ -532,8 +740,10 @@ paths:
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/ExportId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "200":
           description: Export session without secret-bearing credential unless create response policy permits it.
           content:
@@ -544,16 +754,21 @@ paths:
           $ref: "#/components/responses/Error"
     delete:
       operationId: revokeExport
+      summary: Revoke an export session.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: exportId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/ExportId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Export revoke operation.
           content:
@@ -565,15 +780,18 @@ paths:
   /internal/v1/repos/{repoId}/workload-mount-bindings:
     post:
       operationId: createWorkloadMountBinding
+      summary: Create a workload mount binding.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: repoId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
       requestBody:
         required: true
         content:
@@ -581,6 +799,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateWorkloadMountBindingRequest"
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Mount binding create operation.
           content:
@@ -592,6 +812,7 @@ paths:
   /internal/v1/workload-mount-bindings/{mountBindingId}:
     get:
       operationId: getWorkloadMountBinding
+      summary: Get a workload mount binding.
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
@@ -599,8 +820,10 @@ paths:
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/WorkloadMountBindingId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "200":
           description: Workload mount binding.
           content:
@@ -609,9 +832,42 @@ paths:
                 $ref: "#/components/schemas/WorkloadMountBinding"
         default:
           $ref: "#/components/responses/Error"
+  /internal/v1/workload-mount-bindings/{mountBindingId}/status:
+    patch:
+      operationId: updateWorkloadMountBindingStatus
+      summary: Update workload mount status.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
+        - name: mountBindingId
+          in: path
+          required: true
+          schema:
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/WorkloadMountBindingId
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MountBindingStatusUpdateRequest"
+      responses:
+        "400":
+          $ref: "#/components/responses/Error"
+        "202":
+          description: Orchestrator status update operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /internal/v1/workload-mount-bindings/{mountBindingId}/orchestrator-plan:
     get:
       operationId: getOrchestratorMountPlan
+      summary: Get an orchestrator-only mount plan.
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
@@ -619,8 +875,10 @@ paths:
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/WorkloadMountBindingId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "200":
           description: Orchestrator-only Secret-bearing mount plan.
           content:
@@ -632,16 +890,21 @@ paths:
   /internal/v1/workload-mount-bindings/{mountBindingId}:heartbeat:
     post:
       operationId: heartbeatWorkloadMountBinding
+      summary: Heartbeat a workload mount binding.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: mountBindingId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/WorkloadMountBindingId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Heartbeat operation.
           content:
@@ -653,16 +916,21 @@ paths:
   /internal/v1/workload-mount-bindings/{mountBindingId}:release:
     post:
       operationId: releaseWorkloadMountBinding
+      summary: Release a workload mount binding.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: mountBindingId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/WorkloadMountBindingId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Release operation.
           content:
@@ -674,16 +942,21 @@ paths:
   /internal/v1/workload-mount-bindings/{mountBindingId}:revoke:
     post:
       operationId: revokeWorkloadMountBinding
+      summary: Revoke a workload mount binding.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
         - name: mountBindingId
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/WorkloadMountBindingId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "202":
           description: Revoke operation.
           content:
@@ -695,6 +968,7 @@ paths:
   /internal/v1/operations/{operationId}:
     get:
       operationId: getOperation
+      summary: Get a redacted operation record.
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
         - $ref: "#/components/parameters/CallerService"
@@ -702,13 +976,15 @@ paths:
           in: path
           required: true
           schema:
-            type: string
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OperationId
       responses:
+        "400":
+          $ref: "#/components/responses/Error"
         "200":
-          description: Operation envelope.
+          description: Redacted operation record.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/OperationEnvelope"
+                $ref: "#/components/schemas/OperationRecord"
         default:
           $ref: "#/components/responses/Error"
