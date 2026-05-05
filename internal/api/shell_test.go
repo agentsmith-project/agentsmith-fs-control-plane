@@ -1,11 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 )
 
 func TestNeutralShellRoutesHealthAndReadiness(t *testing.T) {
@@ -24,25 +29,20 @@ func TestNeutralShellRoutesHealthAndReadiness(t *testing.T) {
 	}
 }
 
-func TestNeutralShellDeniesStoragePathsWithoutReadingRequestBody(t *testing.T) {
+func TestNeutralShellDeniesKnownInternalRoutesWithoutReadingRequestBody(t *testing.T) {
 	handler := NewNeutralShell()
 
-	for _, tc := range []struct {
-		name   string
-		method string
-		path   string
-	}{
-		{name: "repo create", method: http.MethodPost, path: "/internal/v1/repos"},
-		{name: "internal v1 root", method: http.MethodPost, path: "/internal/v1"},
-		{name: "repo save point", method: http.MethodPost, path: "/internal/v1/repos/repo_123/save-points"},
-		{name: "webdav export", method: http.MethodPost, path: "/internal/v1/repos/repo_123/exports"},
-		{name: "workload mount", method: http.MethodPost, path: "/internal/v1/repos/repo_123/workload-mount-bindings"},
-		{name: "orchestrator mount plan", method: http.MethodGet, path: "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan"},
-		{name: "volume health", method: http.MethodGet, path: "/internal/v1/volumes/vol_123/health"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, route := range InternalV1RouteMetadata() {
+		t.Run(route.OperationID, func(t *testing.T) {
+			path := concretePathForRoute(t, route.Path)
+			if metadata, ok := RouteMetadataForRequest(httptest.NewRequest(route.Method, path, nil)); !ok {
+				t.Fatalf("test route is not registered: %s %s", route.Method, path)
+			} else if metadata.OperationID != route.OperationID {
+				t.Fatalf("test route operation ID = %q, want %q", metadata.OperationID, route.OperationID)
+			}
+
 			body := &trackingReadCloser{}
-			req := httptest.NewRequest(tc.method, tc.path, body)
+			req := httptest.NewRequest(route.Method, path, body)
 			req.Header.Set(HeaderCorrelationID, "corr_shell")
 			rec := httptest.NewRecorder()
 
@@ -80,27 +80,166 @@ func TestNeutralShellDeniesStoragePathsWithoutReadingRequestBody(t *testing.T) {
 	}
 }
 
-func TestNeutralShellUnknownRouteReturnsStableEnvelope(t *testing.T) {
+func TestNeutralShellUnknownRoutesReturnStablePathDeniedEnvelope(t *testing.T) {
 	handler := NewNeutralShell()
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "external route", method: http.MethodGet, path: "/not-a-route"},
+		{name: "internal root", method: http.MethodPost, path: "/internal/v1"},
+		{name: "unknown internal path", method: http.MethodGet, path: "/internal/v1/not-a-route"},
+		{name: "known path wrong method", method: http.MethodDelete, path: "/internal/v1/repos"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &trackingReadCloser{}
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, tc.path, body)
+			req.Header.Set(HeaderCorrelationID, "corr_unknown")
+
+			handler.ServeHTTP(rec, req)
+
+			if body.reads != 0 {
+				t.Fatalf("neutral shell read request body %d time(s)", body.reads)
+			}
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusNotFound, rec.Code, rec.Body.String())
+			}
+
+			var envelope ErrorEnvelope
+			if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("error envelope did not decode: %v", err)
+			}
+			if envelope.Error.Code != CodePathDenied {
+				t.Fatalf("expected %s, got %s", CodePathDenied, envelope.Error.Code)
+			}
+			if envelope.Error.CorrelationID != "corr_unknown" {
+				t.Fatalf("expected correlation id corr_unknown, got %q", envelope.Error.CorrelationID)
+			}
+			if envelope.Error.OperationID != nil {
+				t.Fatalf("path denied shell must not invent operation ids, got %q", *envelope.Error.OperationID)
+			}
+		})
+	}
+}
+
+func TestNeutralShellWithLoggerEmitsStructuredDeniedRequestLogs(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		method    string
+		path      string
+		wantCode  int
+		wantEvent string
+		wantRoute string
+		wantOpID  string
+	}{
+		{
+			name:      "capability denied",
+			method:    http.MethodPost,
+			path:      "/internal/v1/repos/repo_123:archive?token=query-token",
+			wantCode:  http.StatusForbidden,
+			wantEvent: "afscp.request.capability_denied",
+			wantRoute: "/internal/v1/repos/{repoId}:archive",
+			wantOpID:  "archiveRepo",
+		},
+		{
+			name:      "external path denied",
+			method:    http.MethodGet,
+			path:      "/not-a-route?token=query-token",
+			wantCode:  http.StatusNotFound,
+			wantEvent: "afscp.request.path_denied",
+			wantRoute: "unmatched",
+		},
+		{
+			name:      "internal path denied",
+			method:    http.MethodDelete,
+			path:      "/internal/v1/repos?token=query-token",
+			wantCode:  http.StatusNotFound,
+			wantEvent: "afscp.request.path_denied",
+			wantRoute: "unmatched",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			handler := NewNeutralShellWithLogger(observability.NewJSONLogger(&logs, nil))
+			body := &trackingReadCloser{}
+			req := httptest.NewRequest(tc.method, tc.path, body)
+			req.Header.Set(HeaderCorrelationID, "corr_log")
+			req.Header.Set("Authorization", "Bearer request-authorization-token")
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if body.reads != 0 {
+				t.Fatalf("neutral shell read request body %d time(s)", body.reads)
+			}
+			if rec.Code != tc.wantCode {
+				t.Fatalf("expected status %d, got %d: %s", tc.wantCode, rec.Code, rec.Body.String())
+			}
+
+			entry := decodeSingleStructuredLogEntry(t, logs.Bytes())
+			if got, want := entry["event"], tc.wantEvent; got != want {
+				t.Fatalf("event = %#v, want %#v in %#v", got, want, entry)
+			}
+			if got, want := entry["level"], slog.LevelWarn.String(); got != want {
+				t.Fatalf("level = %#v, want %#v", got, want)
+			}
+			if got, want := entry["correlation_id"], "corr_log"; got != want {
+				t.Fatalf("correlation_id = %#v, want %#v", got, want)
+			}
+			if got, want := entry["method"], tc.method; got != want {
+				t.Fatalf("method = %#v, want %#v", got, want)
+			}
+			if got, want := entry["path"], strings.Split(tc.path, "?")[0]; got != want {
+				t.Fatalf("path = %#v, want %#v", got, want)
+			}
+			if got, want := entry["route"], tc.wantRoute; got != want {
+				t.Fatalf("route = %#v, want %#v", got, want)
+			}
+			if tc.wantOpID == "" {
+				if got, ok := entry["operation_id"]; ok {
+					t.Fatalf("operation_id = %#v, want absent", got)
+				}
+			} else if got, want := entry["operation_id"], tc.wantOpID; got != want {
+				t.Fatalf("operation_id = %#v, want %#v", got, want)
+			}
+
+			rendered := logs.String()
+			for _, leaked := range []string{"request-authorization-token", "query-token"} {
+				if strings.Contains(rendered, leaked) {
+					t.Fatalf("denied request log leaked %q in %s", leaked, rendered)
+				}
+			}
+		})
+	}
+}
+
+func TestNeutralShellWithLoggerEmitsStructuredHealthLog(t *testing.T) {
+	var logs bytes.Buffer
+	handler := NewNeutralShellWithLogger(observability.NewJSONLogger(&logs, nil))
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.Header.Set(HeaderCorrelationID, "corr_health")
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/not-a-route", nil)
-	req.Header.Set(HeaderCorrelationID, "corr_unknown")
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
 	}
-
-	var envelope ErrorEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("error envelope did not decode: %v", err)
+	entry := decodeSingleStructuredLogEntry(t, logs.Bytes())
+	if got, want := entry["event"], "afscp.health"; got != want {
+		t.Fatalf("event = %#v, want %#v", got, want)
 	}
-	if envelope.Error.Code != CodePathDenied {
-		t.Fatalf("expected %s, got %s", CodePathDenied, envelope.Error.Code)
+	if got, want := entry["correlation_id"], "corr_health"; got != want {
+		t.Fatalf("correlation_id = %#v, want %#v", got, want)
 	}
-	if envelope.Error.CorrelationID != "corr_unknown" {
-		t.Fatalf("expected correlation id corr_unknown, got %q", envelope.Error.CorrelationID)
+	if got, want := entry["route"], "/healthz"; got != want {
+		t.Fatalf("route = %#v, want %#v", got, want)
+	}
+	if got, want := entry["path"], "/healthz"; got != want {
+		t.Fatalf("path = %#v, want %#v", got, want)
 	}
 }
 
@@ -115,4 +254,44 @@ func (b *trackingReadCloser) Read(_ []byte) (int, error) {
 
 func (b *trackingReadCloser) Close() error {
 	return nil
+}
+
+func concretePathForRoute(t *testing.T, routePath string) string {
+	t.Helper()
+
+	replacements := map[string]string{
+		"{volumeId}":       "vol_123",
+		"{namespaceId}":    "ns_123",
+		"{repoId}":         "repo_123",
+		"{templateId}":     "template_123",
+		"{exportId}":       "export_123",
+		"{mountBindingId}": "wmb_123",
+		"{operationId}":    "op_123",
+	}
+	path := routePath
+	for marker, value := range replacements {
+		path = strings.ReplaceAll(path, marker, value)
+	}
+	if strings.Contains(path, "{") || strings.Contains(path, "}") {
+		t.Fatalf("route path still contains unresolved template marker: %s", routePath)
+	}
+	return path
+}
+
+func decodeSingleStructuredLogEntry(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		t.Fatal("expected one structured log entry, got empty output")
+	}
+	if bytes.Count(trimmed, []byte("\n")) != 0 {
+		t.Fatalf("expected one structured log entry, got %q", string(body))
+	}
+
+	var entry map[string]any
+	if err := json.Unmarshal(trimmed, &entry); err != nil {
+		t.Fatalf("structured log did not decode as JSON: %v: %s", err, string(body))
+	}
+	return entry
 }

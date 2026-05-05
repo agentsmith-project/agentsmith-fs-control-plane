@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 )
 
 const (
@@ -34,10 +35,12 @@ type command struct {
 
 func newCommand(stdout io.Writer, stderr io.Writer) command {
 	return command{
-		stdout:          stdout,
-		stderr:          stderr,
-		newNeutralShell: api.NewNeutralShell,
-		serve:           http.ListenAndServe,
+		stdout: stdout,
+		stderr: stderr,
+		newNeutralShell: func() http.Handler {
+			return api.NewNeutralShellWithLogger(observability.NewJSONLogger(stderr, nil))
+		},
+		serve: http.ListenAndServe,
 	}
 }
 

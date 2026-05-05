@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -214,5 +218,51 @@ func TestRunServeReportsRunnerError(t *testing.T) {
 	}
 	if got, want := stderr.String(), "afscp-api: runner failed\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestNewCommandWiresStructuredRequestLogsToStderr(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := newCommand(&stdout, &stderr)
+	handler := cmd.newNeutralShell()
+	req := httptest.NewRequest(http.MethodGet, "/not-a-route?token=query-token", nil)
+	req.Header.Set(api.HeaderCorrelationID, "corr_cmd")
+	req.Header.Set("Authorization", "Bearer command-authorization-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNotFound, rec.Code, rec.Body.String())
+	}
+	if got := stdout.String(); got != "" {
+		t.Fatalf("stdout = %q, want empty", got)
+	}
+
+	trimmed := bytes.TrimSpace(stderr.Bytes())
+	if len(trimmed) == 0 {
+		t.Fatal("expected structured request log on stderr")
+	}
+
+	var entry map[string]any
+	if err := json.Unmarshal(trimmed, &entry); err != nil {
+		t.Fatalf("stderr did not contain JSON log: %v: %s", err, stderr.String())
+	}
+	if got, want := entry["event"], "afscp.request.path_denied"; got != want {
+		t.Fatalf("event = %#v, want %#v in %#v", got, want, entry)
+	}
+	if got, want := entry["correlation_id"], "corr_cmd"; got != want {
+		t.Fatalf("correlation_id = %#v, want %#v", got, want)
+	}
+	if got, want := entry["route"], "unmatched"; got != want {
+		t.Fatalf("route = %#v, want %#v", got, want)
+	}
+
+	rendered := stderr.String()
+	for _, leaked := range []string{"command-authorization-token", "query-token"} {
+		if strings.Contains(rendered, leaked) {
+			t.Fatalf("command request log leaked %q in %s", leaked, rendered)
+		}
 	}
 }
