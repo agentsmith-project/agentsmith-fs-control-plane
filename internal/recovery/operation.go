@@ -24,7 +24,13 @@ type OperationConfig struct {
 }
 
 type OperationExecutor interface {
+	SupportsOperationRecovery(ctx context.Context, record operations.OperationRecord, plan RecoveryPlan) OperationSupport
 	ExecuteOperationRecovery(ctx context.Context, record operations.OperationRecord, plan RecoveryPlan) error
+}
+
+type OperationSupport struct {
+	Supported bool
+	Reason    string
 }
 
 type RecoveryPlan = inspection.RecoveryPlan
@@ -42,15 +48,16 @@ type OperationCoordinator struct {
 }
 
 type OperationBatchResult struct {
-	Scanned   int
-	Claimed   int
-	Reclaimed int
-	Finalized int
-	Skipped   int
-	Manual    int
-	RaceLost  int
-	Failed    int
-	Results   []OperationResult
+	Scanned     int
+	Claimed     int
+	Reclaimed   int
+	Finalized   int
+	Skipped     int
+	Manual      int
+	Unsupported int
+	RaceLost    int
+	Failed      int
+	Results     []OperationResult
 }
 
 type OperationResult struct {
@@ -64,14 +71,17 @@ type OperationResult struct {
 type OperationOutcome string
 
 const (
-	OperationOutcomeClaimed   OperationOutcome = "claimed"
-	OperationOutcomeReclaimed OperationOutcome = "reclaimed"
-	OperationOutcomeFinalized OperationOutcome = "finalized"
-	OperationOutcomeSkipped   OperationOutcome = "skipped"
-	OperationOutcomeManual    OperationOutcome = "manual"
-	OperationOutcomeRaceLost  OperationOutcome = "race_lost"
-	OperationOutcomeFailed    OperationOutcome = "failed"
+	OperationOutcomeClaimed     OperationOutcome = "claimed"
+	OperationOutcomeReclaimed   OperationOutcome = "reclaimed"
+	OperationOutcomeFinalized   OperationOutcome = "finalized"
+	OperationOutcomeSkipped     OperationOutcome = "skipped"
+	OperationOutcomeManual      OperationOutcome = "manual"
+	OperationOutcomeUnsupported OperationOutcome = "unsupported"
+	OperationOutcomeRaceLost    OperationOutcome = "race_lost"
+	OperationOutcomeFailed      OperationOutcome = "failed"
 )
+
+const unsupportedOperationRecoveryReason = "unsupported_operation_recovery"
 
 func NewOperationCoordinator(config OperationConfig) OperationCoordinator {
 	return OperationCoordinator{config: config}
@@ -112,6 +122,9 @@ func (coordinator OperationCoordinator) RunOnce(ctx context.Context) (OperationB
 		switch plan.Action {
 		case inspection.RecoveryActionClaimable, inspection.RecoveryActionRetry:
 			item.Outcome = OperationOutcomeClaimed
+			if !operationSupported(ctx, config, record, plan, &result, item) {
+				continue
+			}
 			updated, err := acquireOperation(ctx, config, record.ID, operations.LeaseCancelPolicyNone)
 			if err != nil {
 				if fatal := recordAcquireError(&result, item, err); fatal != nil {
@@ -125,6 +138,9 @@ func (coordinator OperationCoordinator) RunOnce(ctx context.Context) (OperationB
 			result.Claimed++
 		case inspection.RecoveryActionReclaim:
 			item.Outcome = OperationOutcomeReclaimed
+			if !operationSupported(ctx, config, record, plan, &result, item) {
+				continue
+			}
 			updated, err := acquireOperation(ctx, config, record.ID, operations.LeaseCancelPolicyNone)
 			if err != nil {
 				if fatal := recordAcquireError(&result, item, err); fatal != nil {
@@ -202,6 +218,22 @@ func acquireOperation(ctx context.Context, config OperationConfig, operationID s
 		Now:          config.Now,
 		CancelPolicy: cancelPolicy,
 	})
+}
+
+func operationSupported(ctx context.Context, config OperationConfig, record operations.OperationRecord, plan RecoveryPlan, result *OperationBatchResult, item OperationResult) bool {
+	support := config.Executor.SupportsOperationRecovery(ctx, record, plan)
+	if support.Supported {
+		return true
+	}
+	item.Outcome = OperationOutcomeUnsupported
+	if reason := strings.TrimSpace(support.Reason); reason != "" {
+		item.Reason = reason
+	} else {
+		item.Reason = unsupportedOperationRecoveryReason
+	}
+	result.Unsupported++
+	result.Results = append(result.Results, item)
+	return false
 }
 
 func executeOperation(ctx context.Context, config OperationConfig, record operations.OperationRecord, plan RecoveryPlan, result *OperationBatchResult, item OperationResult) error {

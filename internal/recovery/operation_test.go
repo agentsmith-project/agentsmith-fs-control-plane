@@ -46,6 +46,9 @@ func TestOperationCoordinatorRejectsInvalidConfigBeforeStoreCalls(t *testing.T) 
 			if executor, ok := tt.config.Executor.(*fakeOperationExecutor); ok && len(executor.calls) != 0 {
 				t.Fatalf("executor calls = %d, want 0", len(executor.calls))
 			}
+			if executor, ok := tt.config.Executor.(*fakeOperationExecutor); ok && len(executor.supportCalls) != 0 {
+				t.Fatalf("support calls = %d, want 0", len(executor.supportCalls))
+			}
 		})
 	}
 }
@@ -124,6 +127,9 @@ func TestOperationCoordinatorAcquiresClaimRetryReclaimAndFinalizeInReaderOrder(t
 	if store.acquireCalls[3].request.CancelPolicy != operations.LeaseCancelPolicyFinalize {
 		t.Fatalf("cancel policy = %#v, want finalize", store.acquireCalls[3].request.CancelPolicy)
 	}
+	if gotIDs := executor.supportOperationIDs(); strings.Join(gotIDs, ",") != "op_claim,op_retry,op_reclaim" {
+		t.Fatalf("support check order = %#v, want claim retry reclaim only", gotIDs)
+	}
 	if gotIDs := executor.operationIDs(); strings.Join(gotIDs, ",") != "op_claim,op_retry,op_reclaim" {
 		t.Fatalf("executor order = %#v, want claim retry reclaim only", gotIDs)
 	}
@@ -135,6 +141,111 @@ func TestOperationCoordinatorAcquiresClaimRetryReclaimAndFinalizeInReaderOrder(t
 	}
 	if store.updateCalls != 0 || store.renewCalls != 0 {
 		t.Fatalf("unexpected lease store calls update=%d renew=%d", store.updateCalls, store.renewCalls)
+	}
+}
+
+func TestOperationCoordinatorMarksUnsupportedClaimRetryAndReclaimWithoutLeaseOrExecute(t *testing.T) {
+	now := recoveryTestNow()
+	expired := now.Add(-time.Minute)
+	reader := &fakeOperationRecoveryReader{
+		records: []operations.OperationRecord{
+			{ID: "op_claim", State: operations.OperationStateQueued},
+			{ID: "op_retry", State: operations.OperationStateQueued, Attempt: 2},
+			{ID: "op_reclaim", State: operations.OperationStateRunning, LeaseOwner: "worker-a", LeaseExpiresAt: &expired},
+		},
+	}
+	store := &fakeOperationLeaseStore{}
+	executor := &fakeOperationExecutor{unsupported: map[string]string{
+		"op_claim":   "unsupported claim",
+		"op_retry":   "unsupported retry",
+		"op_reclaim": "unsupported reclaim",
+	}}
+	coordinator := NewOperationCoordinator(OperationConfig{
+		Reader:        reader,
+		LeaseStore:    store,
+		Executor:      executor,
+		Owner:         "recovery-worker",
+		LeaseDuration: time.Minute,
+		Limit:         10,
+		Now:           now,
+	})
+
+	result, err := coordinator.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.Unsupported != 3 || len(store.acquireCalls) != 0 || len(executor.calls) != 0 {
+		t.Fatalf("result/acquire/execute = %#v/%d/%d, want unsupported 3 and no calls", result, len(store.acquireCalls), len(executor.calls))
+	}
+	if gotIDs := executor.supportOperationIDs(); strings.Join(gotIDs, ",") != "op_claim,op_retry,op_reclaim" {
+		t.Fatalf("support checks = %#v", gotIDs)
+	}
+}
+
+func TestOperationCoordinatorContinuesAfterUnsupportedCandidate(t *testing.T) {
+	now := recoveryTestNow()
+	reader := &fakeOperationRecoveryReader{
+		records: []operations.OperationRecord{
+			{ID: "op_unsupported", State: operations.OperationStateQueued},
+			{ID: "op_supported", State: operations.OperationStateQueued},
+		},
+	}
+	store := &fakeOperationLeaseStore{}
+	executor := &fakeOperationExecutor{unsupported: map[string]string{"op_unsupported": "not implemented"}}
+	coordinator := NewOperationCoordinator(OperationConfig{
+		Reader:        reader,
+		LeaseStore:    store,
+		Executor:      executor,
+		Owner:         "recovery-worker",
+		LeaseDuration: time.Minute,
+		Limit:         10,
+		Now:           now,
+	})
+
+	result, err := coordinator.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.Unsupported != 1 || result.Claimed != 1 {
+		t.Fatalf("result = %#v, want unsupported 1 claimed 1", result)
+	}
+	if gotIDs := store.acquireOperationIDs(); strings.Join(gotIDs, ",") != "op_supported" {
+		t.Fatalf("acquire IDs = %#v, want supported only", gotIDs)
+	}
+	if gotIDs := executor.operationIDs(); strings.Join(gotIDs, ",") != "op_supported" {
+		t.Fatalf("executor IDs = %#v, want supported only", gotIDs)
+	}
+}
+
+func TestOperationCoordinatorUsesFallbackReasonForUnsupportedWithoutExecutorReason(t *testing.T) {
+	now := recoveryTestNow()
+	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
+		{ID: "op_unsupported", State: operations.OperationStateQueued},
+	}}
+	store := &fakeOperationLeaseStore{}
+	executor := &fakeOperationExecutor{unsupported: map[string]string{"op_unsupported": " \t"}}
+	coordinator := NewOperationCoordinator(OperationConfig{
+		Reader:        reader,
+		LeaseStore:    store,
+		Executor:      executor,
+		Owner:         "recovery-worker",
+		LeaseDuration: time.Minute,
+		Limit:         10,
+		Now:           now,
+	})
+
+	result, err := coordinator.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("result items = %#v, want one unsupported result", result.Results)
+	}
+	if result.Results[0].Outcome != OperationOutcomeUnsupported || result.Results[0].Reason != "unsupported_operation_recovery" {
+		t.Fatalf("unsupported result = %#v, want fallback unsupported reason", result.Results[0])
+	}
+	if result.Results[0].Reason == "queued_operation_claimable" {
+		t.Fatalf("unsupported result kept planner reason: %#v", result.Results[0])
 	}
 }
 
@@ -165,8 +276,8 @@ func TestOperationCoordinatorSkipsWaitNoopManualAndAutomaticRecoverPlans(t *test
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if result.Skipped != 2 || result.Manual != 2 || len(store.acquireCalls) != 0 || len(executor.calls) != 0 {
-		t.Fatalf("result/store/executor = %#v/%d/%d calls, want skipped 2 manual 2 no calls", result, len(store.acquireCalls), len(executor.calls))
+	if result.Skipped != 2 || result.Manual != 2 || len(store.acquireCalls) != 0 || len(executor.calls) != 0 || len(executor.supportCalls) != 0 {
+		t.Fatalf("result/store/executor/support = %#v/%d/%d/%d calls, want skipped 2 manual 2 no calls", result, len(store.acquireCalls), len(executor.calls), len(executor.supportCalls))
 	}
 }
 
@@ -200,6 +311,35 @@ func TestOperationCoordinatorCountsLeaseUnavailableRaceAsNonFatal(t *testing.T) 
 	}
 	if gotIDs := executor.operationIDs(); strings.Join(gotIDs, ",") != "op_claim" {
 		t.Fatalf("executor order = %#v, want only non-race claim", gotIDs)
+	}
+}
+
+func TestOperationCoordinatorFinalizeCancellationDoesNotRequireExecutorSupport(t *testing.T) {
+	now := recoveryTestNow()
+	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
+		{ID: "op_cancel", State: operations.OperationStateCancelRequested},
+	}}
+	store := &fakeOperationLeaseStore{}
+	executor := &fakeOperationExecutor{unsupported: map[string]string{"op_cancel": "executor does not finalize"}}
+	coordinator := NewOperationCoordinator(OperationConfig{
+		Reader:        reader,
+		LeaseStore:    store,
+		Executor:      executor,
+		Owner:         "recovery-worker",
+		LeaseDuration: time.Minute,
+		Limit:         10,
+		Now:           now,
+	})
+
+	result, err := coordinator.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.Finalized != 1 || len(store.acquireCalls) != 1 || store.acquireCalls[0].request.CancelPolicy != operations.LeaseCancelPolicyFinalize {
+		t.Fatalf("result/acquire = %#v/%#v, want finalized via lease store", result, store.acquireCalls)
+	}
+	if len(executor.supportCalls) != 0 || len(executor.calls) != 0 {
+		t.Fatalf("support/execute calls = %d/%d, want none", len(executor.supportCalls), len(executor.calls))
 	}
 }
 
@@ -284,8 +424,8 @@ func TestOperationCoordinatorReaderErrorDoesNotCallLeaseStoreOrExecutor(t *testi
 	if !errors.Is(err, readerErr) {
 		t.Fatalf("RunOnce error = %v, want reader error", err)
 	}
-	if len(store.acquireCalls) != 0 || len(executor.calls) != 0 {
-		t.Fatalf("lease/executor calls = %d/%d, want none", len(store.acquireCalls), len(executor.calls))
+	if len(store.acquireCalls) != 0 || len(executor.calls) != 0 || len(executor.supportCalls) != 0 {
+		t.Fatalf("lease/executor/support calls = %d/%d/%d, want none", len(store.acquireCalls), len(executor.calls), len(executor.supportCalls))
 	}
 }
 
@@ -418,8 +558,15 @@ func (store *fakeOperationLeaseStore) acquireOperationIDs() []string {
 }
 
 type fakeOperationExecutor struct {
-	calls []operationExecutorCall
-	err   error
+	supportCalls []operationSupportCall
+	calls        []operationExecutorCall
+	err          error
+	unsupported  map[string]string
+}
+
+type operationSupportCall struct {
+	record operations.OperationRecord
+	plan   RecoveryPlan
 }
 
 type operationExecutorCall struct {
@@ -427,9 +574,25 @@ type operationExecutorCall struct {
 	plan   RecoveryPlan
 }
 
+func (executor *fakeOperationExecutor) SupportsOperationRecovery(_ context.Context, record operations.OperationRecord, plan RecoveryPlan) OperationSupport {
+	executor.supportCalls = append(executor.supportCalls, operationSupportCall{record: record, plan: plan})
+	if reason := executor.unsupported[record.ID]; reason != "" {
+		return OperationSupport{Supported: false, Reason: reason}
+	}
+	return OperationSupport{Supported: true}
+}
+
 func (executor *fakeOperationExecutor) ExecuteOperationRecovery(_ context.Context, record operations.OperationRecord, plan RecoveryPlan) error {
 	executor.calls = append(executor.calls, operationExecutorCall{record: record, plan: plan})
 	return executor.err
+}
+
+func (executor *fakeOperationExecutor) supportOperationIDs() []string {
+	out := make([]string, len(executor.supportCalls))
+	for idx, call := range executor.supportCalls {
+		out[idx] = call.record.ID
+	}
+	return out
 }
 
 func (executor *fakeOperationExecutor) operationIDs() []string {
