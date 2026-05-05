@@ -192,4 +192,166 @@ CREATE INDEX IF NOT EXISTS repo_fences_expiry_idx
     ON repo_fences (expires_at)
     WHERE released_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS volumes (
+    volume_id text PRIMARY KEY,
+    backend text NOT NULL,
+    isolation_class text NOT NULL,
+    status text NOT NULL,
+    capabilities jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT volumes_backend_check CHECK (
+        backend IN ('juicefs')
+    ),
+    CONSTRAINT volumes_isolation_class_check CHECK (
+        isolation_class IN ('shared', 'dedicated')
+    ),
+    CONSTRAINT volumes_status_check CHECK (
+        status IN ('active', 'disabled', 'degraded')
+    ),
+    CONSTRAINT volumes_capabilities_object CHECK (jsonb_typeof(capabilities) = 'object')
+);
+
+CREATE TABLE IF NOT EXISTS namespaces (
+    namespace_id text PRIMARY KEY,
+    status text NOT NULL DEFAULT 'active',
+    disabled_reason text,
+    disabled_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT namespaces_status_check CHECK (
+        status IN ('active', 'disabled')
+    ),
+    CONSTRAINT namespaces_disable_metadata_check CHECK (
+        (
+            status = 'active'
+            AND disabled_at IS NULL
+        )
+        OR (
+            status = 'disabled'
+            AND disabled_at IS NOT NULL
+        )
+    )
+);
+
+CREATE TABLE IF NOT EXISTS namespace_volume_bindings (
+    namespace_id text PRIMARY KEY REFERENCES namespaces (namespace_id),
+    default_volume_id text NOT NULL REFERENCES volumes (volume_id),
+    allowed_callers jsonb NOT NULL DEFAULT '[]'::jsonb,
+    quota_bytes_default bigint NOT NULL DEFAULT 0,
+    export_policy jsonb NOT NULL DEFAULT '{}'::jsonb,
+    lifecycle_policy jsonb NOT NULL DEFAULT '{}'::jsonb,
+    mount_policy jsonb NOT NULL DEFAULT '{}'::jsonb,
+    template_policy jsonb NOT NULL DEFAULT '{}'::jsonb,
+    status text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT namespace_volume_bindings_status_check CHECK (
+        status IN ('active', 'disabled')
+    ),
+    CONSTRAINT namespace_volume_bindings_allowed_callers_array CHECK (jsonb_typeof(allowed_callers) = 'array'),
+    CONSTRAINT namespace_volume_bindings_export_policy_object CHECK (jsonb_typeof(export_policy) = 'object'),
+    CONSTRAINT namespace_volume_bindings_lifecycle_policy_object CHECK (jsonb_typeof(lifecycle_policy) = 'object'),
+    CONSTRAINT namespace_volume_bindings_mount_policy_object CHECK (jsonb_typeof(mount_policy) = 'object'),
+    CONSTRAINT namespace_volume_bindings_template_policy_object CHECK (jsonb_typeof(template_policy) = 'object'),
+    CONSTRAINT namespace_volume_bindings_quota_non_negative CHECK (quota_bytes_default >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS repos (
+    repo_id text PRIMARY KEY,
+    namespace_id text NOT NULL REFERENCES namespaces (namespace_id),
+    volume_id text NOT NULL REFERENCES volumes (volume_id),
+    jvs_repo_id text NOT NULL,
+    repo_kind text NOT NULL,
+    status text NOT NULL,
+    control_volume_subdir text NOT NULL,
+    payload_volume_subdir text NOT NULL,
+    lifecycle_status text NOT NULL,
+    retention_expires_at timestamp with time zone,
+    last_lifecycle_operation_id text REFERENCES operations (operation_id),
+    pre_delete_status text,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT repos_namespace_repo_unique UNIQUE (namespace_id, repo_id),
+    CONSTRAINT repos_kind_check CHECK (
+        repo_kind IN ('repo', 'template')
+    ),
+    CONSTRAINT repos_status_check CHECK (
+        status IN (
+            'active',
+            'archiving',
+            'archived',
+            'restoring_archived',
+            'deleting',
+            'tombstoned',
+            'restoring_tombstoned',
+            'purging',
+            'purged',
+            'operator_intervention_required'
+        )
+    ),
+    CONSTRAINT repos_lifecycle_status_check CHECK (
+        lifecycle_status IN (
+            'active',
+            'archiving',
+            'archived',
+            'restoring_archived',
+            'deleting',
+            'tombstoned',
+            'restoring_tombstoned',
+            'purging',
+            'purged',
+            'operator_intervention_required'
+        )
+    ),
+    CONSTRAINT repos_pre_delete_status_check CHECK (
+        pre_delete_status IS NULL
+        OR pre_delete_status IN (
+            'active',
+            'archived'
+        )
+    ),
+    CONSTRAINT repos_status_lifecycle_match CHECK (status = lifecycle_status),
+    CONSTRAINT repos_canonical_subdir_check CHECK (
+        (
+            repo_kind = 'repo'
+            AND control_volume_subdir = 'afscp/namespaces/' || namespace_id || '/repos/' || repo_id || '/control'
+            AND payload_volume_subdir = 'afscp/namespaces/' || namespace_id || '/repos/' || repo_id || '/payload'
+        )
+        OR (
+            repo_kind = 'template'
+            AND control_volume_subdir = 'afscp/namespaces/' || namespace_id || '/templates/' || repo_id || '/control'
+            AND payload_volume_subdir = 'afscp/namespaces/' || namespace_id || '/templates/' || repo_id || '/payload'
+        )
+    ),
+    CONSTRAINT repos_pre_delete_required_check CHECK (
+        (
+            status IN ('deleting', 'tombstoned', 'restoring_tombstoned', 'purging', 'purged')
+            AND pre_delete_status IS NOT NULL
+        )
+        OR (
+            status IN ('active', 'archiving', 'archived', 'restoring_archived')
+            AND pre_delete_status IS NULL
+        )
+        OR status = 'operator_intervention_required'
+    ),
+    CONSTRAINT repos_retention_metadata_check CHECK (
+        (
+            status IN ('tombstoned', 'restoring_tombstoned', 'purging')
+            AND retention_expires_at IS NOT NULL
+        )
+        OR (
+            status IN ('active', 'archiving', 'archived', 'restoring_archived')
+            AND retention_expires_at IS NULL
+        )
+        OR status IN ('deleting', 'purged', 'operator_intervention_required')
+    )
+);
+
+CREATE INDEX IF NOT EXISTS repos_namespace_idx
+    ON repos (namespace_id, created_at, repo_id);
+
+CREATE INDEX IF NOT EXISTS repos_volume_idx
+    ON repos (volume_id);
+
 COMMIT;

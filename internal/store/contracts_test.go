@@ -10,6 +10,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 )
 
 func TestOperationStoreContractComposesReaderAndWriter(t *testing.T) {
@@ -110,6 +111,113 @@ func TestRepoFenceStoreContractCoversDurableReadCreateReleaseBoundary(t *testing
 	}
 	if len(held) != 0 {
 		t.Fatalf("held fences after release = %#v, want none", held)
+	}
+}
+
+func TestResourceStoresContractCoverControlPlaneMetadataOnly(t *testing.T) {
+	fake := &fakeResourceStore{}
+
+	var _ VolumeStore = fake
+	var _ NamespaceStore = fake
+	var _ NamespaceVolumeBindingStore = fake
+	var _ RepoStore = fake
+
+	now := time.Date(2026, 5, 5, 14, 0, 0, 0, time.UTC)
+	volume := resources.Volume{
+		ID:             "vol_shared01",
+		Backend:        resources.VolumeBackendJuiceFS,
+		IsolationClass: resources.VolumeIsolationShared,
+		Status:         resources.VolumeStatusActive,
+		Capabilities: map[string]any{
+			"webdav_export":             true,
+			"workload_mount":            true,
+			"jvs_external_control_root": true,
+			"directory_quota":           false,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := fake.UpsertVolume(context.Background(), volume); err != nil {
+		t.Fatalf("upsert volume: %v", err)
+	}
+	volumes, err := fake.ListActiveVolumes(context.Background())
+	if err != nil {
+		t.Fatalf("list active volumes: %v", err)
+	}
+	if len(volumes) != 1 || volumes[0].ID != "vol_shared01" {
+		t.Fatalf("active volumes = %#v, want vol_shared01", volumes)
+	}
+
+	namespace := resources.Namespace{ID: "ns_alpha01", Status: resources.NamespaceStatusActive, CreatedAt: now, UpdatedAt: now}
+	if err := fake.UpsertNamespace(context.Background(), namespace); err != nil {
+		t.Fatalf("upsert namespace: %v", err)
+	}
+	disabled, err := fake.DisableNamespace(context.Background(), "ns_alpha01", "test hold")
+	if err != nil {
+		t.Fatalf("disable namespace: %v", err)
+	}
+	if disabled.Status != resources.NamespaceStatusDisabled || disabled.DisabledAt == nil {
+		t.Fatalf("disabled namespace = %#v", disabled)
+	}
+
+	binding := resources.NamespaceVolumeBinding{
+		NamespaceID:       "ns_alpha01",
+		DefaultVolumeID:   "vol_shared01",
+		AllowedCallers:    []resources.AllowedCaller{{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}}},
+		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
+		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
+		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false},
+		TemplatePolicy:    map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false},
+		Status:            resources.NamespaceStatusActive,
+		QuotaBytesDefault: 0,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := fake.PutNamespaceVolumeBinding(context.Background(), binding); err != nil {
+		t.Fatalf("put binding: %v", err)
+	}
+	gotBinding, err := fake.GetNamespaceVolumeBinding(context.Background(), "ns_alpha01")
+	if err != nil {
+		t.Fatalf("get binding: %v", err)
+	}
+	if gotBinding.DefaultVolumeID != "vol_shared01" || gotBinding.AllowedCallers[0].Roles[0] != resources.CallerRoleRepoAdmin {
+		t.Fatalf("binding = %#v, want default volume and caller role", gotBinding)
+	}
+
+	repo := resources.Repo{
+		ID:                  "repo_alpha01",
+		NamespaceID:         "ns_alpha01",
+		VolumeID:            "vol_shared01",
+		JVSRepoID:           "jvs-alpha",
+		Kind:                resources.RepoKindRepo,
+		Status:              resources.RepoStatusActive,
+		ControlVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/control",
+		PayloadVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload",
+		Lifecycle:           resources.RepoLifecycle{Status: resources.RepoStatusActive},
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+	if err := fake.CreateRepo(context.Background(), repo); err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	repos, err := fake.ListReposByNamespace(context.Background(), "ns_alpha01")
+	if err != nil {
+		t.Fatalf("list repos: %v", err)
+	}
+	if len(repos) != 1 || repos[0].VolumeID != "vol_shared01" || repos[0].JVSRepoID != "jvs-alpha" {
+		t.Fatalf("repos = %#v, want recorded identities", repos)
+	}
+	updated, err := fake.UpdateRepoLifecycle(context.Background(), "repo_alpha01", resources.RepoLifecycle{
+		Status:                   resources.RepoStatusTombstoned,
+		RetentionExpiresAt:       ptrTimeForStoreContract(now.Add(24 * time.Hour)),
+		LastLifecycleOperationID: "op_delete01",
+		PreDeleteStatus:          resources.RepoStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("update repo lifecycle: %v", err)
+	}
+	if updated.ID != "repo_alpha01" || updated.Status != resources.RepoStatusTombstoned || updated.VolumeID != "vol_shared01" {
+		t.Fatalf("updated repo = %#v, want immutable ids and tombstoned status", updated)
 	}
 }
 
@@ -388,3 +496,111 @@ func (fake *fakeRepoFenceStore) ReleaseRepoFence(_ context.Context, repoID, fenc
 	}
 	return nil
 }
+
+type fakeResourceStore struct {
+	volumes    map[string]resources.Volume
+	namespaces map[string]resources.Namespace
+	bindings   map[string]resources.NamespaceVolumeBinding
+	repos      map[string]resources.Repo
+}
+
+func (fake *fakeResourceStore) UpsertVolume(_ context.Context, volume resources.Volume) error {
+	if fake.volumes == nil {
+		fake.volumes = map[string]resources.Volume{}
+	}
+	fake.volumes[volume.ID] = volume
+	return nil
+}
+
+func (fake *fakeResourceStore) GetVolume(_ context.Context, volumeID string) (resources.Volume, error) {
+	return fake.volumes[volumeID], nil
+}
+
+func (fake *fakeResourceStore) ListActiveVolumes(_ context.Context) ([]resources.Volume, error) {
+	var out []resources.Volume
+	for _, volume := range fake.volumes {
+		if volume.Status == resources.VolumeStatusActive {
+			out = append(out, volume)
+		}
+	}
+	return out, nil
+}
+
+func (fake *fakeResourceStore) UpsertNamespace(_ context.Context, namespace resources.Namespace) error {
+	if fake.namespaces == nil {
+		fake.namespaces = map[string]resources.Namespace{}
+	}
+	existing := fake.namespaces[namespace.ID]
+	if existing.Status == resources.NamespaceStatusDisabled {
+		namespace = existing
+	}
+	fake.namespaces[namespace.ID] = namespace
+	return nil
+}
+
+func (fake *fakeResourceStore) DisableNamespace(_ context.Context, namespaceID, reason string) (resources.Namespace, error) {
+	if fake.namespaces == nil {
+		fake.namespaces = map[string]resources.Namespace{}
+	}
+	namespace := fake.namespaces[namespaceID]
+	if namespace.ID == "" {
+		namespace.ID = namespaceID
+	}
+	if namespace.Status != resources.NamespaceStatusDisabled {
+		now := time.Date(2026, 5, 5, 14, 30, 0, 0, time.UTC)
+		namespace.Status = resources.NamespaceStatusDisabled
+		namespace.DisabledReason = reason
+		namespace.DisabledAt = &now
+		namespace.UpdatedAt = now
+	}
+	fake.namespaces[namespaceID] = namespace
+	return namespace, nil
+}
+
+func (fake *fakeResourceStore) GetNamespace(_ context.Context, namespaceID string) (resources.Namespace, error) {
+	return fake.namespaces[namespaceID], nil
+}
+
+func (fake *fakeResourceStore) PutNamespaceVolumeBinding(_ context.Context, binding resources.NamespaceVolumeBinding) error {
+	if fake.bindings == nil {
+		fake.bindings = map[string]resources.NamespaceVolumeBinding{}
+	}
+	fake.bindings[binding.NamespaceID] = binding
+	return nil
+}
+
+func (fake *fakeResourceStore) GetNamespaceVolumeBinding(_ context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error) {
+	return fake.bindings[namespaceID], nil
+}
+
+func (fake *fakeResourceStore) CreateRepo(_ context.Context, repo resources.Repo) error {
+	if fake.repos == nil {
+		fake.repos = map[string]resources.Repo{}
+	}
+	fake.repos[repo.ID] = repo
+	return nil
+}
+
+func (fake *fakeResourceStore) GetRepo(_ context.Context, repoID string) (resources.Repo, error) {
+	return fake.repos[repoID], nil
+}
+
+func (fake *fakeResourceStore) ListReposByNamespace(_ context.Context, namespaceID string) ([]resources.Repo, error) {
+	var out []resources.Repo
+	for _, repo := range fake.repos {
+		if repo.NamespaceID == namespaceID {
+			out = append(out, repo)
+		}
+	}
+	return out, nil
+}
+
+func (fake *fakeResourceStore) UpdateRepoLifecycle(_ context.Context, repoID string, lifecycle resources.RepoLifecycle) (resources.Repo, error) {
+	repo := fake.repos[repoID]
+	repo.Status = lifecycle.Status
+	repo.Lifecycle = lifecycle
+	fake.repos[repoID] = repo
+	return repo, nil
+}
+
+func ptrTimeForStoreContract(value time.Time) *time.Time { return &value }

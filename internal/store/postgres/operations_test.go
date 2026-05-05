@@ -576,6 +576,8 @@ func assignScanValue(dest any, value any) error {
 		*ptr = value.(string)
 	case *int:
 		*ptr = value.(int)
+	case *int64:
+		*ptr = value.(int64)
 	case *time.Time:
 		*ptr = value.(time.Time)
 	case *sql.NullString:

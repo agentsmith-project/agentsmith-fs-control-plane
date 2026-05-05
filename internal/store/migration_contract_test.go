@@ -100,6 +100,97 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		)
 		contract.requirePartialUniqueIndex(t, "repo_fences", []string{"repo_id", "fence_kind"}, "released_at is null")
 	})
+
+	t.Run("volumes table", func(t *testing.T) {
+		table := contract.requireTable(t, "volumes")
+
+		table.requireColumn(t, "volume_id", "text", "primary key")
+		table.requireColumn(t, "backend", "text", "not null")
+		table.requireColumn(t, "isolation_class", "text", "not null")
+		table.requireColumn(t, "status", "text", "not null")
+		table.requireColumn(t, "capabilities", "jsonb", "not null", "default '{}'::jsonb")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireCheckMentions(t, "backend", "juicefs")
+		table.requireCheckMentions(t, "isolation_class", "shared", "dedicated")
+		table.requireCheckMentions(t, "status", "active", "disabled", "degraded")
+		table.requireBodyFragments(t, "jsonb_typeof(capabilities) = 'object'")
+	})
+
+	t.Run("namespaces table", func(t *testing.T) {
+		table := contract.requireTable(t, "namespaces")
+
+		table.requireColumn(t, "namespace_id", "text", "primary key")
+		table.requireColumn(t, "status", "text", "not null", "default 'active'")
+		table.requireColumn(t, "disabled_reason", "text")
+		table.requireColumn(t, "disabled_at", "timestamp with time zone")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireCheckMentions(t, "status", "active", "disabled")
+		table.requireBodyFragments(t,
+			"status = 'active' and disabled_at is null",
+			"status = 'disabled' and disabled_at is not null",
+		)
+	})
+
+	t.Run("namespace volume bindings table", func(t *testing.T) {
+		table := contract.requireTable(t, "namespace_volume_bindings")
+
+		table.requireColumn(t, "namespace_id", "text", "primary key", "references namespaces")
+		table.requireColumn(t, "default_volume_id", "text", "not null", "references volumes")
+		table.requireColumn(t, "allowed_callers", "jsonb", "not null", "default '[]'::jsonb")
+		table.requireColumn(t, "quota_bytes_default", "bigint", "not null", "default 0")
+		table.requireColumn(t, "export_policy", "jsonb", "not null", "default '{}'::jsonb")
+		table.requireColumn(t, "lifecycle_policy", "jsonb", "not null", "default '{}'::jsonb")
+		table.requireColumn(t, "mount_policy", "jsonb", "not null", "default '{}'::jsonb")
+		table.requireColumn(t, "template_policy", "jsonb", "not null", "default '{}'::jsonb")
+		table.requireColumn(t, "status", "text", "not null")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireCheckMentions(t, "status", "active", "disabled")
+		table.requireBodyFragments(t,
+			"jsonb_typeof(allowed_callers) = 'array'",
+			"jsonb_typeof(export_policy) = 'object'",
+			"jsonb_typeof(lifecycle_policy) = 'object'",
+			"jsonb_typeof(mount_policy) = 'object'",
+			"jsonb_typeof(template_policy) = 'object'",
+			"quota_bytes_default >= 0",
+		)
+	})
+
+	t.Run("repos table", func(t *testing.T) {
+		table := contract.requireTable(t, "repos")
+
+		table.requireColumn(t, "repo_id", "text", "primary key")
+		table.requireColumn(t, "namespace_id", "text", "not null", "references namespaces")
+		table.requireColumn(t, "volume_id", "text", "not null", "references volumes")
+		table.requireColumn(t, "jvs_repo_id", "text", "not null")
+		table.requireColumn(t, "repo_kind", "text", "not null")
+		table.requireColumn(t, "status", "text", "not null")
+		table.requireColumn(t, "control_volume_subdir", "text", "not null")
+		table.requireColumn(t, "payload_volume_subdir", "text", "not null")
+		table.requireColumn(t, "lifecycle_status", "text", "not null")
+		table.requireColumn(t, "retention_expires_at", "timestamp with time zone")
+		table.requireColumn(t, "last_lifecycle_operation_id", "text", "references operations")
+		table.requireColumn(t, "pre_delete_status", "text")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireUniqueColumns(t, "namespace_id", "repo_id")
+		table.requireCheckMentions(t, "repo_kind", "repo", "template")
+		table.requireCheckMentions(t, "status", expectedRepoStatusValuesForMigrationContract()...)
+		table.requireCheckMentions(t, "lifecycle_status", expectedRepoStatusValuesForMigrationContract()...)
+		table.requireBodyFragments(t,
+			"status = lifecycle_status",
+			"repo_kind = 'repo' and control_volume_subdir = 'afscp/namespaces/' || namespace_id || '/repos/' || repo_id || '/control'",
+			"repo_kind = 'template' and control_volume_subdir = 'afscp/namespaces/' || namespace_id || '/templates/' || repo_id || '/control'",
+			"pre_delete_status is null or pre_delete_status in ( 'active', 'archived' )",
+			"status in ('deleting', 'tombstoned', 'restoring_tombstoned', 'purging', 'purged') and pre_delete_status is not null",
+			"status in ('active', 'archiving', 'archived', 'restoring_archived') and pre_delete_status is null",
+			"status in ('tombstoned', 'restoring_tombstoned', 'purging') and retention_expires_at is not null",
+			"status in ('active', 'archiving', 'archived', 'restoring_archived') and retention_expires_at is null",
+			"status = 'operator_intervention_required'",
+		)
+	})
 }
 
 func TestPostgreSQLMigrationsDoNotEncodeStorageMutationMaterial(t *testing.T) {
@@ -151,6 +242,21 @@ func expectedOperationTypeValuesForMigrationContract() []string {
 		"mount_binding_release",
 		"mount_binding_revoke",
 		"migration_cutover",
+	}
+}
+
+func expectedRepoStatusValuesForMigrationContract() []string {
+	return []string{
+		"active",
+		"archiving",
+		"archived",
+		"restoring_archived",
+		"deleting",
+		"tombstoned",
+		"restoring_tombstoned",
+		"purging",
+		"purged",
+		"operator_intervention_required",
 	}
 }
 

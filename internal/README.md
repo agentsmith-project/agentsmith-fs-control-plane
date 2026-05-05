@@ -11,11 +11,18 @@ needed before real handlers and storage mutation work:
 - `observability`: structured JSON logging and redaction helpers.
 - `operations`: operation state, lease decisions, idempotency, redaction, and
   typed operation record boundaries.
+- `resources`: pure control-plane metadata models and validation for volumes,
+  namespaces, namespace volume bindings, and repo/repo lifecycle metadata.
 - `store`: interfaces for durable operation records, idempotency, and audit
-  sinks. PostgreSQL schema migration exists; the first PostgreSQL adapter slice
+  sinks, plus resource metadata store contracts. PostgreSQL schema migration
+  exists; the first PostgreSQL adapter slice
   covers operation reader/writer, idempotency create-or-reuse, audit outbox
   append plus DB-only at-least-once delivery primitive, and minimal repo fence
-  held read/create/active release.
+  held read/create/active release. The PostgreSQL resource metadata adapter
+  covers volumes, namespaces, namespace volume bindings, and repo/repo
+  lifecycle metadata as control-plane records only, including internal template
+  storage identity. RepoTemplate publication lifecycle and handlers remain
+  unimplemented.
 - `audit`: audit event typing, redaction expectations, and pure outbox state
   transitions.
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
@@ -25,10 +32,10 @@ needed before real handlers and storage mutation work:
 - `pathresolver`: path safety helpers, denial tests, and shared resolver corpus.
 
 Still intentionally absent: real endpoint handlers, real external audit delivery
-worker/sink integration, repo/resource metadata adapters, recovery loop, JVS
-execution, WebDAV export serving, workload mount issuance, repo/template
-lifecycle mutation, storage mutation implementations, and fence enforcement
-beyond the minimal repo fence adapter slice.
+worker/sink integration, repo lifecycle workers/recovery loop, JVS execution,
+WebDAV export serving, workload mount issuance, repo/template lifecycle
+mutation, storage mutation implementations, and fence enforcement beyond the
+minimal repo fence adapter slice.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

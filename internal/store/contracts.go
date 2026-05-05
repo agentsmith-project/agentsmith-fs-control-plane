@@ -7,6 +7,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 )
 
 // OperationReader is the read side of the durable operation record boundary.
@@ -71,4 +72,28 @@ type RepoFenceWriter interface {
 type RepoFenceStore interface {
 	RepoFenceReader
 	RepoFenceWriter
+}
+
+type VolumeStore interface {
+	UpsertVolume(ctx context.Context, volume resources.Volume) error
+	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
+	ListActiveVolumes(ctx context.Context) ([]resources.Volume, error)
+}
+
+type NamespaceStore interface {
+	UpsertNamespace(ctx context.Context, namespace resources.Namespace) error
+	DisableNamespace(ctx context.Context, namespaceID, reason string) (resources.Namespace, error)
+	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
+}
+
+type NamespaceVolumeBindingStore interface {
+	PutNamespaceVolumeBinding(ctx context.Context, binding resources.NamespaceVolumeBinding) error
+	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
+}
+
+type RepoStore interface {
+	CreateRepo(ctx context.Context, repo resources.Repo) error
+	GetRepo(ctx context.Context, repoID string) (resources.Repo, error)
+	ListReposByNamespace(ctx context.Context, namespaceID string) ([]resources.Repo, error)
+	UpdateRepoLifecycle(ctx context.Context, repoID string, lifecycle resources.RepoLifecycle) (resources.Repo, error)
 }

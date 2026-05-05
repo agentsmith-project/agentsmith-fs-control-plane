@@ -32,7 +32,7 @@ GA statuses:
 
 Each binding lists service principals that may act in the namespace.
 
-Example roles:
+Ordinary namespace binding roles may include product-scoped roles such as:
 
 - `repo_admin`
 - `repo_lifecycle_admin`
@@ -41,13 +41,19 @@ Example roles:
 - `template_admin`
 - `mount_admin`
 - `operation_inspector`
-- `orchestrator_mount`
 - `migration_admin`
-- `operator_admin`
-- `break_glass_admin`
+
+Dedicated namespace binding roles may include `orchestrator_mount` for a
+dedicated orchestrator caller where deployment policy permits. It must not be
+mixed with ordinary product caller roles in the same `allowed_callers` entry.
+
+`operator_admin` and `break_glass_admin` are deployment/global policy roles, not
+ordinary namespace binding roles. They must not be used to replace
+namespace-scoped product roles or `operation_inspector` in ordinary caller
+policy.
 
 AFSCP must check `caller_service` and role before each namespace-bound operation. Denied checks are audited.
-`operation_inspector` grants namespace-scoped operation inspection of redacted records. `operator_admin` grants global/operator inspection and repair and must not replace the namespace-scoped inspection role in ordinary product caller policy.
+`operation_inspector` grants namespace-scoped operation inspection of redacted records. `operator_admin` grants global/operator inspection and repair through deployment policy only.
 
 ## Rules
 

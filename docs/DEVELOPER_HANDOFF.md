@@ -1,7 +1,8 @@
 # Developer Handoff
 
-Status: neutral Go skeleton, contract guardrails, and the first PostgreSQL
-adapter slice are in place; storage mutation implementation is not started.
+Status: neutral Go skeleton, contract guardrails, resource metadata
+persistence, and the first PostgreSQL adapter slices are in place; storage
+mutation implementation is not started.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -57,6 +58,7 @@ internal/api
 internal/auth
 internal/config
 internal/store
+internal/resources
 internal/operations
 internal/audit
 internal/pathresolver
@@ -91,11 +93,20 @@ Completed:
 - operation envelope types
 - auth role and namespace guardrails
 - store interfaces for operation, idempotency, and audit boundaries
-- PostgreSQL migration contract for operations, idempotency, audit outbox, and
-  repo fences
+- pure resource metadata models and validation for volumes, namespaces,
+  namespace volume bindings, and repo/repo lifecycle metadata
+- store interfaces for volume, namespace, namespace volume binding, and repo
+  metadata persistence
+- PostgreSQL migration contract for operations, idempotency, audit outbox, repo
+  fences, volumes, namespaces, namespace volume bindings, and repo/repo
+  lifecycle metadata
 - first PostgreSQL adapter slice for operation reader/writer, idempotency
   create-or-reuse, and audit outbox append plus DB-only at-least-once delivery
   primitive, with focused tests
+- PostgreSQL resource metadata adapter for volumes, namespaces, namespace volume
+  bindings, and repo/repo lifecycle metadata, with focused tests
+- repo and template storage identities are recorded as control-plane metadata;
+  RepoTemplate publication lifecycle and handlers remain unimplemented
 - minimal PostgreSQL repo fence adapter for held fence read, create, and active
   release, with focused tests
 - operation lease pure model and tests
@@ -120,15 +131,17 @@ Partially completed:
   The recovery planner only classifies existing durable record values into
   high-level actions; it is not a recovery loop and does not execute workers or
   touch JVS/WebDAV/mount/storage mutation. Real external audit delivery
-  worker/sink integration, repo/resource metadata adapters, and the recovery
-  loop are not implemented.
+  worker/sink integration and the recovery loop are not implemented. Resource
+  metadata persistence exists only as control-plane metadata storage; it is not
+  real repo lifecycle execution, recovery, or storage mutation.
 - Path resolver guardrails exist, but there is no storage mutation integration.
 
 Not implemented:
 
 - real volume, namespace, repo, template, export, mount, save, restore, or
   lifecycle handlers
-- durable DB-backed repo/resource metadata mutations
+- real repo lifecycle workers, recovery loop, archive/delete/purge execution, or
+  storage state transitions
 - fence enforcement beyond the minimal repo fence adapter slice
 - real external audit delivery worker/sink integration
 - JVS execution or repo initialization
@@ -142,8 +155,8 @@ Continue in dependency order:
 
 1. Finish review and acceptance for the existing contract verifier, denied audit,
    migration contract, lease, fence, outbox, and path resolver guardrails.
-2. Implement the remaining durable PostgreSQL adapters for repo/resource
-   metadata, plus recovery inspection over durable repo and fence records.
+2. Build recovery inspection over durable repo and fence records, using the
+   existing resource metadata persistence as read/write control-plane state.
 3. Add recovery loop behavior only after the remaining durable primitives have
    tests.
 4. Implement volume and namespace binding APIs.
