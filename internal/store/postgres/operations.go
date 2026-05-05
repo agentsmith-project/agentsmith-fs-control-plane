@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
 
@@ -160,6 +161,37 @@ func (store *Store) UpdateOperationWithLease(ctx context.Context, sanitized oper
 	return updated, nil
 }
 
+func (store *Store) CommitOperationWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	record := sanitized.Record()
+	operationID := strings.TrimSpace(record.ID)
+	if strings.TrimSpace(event.OperationID) == "" {
+		return operations.OperationRecord{}, auditOutboxInvalidRequest("operation_id", "missing audit operation id")
+	}
+	if event.OperationID != operationID {
+		return operations.OperationRecord{}, auditOutboxInvalidRequest("operation_id", "audit operation id must match operation update")
+	}
+
+	operationArgs, err := operationLeaseFencedUpdateArgs(record, owner, now)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	outboxRecord, err := audit.NewOutboxRecord(event, now)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+
+	args := append(operationArgs, auditOutboxInsertArgs(outboxRecord)...)
+	row := store.exec.QueryRowContext(ctx, operationCommitWithLeaseSQL(), args...)
+	updated, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("commit", operationID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return updated, nil
+}
+
 func (store *Store) CreateOrReuseOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
 	record, err := operations.NewQueuedOperationRecord(spec)
 	if err != nil {
@@ -261,6 +293,10 @@ func operationRenewLeaseSQL() string {
 }
 
 func operationLeaseFencedUpdateSQL() string {
+	return operationLeaseFencedUpdateBaseSQL() + "RETURNING " + strings.Join(operationSelectColumns, ", ")
+}
+
+func operationLeaseFencedUpdateBaseSQL() string {
 	return "UPDATE operations SET " +
 		"operation_state = $1, " +
 		"phase = $2, " +
@@ -275,8 +311,18 @@ func operationLeaseFencedUpdateSQL() string {
 		"started_at = COALESCE(started_at, $9, $11), " +
 		"finished_at = CASE WHEN $1 IN ('succeeded', 'failed', 'cancelled') THEN COALESCE($10, $11) ELSE NULL END, " +
 		"updated_at = $11 " +
-		"WHERE operation_id = $12 AND operation_state = 'running' AND lease_owner = $13 AND lease_expires_at IS NOT NULL AND lease_expires_at > $11 " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ")
+		"WHERE operation_id = $12 AND operation_state = 'running' AND lease_owner = $13 AND lease_expires_at IS NOT NULL AND lease_expires_at > $11 "
+}
+
+func operationCommitWithLeaseSQL() string {
+	return "WITH updated_operation AS (" +
+		operationLeaseFencedUpdateBaseSQL() +
+		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"), inserted_audit AS (" +
+		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") " +
+		"SELECT " + placeholders(14, len(auditOutboxColumns)) + " FROM updated_operation " +
+		"RETURNING audit_event_id" +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
 }
 
 func operationInsertArgs(record operations.OperationRecord) ([]any, error) {
@@ -493,6 +539,22 @@ func operationLeaseFencedUpdateArgs(record operations.OperationRecord, owner str
 		operationID,
 		owner,
 	}, nil
+}
+
+func auditOutboxInsertArgs(record audit.OutboxRecord) []any {
+	return []any{
+		record.EventID,
+		string(record.EventType),
+		record.EventTime,
+		[]byte(record.PayloadJSON),
+		string(record.Status),
+		record.DeliveryAttempt,
+		timePtrArg(record.NextRetryAt),
+		record.LastError,
+		record.CreatedAt,
+		record.UpdatedAt,
+		timePtrArg(record.DeliveredAt),
+	}
 }
 
 func validOperationLeaseFencedUpdateState(state operations.OperationState) bool {

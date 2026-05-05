@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +103,47 @@ func TestOperationLeaseStoreContractCoversClaimReclaimRenewAndFencedUpdateByOper
 	}
 	if rendered := updated.JVSJSONOutput.(map[string]any)["token"]; rendered == "lease-fenced-secret" {
 		t.Fatalf("fenced update stored unsanitized output: %#v", updated.JVSJSONOutput)
+	}
+}
+
+func TestOperationWorkerCommitStoreContractCommitsSanitizedOperationAndAuditTogether(t *testing.T) {
+	fake := &fakeOperationStore{}
+	var _ OperationWorkerCommitStore = fake
+
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	leaseExpiresAt := now.Add(30 * time.Minute)
+	fake.record = operations.OperationRecord{
+		ID:             "op_alpha",
+		Type:           operations.OperationExportCreate,
+		State:          operations.OperationStateRunning,
+		LeaseOwner:     "worker-a",
+		LeaseExpiresAt: &leaseExpiresAt,
+		CreatedAt:      now.Add(-time.Hour),
+	}
+	update := fake.record
+	update.State = operations.OperationStateSucceeded
+	update.InputSummary = map[string]any{"command": "export --token contract-secret"}
+	event := audit.NewEvent(audit.Event{
+		EventID:       "audit-op-alpha",
+		Type:          audit.EventTypeExportCreate,
+		Time:          now,
+		OperationID:   "op_alpha",
+		Resource:      audit.Resource{Type: "export", ID: "export_alpha"},
+		Outcome:       audit.OutcomeSucceeded,
+		Reason:        "done token=audit-secret",
+		CallerService: "afscp-api",
+	})
+
+	committed, err := fake.CommitOperationWithLease(context.Background(), update.SanitizedForPersistence(), "worker-a", now, event)
+	if err != nil {
+		t.Fatalf("commit operation with audit: %v", err)
+	}
+	if committed.State != operations.OperationStateSucceeded || committed.LeaseOwner != "" || len(fake.auditEvents) != 1 {
+		t.Fatalf("commit state/audit = %#v/%#v", committed, fake.auditEvents)
+	}
+	if strings.Contains(toStoreContractString(fake.record.InputSummary), "contract-secret") ||
+		strings.Contains(fake.auditEvents[0].Reason, "audit-secret") {
+		t.Fatalf("commit stored unsanitized operation/audit: %#v %#v", fake.record, fake.auditEvents)
 	}
 }
 
@@ -507,8 +549,9 @@ func TestAuditOutboxDeliveryStoreContractCoversDBOnlyStateAdapter(t *testing.T) 
 }
 
 type fakeOperationStore struct {
-	record     operations.OperationRecord
-	operations []operations.OperationRecord
+	record      operations.OperationRecord
+	operations  []operations.OperationRecord
+	auditEvents []audit.Event
 }
 
 func (fake *fakeOperationStore) GetOperation(_ context.Context, operationID string) (operations.OperationRecord, error) {
@@ -570,6 +613,18 @@ func (fake *fakeOperationStore) UpdateOperationWithLease(_ context.Context, reco
 	}
 	fake.record = updated.SanitizedForPersistence().Record()
 	return fake.record, nil
+}
+
+func (fake *fakeOperationStore) CommitOperationWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	if strings.TrimSpace(event.OperationID) == "" || event.OperationID != record.Record().ID {
+		return operations.OperationRecord{}, audit.ErrInvalidOutboxRequest
+	}
+	updated, err := fake.UpdateOperationWithLease(ctx, record, owner, now)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	fake.auditEvents = append(fake.auditEvents, event.Sanitized())
+	return updated, nil
 }
 
 func (fake *fakeOperationStore) ListOperationsForRecovery(_ context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
@@ -858,3 +913,8 @@ func (fake *fakeResourceStore) UpdateRepoLifecycle(_ context.Context, repoID str
 }
 
 func ptrTimeForStoreContract(value time.Time) *time.Time { return &value }
+
+func toStoreContractString(value any) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
+}

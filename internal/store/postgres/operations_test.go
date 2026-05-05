@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
@@ -20,6 +21,7 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.OperationWriter = (*Store)(nil)
 	var _ store.OperationRecoveryReader = (*Store)(nil)
 	var _ store.OperationLeaseStore = (*Store)(nil)
+	var _ store.OperationWorkerCommitStore = (*Store)(nil)
 	var _ store.IdempotencyStore = (*Store)(nil)
 	var _ store.AuditSink = (*Store)(nil)
 
@@ -732,6 +734,7 @@ func TestUpdateOperationWithLeaseRejectsRecordLeaseTransferBeforeSQL(t *testing.
 func TestUpdateOperationWithLeaseCanWriteTerminalAndClearLease(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	returned := operationFixture(now.Add(-time.Hour))
+	returned.Type = operations.OperationExportCreate
 	returned.State = operations.OperationStateSucceeded
 	returned.Phase = "done"
 	returned.LeaseOwner = ""
@@ -760,6 +763,135 @@ func TestUpdateOperationWithLeaseCanWriteTerminalAndClearLease(t *testing.T) {
 		"lease_expires_at = CASE WHEN $1 = 'running' THEN lease_expires_at ELSE NULL END",
 		"finished_at = CASE WHEN $1 IN ('succeeded', 'failed', 'cancelled') THEN COALESCE($10, $11) ELSE NULL END",
 	)
+}
+
+func TestCommitOperationWithLeaseAtomicallyUpdatesOperationAndAppendsAudit(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	returned := operationFixture(now.Add(-time.Hour))
+	returned.Type = operations.OperationExportCreate
+	returned.State = operations.OperationStateSucceeded
+	returned.Phase = "done"
+	returned.LeaseOwner = ""
+	returned.LeaseExpiresAt = nil
+	returned.ExternalResourceIDs = map[string]string{"jvs_repo_id": "jvs-commit-secret"}
+	returned.InputSummary = map[string]any{"command": "export --token commit-input-secret", "safe": "visible"}
+	returned.JVSJSONOutput = map[string]any{"token": "commit-output-secret"}
+	returned.FinishedAt = &now
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(returned.SanitizedForPersistence().Record())}}
+	st := &Store{exec: exec}
+
+	update := returned
+	event := commitAuditEvent("audit-op-alpha", "op-alpha", now)
+	event.Reason = "finished token=audit-reason-secret"
+	event.Resource.Path = "/control/root/raw-secret"
+	event.Details = map[string]any{"authorization": "Bearer audit-detail-secret", "safe": "visible"}
+
+	got, err := st.CommitOperationWithLease(context.Background(), update.SanitizedForPersistence(), "worker-a", now, event)
+	if err != nil {
+		t.Fatalf("CommitOperationWithLease: %v", err)
+	}
+	if got.ID != "op-alpha" || got.State != operations.OperationStateSucceeded || got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("committed operation = %#v", got)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"WITH updated_operation AS (",
+		"UPDATE operations SET",
+		"WHERE operation_id = $12",
+		"operation_state = 'running'",
+		"lease_owner = $13",
+		"lease_expires_at IS NOT NULL",
+		"lease_expires_at > $11",
+		"RETURNING",
+		"), inserted_audit AS (",
+		"INSERT INTO audit_outbox",
+		"SELECT",
+		"FROM updated_operation",
+		"RETURNING audit_event_id",
+		") SELECT",
+		"FROM updated_operation",
+		"WHERE EXISTS (SELECT 1 FROM inserted_audit)",
+	)
+	if strings.Contains(exec.query, "UPDATE operations SET") && strings.Contains(exec.query, "INSERT INTO audit_outbox") {
+		// The important assertion is that both mutations live in one QueryRow CTE.
+	} else {
+		t.Fatalf("commit SQL missing update or audit insert: %s", exec.query)
+	}
+	if len(exec.args) != len(operationLeaseFencedUpdateArgsForTest(t, update, "worker-a", now))+len(auditOutboxColumns) {
+		t.Fatalf("arg count = %d, want operation args plus audit args", len(exec.args))
+	}
+	if exec.queryRowCalls != 1 || exec.execCalls != 0 || exec.queryCalls != 0 {
+		t.Fatalf("executor calls queryRow/exec/query = %d/%d/%d, want 1/0/0", exec.queryRowCalls, exec.execCalls, exec.queryCalls)
+	}
+	rendered := strings.ToLower(renderArgs(t, exec.args...))
+	for _, forbidden := range []string{"commit-input-secret", "commit-output-secret", "jvs-commit-secret", "audit-reason-secret", "raw-secret", "audit-detail-secret"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("CommitOperationWithLease args leaked %q in %s", forbidden, rendered)
+		}
+	}
+}
+
+func TestCommitOperationWithLeaseRejectsInvalidRequestBeforeSQL(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := operationFixture(now.Add(-time.Hour))
+	tests := []struct {
+		name  string
+		owner string
+		now   time.Time
+		event audit.Event
+	}{
+		{name: "blank owner", owner: " \t", now: now, event: commitAuditEvent("audit-op-alpha", "op-alpha", now)},
+		{name: "zero now", owner: "worker-a", event: commitAuditEvent("audit-op-alpha", "op-alpha", now)},
+		{name: "missing audit operation", owner: "worker-a", now: now, event: commitAuditEvent("audit-op-alpha", "", now)},
+		{name: "mismatched audit operation", owner: "worker-a", now: now, event: commitAuditEvent("audit-op-alpha", "op-other", now)},
+		{name: "invalid audit event", owner: "worker-a", now: now, event: commitAuditEvent("", "op-alpha", now)},
+		{name: "invalid audit payload", owner: "worker-a", now: now, event: func() audit.Event {
+			event := commitAuditEvent("audit-op-alpha", "op-alpha", now)
+			event.Details = map[string]any{"bad": make(chan int)}
+			return event
+		}()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{}
+			st := &Store{exec: exec}
+
+			_, err := st.CommitOperationWithLease(context.Background(), record.SanitizedForPersistence(), tt.owner, tt.now, tt.event)
+			if err == nil {
+				t.Fatal("CommitOperationWithLease succeeded, want error")
+			}
+			if exec.query != "" {
+				t.Fatalf("issued SQL for invalid request: %s", exec.query)
+			}
+		})
+	}
+}
+
+func TestCommitOperationWithLeaseNoRowsWrapsLeaseUnavailable(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := operationFixture(now.Add(-time.Hour))
+	st := &Store{exec: &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}}
+
+	_, err := st.CommitOperationWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, commitAuditEvent("audit-op-alpha", "op-alpha", now))
+	if !errors.Is(err, operations.ErrLeaseUnavailable) || !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("CommitOperationWithLease error = %v, want ErrLeaseUnavailable and sql.ErrNoRows", err)
+	}
+}
+
+func TestCommitOperationWithLeaseAuditInsertFailureReturnsError(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := operationFixture(now.Add(-time.Hour))
+	insertErr := errors.New("audit insert failed")
+	exec := &fakeExecutor{row: fakeRow{err: insertErr}}
+	st := &Store{exec: exec}
+
+	_, err := st.CommitOperationWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, commitAuditEvent("audit-op-alpha", "op-alpha", now))
+	if !errors.Is(err, insertErr) {
+		t.Fatalf("CommitOperationWithLease error = %v, want audit insert error", err)
+	}
+	if !strings.Contains(exec.query, "WITH updated_operation AS") || !strings.Contains(exec.query, "INSERT INTO audit_outbox") {
+		t.Fatalf("commit did not use atomic CTE boundary: %s", exec.query)
+	}
 }
 
 func TestUpdateOperationWithLeaseReturnsUnavailableWhenLeaseExpiredOrReclaimed(t *testing.T) {
@@ -860,6 +992,31 @@ func operationIDsForPostgresTest(records []operations.OperationRecord) []string 
 	return out
 }
 
+func operationLeaseFencedUpdateArgsForTest(t *testing.T, record operations.OperationRecord, owner string, now time.Time) []any {
+	t.Helper()
+	args, err := operationLeaseFencedUpdateArgs(record.SanitizedForPersistence().Record(), owner, now)
+	if err != nil {
+		t.Fatalf("operationLeaseFencedUpdateArgs: %v", err)
+	}
+	return args
+}
+
+func commitAuditEvent(eventID, operationID string, now time.Time) audit.Event {
+	return audit.Event{
+		EventID:         eventID,
+		Type:            audit.EventTypeExportCreate,
+		Time:            now,
+		CallerService:   "afscp-api",
+		AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"},
+		CorrelationID:   "corr-alpha",
+		OperationID:     operationID,
+		Resource:        audit.Resource{Type: "repo", ID: "repo-alpha"},
+		Outcome:         audit.OutcomeSucceeded,
+		Reason:          "operation committed",
+		Details:         map[string]any{"safe": "visible"},
+	}
+}
+
 func ptrTime(value time.Time) *time.Time { return &value }
 
 func assertSQLContainsInOrder(t *testing.T, sql string, parts ...string) {
@@ -917,27 +1074,33 @@ func nullableArgString(value string) any {
 }
 
 type fakeExecutor struct {
-	query        string
-	args         []any
-	row          fakeRow
-	rows         fakeRows
-	err          error
-	rowsAffected int64
+	query         string
+	args          []any
+	row           fakeRow
+	rows          fakeRows
+	err           error
+	rowsAffected  int64
+	execCalls     int
+	queryRowCalls int
+	queryCalls    int
 }
 
 func (fake *fakeExecutor) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
+	fake.execCalls++
 	fake.query = query
 	fake.args = args
 	return fakeResult{rowsAffected: fake.rowsAffected}, fake.err
 }
 
 func (fake *fakeExecutor) QueryRowContext(_ context.Context, query string, args ...any) rowScanner {
+	fake.queryRowCalls++
 	fake.query = query
 	fake.args = args
 	return fake.row
 }
 
 func (fake *fakeExecutor) QueryContext(_ context.Context, query string, args ...any) (rowsScanner, error) {
+	fake.queryCalls++
 	fake.query = query
 	fake.args = args
 	return &fake.rows, fake.err
