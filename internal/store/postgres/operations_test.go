@@ -309,6 +309,12 @@ func TestListOperationsForRecoverySelectsOrderedCandidatesReadOnly(t *testing.T)
 	if strings.Contains(exec.query, "lease_expires_at > $1") {
 		t.Fatalf("ListOperationsForRecovery must not select live running leases: %s", exec.query)
 	}
+	cancelBranch := exec.query[strings.Index(exec.query, "operation_state = 'cancel_requested'"):]
+	if !strings.Contains(cancelBranch, "(lease_owner IS NULL AND lease_expires_at IS NOT NULL)") ||
+		!strings.Contains(cancelBranch, "(lease_owner IS NOT NULL AND btrim(lease_owner) = '')") ||
+		!strings.Contains(cancelBranch, "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NULL)") {
+		t.Fatalf("cancel_requested branch must include invalid lease pair visibility: %s", exec.query)
+	}
 	if !reflect.DeepEqual(exec.args, []any{now, 25}) {
 		t.Fatalf("args = %#v, want now and limit", exec.args)
 	}
@@ -584,8 +590,25 @@ func TestAcquireOperationLeasePassesExplicitRecoveryAndFinalizePolicies(t *testi
 		assertSQLContainsInOrder(t, exec.query,
 			"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN 'cancelled'",
 			"(operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation'",
+			"((lease_owner IS NULL AND lease_expires_at IS NULL) OR",
+			"(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4)",
 		)
 	})
+}
+
+func TestAcquireOperationLeaseFinalizeCancellationNoRowsIsLeaseUnavailable(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	st := &Store{exec: &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}}
+
+	_, err := st.AcquireOperationLease(context.Background(), "op-alpha", operations.LeaseRequest{
+		Owner:        "canceller",
+		Duration:     30 * time.Minute,
+		Now:          now,
+		CancelPolicy: operations.LeaseCancelPolicyFinalize,
+	})
+	if !errors.Is(err, operations.ErrLeaseUnavailable) || !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("AcquireOperationLease finalize cancellation error = %v, want ErrLeaseUnavailable and sql.ErrNoRows", err)
+	}
 }
 
 func TestAcquireOperationLeaseNoRowsWrapsLeaseUnavailableAndSQLNoRows(t *testing.T) {

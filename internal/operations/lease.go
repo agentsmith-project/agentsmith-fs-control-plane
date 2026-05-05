@@ -136,6 +136,9 @@ func AcquireLease(record OperationRecord, request LeaseRequest) LeaseDecision {
 			err := ValidateTransition(record.State, OperationStateRunning)
 			return denyLease(record, leaseTransition("operation_state", err))
 		}
+		if record.LeaseExpiresAt != nil && record.LeaseExpiresAt.After(request.Now) {
+			return denyLease(record, leaseUnavailable("lease_expires_at", "cancel requested operation lease is still live"))
+		}
 		return finalizeCancellation(record, request.Now)
 	default:
 		err := ValidateTransition(record.State, OperationStateRunning)

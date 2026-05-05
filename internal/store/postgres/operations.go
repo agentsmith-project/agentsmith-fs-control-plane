@@ -209,7 +209,7 @@ func operationRecoveryCandidatesSQL() string {
 	return operationSelectSQL() + " WHERE " +
 		"(operation_state = 'queued') OR " +
 		"(operation_state = 'running' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
-		"(operation_state = 'cancel_requested' AND (" + noLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'cancel_requested' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
 		"(operation_state = 'operator_intervention_required') " +
 		"ORDER BY created_at, operation_id LIMIT $2"
 }
@@ -235,6 +235,7 @@ func operationUpdateSQL() string {
 
 func operationAcquireLeaseSQL() string {
 	validLeasePair := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL))"
+	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
 	return "UPDATE operations SET " +
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
@@ -247,7 +248,7 @@ func operationAcquireLeaseSQL() string {
 		"(operation_state = 'queued' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'operator_intervention_required' AND $5 = 'explicit_recovery_action' AND " + validLeasePair + ") OR " +
-		"(operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' AND " + validLeasePair + ")" +
+		"(operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
 		") RETURNING " + strings.Join(operationSelectColumns, ", ")
 }
 

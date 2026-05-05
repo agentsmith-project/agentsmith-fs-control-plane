@@ -223,6 +223,36 @@ func TestCancelRequestedDoesNotBecomeRunningWithoutExplicitPolicy(t *testing.T) 
 	}
 }
 
+func TestCancelRequestedFinalizeWaitsForLiveLease(t *testing.T) {
+	now := leaseTestTime()
+	liveLease := now.Add(time.Minute)
+	record := OperationRecord{
+		ID:             "op-cancel",
+		State:          OperationStateCancelRequested,
+		Attempt:        3,
+		LeaseOwner:     "worker-a",
+		LeaseExpiresAt: &liveLease,
+	}
+	request := LeaseRequest{
+		Owner:        "canceller",
+		Duration:     time.Minute,
+		Now:          now,
+		CancelPolicy: LeaseCancelPolicyFinalize,
+	}
+
+	decision := AcquireLease(record, request)
+	if decision.Allowed {
+		t.Fatalf("AcquireLease finalized live cancel_requested lease: %#v", decision)
+	}
+	assertLeaseError(t, decision.Error, ErrLeaseUnavailable)
+	if decision.Record.State != record.State ||
+		decision.Record.Attempt != record.Attempt ||
+		decision.Record.LeaseOwner != record.LeaseOwner ||
+		!sameTimePtr(decision.Record.LeaseExpiresAt, liveLease) {
+		t.Fatalf("decision record = %#v, want original record %#v", decision.Record, record)
+	}
+}
+
 func TestAcquireLeaseRejectsInvalidInputsAndExistingRecords(t *testing.T) {
 	now := leaseTestTime()
 	validRecord := OperationRecord{ID: "op-queued", State: OperationStateQueued}
