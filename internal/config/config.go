@@ -76,6 +76,7 @@ type WorkerOperationRecoveryConfig struct {
 	Limit         int
 	LeaseDuration time.Duration
 	RepoCreate    WorkerRepoCreateRecoveryConfig
+	RepoLifecycle WorkerRepoCreateRecoveryConfig
 }
 
 type WorkerRepoCreateRecoveryConfig struct {
@@ -179,6 +180,11 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.OperationRecovery.RepoCreate = repoCreate
+	repoLifecycle, err := loadRepoLifecycleRecoveryConfig(source)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.OperationRecovery.RepoLifecycle = repoLifecycle
 
 	limit, err := intValue(source, "AFSCP_OPERATION_RECOVERY_LIMIT", worker.OperationRecovery.Limit)
 	if err != nil {
@@ -220,7 +226,15 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 }
 
 func loadRepoCreateRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
-	enabled, err := boolValue(source, "AFSCP_REPO_CREATE_RECOVERY_ENABLED")
+	return loadJVSOperationRecoveryConfig(source, "AFSCP_REPO_CREATE_RECOVERY_ENABLED")
+}
+
+func loadRepoLifecycleRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
+	return loadJVSOperationRecoveryConfig(source, "AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED")
+}
+
+func loadJVSOperationRecoveryConfig(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {
+	enabled, err := boolValue(source, gateKey)
 	if err != nil {
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
@@ -229,7 +243,7 @@ func loadRepoCreateRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig
 		return cfg, nil
 	}
 	cfg.JVSBinaryPath = valueOrDefault(source, "AFSCP_JVS_BINARY_PATH", "")
-	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_BINARY_PATH", cfg.JVSBinaryPath); err != nil {
+	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_BINARY_PATH", cfg.JVSBinaryPath, gateKey); err != nil {
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	cfg.JVSBinarySHA256 = strings.ToLower(valueOrDefault(source, "AFSCP_JVS_BINARY_SHA256", ""))
@@ -237,11 +251,11 @@ func loadRepoCreateRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig
 		return WorkerRepoCreateRecoveryConfig{}, fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must be a sha256 hex digest")
 	}
 	cfg.JVSCWD = valueOrDefault(source, "AFSCP_JVS_CWD", "")
-	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_CWD", cfg.JVSCWD); err != nil {
+	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_CWD", cfg.JVSCWD, gateKey); err != nil {
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	rootsRaw := valueOrDefault(source, "AFSCP_VOLUME_ROOTS", "")
-	roots, err := parseVolumeRoots(rootsRaw)
+	roots, err := parseVolumeRoots(rootsRaw, gateKey)
 	if err != nil {
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
@@ -249,9 +263,9 @@ func loadRepoCreateRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig
 	return cfg, nil
 }
 
-func validateCleanAbsoluteConfigPath(key, path string) error {
+func validateCleanAbsoluteConfigPath(key, path, gateKey string) error {
 	if path == "" {
-		return fmt.Errorf("%s is required when AFSCP_REPO_CREATE_RECOVERY_ENABLED is true", key)
+		return fmt.Errorf("%s is required when %s is true", key, gateKey)
 	}
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || path == string(filepath.Separator) {
 		return fmt.Errorf("%s must be an absolute clean path", key)
@@ -271,10 +285,10 @@ func validSHA256Hex(value string) bool {
 	return true
 }
 
-func parseVolumeRoots(raw string) (map[string]string, error) {
+func parseVolumeRoots(raw, gateKey string) (map[string]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS is required when AFSCP_REPO_CREATE_RECOVERY_ENABLED is true")
+		return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS is required when %s is true", gateKey)
 	}
 	roots := map[string]string{}
 	for _, part := range strings.Split(raw, ",") {
@@ -301,7 +315,7 @@ func parseVolumeRoots(raw string) (map[string]string, error) {
 		roots[volumeID] = root
 	}
 	if len(roots) == 0 {
-		return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS is required when AFSCP_REPO_CREATE_RECOVERY_ENABLED is true")
+		return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS is required when %s is true", gateKey)
 	}
 	return roots, nil
 }

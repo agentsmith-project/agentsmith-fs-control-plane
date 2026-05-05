@@ -42,6 +42,9 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	if cfg.Worker.OperationRecovery.RepoCreate.Enabled {
 		t.Fatal("repo_create recovery enabled by default, want disabled")
 	}
+	if cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
+		t.Fatal("repo lifecycle recovery enabled by default, want disabled")
+	}
 }
 
 func TestLoadNormalizesFieldsAndCapabilities(t *testing.T) {
@@ -149,6 +152,41 @@ func TestLoadRepoCreateRecoveryParsesValidConfig(t *testing.T) {
 	}
 	if repo.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" || repo.VolumeRoots["vol_other"] != "/srv/afscp/volumes/vol_other" {
 		t.Fatalf("volume roots = %#v", repo.VolumeRoots)
+	}
+}
+
+func TestLoadRepoLifecycleRecoveryRequiresExplicitConfigWhenEnabled(t *testing.T) {
+	_, err := Load(MapSource{
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
+		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
+		"AFSCP_WORKER_OWNER":                      "worker-a",
+		"AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED":   "true",
+	})
+	if err == nil {
+		t.Fatal("Load succeeded, want repo lifecycle config error")
+	}
+	if !strings.Contains(err.Error(), "AFSCP_JVS_BINARY_PATH") {
+		t.Fatalf("error = %q, want binary path config error", err)
+	}
+}
+
+func TestLoadRepoLifecycleRecoveryParsesValidConfig(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
+		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
+		"AFSCP_WORKER_OWNER":                      "worker-a",
+		"AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED":   "true",
+		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":                 strings.Repeat("b", 64),
+		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	lifecycle := cfg.Worker.OperationRecovery.RepoLifecycle
+	if !lifecycle.Enabled || lifecycle.JVSBinaryPath != "/opt/afscp/bin/jvs" || lifecycle.JVSBinarySHA256 != strings.Repeat("b", 64) || lifecycle.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
+		t.Fatalf("repo lifecycle config = %#v", lifecycle)
 	}
 }
 

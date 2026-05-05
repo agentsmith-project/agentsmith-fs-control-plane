@@ -83,6 +83,8 @@ const (
 
 const unsupportedOperationRecoveryReason = "unsupported_operation_recovery"
 
+var ErrOperationManualIntervention = errors.New("operation recovery committed operator intervention")
+
 func NewOperationCoordinator(config OperationConfig) OperationCoordinator {
 	return OperationCoordinator{config: config}
 }
@@ -132,10 +134,15 @@ func (coordinator OperationCoordinator) RunOnce(ctx context.Context) (OperationB
 				}
 				continue
 			}
-			if fatal := executeOperation(ctx, config, updated, plan, &result, item); fatal != nil {
+			countClaim, fatal := executeOperation(ctx, config, updated, plan, &result, item)
+			if fatal != nil {
 				return result, fatal
 			}
-			result.Claimed++
+			if countClaim {
+				result.Claimed++
+			} else {
+				continue
+			}
 		case inspection.RecoveryActionReclaim:
 			item.Outcome = OperationOutcomeReclaimed
 			if !operationSupported(ctx, config, record, plan, &result, item) {
@@ -148,10 +155,15 @@ func (coordinator OperationCoordinator) RunOnce(ctx context.Context) (OperationB
 				}
 				continue
 			}
-			if fatal := executeOperation(ctx, config, updated, plan, &result, item); fatal != nil {
+			countReclaim, fatal := executeOperation(ctx, config, updated, plan, &result, item)
+			if fatal != nil {
 				return result, fatal
 			}
-			result.Reclaimed++
+			if countReclaim {
+				result.Reclaimed++
+			} else {
+				continue
+			}
 		case inspection.RecoveryActionFinalizeCancellation:
 			item.Outcome = OperationOutcomeFinalized
 			if _, err := acquireOperation(ctx, config, record.ID, operations.LeaseCancelPolicyFinalize); err != nil {
@@ -236,15 +248,22 @@ func operationSupported(ctx context.Context, config OperationConfig, record oper
 	return false
 }
 
-func executeOperation(ctx context.Context, config OperationConfig, record operations.OperationRecord, plan RecoveryPlan, result *OperationBatchResult, item OperationResult) error {
+func executeOperation(ctx context.Context, config OperationConfig, record operations.OperationRecord, plan RecoveryPlan, result *OperationBatchResult, item OperationResult) (bool, error) {
 	if err := config.Executor.ExecuteOperationRecovery(ctx, record, plan); err != nil {
+		if errors.Is(err, ErrOperationManualIntervention) {
+			item.Outcome = OperationOutcomeManual
+			item.Error = err
+			result.Manual++
+			result.Results = append(result.Results, item)
+			return false, nil
+		}
 		item.Outcome = OperationOutcomeFailed
 		item.Error = err
 		result.Failed++
 		result.Results = append(result.Results, item)
-		return fmt.Errorf("operation recovery execute %q: %w", item.OperationID, err)
+		return false, fmt.Errorf("operation recovery execute %q: %w", item.OperationID, err)
 	}
-	return nil
+	return true, nil
 }
 
 func recordAcquireError(result *OperationBatchResult, item OperationResult, err error) error {

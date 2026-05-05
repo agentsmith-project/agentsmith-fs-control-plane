@@ -15,6 +15,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
 )
 
@@ -180,6 +181,156 @@ func TestRunOnceRepoCreateEnabledClaimsThroughRepoExecutor(t *testing.T) {
 	}
 	if strings.Join(jvs.calls, ",") != "init,doctor" {
 		t.Fatalf("jvs calls = %#v, want init,doctor", jvs.calls)
+	}
+}
+
+func TestRunOnceRepoLifecycleDisabledDoesNotListLifecycle(t *testing.T) {
+	now := workerAppNow()
+	lifecycleRecord := workerAppRepoLifecycleOperationRecord("op_archive", operations.OperationRepoArchive, now)
+	store := newWorkerAppStore(lifecycleRecord)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 0 || summary.Claimed != 0 || strings.Join(store.acquireIDs, ",") != "" {
+		t.Fatalf("summary/acquire = %#v/%#v, want repo lifecycle ignored while gate disabled", summary, store.acquireIDs)
+	}
+}
+
+func TestRunOnceRepoLifecycleEnabledArchivesThroughLifecycleExecutor(t *testing.T) {
+	now := workerAppNow()
+	lifecycleRecord := workerAppRepoLifecycleOperationRecord("op_archive", operations.OperationRepoArchive, now)
+	store := newWorkerAppStore(lifecycleRecord)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoLifecycleConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_lifecycle" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want lifecycle archive claimed", summary)
+	}
+	if store.repo.Status != resources.RepoStatusArchived || store.operation.Type != operations.OperationRepoArchive || store.operation.State != operations.OperationStateSucceeded || store.releasedFenceID == "" || len(store.auditEvents) != 1 {
+		t.Fatalf("repo/operation/release/audit = %#v/%#v/%q/%#v", store.repo, store.operation, store.releasedFenceID, store.auditEvents)
+	}
+}
+
+func TestRunOnceRepoLifecycleFinalizeCancellationReleasesSameOperationFence(t *testing.T) {
+	now := workerAppNow()
+	cancelRecord := workerAppRepoLifecycleOperationRecord("op_archive", operations.OperationRepoArchive, now)
+	cancelRecord.State = operations.OperationStateCancelRequested
+	store := newWorkerAppStore(cancelRecord)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	store.fences = []fences.Fence{{
+		ID:                "fence_op_archive",
+		RepoID:            "repo_alpha01",
+		Kind:              fences.KindLifecycle,
+		HolderOperationID: "op_archive",
+		Status:            fences.StatusActive,
+		ExpiresAt:         now.Add(time.Hour),
+		CreatedAt:         now.Add(-time.Hour),
+		UpdatedAt:         now.Add(-time.Hour),
+	}}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoLifecycleConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_lifecycle" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Finalized != 1 || summary.Claimed != 0 || summary.Failed != 0 {
+		t.Fatalf("summary = %#v, want finalized cancellation", summary)
+	}
+	got := store.records[cancelRecord.ID]
+	if got.State != operations.OperationStateCancelled || store.releasedFenceID != "fence_op_archive" {
+		t.Fatalf("operation/release = %#v/%q, want cancelled with fence release", got, store.releasedFenceID)
+	}
+}
+
+func TestRunOnceRepoLifecycleOperatorInterventionReturnsManualError(t *testing.T) {
+	now := workerAppNow()
+	lifecycleRecord := workerAppRepoLifecycleOperationRecord("op_restore", operations.OperationRepoRestoreArchived, now)
+	store := newWorkerAppStore(lifecycleRecord)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusArchived)
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoLifecycleConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_other", Healthy: true, Workspace: "main"}}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_lifecycle" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want manual intervention error")
+	}
+	summary := result.Summary().Operation
+	if summary.Manual != 1 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want manual=1 failed=0 unsupported=0", summary)
+	}
+	if !strings.Contains(err.Error(), "manual=1") {
+		t.Fatalf("error = %v, want manual count", err)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired {
+		t.Fatalf("operation = %#v, want operator intervention", store.operation)
+	}
+}
+
+func TestRunOnceRepoLifecycleEnabledMissingJVSConfigFailsClosed(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore(workerAppRepoLifecycleOperationRecord("op_archive", operations.OperationRepoArchive, now))
+
+	_, err := NewRunOnceRunner(Options{
+		Source: workerAppConfigSource(config.MapSource{"AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED": "true"}),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		Clock: func() time.Time { return now },
+	})
+	if err == nil {
+		t.Fatal("NewRunOnceRunner succeeded, want lifecycle JVS config error")
+	}
+	if strings.Contains(err.Error(), "postgres://") || strings.Contains(err.Error(), "/srv/") {
+		t.Fatalf("error leaked config detail: %v", err)
 	}
 }
 
@@ -621,6 +772,20 @@ func workerAppRepoConfigSource(overrides config.MapSource) config.MapSource {
 	return source
 }
 
+func workerAppRepoLifecycleConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppConfigSource(config.MapSource{
+		"AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED": "true",
+		"AFSCP_JVS_BINARY_PATH":                 "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":               strings.Repeat("a", 64),
+		"AFSCP_JVS_CWD":                         "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                    "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return source
+}
+
 func workerAppOperationRecord(now time.Time) operations.OperationRecord {
 	return operations.OperationRecord{
 		ID:               "op_namespace",
@@ -665,6 +830,42 @@ func workerAppRepoCreateOperationRecord(operationID string, now time.Time) opera
 	record.Resource = operations.ResourceRef{Type: "repo", ID: "repo_alpha01"}
 	record.InputSummary = map[string]any{"namespace_id": "ns_alpha01", "target_repo_id": "repo_alpha01"}
 	return record
+}
+
+func workerAppRepoLifecycleOperationRecord(operationID string, typ operations.OperationType, now time.Time) operations.OperationRecord {
+	return operations.OperationRecord{
+		ID:               operationID,
+		Type:             typ,
+		State:            operations.OperationStateQueued,
+		Phase:            operations.OperationPhaseRepoLifecycleValidate,
+		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", typ, operationID).String(),
+		IdempotencyKey:   operationID,
+		RequestHash:      operations.RequestHash("sha256:lifecycle"),
+		CorrelationID:    "corr-alpha",
+		CallerService:    "agentsmith-api",
+		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
+		NamespaceID:      "ns_alpha01",
+		RepoID:           "repo_alpha01",
+		InputSummary:     map[string]any{"repo_id": "repo_alpha01", "reason_present": false},
+		CreatedAt:        now.Add(-time.Hour),
+	}
+}
+
+func workerAppRepoLifecycleResource(now time.Time, status resources.RepoStatus) resources.Repo {
+	return resources.Repo{
+		ID:                  "repo_alpha01",
+		NamespaceID:         "ns_alpha01",
+		VolumeID:            "vol_123",
+		JVSRepoID:           "jvs_repo_alpha",
+		Kind:                resources.RepoKindRepo,
+		Status:              status,
+		ControlVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/control",
+		PayloadVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload",
+		Lifecycle:           resources.RepoLifecycle{Status: status, LastLifecycleOperationID: "op_repo_create"},
+		CreatedAt:           now.Add(-time.Hour),
+		UpdatedAt:           now,
+	}
 }
 
 func workerAppVolumeOperationRecord(operationID string, now time.Time) operations.OperationRecord {
@@ -735,6 +936,8 @@ type fakeWorkerAppStore struct {
 	repo            resources.Repo
 	namespace       resources.Namespace
 	binding         resources.NamespaceVolumeBinding
+	exports         []sessionstate.ExportSession
+	mounts          []sessionstate.WorkloadMountBinding
 	operation       operations.OperationRecord
 	auditEvents     []audit.Event
 	fences          []fences.Fence
@@ -923,6 +1126,31 @@ func (store *fakeWorkerAppStore) ListRepoCreateOperationsForRecovery(ctx context
 	return out, nil
 }
 
+func (store *fakeWorkerAppStore) ListRepoLifecycleOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		store.listDeadline = deadline
+	}
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if (record.Type != operations.OperationRepoArchive && record.Type != operations.OperationRepoRestoreArchived) || record.Phase != operations.OperationPhaseRepoLifecycleValidate {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+		case operations.OperationStateRunning, operations.OperationStateCancelRequested:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (store *fakeWorkerAppStore) AcquireRepoCreateOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	record, ok := store.records[operationID]
 	if !ok {
@@ -938,6 +1166,48 @@ func (store *fakeWorkerAppStore) AcquireRepoCreateOperationLease(_ context.Conte
 		return operations.OperationRecord{}, decision.Error
 	}
 	store.records[operationID] = decision.Record
+	if decision.Action == operations.LeaseActionFinalizeCancellation {
+		for idx, fence := range store.fences {
+			if fence.RepoID == record.RepoID && fence.Kind == fences.KindLifecycle && fence.HolderOperationID == record.ID && fence.Status == fences.StatusActive && fence.ReleasedAt == nil && fence.RecoveredAt == nil {
+				releasedAt := request.Now
+				store.fences[idx].Status = fences.StatusReleased
+				store.fences[idx].ReleasedAt = &releasedAt
+				store.fences[idx].UpdatedAt = releasedAt
+				store.releasedFenceID = fence.ID
+				break
+			}
+		}
+	}
+	return decision.Record, nil
+}
+
+func (store *fakeWorkerAppStore) AcquireRepoLifecycleOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if (record.Type != operations.OperationRepoArchive && record.Type != operations.OperationRepoRestoreArchived) || record.Phase != operations.OperationPhaseRepoLifecycleValidate {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	if decision.Action == operations.LeaseActionFinalizeCancellation {
+		for idx, fence := range store.fences {
+			if fence.RepoID == record.RepoID && fence.Kind == fences.KindLifecycle && fence.HolderOperationID == record.ID && fence.Status == fences.StatusActive && fence.ReleasedAt == nil && fence.RecoveredAt == nil {
+				releasedAt := request.Now
+				store.fences[idx].Status = fences.StatusReleased
+				store.fences[idx].ReleasedAt = &releasedAt
+				store.fences[idx].UpdatedAt = releasedAt
+				store.releasedFenceID = fence.ID
+				break
+			}
+		}
+	}
 	return decision.Record, nil
 }
 
@@ -997,6 +1267,36 @@ func (store *fakeWorkerAppStore) CommitRepoCreateFailedWithLease(_ context.Conte
 	return operation, nil
 }
 
+func (store *fakeWorkerAppStore) CommitRepoLifecycleSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.repo = repo
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	store.releasedFenceID = fenceID
+	return repo, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitRepoLifecycleFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	store.releasedFenceID = releaseFenceID
+	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
+	if store.repo.ID == "" {
+		return resources.Repo{}, errors.New("repo not found")
+	}
+	return store.repo, nil
+}
+
 func (store *fakeWorkerAppStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
 	return resources.Namespace{ID: "ns_alpha01", Status: resources.NamespaceStatusActive, CreatedAt: workerAppNow().Add(-time.Hour), UpdatedAt: workerAppNow()}, nil
 }
@@ -1028,6 +1328,14 @@ func (store *fakeWorkerAppStore) ListHeldRepoFences(context.Context, string) ([]
 func (store *fakeWorkerAppStore) CreateRepoFence(_ context.Context, fence fences.Fence) error {
 	store.fences = append(store.fences, fence)
 	return nil
+}
+
+func (store *fakeWorkerAppStore) ListExportSessionsByRepo(context.Context, string) ([]sessionstate.ExportSession, error) {
+	return store.exports, nil
+}
+
+func (store *fakeWorkerAppStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
+	return store.mounts, nil
 }
 
 type fakeOperationRecoveryRunner struct {

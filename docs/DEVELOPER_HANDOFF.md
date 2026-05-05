@@ -1,9 +1,10 @@
 # Developer Handoff
 
 Status: neutral Go skeleton, contract guardrails, resource metadata
-persistence, metadata recovery workers, and opt-in `repo_create` JVS execution
-are in place; broader repo lifecycle, WebDAV, mount, save/restore, template,
-and audit delivery workers remain unimplemented.
+persistence, metadata recovery workers, opt-in `repo_create` JVS execution, and
+the first opt-in repo lifecycle recovery loop for archive/restore-archived are
+in place; delete/restore-tombstoned/purge, WebDAV, mount, save/restore,
+template, and audit delivery workers remain unimplemented.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -120,6 +121,12 @@ Completed:
 - opt-in `repo_create` recovery through `afscp-worker --run-once`, `repoexec`,
   JVS `init`/`doctor --strict`, dedicated PostgreSQL atomic commit, and fence
   release when the explicit repo create recovery gate is enabled
+- opt-in repo lifecycle recovery for `repo_archive` and
+  `repo_restore_archived` through `afscp-worker --run-once`, `repoexec`,
+  dedicated scoped PostgreSQL list/acquire/commit boundaries, lifecycle fence
+  release on success, session drain checks for archive, and JVS
+  `doctor --strict` verification for restore-archived when the explicit repo
+  lifecycle recovery gate is enabled
 - namespace-bound repo read handlers for `GET /internal/v1/repos/{repoId}` and
   `GET /internal/v1/repos?namespace_id=&lifecycle_status=`, exposed through
   `InternalAPIShell` as repo storage projections without product catalog fields
@@ -131,9 +138,9 @@ Completed:
   status, namespace/binding status, writer-session fences, lifecycle fences,
   and lifecycle source-status rules; it is not wired to concrete handlers yet
 - session substrate pure model for export and workload-mount session state,
-  restore-run writer gating, and repo lifecycle drain gating; it is not wired to
-  WebDAV gateway, mount plan, lifecycle worker execution, or storage adapters
-  yet
+  restore-run writer gating, and repo lifecycle drain gating; it is wired into
+  repo archive recovery drain checks, but not yet to WebDAV gateway, mount plan,
+  restore-run execution, or storage-backed session handlers
 - audit outbox pure model and tests
 - pure recovery planner/classification for operation, fence, audit outbox, and
   repo recovery inspection durable records
@@ -155,9 +162,10 @@ Partially completed:
   metadata-only namespace upsert and namespace volume binding intake/read
   handlers implemented, plus repo create intake, repo lifecycle operation
   intake/admission, namespace-bound repo read storage projections, and operation
-  inspection. Repo lifecycle workers/storage mutation, JVS lifecycle, WebDAV,
-  mount, save/restore, template, session drain execution, and storage-backed
-  handlers beyond the listed intake/read surfaces remain unimplemented.
+  inspection. Repo lifecycle delete/restore-tombstoned/purge workers, JVS
+  lifecycle beyond restore-archived doctor, WebDAV, mount, save/restore,
+  template, session drain execution, and storage-backed handlers beyond the
+  listed intake/read surfaces remain unimplemented.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
   models. The first PostgreSQL adapter slice implements operation read/write,
@@ -170,28 +178,33 @@ Partially completed:
   recovery planner and repo recovery inspection classify existing durable
   record values into high-level actions. `afscp-worker --run-once` now has an
   opt-in production bootstrap for the minimal `volume_ensure`,
-  `namespace_upsert`, `namespace_volume_binding_put`, and explicit-gated
-  `repo_create` recovery executors. With the repo create gate enabled,
-  `repo_create` runs JVS `init` plus `doctor --strict` and commits through the
-  dedicated PostgreSQL repo-create boundary with fence release; it does not
-  implement repo lifecycle archive/delete/restore/purge, save/restore,
-  template, WebDAV, mount, or external audit delivery.
+  `namespace_upsert`, `namespace_volume_binding_put`, explicit-gated
+  `repo_create`, and explicit-gated `repo_archive`/`repo_restore_archived`
+  recovery executors. With the repo create gate enabled, `repo_create` runs JVS
+  `init` plus `doctor --strict` and commits through the dedicated PostgreSQL
+  repo-create boundary with fence release. With the repo lifecycle recovery gate
+  enabled, archive and restore-archived commit through dedicated PostgreSQL repo
+  lifecycle boundaries with fence release. It does not implement repo delete,
+  restore-tombstoned, purge, save/restore, template, WebDAV, mount, or external
+  audit delivery.
 - Path resolver guardrails exist and are used by repo create recovery; broader
-  WebDAV, mount, file API, and lifecycle integration remains absent.
+  WebDAV, mount, file API, and remaining lifecycle integration remains absent.
 
 Not implemented:
 
-- real repo lifecycle archive/delete/restore/purge workers or storage state
+- real repo lifecycle delete/restore-tombstoned/purge workers or storage state
   transitions
 - real template, export, mount, save, or restore handlers
-- repo lifecycle workers/storage mutation, session drain execution, and JVS
-  save/restore/template/export/mount handlers; repo lifecycle intake/admission
-  handlers already exist
+- repo lifecycle delete/restore-tombstoned/purge workers, session drain
+  execution beyond archive gating, and JVS save/restore/template/export/mount
+  handlers; repo lifecycle intake/admission handlers and archive/restore-archived
+  recovery already exist
 - concrete handler wiring for the session admission model beyond lifecycle
   intake checks; repo access admission is already wired for lifecycle
   intake/admission
 - real external audit delivery worker/sink integration
-- JVS execution beyond repo create `init`/`doctor --strict`
+- JVS execution beyond repo create `init`/`doctor --strict` and
+  restore-archived `doctor --strict`
 - WebDAV export gateway file serving
 - workload mount issuance or orchestrator mount plans
 - session drain, broader fence enforcement, or lifecycle mutation
@@ -207,13 +220,13 @@ Continue in dependency order:
 3. Add recovery loop behavior only after the remaining durable primitives have
    tests.
 4. Implement volume and namespace binding APIs.
-5. Continue from implemented repo create intake and explicit-gated
-   `repo_create` JVS recovery toward the remaining repo lifecycle,
-   export/WebDAV, workload mount, save/restore, and template handlers only
-   after their dependency gates are accepted. G-005 is closed by JVS v0.4.8
-   evidence; remaining repo/JVS/storage work may proceed only through accepted
-   contracts, fences, session drain, operation leases, audit behavior, and
-   focused tests.
+5. Continue from implemented repo create intake, explicit-gated `repo_create`
+   JVS recovery, and explicit-gated archive/restore-archived lifecycle recovery
+   toward the remaining repo lifecycle, export/WebDAV, workload mount,
+   save/restore, and template handlers only after their dependency gates are
+   accepted. G-005 is closed by JVS v0.4.8 evidence; remaining repo/JVS/storage
+   work may proceed only through accepted contracts, fences, session drain,
+   operation leases, audit behavior, and focused tests.
 
 ## JVS Gate Status
 
@@ -221,20 +234,25 @@ G-005 is closed. JVS v0.4.8 is pinned and smoke-tested in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`; the v0.4.7 blocker evidence
 remains historical in `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
 
-This closes the JVS gate and repo create now has an explicit-gated worker path.
-Remaining storage mutation still requires accepted contracts, fences, session
-drain, operation leases, audit behavior, and focused tests. AFSCP must not
-delete private JVS files directly.
+This closes the JVS gate. Repo create and restore-archived now have
+explicit-gated worker paths for their pinned JVS commands. Remaining storage
+mutation still requires accepted contracts, fences, session drain, operation
+leases, audit behavior, and focused tests. AFSCP must not delete private JVS
+files directly.
 
 ## Repo Lifecycle Rules
 
-Repo lifecycle is in GA:
+Repo lifecycle GA target contract rules cover:
 
 - `archive`
 - `restore-archived`
 - `delete`
 - `restore-tombstoned`
 - `purge`
+
+Current implementation only includes opt-in worker execution for `archive` and
+`restore-archived`. `delete`, `restore-tombstoned`, and `purge` remain
+unimplemented worker paths.
 
 Important behavior:
 

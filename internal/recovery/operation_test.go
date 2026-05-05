@@ -404,6 +404,35 @@ func TestOperationCoordinatorReturnsExecutorErrorWithPartialResult(t *testing.T)
 	}
 }
 
+func TestOperationCoordinatorCountsCommittedOperatorInterventionAsManual(t *testing.T) {
+	now := recoveryTestNow()
+	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
+		{ID: "op_intervention", State: operations.OperationStateQueued},
+	}}
+	store := &fakeOperationLeaseStore{}
+	executor := &fakeOperationExecutor{err: ErrOperationManualIntervention}
+	coordinator := NewOperationCoordinator(OperationConfig{
+		Reader:        reader,
+		LeaseStore:    store,
+		Executor:      executor,
+		Owner:         "recovery-worker",
+		LeaseDuration: time.Minute,
+		Limit:         10,
+		Now:           now,
+	})
+
+	result, err := coordinator.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.Manual != 1 || result.Failed != 0 || result.Unsupported != 0 {
+		t.Fatalf("result = %#v, want manual=1 failed=0 unsupported=0", result)
+	}
+	if len(result.Results) != 1 || result.Results[0].Outcome != OperationOutcomeManual {
+		t.Fatalf("results = %#v, want manual outcome", result.Results)
+	}
+}
+
 func TestOperationCoordinatorReaderErrorDoesNotCallLeaseStoreOrExecutor(t *testing.T) {
 	now := recoveryTestNow()
 	readerErr := errors.New("reader failed")

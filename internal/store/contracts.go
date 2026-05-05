@@ -179,6 +179,34 @@ type RepoCreateOperationRecoveryStore interface {
 	RepoCreateOperationMetadataReader
 }
 
+type RepoLifecycleOperationCommitStore interface {
+	CommitRepoLifecycleSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error)
+	CommitRepoLifecycleFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error)
+}
+
+type RepoLifecycleOperationMetadataReader interface {
+	GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error)
+	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
+	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
+	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
+	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
+	CreateRepoFence(ctx context.Context, fence fences.Fence) error
+	ListExportSessionsByRepo(ctx context.Context, repoID string) ([]sessionstate.ExportSession, error)
+	ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error)
+}
+
+// RepoLifecycleOperationRecoveryStore owns repo_archive and
+// repo_restore_archived recovery. Implementations must scope list/acquire at
+// the durable boundary to those operation types and validate_repo_lifecycle,
+// and terminal writes must atomically update repo lifecycle metadata,
+// operation state, audit outbox, and lifecycle fence release when applicable.
+type RepoLifecycleOperationRecoveryStore interface {
+	ListRepoLifecycleOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireRepoLifecycleOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	RepoLifecycleOperationCommitStore
+	RepoLifecycleOperationMetadataReader
+}
+
 // AuditSink accepts audit events for append-only or outbox-backed delivery.
 type AuditSink interface {
 	AppendAuditEvent(ctx context.Context, event audit.Event) error

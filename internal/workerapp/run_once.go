@@ -23,6 +23,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store/postgres"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/volumeexec"
@@ -36,6 +37,7 @@ type OperationRecoveryStore interface {
 	store.NamespaceUpsertOperationRecoveryStore
 	store.NamespaceVolumeBindingOperationRecoveryStore
 	store.RepoCreateOperationRecoveryStore
+	store.RepoLifecycleOperationRecoveryStore
 }
 
 type StoreFactory func(context.Context, string) (StoreHandle, error)
@@ -170,6 +172,35 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		executors = append(executors, repoExecutor)
 		scopedStore.repoCreateEnabled = true
 	}
+	if opConfig.RepoLifecycle.Enabled {
+		jvsFactory := options.JVSRunnerFactory
+		if jvsFactory == nil {
+			jvsFactory = NewJVSRunnerFromConfig
+		}
+		jvs, err := jvsFactory(opConfig.RepoLifecycle)
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		lifecycleExecutor, err := repoexec.NewLifecycleExecutor(repoexec.LifecycleConfig{
+			Store:        scopedStore,
+			JVSRunner:    jvs,
+			Owner:        opConfig.Owner,
+			Clock:        now,
+			AuditEventID: func() string { return eventID() },
+			VolumeRoots:  opConfig.RepoLifecycle.VolumeRoots,
+		})
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		executors = append(executors, lifecycleExecutor)
+		scopedStore.repoLifecycleEnabled = true
+	}
 	operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
 		Reader:        scopedStore,
 		LeaseStore:    scopedStore,
@@ -261,8 +292,9 @@ func nowFunc(clock func() time.Time) func() time.Time {
 }
 
 type operationRecoveryStore struct {
-	store             OperationRecoveryStore
-	repoCreateEnabled bool
+	store                OperationRecoveryStore
+	repoCreateEnabled    bool
+	repoLifecycleEnabled bool
 }
 
 func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
@@ -287,6 +319,13 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 		}
 		records = append(records, repoRecords...)
 	}
+	if scoped.repoLifecycleEnabled {
+		lifecycleRecords, err := scoped.store.ListRepoLifecycleOperationsForRecovery(ctx, now, limit)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, lifecycleRecords...)
+	}
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
 			return records[i].ID < records[j].ID
@@ -309,10 +348,19 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 		return record, err
 	}
 	record, err = scoped.store.AcquireNamespaceVolumeBindingPutOperationLease(ctx, operationID, request)
-	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || !scoped.repoCreateEnabled {
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
 		return record, err
 	}
-	return scoped.store.AcquireRepoCreateOperationLease(ctx, operationID, request)
+	if scoped.repoCreateEnabled {
+		record, err = scoped.store.AcquireRepoCreateOperationLease(ctx, operationID, request)
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || !scoped.repoLifecycleEnabled {
+			return record, err
+		}
+	}
+	if scoped.repoLifecycleEnabled {
+		return scoped.store.AcquireRepoLifecycleOperationLease(ctx, operationID, request)
+	}
+	return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 }
 
 func (scoped operationRecoveryStore) RenewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
@@ -343,6 +391,18 @@ func (scoped operationRecoveryStore) CommitRepoCreateFailedWithLease(ctx context
 	return scoped.store.CommitRepoCreateFailedWithLease(ctx, record, owner, now, event, releaseFenceID)
 }
 
+func (scoped operationRecoveryStore) CommitRepoLifecycleSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+	return scoped.store.CommitRepoLifecycleSucceededWithLease(ctx, repo, record, owner, now, event, fenceID)
+}
+
+func (scoped operationRecoveryStore) CommitRepoLifecycleFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
+	return scoped.store.CommitRepoLifecycleFailedWithLease(ctx, record, owner, now, event, releaseFenceID)
+}
+
+func (scoped operationRecoveryStore) GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error) {
+	return scoped.store.GetRepoInNamespace(ctx, namespaceID, repoID)
+}
+
 func (scoped operationRecoveryStore) GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error) {
 	return scoped.store.GetNamespace(ctx, namespaceID)
 }
@@ -361,6 +421,14 @@ func (scoped operationRecoveryStore) ListHeldRepoFences(ctx context.Context, rep
 
 func (scoped operationRecoveryStore) CreateRepoFence(ctx context.Context, fence fences.Fence) error {
 	return scoped.store.CreateRepoFence(ctx, fence)
+}
+
+func (scoped operationRecoveryStore) ListExportSessionsByRepo(ctx context.Context, repoID string) ([]sessionstate.ExportSession, error) {
+	return scoped.store.ListExportSessionsByRepo(ctx, repoID)
+}
+
+func (scoped operationRecoveryStore) ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error) {
+	return scoped.store.ListWorkloadMountBindingsByRepo(ctx, repoID)
 }
 
 func operationRecoveryCountError(result recovery.OperationBatchResult) error {
@@ -414,5 +482,6 @@ var (
 	_ store.NamespaceUpsertOperationCommitStore        = operationRecoveryStore{}
 	_ store.NamespaceVolumeBindingOperationCommitStore = operationRecoveryStore{}
 	_ store.RepoCreateOperationCommitStore             = operationRecoveryStore{}
+	_ store.RepoLifecycleOperationCommitStore          = operationRecoveryStore{}
 	_ recovery.OperationExecutor                       = multiExecutor{}
 )

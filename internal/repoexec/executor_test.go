@@ -14,6 +14,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
 func TestExecutorFirstAttemptInitializesDoctorsAndCommitsRepo(t *testing.T) {
@@ -328,6 +329,8 @@ type fakeRepoCreateStore struct {
 	repo             resources.Repo
 	operation        operations.OperationRecord
 	auditEvents      []audit.Event
+	exports          []sessionstate.ExportSession
+	mounts           []sessionstate.WorkloadMountBinding
 	createFenceCalls int
 	releasedFenceID  string
 	successErr       error
@@ -341,6 +344,9 @@ func (store *fakeRepoCreateStore) GetNamespaceVolumeBinding(context.Context, str
 }
 func (store *fakeRepoCreateStore) GetVolume(context.Context, string) (resources.Volume, error) {
 	return store.volume, nil
+}
+func (store *fakeRepoCreateStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
+	return store.repo, nil
 }
 func (store *fakeRepoCreateStore) ListHeldRepoFences(context.Context, string) ([]fences.Fence, error) {
 	return append([]fences.Fence(nil), store.fences...), nil
@@ -362,6 +368,25 @@ func (store *fakeRepoCreateStore) CommitRepoCreateSucceededWithLease(_ context.C
 	return repo, store.operation, nil
 }
 func (store *fakeRepoCreateStore) CommitRepoCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	store.releasedFenceID = releaseFenceID
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+func (store *fakeRepoCreateStore) ListExportSessionsByRepo(context.Context, string) ([]sessionstate.ExportSession, error) {
+	return append([]sessionstate.ExportSession(nil), store.exports...), nil
+}
+func (store *fakeRepoCreateStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
+	return append([]sessionstate.WorkloadMountBinding(nil), store.mounts...), nil
+}
+func (store *fakeRepoCreateStore) CommitRepoLifecycleSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+	store.repo = repo
+	store.operation = record.Record()
+	store.releasedFenceID = fenceID
+	store.auditEvents = append(store.auditEvents, event)
+	return repo, store.operation, nil
+}
+func (store *fakeRepoCreateStore) CommitRepoLifecycleFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
 	store.operation = record.Record()
 	store.releasedFenceID = releaseFenceID
 	store.auditEvents = append(store.auditEvents, event)
