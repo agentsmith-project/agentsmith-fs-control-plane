@@ -32,10 +32,15 @@ changes that leave JVS control metadata inconsistent.
 
 See:
 
-- `/home/percy/works/mbos-v1/jvs/docs/02_CLI_SPEC.md`
-- `/home/percy/works/mbos-v1/jvs/docs/06_RESTORE_SPEC.md`
-- `/home/percy/works/mbos-v1/jvs/docs/24_REPO_CLONE_PRODUCT_PLAN.md`
-- `/home/percy/works/mbos-v1/jvs/docs/25_REPO_WORKSPACE_LIFECYCLE_PRODUCT_PLAN.md`
+- JVS `v0.4.8` release/tag documentation and assets:
+  `https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8`
+- [contracts/jvs-runner-contract-v1.md](contracts/jvs-runner-contract-v1.md)
+  for the self-contained AFSCP command matrix and fail-closed behavior.
+
+Local checkouts such as `/home/percy/works/mbos-v1/jvs` are development-machine
+references only. They are not a handoff dependency for AFSCP worker
+implementation; use the pinned release/tag documentation and asset checksums as
+the authority.
 
 ## External Control Root Mode
 
@@ -60,6 +65,10 @@ External control root rules accepted for AFSCP:
 - A bare payload folder cannot auto-discover the control root; AFSCP runner must pass `--control-root` and `--workspace main`.
 - `--repo` is not the selector for external control root repos.
 - Current JVS external control root contract is main-only.
+- AFSCP runner target selection is authoritative only through explicit
+  `--control-root <control_root_path> --workspace main`. The process CWD must
+  be clean and controlled, must not be inside another JVS repo, and must never
+  be used to discover the target repo.
 - JVS has repo/workspace lifecycle commands for ordinary repos, but AFSCP GA
   lifecycle does not depend on them. If AFSCP later uses those commands, their
   external-control-root behavior must first be pinned and tested against the
@@ -75,7 +84,7 @@ External control root rules accepted for AFSCP:
 - `doctor --strict` should be run before reactivating archived or tombstoned repos when retained JVS metadata is expected to remain usable.
 - The supported JVS release version, binary asset name, checksum, and signature bundle must be pinned before endpoint implementation.
 - The packaged JVS binary must come from the pinned GitHub release asset; CI should verify the checksum, verify Sigstore/cosign bundles where supported, and smoke-test the required commands instead of trusting a stale local artifact.
-- AFSCP should run JVS commands from a clean working directory outside another JVS repo, or explicitly validate that the runner CWD cannot affect target resolution.
+- AFSCP should run JVS commands from a clean working directory outside another JVS repo; explicit `--control-root --workspace main` is the target selector and CWD must not affect target resolution.
 - Cross-resource operations must use deterministic lock ordering.
 
 ## Required Separation Smoke Test

@@ -34,12 +34,13 @@ version checks use the pinned release asset and checksum.
 - `jvs doctor --strict` is part of repo create, restore-run, and clone validation.
 - Dirty source state must be surfaced as a stable caller-visible error unless the operation first creates an explicit save point.
 - Template clone history mode must be pinned to the supported JVS version. `--save-points all` is allowed only after durable imported-save-point protection is supported; otherwise GA uses `--save-points main`.
-- With external control roots, JVS run commands after `init` should use the
-  payload root as CWD; the runner must avoid inheriting an unrelated JVS repo
-  CWD.
+- With external control roots, JVS target selection must come from explicit
+  `--control-root <control> --workspace main`; the runner must not rely on CWD
+  discovery and must not inherit an unrelated JVS repo from its process CWD.
 - `--control-root` cannot be combined with `--repo`. After `init`, run commands
-  from the payload root CWD with `--control-root <control> --workspace main
-  --json`.
+  from a clean, controlled CWD with `--control-root <control> --workspace main
+  --json`; the payload root is an explicit command argument only where JVS
+  requires one.
 - Pending restore previews are public recovery state. AFSCP must inspect
   `restore_state`, fail closed on `E_RECOVERY_BLOCKING`, and use
   `restore discard <plan_id>` for cleanup; it must not delete private JVS files.
@@ -76,6 +77,28 @@ required command:
 
 The JVS release version, asset names, checksums, and packaged binary paths must
 be recorded in an ADR or in this contract before endpoint implementation.
+
+## JVS v0.4.8 Command Matrix
+
+The v0.4.8 runner contract is self-contained for worker implementation. All
+commands must use the pinned release binary, request `--json`, capture stdout
+and stderr, and map non-zero exit or malformed JSON to stable AFSCP operation
+errors. For external-control-root repos, commands must run from a clean,
+controlled CWD that is not inside another JVS repo; target selection comes only
+from explicit `--control-root <control_root_path> --workspace main`, never from
+CWD discovery.
+
+| Capability | Argv Template | JSON Fields AFSCP Must Parse | Fail-Closed Behavior |
+| --- | --- | --- | --- |
+| init | `jvs init <payload_root_path> --control-root <control_root_path> --workspace main --json` | repo/workspace identity such as `repo_id` or equivalent stable repo identifier, workspace name, status/ok field | Reject if payload/control roots already contain incompatible data, if workspace is not `main`, if control metadata is created under payload, or if JSON identity/status is missing. |
+| save | `jvs --control-root <control_root_path> --workspace main save --message <message> --json` | `save_point_id`, current/dirty status, created timestamp when present | Require non-empty audited message; reject missing save point id, dirty-state ambiguity, malformed JSON, or output that does not identify the saved point. |
+| history | `jvs --control-root <control_root_path> --workspace main history --json` | `workspace`, `save_points[].save_point_id`, `newest_save_point`, timestamp/message fields when present | Treat malformed output as failure; reject entries missing stable IDs; if a handler requires complete history and output/pagination fields indicate incompleteness, fail closed. |
+| restore preview | `jvs --control-root <control_root_path> --workspace main restore <save_point_id> --json` | `mode:"preview"`, `plan_id`, `source_save_point`, `run_command`, `files_changed:false`, `history_changed:false`, `workspace` | This is the real preview command shape in external-control-root mode. Do not require `restore_state` on success; that belongs to recovery status. Fail closed on missing plan/source/run command, changed files/history, malformed JSON, or dirty-state ambiguity. |
+| restore-run | `jvs --control-root <control_root_path> --workspace main restore --run <plan_id> --json` | `mode:"run"`, `plan_id`, `source_save_point` or `restored_save_point`, `files_changed`, `history_changed:false`, `unsaved_changes:false`, `workspace` | Run only for a recorded preview plan under the repo lock. Do not require `restore_state` on success; fail closed on missing plan/source, unexpected history changes, unsaved changes, malformed JSON, or dirty-state ambiguity. |
+| restore discard | `jvs --control-root <control_root_path> --workspace main restore discard <plan_id> --json` | `mode:"discard"`, `plan_id`, `plan_discarded:true`, `files_changed:false`, `history_changed:false` | Cleanup pending preview state with the JVS command; never delete private control-root files directly. Missing discard confirmation or changed files/history is operator-visible recovery state. |
+| recovery status | `jvs --control-root <control_root_path> --workspace main recovery status --json` | `restore_state`, active `plan_id` when present, blocking/recovery reason when present | If a restore is pending/blocking, do not start unrelated mutations. Missing status or unknown state maps to operator intervention, not silent recovery. |
+| repo clone | `jvs --control-root <source_control_root_path> --workspace main repo clone <target_payload_root_path> --target-control-root <target_control_root_path> --save-points main --json` | `source_repo_id`, `target_repo_id`, `target_folder`, `target_control_root`, `save_points_mode`, `save_points_copied_count`, `runtime_state_copied` | GA uses `--save-points main`. Reject non-empty target payload/control roots, missing target identity, source dirty ambiguity, or any attempt to clone by CWD discovery. |
+| doctor --strict | `jvs --control-root <control_root_path> --workspace main doctor --strict --json` | `ok`, plus health/findings/healthy fields where present | External-control-root doctor uses only `doctor --strict --json`; do not pass `--repair-runtime`. Any missing/false ok, error-severity finding, malformed JSON, or non-zero exit fails the operation or marks recovery/operator intervention. |
 
 ## Resource Locks
 
