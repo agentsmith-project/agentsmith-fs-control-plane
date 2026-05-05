@@ -36,6 +36,7 @@ type InternalAPIShellConfig struct {
 	PrincipalResolver          PrincipalResolver
 	NamespaceBindingReader     NamespaceVolumeBindingReader
 	RepoReader                 RepoReader
+	OperationInspectionReader  OperationInspectionStoreReader
 	RepoCreateIntakeStore      RepoCreateOperationIntakeStore
 	DeploymentGlobalPolicy     AllowedCallerPolicy
 	DeploymentNamespacePolicy  AllowedCallerPolicy
@@ -92,6 +93,19 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	getRepoHandler := requestLogHandler(repoReadHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}", "getRepo")
 	listReposHandler := requestLogHandler(repoReadHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos", "listRepos")
 
+	operationInspectionHandler := OperationInspectionHandler(OperationInspectionHandlerConfig{
+		StoreReader: config.OperationInspectionReader,
+		StoredNamespaceAuthorizer: operationInspectionNamespaceBindingAuthorizer{
+			Reader: config.NamespaceBindingReader,
+		},
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: OperationInspectionPreflightPolicy{
+			DeploymentGlobal: deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+		},
+		AuditSink: config.AuditSink,
+	})
+	operationInspectionHandler = requestLogHandler(operationInspectionHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/operations/{operationId}", "getOperation")
+
 	bindingHandler := NamespaceVolumeBindingHandler(NamespaceVolumeBindingHandlerConfig{
 		Reader:            config.NamespaceBindingReader,
 		IntakeStore:       config.OperationIntakeStore,
@@ -130,6 +144,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"getRepo":                   getRepoHandler,
 		"getNamespaceVolumeBinding": getBindingHandler,
 		"listRepos":                 listReposHandler,
+		"getOperation":              operationInspectionHandler,
 		"putNamespaceVolumeBinding": putBindingHandler,
 		"upsertNamespace":           upsertNamespaceHandler,
 	}, fallback))

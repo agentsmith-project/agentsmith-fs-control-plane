@@ -108,11 +108,25 @@ func (redactor *valueRedactor) redactMap(values map[string]any, path string) map
 }
 
 func (redactor *valueRedactor) redactString(value, path string) string {
+	if containsSensitiveText(value) {
+		redactor.mark(path)
+		return redactedValue
+	}
 	redacted, ok := observability.RedactString(value)
 	if ok {
 		redactor.mark(path)
 	}
 	return redacted
+}
+
+func containsSensitiveText(value string) bool {
+	normalized := strings.ToLower(value)
+	for _, fragment := range []string{"password", "passwd", "secret", "token", "credential"} {
+		if strings.Contains(normalized, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func (redactor *valueRedactor) mark(path string) {
@@ -147,6 +161,9 @@ func isSensitiveKey(key string) bool {
 		"secretkey",
 		"metadataurl",
 		"webdavpassword",
+		"rawpath",
+		"stdout",
+		"stderr",
 	}
 	for _, fragment := range sensitiveFragments {
 		if strings.Contains(normalized, fragment) {

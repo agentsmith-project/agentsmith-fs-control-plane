@@ -21,6 +21,7 @@ func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {
 		CodeIdempotencyConflict,
 		CodeRepoAlreadyExists,
 		CodeRepoNotFound,
+		CodeOperationNotFound,
 		CodeStorageUnavailable,
 		CodeInternalError,
 		CodeActiveWriterSessions,

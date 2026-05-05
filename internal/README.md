@@ -30,8 +30,10 @@ needed before real handlers and storage mutation work:
   transitions.
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
 - `fences`: pure repo fence model, held-state semantics, and acquisition checks.
-- `inspection`: operation inspection, recovery classification, and read-only
-  repo recovery inspection composition primitives.
+- `operationinspect`: operation-only inspection authorization service used by
+  the API without importing repo recovery/fence inspection code.
+- `inspection`: recovery classification and read-only repo recovery inspection
+  composition primitives.
 - `volumeexec`: minimal recovery executor for metadata-only `volume_ensure`;
   it commits volume metadata, the terminal operation update, and the audit event
   through the dedicated volume ensure store boundary.
@@ -55,7 +57,8 @@ needed before real handlers and storage mutation work:
   canonical internal repo root resolution from trusted volume roots plus repo
   IDs.
 
-Repo create intake and namespace-bound repo read handlers exist. Still
+Repo create intake, namespace-bound repo read handlers, and operation
+inspection exist. Still
 intentionally absent: repo lifecycle/JVS lifecycle/WebDAV/mount/save/restore/
 template endpoint handlers, real external audit delivery worker/sink
 integration, repo lifecycle workers/recovery loop beyond create, WebDAV export

@@ -186,6 +186,46 @@ func TestNamespaceVolumeBindingAuthorizerDeniesUnsupportedRole(t *testing.T) {
 	}
 }
 
+func TestNamespaceVolumeBindingAuthorizerWithErrorRejectsInvalidStoredBindingInvariant(t *testing.T) {
+	tests := []struct {
+		name    string
+		binding resources.NamespaceVolumeBinding
+	}{
+		{
+			name:    "invalid binding policy",
+			binding: resources.NamespaceVolumeBinding{NamespaceID: "ns_123", DefaultVolumeID: "vol_123", Status: resources.NamespaceStatusActive},
+		},
+		{
+			name: "stored caller cannot map",
+			binding: namespaceBindingFixture("ns_123", resources.NamespaceStatusActive, resources.AllowedCaller{
+				CallerService: "agentsmith-api",
+				Roles:         []resources.CallerRole{resources.CallerRoleVolumeAdmin},
+			}),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &fakeNamespaceVolumeBindingReader{
+				bindings: map[string]resources.NamespaceVolumeBinding{
+					"ns_123": tt.binding,
+				},
+			}
+			authorizer := NamespaceVolumeBindingAuthorizer{Reader: reader}
+
+			allowed, err := authorizer.AllowsOperationInspectionWithError(context.Background(), "ns_123", productInspectionCaller())
+			if allowed {
+				t.Fatal("allowed = true, want false")
+			}
+			if !errors.Is(err, ErrInvalidStoredNamespaceAuthorizationState) {
+				t.Fatalf("error = %v, want ErrInvalidStoredNamespaceAuthorizationState", err)
+			}
+			if authorizer.AllowsOperationInspection(context.Background(), "ns_123", productInspectionCaller()) {
+				t.Fatal("old bool API allowed invalid stored binding")
+			}
+		})
+	}
+}
+
 func TestNamespaceVolumeBindingAuthorizerWiresIntoInspectOperationAndKeepsRedaction(t *testing.T) {
 	operationReader := &fakeOperationReader{
 		records: map[string]operations.OperationRecord{

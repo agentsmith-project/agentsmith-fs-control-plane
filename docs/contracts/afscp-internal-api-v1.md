@@ -130,6 +130,12 @@ Repo read APIs are namespace-bound. Missing repos, including repos that exist
 under a different namespace than the request namespace, use the stable
 `REPO_NOT_FOUND` response and must not reveal cross-namespace existence.
 
+Operation inspection returns a redacted `OperationRecord` directly. Missing
+operations use the stable `OPERATION_NOT_FOUND` response. Product caller
+operation-inspection denials, including cross-namespace or global operation
+records, also return `OPERATION_NOT_FOUND` to avoid revealing operation
+existence; operator/admin policy denials remain authorization failures.
+
 `STORAGE_UNAVAILABLE` is for durable control-plane metadata/store outages,
 timeouts, or connection/query failures and should map to HTTP 503 with
 `retryable=true`. `INTERNAL_ERROR` is for handler, invariant, serialization, or

@@ -27,6 +27,7 @@ const (
 	CodeIdempotencyConflict       ErrorCode = "IDEMPOTENCY_CONFLICT"
 	CodeRepoAlreadyExists         ErrorCode = "REPO_ALREADY_EXISTS"
 	CodeRepoNotFound              ErrorCode = "REPO_NOT_FOUND"
+	CodeOperationNotFound         ErrorCode = "OPERATION_NOT_FOUND"
 	CodeStorageUnavailable        ErrorCode = "STORAGE_UNAVAILABLE"
 	CodeInternalError             ErrorCode = "INTERNAL_ERROR"
 
@@ -68,6 +69,7 @@ var allErrorCodes = []ErrorCode{
 	CodeIdempotencyConflict,
 	CodeRepoAlreadyExists,
 	CodeRepoNotFound,
+	CodeOperationNotFound,
 	CodeStorageUnavailable,
 	CodeInternalError,
 	CodeActiveWriterSessions,

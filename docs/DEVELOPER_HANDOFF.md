@@ -121,6 +121,8 @@ Completed:
 - namespace-bound repo read handlers for `GET /internal/v1/repos/{repoId}` and
   `GET /internal/v1/repos?namespace_id=&lifecycle_status=`, exposed through
   `InternalAPIShell` as repo storage projections without product catalog fields
+- operation inspection handler for `GET /internal/v1/operations/{operationId}`,
+  exposed through `InternalAPIShell` as a redacted `OperationRecord`
 - operation lease pure model and tests
 - repo writer/lifecycle fence pure model and tests
 - audit outbox pure model and tests
@@ -143,7 +145,7 @@ Partially completed:
 - API shell routes known contract paths to capability-denied responses, with
   metadata-only namespace upsert and namespace volume binding intake/read
   handlers implemented, plus repo create intake and namespace-bound repo read
-  storage projections. Repo lifecycle, JVS lifecycle, WebDAV, mount,
+  storage projections, and operation inspection. Repo lifecycle, JVS lifecycle, WebDAV, mount,
   save/restore, template, and storage-backed handlers beyond repo create/read
   remain unimplemented.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with

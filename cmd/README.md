@@ -6,8 +6,8 @@ The repo now has neutral Go command entrypoints:
   exposes `/healthz`, `/readyz`, route metadata fallback, standard error
   envelopes, request logging, capability-denied guardrails, metadata-only
   namespace handlers, repo create intake, and namespace-bound repo read
-  handlers. It does not implement repo lifecycle/JVS lifecycle/WebDAV/mount/
-  save/restore/template handlers yet.
+  handlers, plus operation inspection. It does not implement repo
+  lifecycle/JVS lifecycle/WebDAV/mount/save/restore/template handlers yet.
 - `afscp-worker`: bounded async worker entrypoint. `--run-once` defaults to
   fail-closed unless `AFSCP_WORKER_OPERATION_RECOVERY_ENABLED=true`; when
   enabled it wires PostgreSQL operation recovery for the minimal

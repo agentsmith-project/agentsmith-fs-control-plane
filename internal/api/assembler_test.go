@@ -193,6 +193,142 @@ func TestInternalAPIShellServesRepoReadRoutesThroughRepoReader(t *testing.T) {
 	}
 }
 
+func TestInternalAPIShellServesOperationInspectionThroughInjectedReader(t *testing.T) {
+	reader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
+		"op_secret": operationInspectionRecord("op_secret", "ns_123"),
+	}}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
+		CallerService: "agentsmith-api",
+		Roles:         []resources.CallerRole{resources.CallerRoleOperationInspector},
+	})}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:         namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:    bindingReader,
+		OperationInspectionReader: fakeOperationInspectionStoreReader{reader: reader},
+	})
+	rec := httptest.NewRecorder()
+	req := operationInspectionRequest("op_secret", "", "agentsmith-api")
+	req.URL.RawQuery = "token=query-secret"
+	req.Header.Set(auth.HeaderAuthorization, "Bearer auth-secret")
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if reader.calls != 1 || bindingReader.calls != 1 {
+		t.Fatalf("reader/binding calls = %d/%d, want operation and stored namespace auth", reader.calls, bindingReader.calls)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "query-secret") || strings.Contains(body, "auth-secret") {
+		t.Fatalf("operation inspection response leaked request secret: %s", body)
+	}
+	assertOperationInspectionResponseDoesNotLeak(t, body)
+}
+
+func TestInternalAPIShellOperationInspectionAllowsGlobalOperatorBeforeProductFallback(t *testing.T) {
+	reader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
+		"op_global": operationInspectionRecord("op_global", ""),
+	}}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		DeploymentGlobalCallers: []auth.AllowedCaller{{
+			CallerService: "agentsmith-api",
+			Kind:          auth.CallerKindOperator,
+			Roles:         []auth.Role{auth.RoleOperatorAdmin},
+		}},
+		OperationInspectionReader: fakeOperationInspectionStoreReader{reader: reader},
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, operationInspectionRequest("op_global", "", "agentsmith-api"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"namespace_id":null`) {
+		t.Fatalf("global operation response = %s, want namespace_id null", rec.Body.String())
+	}
+}
+
+func TestInternalAPIShellOperationInspectionOperatorAdminIgnoresNamespaceHeaderForOtherScopes(t *testing.T) {
+	tests := []struct {
+		name        string
+		record      operations.OperationRecord
+		requestNS   string
+		wantNSField string
+	}{
+		{
+			name:        "global operation with namespace header",
+			record:      operationInspectionRecord("op_global", ""),
+			requestNS:   "ns_123",
+			wantNSField: `"namespace_id":null`,
+		},
+		{
+			name:        "other namespace operation with namespace header",
+			record:      operationInspectionRecord("op_other_ns", "ns_456"),
+			requestNS:   "ns_123",
+			wantNSField: `"namespace_id":"ns_456"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
+				tt.record.ID: tt.record,
+			}}
+			handler := NewInternalAPIShell(InternalAPIShellConfig{
+				PrincipalResolver: namespaceBindingPrincipalResolver(),
+				DeploymentGlobalCallers: []auth.AllowedCaller{{
+					CallerService: "agentsmith-api",
+					Kind:          auth.CallerKindOperator,
+					Roles:         []auth.Role{auth.RoleOperatorAdmin},
+				}},
+				OperationInspectionReader: fakeOperationInspectionStoreReader{reader: reader},
+			})
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, operationInspectionRequest(tt.record.ID, tt.requestNS, "agentsmith-api"))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantNSField) {
+				t.Fatalf("operation response = %s, want %s", rec.Body.String(), tt.wantNSField)
+			}
+		})
+	}
+}
+
+func TestInternalAPIShellOperationInspectionProductStillRequiresStoredBinding(t *testing.T) {
+	reader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
+		"op_secret": operationInspectionRecord("op_secret", "ns_123"),
+	}}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
+		CallerService: "agentsmith-api",
+		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
+	})}
+	sink := &fakeAuditSink{}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		AuditSink:                 sink,
+		PrincipalResolver:         namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:    bindingReader,
+		OperationInspectionReader: fakeOperationInspectionStoreReader{reader: reader},
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "agentsmith-api"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s, want 404", rec.Code, rec.Body.String())
+	}
+	if bindingReader.calls != 1 {
+		t.Fatalf("binding reader calls = %d, want stored namespace binding auth", bindingReader.calls)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("audit events = %#v, want denied audit", sink.events)
+	}
+}
+
 func TestInternalAPIShellServesCreateRepoThroughOperationIntake(t *testing.T) {
 	store := &fakeOperationIntakeStore{}
 	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{

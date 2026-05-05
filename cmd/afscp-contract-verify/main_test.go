@@ -304,6 +304,7 @@ const cliValidSchema = `
         "IDEMPOTENCY_CONFLICT",
         "REPO_ALREADY_EXISTS",
         "REPO_NOT_FOUND",
+        "OPERATION_NOT_FOUND",
         "STORAGE_UNAVAILABLE",
         "INTERNAL_ERROR",
         "ACTIVE_WRITER_SESSIONS",

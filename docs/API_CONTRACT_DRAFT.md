@@ -103,6 +103,7 @@ GA error families:
 - `IDEMPOTENCY_CONFLICT`
 - `REPO_ALREADY_EXISTS`
 - `REPO_NOT_FOUND`
+- `OPERATION_NOT_FOUND`
 - `STORAGE_UNAVAILABLE`
 - `INTERNAL_ERROR`
 - `ACTIVE_WRITER_SESSIONS`
@@ -564,11 +565,14 @@ have `namespace_id: null` for volume-global or operator workflows. The handler
 returns the redacted `OperationRecord` directly after authorizing against the
 stored namespace when present, or operator/global policy when absent. It must not
 wrap that record in `OperationEnvelope`.
+Missing operations return `OPERATION_NOT_FOUND`.
 
 Product callers use `operation_inspector` for namespace-scoped operation
-inspection of redacted records. Operator/admin callers use `operator_admin` for
+inspection of redacted records; product caller denials, including cross-namespace
+or global operation records, return `OPERATION_NOT_FOUND` to avoid exposing
+operation existence. Operator/admin callers use `operator_admin` for
 global/operator inspection and repair, including records without a stored
-namespace.
+namespace; operator/admin policy denials remain authorization failures.
 
 ## Operation Requirements
 
