@@ -52,6 +52,10 @@ Deleting an archived repo records that it was archived before deletion.
 Restoring a tombstoned repo returns it to the recorded pre-delete accessibility
 state unless a separate reviewed contract adds an explicit target-state option.
 
+The repo access admission pure model exists in code for shared pre-handler
+decisions across future lifecycle, save/restore, export, mount, and template
+handlers. It is not yet wired to those concrete endpoint handlers.
+
 ## Lifecycle Fence
 
 Lifecycle operations acquire a per-repo lifecycle fence. The lifecycle fence is
@@ -71,6 +75,11 @@ Lifecycle fence acquisition must also reject or wait for active storage
 mutations on the same repo, according to the operation-lock contract. If AFSCP
 cannot prove whether an in-flight mutation has finished safely, the lifecycle
 operation fails closed or enters `operator_intervention_required`.
+Lifecycle operation admission also fails closed when a held writer-session fence
+already exists for the target repo.
+Before wiring this pure admission model to concrete handlers, lifecycle request
+handling must preserve idempotency-first behavior or pass holder-operation
+context so an operation retry is not denied by its own held fence.
 
 Archive, delete, and purge must wait for all non-terminal exports and workload
 mount bindings, read-only or read-write, to reach a confirmed terminal non-accessing
