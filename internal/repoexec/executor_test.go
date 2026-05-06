@@ -48,6 +48,217 @@ func TestExecutorFirstAttemptInitializesDoctorsAndCommitsRepo(t *testing.T) {
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
+func TestSavePointExecutorPersistsPreSaveMarkerThenSavesAndCommits(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
+		saveSummary:    jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "history,save" {
+		t.Fatalf("JVS calls = %#v, want history then save", runner.calls)
+	}
+	if store.progressUpdates != 1 {
+		t.Fatalf("progress updates = %d, want pre-save marker persisted", store.progressUpdates)
+	}
+	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseSavePointCreateCommitted {
+		t.Fatalf("operation = %#v, want succeeded committed", store.operation)
+	}
+	result := store.operation.VerificationResult.(map[string]any)
+	if result["pre_save_newest_save_point_id"] != "sp_before" || result["save_point_id"] != "sp_after" || result["unsaved_changes"] != false {
+		t.Fatalf("verification = %#v, want pre marker and save result", result)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
+func TestSavePointExecutorUsesDurableNaturalLanguageMessageWithoutRedaction(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
+		saveSummary:    jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate)
+	record.InputSummary["message"] = "fix secret handling"
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if runner.saveMessage != "fix secret handling" {
+		t.Fatalf("jvs save message = %q, want original natural-language message", runner.saveMessage)
+	}
+	if got := store.operation.InputSummary["message"]; got != "fix secret handling" {
+		t.Fatalf("persisted input message = %#v, want original natural-language message", got)
+	}
+	jvsOutput := store.operation.JVSJSONOutput.(map[string]any)
+	if got := jvsOutput["message"]; got != "fix secret handling" {
+		t.Fatalf("persisted jvs message = %#v, want original natural-language message", got)
+	}
+}
+
+func TestSavePointExecutorRejectsSecretShapedMessageBeforeJVS(t *testing.T) {
+	for _, message := range []string{"token=savepoint-message-secret", "[REDACTED]"} {
+		t.Run(message, func(t *testing.T) {
+			now := repoExecNow()
+			store := newFakeStore()
+			store.repo = activeRepoResource(now)
+			runner := &fakeJVSRunner{}
+			executor := newTestSavePointExecutor(t, store, runner, now)
+			record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate)
+			record.InputSummary["message"] = message
+
+			if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err == nil {
+				t.Fatal("ExecuteOperationRecovery succeeded, want invalid message error")
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("JVS calls = %#v, want none for invalid message", runner.calls)
+			}
+			if store.operation.ID != "" {
+				t.Fatalf("operation was committed unexpectedly: %#v", store.operation)
+			}
+		})
+	}
+}
+
+func TestSavePointExecutorAdoptsCrashAfterSaveWithoutCallingSaveAgain(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_after", SavePoints: []jvsrunner.SavePointSummary{
+		{SavePointID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
+		{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"},
+	}}}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreatePrepared)
+	record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": "sp_before"}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "history" {
+		t.Fatalf("JVS calls = %#v, want history only adoption", runner.calls)
+	}
+	verification := store.operation.VerificationResult.(map[string]any)
+	if verification["adopted"] != true || verification["unsaved_changes_known"] != false {
+		t.Fatalf("verification = %#v, want adopted", store.operation.VerificationResult)
+	}
+	if _, ok := verification["unsaved_changes"]; ok {
+		t.Fatalf("verification = %#v, adopted save must not claim unsaved_changes", verification)
+	}
+	jvsOutput := store.operation.JVSJSONOutput.(map[string]any)
+	if jvsOutput["unsaved_changes_known"] != false {
+		t.Fatalf("jvs output = %#v, want unknown unsaved_changes", jvsOutput)
+	}
+	if _, ok := jvsOutput["unsaved_changes"]; ok {
+		t.Fatalf("jvs output = %#v, adopted save must not claim unsaved_changes", jvsOutput)
+	}
+}
+
+func TestSavePointExecutorAmbiguousHistoryRequiresOperatorIntervention(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_two", SavePoints: []jvsrunner.SavePointSummary{
+		{SavePointID: "sp_two", Message: "two", CreatedAt: "2026-05-05T12:01:00Z"},
+		{SavePointID: "sp_one", Message: "one", CreatedAt: "2026-05-05T12:00:00Z"},
+		{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"},
+	}}}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreatePrepared)
+	record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": "sp_before"}
+
+	err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim})
+	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired {
+		t.Fatalf("operation state = %s, want operator intervention", store.operation.State)
+	}
+	if strings.Contains(strings.Join(runner.calls, ","), "save") {
+		t.Fatalf("JVS calls = %#v, want no save on ambiguity", runner.calls)
+	}
+}
+
+func TestSavePointExecutorPreparedRetryWithNoNewerSavePointRunsSave(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
+		saveSummary:    jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z", UnsavedChanges: true},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreatePrepared)
+	record.InputSummary["message"] = "rotate token docs"
+	record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": "sp_before"}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "history,save" {
+		t.Fatalf("JVS calls = %#v, want history then save", runner.calls)
+	}
+	if runner.saveMessage != "rotate token docs" {
+		t.Fatalf("jvs save message = %q, want durable natural-language message", runner.saveMessage)
+	}
+	verification := store.operation.VerificationResult.(map[string]any)
+	if verification["save_point_id"] != "sp_after" || verification["unsaved_changes_known"] != true || verification["unsaved_changes"] != true {
+		t.Fatalf("verification = %#v, want fresh save with known unsaved_changes", verification)
+	}
+}
+
+func TestSavePointExecutorAdoptsWhenPreSaveHistoryWasEmpty(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_after", SavePoints: []jvsrunner.SavePointSummary{
+		{SavePointID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
+	}}}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreatePrepared)
+	record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": ""}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "history" {
+		t.Fatalf("JVS calls = %#v, want history only adoption", runner.calls)
+	}
+	verification := store.operation.VerificationResult.(map[string]any)
+	if verification["save_point_id"] != "sp_after" || verification["adopted"] != true || verification["unsaved_changes_known"] != false {
+		t.Fatalf("verification = %#v, want adopted save with unknown unsaved_changes", verification)
+	}
+}
+
+func TestSavePointExecutorMissingPreSavePointerRequiresOperatorIntervention(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{historySummary: jvsrunner.HistorySummary{Workspace: "main", SavePoints: []jvsrunner.SavePointSummary{}}}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreatePrepared)
+	record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": "sp_missing"}
+
+	err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim})
+	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+	}
+	if strings.Contains(strings.Join(runner.calls, ","), "save") {
+		t.Fatalf("JVS calls = %#v, want no save when marker is missing", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired {
+		t.Fatalf("operation state = %s, want operator intervention", store.operation.State)
+	}
+}
+
 func TestExecutorRetryWithSameOperationFenceAdoptsHealthyDoctorWithoutInit(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
@@ -259,6 +470,22 @@ func newTestExecutor(t *testing.T, store *fakeRepoCreateStore, runner *fakeJVSRu
 	return executor
 }
 
+func newTestSavePointExecutor(t *testing.T, store *fakeRepoCreateStore, runner *fakeJVSRunner, now time.Time) *SavePointExecutor {
+	t.Helper()
+	executor, err := NewSavePointExecutor(SavePointConfig{
+		Store:        store,
+		JVSRunner:    runner,
+		Owner:        "worker-a",
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "audit_savepoint" },
+		VolumeRoots:  store.volumeRoots,
+	})
+	if err != nil {
+		t.Fatalf("NewSavePointExecutor: %v", err)
+	}
+	return executor
+}
+
 func repoCreateLeasedRecord(now time.Time, attempt int) operations.OperationRecord {
 	leaseExpiresAt := now.Add(time.Minute)
 	startedAt := now.Add(-time.Minute)
@@ -283,6 +510,34 @@ func repoCreateLeasedRecord(now time.Time, attempt int) operations.OperationReco
 		InputSummary:        map[string]any{"namespace_id": "ns_alpha01", "target_repo_id": "repo_alpha01"},
 		CreatedAt:           now.Add(-time.Hour),
 		StartedAt:           &startedAt,
+	}
+}
+
+func savePointLeasedRecord(now time.Time, phase string) operations.OperationRecord {
+	record := repoCreateLeasedRecord(now, 1)
+	record.ID = "op_savepoint"
+	record.Type = operations.OperationSavePointCreate
+	record.Phase = phase
+	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationSavePointCreate, "idem_savepoint").String()
+	record.IdempotencyKey = "idem_savepoint"
+	record.RequestHash = "sha256:savepoint"
+	record.InputSummary = map[string]any{"message": "checkpoint"}
+	return record
+}
+
+func activeRepoResource(now time.Time) resources.Repo {
+	return resources.Repo{
+		ID:                  "repo_alpha01",
+		NamespaceID:         "ns_alpha01",
+		VolumeID:            "vol_123",
+		JVSRepoID:           "jvs_repo_alpha",
+		Kind:                resources.RepoKindRepo,
+		Status:              resources.RepoStatusActive,
+		ControlVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/control",
+		PayloadVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload",
+		Lifecycle:           resources.RepoLifecycle{Status: resources.RepoStatusActive, LastLifecycleOperationID: "op_repo"},
+		CreatedAt:           now.Add(-time.Hour),
+		UpdatedAt:           now,
 	}
 }
 
@@ -332,6 +587,7 @@ type fakeRepoCreateStore struct {
 	exports           []sessionstate.ExportSession
 	mounts            []sessionstate.WorkloadMountBinding
 	createFenceCalls  int
+	progressUpdates   int
 	releasedFenceID   string
 	successErr        error
 	blockingLifecycle []operations.OperationRecord
@@ -410,14 +666,37 @@ func (store *fakeRepoCreateStore) CommitRepoPurgeFailedWithLease(_ context.Conte
 	return store.operation, nil
 }
 
+func (store *fakeRepoCreateStore) UpdateSavePointCreateProgressWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time) (operations.OperationRecord, error) {
+	store.progressUpdates++
+	store.operation = record.Record()
+	return store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitSavePointCreateSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitSavePointCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+
 type fakeJVSRunner struct {
-	calls         []string
-	payloadRoot   string
-	controlRoot   string
-	initSummary   jvsrunner.InitSummary
-	doctorSummary jvsrunner.DoctorSummary
-	initErr       error
-	doctorErr     error
+	calls          []string
+	payloadRoot    string
+	controlRoot    string
+	saveMessage    string
+	initSummary    jvsrunner.InitSummary
+	doctorSummary  jvsrunner.DoctorSummary
+	saveSummary    jvsrunner.SaveSummary
+	historySummary jvsrunner.HistorySummary
+	initErr        error
+	doctorErr      error
+	saveErr        error
+	historyErr     error
 }
 
 func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot string) (jvsrunner.InitSummary, error) {
@@ -430,6 +709,19 @@ func (runner *fakeJVSRunner) DoctorStrict(_ context.Context, controlRoot string)
 	runner.calls = append(runner.calls, "doctor")
 	runner.controlRoot = controlRoot
 	return runner.doctorSummary, runner.doctorErr
+}
+
+func (runner *fakeJVSRunner) Save(_ context.Context, controlRoot, message string) (jvsrunner.SaveSummary, error) {
+	runner.calls = append(runner.calls, "save")
+	runner.controlRoot = controlRoot
+	runner.saveMessage = message
+	return runner.saveSummary, runner.saveErr
+}
+
+func (runner *fakeJVSRunner) History(_ context.Context, controlRoot string) (jvsrunner.HistorySummary, error) {
+	runner.calls = append(runner.calls, "history")
+	runner.controlRoot = controlRoot
+	return runner.historySummary, runner.historyErr
 }
 
 func repoCreateFence(now time.Time, fenceID, operationID string) fences.Fence {

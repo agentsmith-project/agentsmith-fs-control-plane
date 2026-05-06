@@ -225,6 +225,58 @@ func TestSanitizedForPersistenceRedactsQueuedRecordBeforeStoreWrite(t *testing.T
 	}
 }
 
+func TestSanitizedForPersistencePreservesSafeSavePointMessage(t *testing.T) {
+	record := OperationRecord{
+		ID:    "op-savepoint",
+		Type:  OperationSavePointCreate,
+		State: OperationStateQueued,
+		Phase: OperationPhaseSavePointCreateValidate,
+		InputSummary: map[string]any{
+			"message": "fix secret handling",
+			"command": "jvs save --token savepoint-command-secret",
+		},
+		JVSJSONOutput: map[string]any{
+			"message": "rotate token docs",
+			"stdout":  "save --password savepoint-output-secret",
+		},
+	}
+
+	sanitized := record.SanitizedForPersistence().Record()
+
+	if got := sanitized.InputSummary["message"]; got != "fix secret handling" {
+		t.Fatalf("input message = %#v, want natural-language save point message preserved", got)
+	}
+	output, ok := sanitized.JVSJSONOutput.(map[string]any)
+	if !ok {
+		t.Fatalf("jvs output = %#v, want object", sanitized.JVSJSONOutput)
+	}
+	if got := output["message"]; got != "rotate token docs" {
+		t.Fatalf("jvs output message = %#v, want natural-language save point message preserved", got)
+	}
+	rendered := strings.ToLower(toTestString(sanitized))
+	for _, forbidden := range []string{"savepoint-command-secret", "savepoint-output-secret"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("secret material %q leaked in %s", forbidden, rendered)
+		}
+	}
+}
+
+func TestSanitizedForPersistenceDoesNotPreserveSecretShapedSavePointMessage(t *testing.T) {
+	record := OperationRecord{
+		ID:           "op-savepoint",
+		Type:         OperationSavePointCreate,
+		State:        OperationStateQueued,
+		Phase:        OperationPhaseSavePointCreateValidate,
+		InputSummary: map[string]any{"message": "token=savepoint-message-secret"},
+	}
+
+	sanitized := record.SanitizedForPersistence().Record()
+	rendered := strings.ToLower(toTestString(sanitized.InputSummary["message"]))
+	if strings.Contains(rendered, "savepoint-message-secret") || rendered == `"token=savepoint-message-secret"` {
+		t.Fatalf("secret-shaped save point message was preserved: %#v", sanitized.InputSummary["message"])
+	}
+}
+
 func assertNoSecretMaterial(t *testing.T, value any) {
 	t.Helper()
 

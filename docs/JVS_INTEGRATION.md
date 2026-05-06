@@ -16,7 +16,7 @@ AFSCP should support:
 
 - `jvs init`
 - save point creation
-- save point history/list
+- save point history/list with a complete-history request
 - restore preview
 - restore-run
 - recovery status/resume/rollback or an explicit operator-intervention state for failed restore runs
@@ -85,6 +85,8 @@ External control root rules accepted for AFSCP:
 - JVS JSON output stored with the operation record must be reduced to a safe
   summary and must not include absolute roots, raw stdout/stderr, or secrets.
 - AFSCP should map JVS errors into stable caller-visible error codes.
+- Save point history/list must request complete history; if JVS reports
+  `truncated:true`, AFSCP must fail closed instead of returning a partial list.
 - `doctor --strict` should be run after repo create, restore, and clone in GA smoke paths.
 - `doctor --strict` should be run before reactivating archived or tombstoned repos when retained JVS metadata is expected to remain usable.
 - The supported JVS release version, binary asset name, checksum, and signature bundle must be pinned before endpoint implementation.

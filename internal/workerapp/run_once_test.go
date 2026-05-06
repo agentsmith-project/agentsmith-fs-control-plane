@@ -620,6 +620,72 @@ func TestRunOnceRepoPurgeCancelRequestedIsNotFinalized(t *testing.T) {
 	}
 }
 
+func TestRunOnceSavePointCreateDisabledDoesNotListOrClaim(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if summary := result.Summary().Operation; summary.Scanned != 0 || summary.Claimed != 0 || store.savePointListCalls != 0 || len(store.acquireIDs) != 0 {
+		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want save_point_create ignored while gate disabled", summary, store.savePointListCalls, store.acquireIDs)
+	}
+}
+
+func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	jvs := &workerAppFakeJVSRunner{
+		historySummary: jvsrunner.HistorySummary{
+			Workspace:         "main",
+			NewestSavePointID: "sp_before",
+			SavePoints:        []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}},
+		},
+		saveSummary: jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppSavePointConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_savepoint" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want save_point_create claimed", summary)
+	}
+	if store.savePointListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_savepoint" {
+		t.Fatalf("list/acquire = %d/%#v, want save_point_create listed and acquired", store.savePointListCalls, store.acquireIDs)
+	}
+	if strings.Join(jvs.calls, ",") != "history,save" {
+		t.Fatalf("jvs calls = %#v, want history,save", jvs.calls)
+	}
+	if store.operation.ID != record.ID || store.operation.Type != operations.OperationSavePointCreate || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseSavePointCreateCommitted {
+		t.Fatalf("operation = %#v, want succeeded save_point_create_committed", store.operation)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeSavePointCreate || store.auditEvents[0].Outcome != audit.OutcomeSucceeded || store.auditEvents[0].Reason != "save_point_create_committed" {
+		t.Fatalf("audit events = %#v, want succeeded save_point_create_committed event", store.auditEvents)
+	}
+}
+
 func TestRunOnceRepoLifecycleOperatorInterventionReturnsManualError(t *testing.T) {
 	now := workerAppNow()
 	lifecycleRecord := workerAppRepoLifecycleOperationRecord("op_restore", operations.OperationRepoRestoreArchived, now)
@@ -1150,6 +1216,20 @@ func workerAppRepoPurgeConfigSource(overrides config.MapSource) config.MapSource
 	return source
 }
 
+func workerAppSavePointConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppConfigSource(config.MapSource{
+		"AFSCP_SAVE_POINT_RECOVERY_ENABLED": "true",
+		"AFSCP_JVS_BINARY_PATH":             "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":           strings.Repeat("a", 64),
+		"AFSCP_JVS_CWD":                     "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return source
+}
+
 func workerAppOperationRecord(now time.Time) operations.OperationRecord {
 	return operations.OperationRecord{
 		ID:               "op_namespace",
@@ -1235,6 +1315,26 @@ func workerAppRepoPurgeOperationRecord(operationID string, now time.Time) operat
 		},
 	}
 	return record
+}
+
+func workerAppSavePointCreateOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	return operations.OperationRecord{
+		ID:               operationID,
+		Type:             operations.OperationSavePointCreate,
+		State:            operations.OperationStateQueued,
+		Phase:            operations.OperationPhaseSavePointCreateValidate,
+		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationSavePointCreate, "idem_savepoint").String(),
+		IdempotencyKey:   "idem_savepoint",
+		RequestHash:      operations.RequestHash("sha256:savepoint"),
+		CorrelationID:    "corr-alpha",
+		CallerService:    "agentsmith-api",
+		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
+		NamespaceID:      "ns_alpha01",
+		RepoID:           "repo_alpha01",
+		InputSummary:     map[string]any{"message": "checkpoint"},
+		CreatedAt:        now.Add(-time.Hour),
+	}
 }
 
 func workerAppRepoLifecycleResource(now time.Time, status resources.RepoStatus) resources.Repo {
@@ -1324,32 +1424,33 @@ func workerAppNow() time.Time {
 }
 
 type fakeWorkerAppStore struct {
-	records           map[string]operations.OperationRecord
-	order             []string
-	volume            resources.Volume
-	repo              resources.Repo
-	namespace         resources.Namespace
-	binding           resources.NamespaceVolumeBinding
-	exports           []sessionstate.ExportSession
-	mounts            []sessionstate.WorkloadMountBinding
-	operation         operations.OperationRecord
-	auditEvents       []audit.Event
-	fences            []fences.Fence
-	releasedFenceID   string
-	listDeadline      time.Time
-	closeCalls        int
-	acquireIDs        []string
-	acquirePolicies   map[string]operations.LeaseCancelPolicy
-	recoveredAudit    []audit.OutboxRecord
-	claimedAudit      []audit.OutboxRecord
-	auditCallOrder    []string
-	auditRecoverOwner string
-	auditRecoverLimit int
-	auditClaimOwner   string
-	auditClaimLimit   int
-	auditDelivered    []string
-	auditFailed       []workerAppAuditFailedCall
-	auditDeliverErr   error
+	records            map[string]operations.OperationRecord
+	order              []string
+	volume             resources.Volume
+	repo               resources.Repo
+	namespace          resources.Namespace
+	binding            resources.NamespaceVolumeBinding
+	exports            []sessionstate.ExportSession
+	mounts             []sessionstate.WorkloadMountBinding
+	operation          operations.OperationRecord
+	auditEvents        []audit.Event
+	fences             []fences.Fence
+	releasedFenceID    string
+	listDeadline       time.Time
+	closeCalls         int
+	acquireIDs         []string
+	acquirePolicies    map[string]operations.LeaseCancelPolicy
+	recoveredAudit     []audit.OutboxRecord
+	claimedAudit       []audit.OutboxRecord
+	auditCallOrder     []string
+	auditRecoverOwner  string
+	auditRecoverLimit  int
+	auditClaimOwner    string
+	auditClaimLimit    int
+	savePointListCalls int
+	auditDelivered     []string
+	auditFailed        []workerAppAuditFailedCall
+	auditDeliverErr    error
 }
 
 type workerAppAuditFailedCall struct {
@@ -1616,6 +1717,29 @@ func (store *fakeWorkerAppStore) ListRepoPurgeOperationsForRecovery(ctx context.
 	return out, nil
 }
 
+func (store *fakeWorkerAppStore) ListSavePointCreateOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	store.savePointListCalls++
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if record.Type != operations.OperationSavePointCreate || (record.Phase != operations.OperationPhaseSavePointCreateValidate && record.Phase != operations.OperationPhaseSavePointCreatePrepared) {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+		case operations.OperationStateRunning:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (store *fakeWorkerAppStore) AcquireRepoCreateOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	record, ok := store.records[operationID]
 	if !ok {
@@ -1682,6 +1806,24 @@ func (store *fakeWorkerAppStore) AcquireRepoPurgeOperationLease(_ context.Contex
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	if record.Type != operations.OperationRepoPurge || record.Phase != operations.OperationPhaseRepoLifecycleValidate || request.CancelPolicy != operations.LeaseCancelPolicyNone {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
+func (store *fakeWorkerAppStore) AcquireSavePointCreateOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if record.Type != operations.OperationSavePointCreate || (record.Phase != operations.OperationPhaseSavePointCreateValidate && record.Phase != operations.OperationPhaseSavePointCreatePrepared) {
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	store.acquireIDs = append(store.acquireIDs, operationID)
@@ -1805,6 +1947,33 @@ func (store *fakeWorkerAppStore) CommitRepoPurgeFailedWithLease(_ context.Contex
 	return operation, nil
 }
 
+func (store *fakeWorkerAppStore) UpdateSavePointCreateProgressWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time) (operations.OperationRecord, error) {
+	operation := record.Record()
+	store.records[operation.ID] = operation
+	store.operation = operation
+	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitSavePointCreateSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitSavePointCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
+}
+
 func (store *fakeWorkerAppStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
 	if store.repo.ID == "" {
 		return resources.Repo{}, errors.New("repo not found")
@@ -1910,9 +2079,11 @@ func (store *fakeWorkerAppAuditStore) MarkAuditOutboxDeliveryFailed(context.Cont
 }
 
 type workerAppFakeJVSRunner struct {
-	calls         []string
-	initSummary   jvsrunner.InitSummary
-	doctorSummary jvsrunner.DoctorSummary
+	calls          []string
+	initSummary    jvsrunner.InitSummary
+	doctorSummary  jvsrunner.DoctorSummary
+	saveSummary    jvsrunner.SaveSummary
+	historySummary jvsrunner.HistorySummary
 }
 
 type workerAppFakeStoragePurger struct {
@@ -1938,6 +2109,19 @@ func (runner *workerAppFakeJVSRunner) Init(context.Context, string, string) (jvs
 func (runner *workerAppFakeJVSRunner) DoctorStrict(context.Context, string) (jvsrunner.DoctorSummary, error) {
 	runner.calls = append(runner.calls, "doctor")
 	return runner.doctorSummary, nil
+}
+
+func (runner *workerAppFakeJVSRunner) Save(context.Context, string, string) (jvsrunner.SaveSummary, error) {
+	runner.calls = append(runner.calls, "save")
+	if runner.saveSummary.SavePointID == "" {
+		runner.saveSummary = jvsrunner.SaveSummary{SavePointID: "sp_001", NewestSavePointID: "sp_001", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"}
+	}
+	return runner.saveSummary, nil
+}
+
+func (runner *workerAppFakeJVSRunner) History(context.Context, string) (jvsrunner.HistorySummary, error) {
+	runner.calls = append(runner.calls, "history")
+	return runner.historySummary, nil
 }
 
 func workerAppAuditRecord(eventID string, payload []byte) audit.OutboxRecord {

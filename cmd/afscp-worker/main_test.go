@@ -360,6 +360,10 @@ func (store *cmdWorkerAppStore) ListRepoPurgeOperationsForRecovery(context.Conte
 	return nil, nil
 }
 
+func (store *cmdWorkerAppStore) ListSavePointCreateOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 func (store *cmdWorkerAppStore) AcquireNamespaceUpsertOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
@@ -381,6 +385,10 @@ func (store *cmdWorkerAppStore) AcquireRepoLifecycleOperationLease(context.Conte
 }
 
 func (store *cmdWorkerAppStore) AcquireRepoPurgeOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) AcquireSavePointCreateOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
 
@@ -417,6 +425,18 @@ func (store *cmdWorkerAppStore) CommitRepoPurgeSucceededWithLease(context.Contex
 }
 
 func (store *cmdWorkerAppStore) CommitRepoPurgeFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event, string) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) UpdateSavePointCreateProgressWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected progress update")
+}
+
+func (store *cmdWorkerAppStore) CommitSavePointCreateSucceededWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitSavePointCreateFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }
 

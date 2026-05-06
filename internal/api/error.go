@@ -30,6 +30,7 @@ const (
 	CodeOperationNotFound         ErrorCode = "OPERATION_NOT_FOUND"
 	CodeStorageUnavailable        ErrorCode = "STORAGE_UNAVAILABLE"
 	CodeInternalError             ErrorCode = "INTERNAL_ERROR"
+	CodeRepoJVSMutationInProgress ErrorCode = "REPO_JVS_MUTATION_IN_PROGRESS"
 
 	CodeActiveWriterSessions        ErrorCode = "ACTIVE_WRITER_SESSIONS"
 	CodeWriterSessionFenceHeld      ErrorCode = "WRITER_SESSION_FENCE_HELD"
@@ -72,6 +73,7 @@ var allErrorCodes = []ErrorCode{
 	CodeOperationNotFound,
 	CodeStorageUnavailable,
 	CodeInternalError,
+	CodeRepoJVSMutationInProgress,
 	CodeActiveWriterSessions,
 	CodeWriterSessionFenceHeld,
 	CodeStaleWriterSessionUncertain,

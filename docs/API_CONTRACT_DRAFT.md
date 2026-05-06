@@ -106,6 +106,7 @@ GA error families:
 - `OPERATION_NOT_FOUND`
 - `STORAGE_UNAVAILABLE`
 - `INTERNAL_ERROR`
+- `REPO_JVS_MUTATION_IN_PROGRESS`
 - `ACTIVE_WRITER_SESSIONS`
 - `WRITER_SESSION_FENCE_HELD`
 - `STALE_WRITER_SESSION_UNCERTAIN`
@@ -135,6 +136,8 @@ should map it to HTTP 503 with `retryable=true`. `INTERNAL_ERROR` is reserved
 for otherwise unclassified handler, invariant, serialization, or service bugs;
 handlers should map it to HTTP 500 and default `retryable=false`. Store outages
 must not be disguised as `CAPABILITY_DENIED` or `NAMESPACE_NOT_FOUND`.
+`REPO_JVS_MUTATION_IN_PROGRESS` means a same-repo JVS mutation is non-terminal;
+handlers should map it to HTTP 409 with `retryable=true`.
 
 ## Core Types
 

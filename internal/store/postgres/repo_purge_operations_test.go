@@ -43,14 +43,24 @@ func TestAcquireRepoPurgeOperationLeaseScopesBeforeMutationAndRejectsCancelFinal
 		t.Fatalf("AcquireRepoPurgeOperationLease: %v", err)
 	}
 	assertSQLContainsInOrder(t, exec.query,
-		"UPDATE operations SET",
+		"WITH eligible_operation AS",
+		"WHERE operation_id = $1",
 		"operation_type = 'repo_purge'",
 		"phase = 'validate_repo_lifecycle'",
 		"AND $5 = ''",
+		"earlier_jvs_mutation AS",
+		"o.operation_id <> e.operation_id",
+		"o.operation_type IN ('save_point_create', 'restore_run', 'template_create', 'template_clone')",
+		"o.operation_state NOT IN ('succeeded','failed','cancelled')",
+		"updated_operation AS",
+		"UPDATE operations SET",
+		"NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)",
 		"RETURNING",
 	)
-	if strings.Contains(exec.query, "repo_fences") || strings.Contains(exec.query, "finalize_cancellation") {
-		t.Fatalf("purge acquire SQL releases fence/finalizes cancel: %s", exec.query)
+	for _, forbidden := range []string{"repo_fences", "finalize_cancellation", "earlier_repo_lifecycle"} {
+		if strings.Contains(exec.query, forbidden) {
+			t.Fatalf("purge acquire SQL includes unsupported fragment %q: %s", forbidden, exec.query)
+		}
 	}
 }
 

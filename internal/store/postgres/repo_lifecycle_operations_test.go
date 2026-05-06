@@ -50,10 +50,18 @@ func TestAcquireRepoLifecycleOperationLeaseScopesBeforeMutation(t *testing.T) {
 		"WHERE operation_id = $1",
 		"operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned')",
 		"phase = 'validate_repo_lifecycle'",
+		"earlier_jvs_mutation AS",
+		"o.operation_id <> e.operation_id",
+		"o.operation_type IN ('save_point_create', 'restore_run', 'template_create', 'template_clone')",
+		"o.operation_state NOT IN ('succeeded','failed','cancelled')",
 		"updated_operation AS",
 		"UPDATE operations SET",
+		"$5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)",
 		"RETURNING",
 	)
+	if strings.Contains(exec.query, "operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned', 'repo_purge')") {
+		t.Fatalf("repo lifecycle acquire SQL included repo_purge in lifecycle scope: %s", exec.query)
+	}
 }
 
 func TestAcquireRepoLifecycleOperationLeaseFinalizeCancellationReleasesSameOperationFence(t *testing.T) {
@@ -83,7 +91,9 @@ func TestAcquireRepoLifecycleOperationLeaseFinalizeCancellationReleasesSameOpera
 				"FOR UPDATE",
 				"released_fence AS",
 				"UPDATE repo_fences SET status = 'released'",
+				"earlier_jvs_mutation AS",
 				"updated_operation AS",
+				"$5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)",
 				"SELECT",
 				"FROM updated_operation",
 			)

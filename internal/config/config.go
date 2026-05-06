@@ -86,6 +86,7 @@ type WorkerOperationRecoveryConfig struct {
 	RepoCreate    WorkerRepoCreateRecoveryConfig
 	RepoLifecycle WorkerRepoCreateRecoveryConfig
 	RepoPurge     WorkerRepoCreateRecoveryConfig
+	SavePoint     WorkerRepoCreateRecoveryConfig
 }
 
 type WorkerRepoCreateRecoveryConfig struct {
@@ -220,6 +221,11 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.OperationRecovery.RepoPurge = repoPurge
+	savePoint, err := loadSavePointRecoveryConfig(source)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.OperationRecovery.SavePoint = savePoint
 
 	limit, err := intValue(source, "AFSCP_OPERATION_RECOVERY_LIMIT", worker.OperationRecovery.Limit)
 	if err != nil {
@@ -369,6 +375,10 @@ func loadRepoLifecycleRecoveryConfig(source Source) (WorkerRepoCreateRecoveryCon
 
 func loadRepoPurgeRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
 	return loadJVSOperationRecoveryConfig(source, "AFSCP_REPO_PURGE_RECOVERY_ENABLED")
+}
+
+func loadSavePointRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
+	return loadJVSOperationRecoveryConfig(source, "AFSCP_SAVE_POINT_RECOVERY_ENABLED")
 }
 
 func loadJVSOperationRecoveryConfig(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {

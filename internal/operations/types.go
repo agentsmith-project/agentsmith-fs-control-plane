@@ -49,6 +49,10 @@ const (
 
 	OperationPhaseRepoLifecycleValidate  = "validate_repo_lifecycle"
 	OperationPhaseRepoLifecycleCommitted = "repo_lifecycle_committed"
+
+	OperationPhaseSavePointCreateValidate  = "validate_save_point_create"
+	OperationPhaseSavePointCreatePrepared  = "save_point_create_prepared"
+	OperationPhaseSavePointCreateCommitted = "save_point_create_committed"
 )
 
 var operationTypes = []OperationType{
@@ -256,8 +260,37 @@ func (record OperationRecord) Sanitized() OperationRecord {
 		errReport = report
 	}
 
+	restoreSafeSavePointMessage(record, &sanitized)
 	sanitized.Redaction = MergeRedactionReports(record.Redaction, externalResourceReport, inputReport, jvsReport, verificationReport, errReport)
 	return sanitized
+}
+
+func restoreSafeSavePointMessage(original OperationRecord, sanitized *OperationRecord) {
+	if sanitized == nil || original.Type != OperationSavePointCreate {
+		return
+	}
+	restoreSafeSavePointMessageInMap(original.InputSummary, sanitized.InputSummary)
+	originalOutput, ok := original.JVSJSONOutput.(map[string]any)
+	if !ok {
+		return
+	}
+	sanitizedOutput, ok := sanitized.JVSJSONOutput.(map[string]any)
+	if !ok {
+		return
+	}
+	restoreSafeSavePointMessageInMap(originalOutput, sanitizedOutput)
+}
+
+func restoreSafeSavePointMessageInMap(original, sanitized map[string]any) {
+	if original == nil || sanitized == nil {
+		return
+	}
+	raw, _ := original["message"].(string)
+	message, err := NormalizeSavePointMessage(raw)
+	if err != nil {
+		return
+	}
+	sanitized["message"] = message
 }
 
 func (err OperationError) Sanitized() (OperationError, RedactionReport) {

@@ -40,6 +40,7 @@ type OperationRecoveryStore interface {
 	store.RepoCreateOperationRecoveryStore
 	store.RepoLifecycleOperationRecoveryStore
 	store.RepoPurgeOperationRecoveryStore
+	store.SavePointCreateOperationRecoveryStore
 }
 
 type WorkerStore interface {
@@ -279,6 +280,35 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			executors = append(executors, purgeExecutor)
 			scopedStore.repoPurgeEnabled = true
 		}
+		if opConfig.SavePoint.Enabled {
+			jvsFactory := options.JVSRunnerFactory
+			if jvsFactory == nil {
+				jvsFactory = NewJVSRunnerFromConfig
+			}
+			jvs, err := jvsFactory(opConfig.SavePoint)
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			savePointExecutor, err := repoexec.NewSavePointExecutor(repoexec.SavePointConfig{
+				Store:        scopedStore,
+				JVSRunner:    jvs,
+				Owner:        opConfig.Owner,
+				Clock:        now,
+				AuditEventID: func() string { return eventID() },
+				VolumeRoots:  opConfig.SavePoint.VolumeRoots,
+			})
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			executors = append(executors, savePointExecutor)
+			scopedStore.savePointEnabled = true
+		}
 		operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
 			Reader:        scopedStore,
 			LeaseStore:    scopedStore,
@@ -433,6 +463,7 @@ type operationRecoveryStore struct {
 	repoCreateEnabled    bool
 	repoLifecycleEnabled bool
 	repoPurgeEnabled     bool
+	savePointEnabled     bool
 }
 
 func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
@@ -471,6 +502,13 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 		}
 		records = append(records, purgeRecords...)
 	}
+	if scoped.savePointEnabled {
+		savePointRecords, err := scoped.store.ListSavePointCreateOperationsForRecovery(ctx, now, limit)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, savePointRecords...)
+	}
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
 			return records[i].ID < records[j].ID
@@ -498,18 +536,24 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 	}
 	if scoped.repoCreateEnabled {
 		record, err = scoped.store.AcquireRepoCreateOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoLifecycleEnabled && !scoped.repoPurgeEnabled) {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoLifecycleEnabled && !scoped.repoPurgeEnabled && !scoped.savePointEnabled) {
 			return record, err
 		}
 	}
 	if scoped.repoLifecycleEnabled {
 		record, err = scoped.store.AcquireRepoLifecycleOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || !scoped.repoPurgeEnabled {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoPurgeEnabled && !scoped.savePointEnabled) {
 			return record, err
 		}
 	}
 	if scoped.repoPurgeEnabled {
-		return scoped.store.AcquireRepoPurgeOperationLease(ctx, operationID, request)
+		record, err = scoped.store.AcquireRepoPurgeOperationLease(ctx, operationID, request)
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || !scoped.savePointEnabled {
+			return record, err
+		}
+	}
+	if scoped.savePointEnabled {
+		return scoped.store.AcquireSavePointCreateOperationLease(ctx, operationID, request)
 	}
 	return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 }
@@ -556,6 +600,18 @@ func (scoped operationRecoveryStore) CommitRepoPurgeSucceededWithLease(ctx conte
 
 func (scoped operationRecoveryStore) CommitRepoPurgeFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
 	return scoped.store.CommitRepoPurgeFailedWithLease(ctx, record, owner, now, event, releaseFenceID)
+}
+
+func (scoped operationRecoveryStore) UpdateSavePointCreateProgressWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	return scoped.store.UpdateSavePointCreateProgressWithLease(ctx, record, owner, now)
+}
+
+func (scoped operationRecoveryStore) CommitSavePointCreateSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return scoped.store.CommitSavePointCreateSucceededWithLease(ctx, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitSavePointCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return scoped.store.CommitSavePointCreateFailedWithLease(ctx, record, owner, now, event)
 }
 
 func (scoped operationRecoveryStore) GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error) {
@@ -654,5 +710,6 @@ var (
 	_ store.RepoCreateOperationCommitStore             = operationRecoveryStore{}
 	_ store.RepoLifecycleOperationCommitStore          = operationRecoveryStore{}
 	_ store.RepoPurgeOperationCommitStore              = operationRecoveryStore{}
+	_ store.SavePointCreateOperationCommitStore        = operationRecoveryStore{}
 	_ recovery.OperationExecutor                       = multiExecutor{}
 )

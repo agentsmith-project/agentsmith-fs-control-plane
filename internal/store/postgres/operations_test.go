@@ -25,6 +25,8 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.RepoCreateOperationIntakeStore = (*Store)(nil)
 	var _ store.RepoCreateOperationCommitStore = (*Store)(nil)
 	var _ store.RepoCreateOperationRecoveryStore = (*Store)(nil)
+	var _ store.SavePointCreateOperationRecoveryStore = (*Store)(nil)
+	var _ store.RepoJVSMutationGateReader = (*Store)(nil)
 	var _ store.VolumeEnsureOperationCommitStore = (*Store)(nil)
 	var _ store.VolumeEnsureOperationRecoveryStore = (*Store)(nil)
 	var _ store.NamespaceUpsertOperationCommitStore = (*Store)(nil)
@@ -37,6 +39,34 @@ func TestStoreImplementsContracts(t *testing.T) {
 
 	if got := New(nil); got == nil {
 		t.Fatal("New returned nil")
+	}
+}
+
+func TestRepoHasNonTerminalJVSMutationScopesRepoTypeAndNonTerminalState(t *testing.T) {
+	exec := &fakeExecutor{row: fakeRow{values: []any{true}}}
+	st := &Store{exec: exec}
+
+	got, err := st.RepoHasNonTerminalJVSMutation(context.Background(), "repo_alpha")
+	if err != nil {
+		t.Fatalf("RepoHasNonTerminalJVSMutation: %v", err)
+	}
+	if !got {
+		t.Fatal("RepoHasNonTerminalJVSMutation = false, want true")
+	}
+	if exec.queryRowCalls != 1 || len(exec.args) != 1 || exec.args[0] != "repo_alpha" {
+		t.Fatalf("query calls/args = %d/%#v, want repo query", exec.queryRowCalls, exec.args)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"SELECT EXISTS",
+		"FROM operations",
+		"repo_id = $1",
+		"operation_type IN ('save_point_create', 'restore_run', 'template_create', 'template_clone')",
+		"operation_state NOT IN ('succeeded','failed','cancelled')",
+	)
+	for _, forbidden := range []string{"UPDATE ", "INSERT ", "DELETE ", "FOR UPDATE", "lease_owner", "repo_fences"} {
+		if strings.Contains(strings.ToUpper(exec.query), strings.ToUpper(forbidden)) {
+			t.Fatalf("gate query contains mutating or unrelated SQL %q: %s", forbidden, exec.query)
+		}
 	}
 }
 

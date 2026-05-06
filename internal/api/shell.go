@@ -31,22 +31,27 @@ func NewNeutralShellWithLoggerAndAuditSink(logger *slog.Logger, sink audit.Sink)
 }
 
 type InternalAPIShellConfig struct {
-	Logger                     *slog.Logger
-	AuditSink                  audit.Sink
-	PrincipalResolver          PrincipalResolver
-	NamespaceBindingReader     NamespaceVolumeBindingReader
-	NamespaceReader            NamespaceReader
-	RepoReader                 RepoReader
-	RepoFenceReader            RepoFenceReader
-	OperationInspectionReader  OperationInspectionStoreReader
-	RepoCreateIntakeStore      RepoCreateOperationIntakeStore
-	DeploymentGlobalPolicy     AllowedCallerPolicy
-	DeploymentNamespacePolicy  AllowedCallerPolicy
-	DeploymentGlobalCallers    []auth.AllowedCaller
-	DeploymentNamespaceCallers []auth.AllowedCaller
-	OperationIntakeStore       OperationIntakeStore
-	GenerateOperationID        OperationIDGenerator
-	Now                        func() time.Time
+	Logger                      *slog.Logger
+	AuditSink                   audit.Sink
+	PrincipalResolver           PrincipalResolver
+	NamespaceBindingReader      NamespaceVolumeBindingReader
+	NamespaceReader             NamespaceReader
+	RepoReader                  RepoReader
+	VolumeReader                VolumeReader
+	RepoFenceReader             RepoFenceReader
+	SavePointHistoryReader      SavePointHistoryReader
+	SavePointMutationGate       RepoJVSMutationGateReader
+	SavePointHistoryJVSRunner   JVSHistoryRunner
+	SavePointHistoryVolumeRoots map[string]string
+	OperationInspectionReader   OperationInspectionStoreReader
+	RepoCreateIntakeStore       RepoCreateOperationIntakeStore
+	DeploymentGlobalPolicy      AllowedCallerPolicy
+	DeploymentNamespacePolicy   AllowedCallerPolicy
+	DeploymentGlobalCallers     []auth.AllowedCaller
+	DeploymentNamespaceCallers  []auth.AllowedCaller
+	OperationIntakeStore        OperationIntakeStore
+	GenerateOperationID         OperationIDGenerator
+	Now                         func() time.Time
 }
 
 func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
@@ -118,6 +123,45 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	restoreTombstonedRepoHandler := requestLogHandler(repoLifecycleHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}:restore-tombstoned", "restoreTombstonedRepo")
 	purgeRepoHandler := requestLogHandler(repoLifecycleHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}:purge", "purgeRepo")
 
+	savePointHistoryReader := config.SavePointHistoryReader
+	if savePointHistoryReader == nil && config.SavePointHistoryJVSRunner != nil {
+		if reader, err := NewJVSBackedSavePointHistoryReader(JVSBackedSavePointHistoryReaderConfig{
+			RepoReader:   config.RepoReader,
+			VolumeReader: config.VolumeReader,
+			JVSRunner:    config.SavePointHistoryJVSRunner,
+			VolumeRoots:  config.SavePointHistoryVolumeRoots,
+		}); err == nil {
+			savePointHistoryReader = reader
+		}
+	}
+	savePointMutationGate := config.SavePointMutationGate
+	if savePointMutationGate == nil {
+		if typed, ok := config.OperationIntakeStore.(RepoJVSMutationGateReader); ok {
+			savePointMutationGate = typed
+		}
+	}
+
+	savePointHandler := SavePointHandler(SavePointHandlerConfig{
+		RepoReader:        config.RepoReader,
+		NamespaceReader:   config.NamespaceReader,
+		BindingReader:     config.NamespaceBindingReader,
+		FenceReader:       config.RepoFenceReader,
+		HistoryReader:     savePointHistoryReader,
+		MutationGate:      savePointMutationGate,
+		IntakeStore:       config.OperationIntakeStore,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
+	})
+	createSavePointHandler := requestLogHandler(savePointHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/save-points", "createSavePoint")
+	listSavePointsHandler := requestLogHandler(savePointHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/save-points", "listSavePoints")
+
 	operationInspectionHandler := OperationInspectionHandler(OperationInspectionHandlerConfig{
 		StoreReader: config.OperationInspectionReader,
 		StoredNamespaceAuthorizer: operationInspectionNamespaceBindingAuthorizer{
@@ -165,6 +209,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	fallback := internalAPIFallbackHandler(config.Logger, config.AuditSink)
 	mux.Handle("/", routeDispatchHandler(map[string]http.Handler{
 		"createRepo":                createRepoHandler,
+		"createSavePoint":           createSavePointHandler,
 		"archiveRepo":               archiveRepoHandler,
 		"restoreArchivedRepo":       restoreArchivedRepoHandler,
 		"deleteRepo":                deleteRepoHandler,
@@ -175,6 +220,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"purgeRepo":                 purgeRepoHandler,
 		"restoreTombstonedRepo":     restoreTombstonedRepoHandler,
 		"getOperation":              operationInspectionHandler,
+		"listSavePoints":            listSavePointsHandler,
 		"putNamespaceVolumeBinding": putBindingHandler,
 		"upsertNamespace":           upsertNamespaceHandler,
 	}, fallback))

@@ -142,14 +142,40 @@ func TestHistoryUsesFixedCommandAndParsesEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("History returned error: %v", err)
 	}
-	if summary.NewestSavePointID != "sp_002" || len(summary.SavePoints) != 2 || summary.SavePoints[0].SavePointID != "sp_001" {
+	if summary.NewestSavePointID != "sp_002" || len(summary.SavePoints) != 2 {
 		t.Fatalf("summary = %#v", summary)
 	}
-	want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: []string{"--control-root", testControlRoot, "--workspace", "main", "history", "--json"}, Dir: "/var/lib/afscp/jvs-cwd"}
+	if summary.SavePoints[0].SavePointID != "sp_002" || summary.SavePoints[0].Message != "second" || summary.SavePoints[0].CreatedAt != "2026-05-05T12:01:00Z" {
+		t.Fatalf("first returned save point = %#v, want JVS newest-first sp_002", summary.SavePoints[0])
+	}
+	if summary.SavePoints[1].SavePointID != "sp_001" || summary.SavePoints[1].Message != "first" || summary.SavePoints[1].CreatedAt != "2026-05-05T12:00:00Z" {
+		t.Fatalf("summary = %#v", summary)
+	}
+	want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: []string{"--control-root", testControlRoot, "--workspace", "main", "history", "--limit", "0", "--json"}, Dir: "/var/lib/afscp/jvs-cwd"}
 	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
 		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
 	}
 	assertSummaryDoesNotLeakPaths(t, summary)
+}
+
+func TestHistoryFullRequestStillFailsClosedWhenTruncated(t *testing.T) {
+	t.Parallel()
+
+	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: historyStdoutWith(t, func(env map[string]any) {
+		env["data"].(map[string]any)["truncated"] = true
+	})}}
+	runner := newTestRunner(t, commandRunner)
+
+	_, err := runner.History(context.Background(), testControlRoot)
+	if err == nil {
+		t.Fatal("History succeeded with truncated output, want fail closed")
+	}
+	assertErrorDoesNotLeak(t, err)
+
+	want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: []string{"--control-root", testControlRoot, "--workspace", "main", "history", "--limit", "0", "--json"}, Dir: "/var/lib/afscp/jvs-cwd"}
+	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
+		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
+	}
 }
 
 func TestHistoryAllowsEmptyHistory(t *testing.T) {
@@ -168,6 +194,95 @@ func TestHistoryAllowsEmptyHistory(t *testing.T) {
 	}
 	if summary.NewestSavePointID != "" || len(summary.SavePoints) != 0 {
 		t.Fatalf("summary = %#v, want empty history", summary)
+	}
+}
+
+func TestHistoryMessageAllowsNaturalLanguage(t *testing.T) {
+	t.Parallel()
+
+	wantMessage := "checkpoint before release (中文说明，保留空格!)"
+	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: historyStdoutWith(t, func(env map[string]any) {
+		savePoints := env["data"].(map[string]any)["save_points"].([]map[string]any)
+		savePoints[0]["message"] = wantMessage
+	})}}
+	runner := newTestRunner(t, commandRunner)
+
+	summary, err := runner.History(context.Background(), testControlRoot)
+	if err != nil {
+		t.Fatalf("History returned error: %v", err)
+	}
+	if got := summary.SavePoints[0].Message; got != wantMessage {
+		t.Fatalf("message = %q, want %q", got, wantMessage)
+	}
+}
+
+func TestHistoryMessageUsesUnicodeLengthLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{name: "allows 512 CJK characters", message: strings.Repeat("界", 512), want: strings.Repeat("界", 512)},
+		{name: "redacts 513 CJK characters", message: strings.Repeat("界", 513), want: "redacted"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: historyStdoutWith(t, func(env map[string]any) {
+				savePoints := env["data"].(map[string]any)["save_points"].([]map[string]any)
+				savePoints[0]["message"] = tt.message
+			})}}
+			runner := newTestRunner(t, commandRunner)
+
+			summary, err := runner.History(context.Background(), testControlRoot)
+			if err != nil {
+				t.Fatalf("History returned error: %v", err)
+			}
+			if got := summary.SavePoints[0].Message; got != tt.want {
+				t.Fatalf("message length/runes mismatch: got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHistoryMessageRedactsDangerousContent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		message string
+	}{
+		{name: "dot jvs", message: "look in .jvs/state.json"},
+		{name: "absolute path", message: "copied from /srv/afscp/volumes/secret"},
+		{name: "control root field", message: "control_root=/srv/afscp/control"},
+		{name: "payload root field", message: "payload_root=/srv/afscp/payload"},
+		{name: "raw path field", message: "raw_path=/srv/afscp/raw"},
+		{name: "shell fragment", message: "run rm -rf /srv/afscp/volumes"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: historyStdoutWith(t, func(env map[string]any) {
+				savePoints := env["data"].(map[string]any)["save_points"].([]map[string]any)
+				savePoints[0]["message"] = tt.message
+			})}}
+			runner := newTestRunner(t, commandRunner)
+
+			summary, err := runner.History(context.Background(), testControlRoot)
+			if err != nil {
+				t.Fatalf("History returned error: %v", err)
+			}
+			if got := summary.SavePoints[0].Message; got != "redacted" {
+				t.Fatalf("message = %q, want redacted", got)
+			}
+			assertSummaryDoesNotLeakPaths(t, summary)
+		})
 	}
 }
 
@@ -703,12 +818,45 @@ func TestNewJVSPrimitivesFailClosedForInvalidEnvelope(t *testing.T) {
 			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
 			return err
 		}},
+		{name: "save missing created at", stdout: saveStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "created_at") }), call: func(r *Runner) error {
+			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
+			return err
+		}},
+		{name: "save empty created at", stdout: saveStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["created_at"] = " \t" }), call: func(r *Runner) error {
+			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
+			return err
+		}},
 		{name: "history truncated", stdout: historyStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["truncated"] = true }), call: func(r *Runner) error {
 			_, err := r.History(context.Background(), testControlRoot)
 			return err
 		}},
 		{name: "history unsafe save point id", stdout: historyStdoutWith(t, func(env map[string]any) {
 			env["data"].(map[string]any)["save_points"] = []map[string]any{{"save_point_id": "sp/secret"}}
+		}), call: func(r *Runner) error {
+			_, err := r.History(context.Background(), testControlRoot)
+			return err
+		}},
+		{name: "history missing message", stdout: historyStdoutWith(t, func(env map[string]any) {
+			env["data"].(map[string]any)["save_points"] = []map[string]any{{"save_point_id": "sp_001", "created_at": "2026-05-05T12:00:00Z"}}
+		}), call: func(r *Runner) error {
+			_, err := r.History(context.Background(), testControlRoot)
+			return err
+		}},
+		{name: "history missing created at", stdout: historyStdoutWith(t, func(env map[string]any) {
+			env["data"].(map[string]any)["save_points"] = []map[string]any{{"save_point_id": "sp_001", "message": "first"}}
+		}), call: func(r *Runner) error {
+			_, err := r.History(context.Background(), testControlRoot)
+			return err
+		}},
+		{name: "history newest mismatch", stdout: historyStdoutWith(t, func(env map[string]any) {
+			env["data"].(map[string]any)["newest_save_point"] = "sp_001"
+		}), call: func(r *Runner) error {
+			_, err := r.History(context.Background(), testControlRoot)
+			return err
+		}},
+		{name: "history item wrong workspace", stdout: historyStdoutWith(t, func(env map[string]any) {
+			savePoints := env["data"].(map[string]any)["save_points"].([]map[string]any)
+			savePoints[0]["workspace"] = "dev"
 		}), call: func(r *Runner) error {
 			_, err := r.History(context.Background(), testControlRoot)
 			return err
@@ -1016,8 +1164,8 @@ func historyStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	data["limit"] = 100
 	data["current_pointer"] = "sp_002"
 	data["save_points"] = []map[string]any{
-		{"save_point_id": "sp_001", "message": "first"},
-		{"save_point_id": "sp_002", "message": "second"},
+		{"save_point_id": "sp_002", "message": "second", "created_at": "2026-05-05T12:01:00Z"},
+		{"save_point_id": "sp_001", "message": "first", "created_at": "2026-05-05T12:00:00Z"},
 	}
 	if mutate != nil {
 		mutate(env)

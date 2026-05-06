@@ -45,7 +45,8 @@ External control-root smoke with a temporary repo proved:
 
 - `jvs init <payload> --control-root <control> --workspace main --json` works.
 - `jvs save -m <message> --json` works.
-- `jvs history --json` works.
+- `jvs history` can emit JSON; the current AFSCP runner contract uses
+  `jvs history --limit 0 --json` for complete history.
 - `jvs repo clone <target_payload> --target-control-root <target_control> --save-points main --json` works before restore-run.
 - `jvs doctor --strict --json` reports clone health before restore-run.
 - `payload/.jvs` is absent for external-control-root repos.

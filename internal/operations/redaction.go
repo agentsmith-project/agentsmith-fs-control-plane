@@ -1,14 +1,17 @@
 package operations
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 )
 
 const redactedValue = "[REDACTED]"
+const MaxSavePointMessageRunes = 512
 
 func RedactValue(value any) (any, RedactionReport) {
 	redactor := valueRedactor{}
@@ -56,6 +59,22 @@ func RedactExternalResourceIDs(ids map[string]string) (map[string]string, Redact
 		Redacted: true,
 		Fields:   fields,
 	}
+}
+
+func NormalizeSavePointMessage(value string) (string, error) {
+	message := strings.TrimSpace(value)
+	if message == "" || utf8.RuneCountInString(message) > MaxSavePointMessageRunes {
+		return "", errors.New("invalid save point message")
+	}
+	if message == redactedValue || ContainsSensitiveTextShape(message) {
+		return "", errors.New("invalid save point message")
+	}
+	return message, nil
+}
+
+func ContainsSensitiveTextShape(value string) bool {
+	_, ok := observability.RedactString(value)
+	return ok
 }
 
 type valueRedactor struct {

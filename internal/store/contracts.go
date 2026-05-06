@@ -227,6 +227,37 @@ type RepoPurgeOperationRecoveryStore interface {
 	RepoLifecycleOperationMetadataReader
 }
 
+type SavePointCreateOperationCommitStore interface {
+	UpdateSavePointCreateProgressWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error)
+	CommitSavePointCreateSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+	CommitSavePointCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+}
+
+type SavePointCreateOperationMetadataReader interface {
+	GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error)
+	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
+	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
+	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
+	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
+}
+
+// RepoJVSMutationGateReader is the read-only durable gate for JVS history
+// readers. It must not claim, fence, lease, or mutate operation state.
+type RepoJVSMutationGateReader interface {
+	RepoHasNonTerminalJVSMutation(ctx context.Context, repoID string) (bool, error)
+}
+
+// SavePointCreateOperationRecoveryStore owns save_point_create recovery. It
+// serializes same-repo JVS mutations at acquire time using earlier
+// non-terminal operation records rather than repo_fences, and it persists the
+// pre-save history pointer before any JVS save command can run.
+type SavePointCreateOperationRecoveryStore interface {
+	ListSavePointCreateOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireSavePointCreateOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	SavePointCreateOperationCommitStore
+	SavePointCreateOperationMetadataReader
+}
+
 // AuditSink accepts audit events for append-only or outbox-backed delivery.
 type AuditSink interface {
 	AppendAuditEvent(ctx context.Context, event audit.Event) error

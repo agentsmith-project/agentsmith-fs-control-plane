@@ -348,6 +348,9 @@ type fakeOperationIntakeStore struct {
 	existingOperationID string
 	reusedRecord        *operations.OperationRecord
 	repoAlreadyExists   bool
+	jvsMutation         bool
+	jvsMutationErr      error
+	jvsMutationCalls    int
 }
 
 func (store *fakeOperationIntakeStore) GetOperationByIdempotencyScope(_ context.Context, _ operations.IdempotencyScope) (operations.OperationRecord, error) {
@@ -391,6 +394,14 @@ func (store *fakeOperationIntakeStore) CreateOrReuseRepoCreateOperation(ctx cont
 		return operations.IdempotencyResolution{}, operations.ErrRepoAlreadyExists
 	}
 	return store.CreateOrReuseOperation(ctx, spec)
+}
+
+func (store *fakeOperationIntakeStore) RepoHasNonTerminalJVSMutation(context.Context, string) (bool, error) {
+	store.jvsMutationCalls++
+	if store.jvsMutationErr != nil {
+		return false, store.jvsMutationErr
+	}
+	return store.jvsMutation, nil
 }
 
 func operationIntakeError(t *testing.T, err error) *OperationIntakeError {

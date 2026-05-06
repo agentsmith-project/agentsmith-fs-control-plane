@@ -10,13 +10,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
-	workspaceMain         = "main"
-	schemaVersionV048     = 1
-	defaultMaxOutputBytes = 64 * 1024
-	maxSafeRepoIDLength   = 128
+	workspaceMain          = "main"
+	schemaVersionV048      = 1
+	defaultMaxOutputBytes  = 64 * 1024
+	maxSafeRepoIDLength    = 128
+	maxHistoryMessageRunes = 512
 )
 
 var (
@@ -77,6 +79,8 @@ type SaveSummary struct {
 
 type SavePointSummary struct {
 	SavePointID string
+	Message     string
+	CreatedAt   string
 }
 
 type HistorySummary struct {
@@ -256,15 +260,15 @@ func (runner *Runner) Save(ctx context.Context, controlRoot, message string) (Sa
 	workspace, _ := envelope.Data["workspace"].(string)
 	newest, newestOK := dataSafeID(envelope, "newest_save_point")
 	unsavedChanges, unsavedOK := envelope.Data["unsaved_changes"].(bool)
-	if !ok || !newestOK || newest != savePointID || workspace != workspaceMain || !unsavedOK {
+	createdAt, createdAtOK := envelope.Data["created_at"].(string)
+	if !ok || !newestOK || newest != savePointID || workspace != workspaceMain || !unsavedOK || !createdAtOK || strings.TrimSpace(createdAt) == "" {
 		return SaveSummary{}, fmt.Errorf("%w: save", ErrInvalidEnvelope)
 	}
-	createdAt, _ := envelope.Data["created_at"].(string)
 	return SaveSummary{SavePointID: savePointID, NewestSavePointID: newest, Workspace: workspace, UnsavedChanges: unsavedChanges, CreatedAt: safeSummaryText(createdAt)}, nil
 }
 
 func (runner *Runner) History(ctx context.Context, controlRoot string) (HistorySummary, error) {
-	envelope, err := runner.runControlJSON(ctx, "history", controlRoot, []string{"history", "--json"})
+	envelope, err := runner.runControlJSON(ctx, "history", controlRoot, []string{"history", "--limit", "0", "--json"})
 	if err != nil {
 		return HistorySummary{}, err
 	}
@@ -283,17 +287,28 @@ func (runner *Runner) History(ctx context.Context, controlRoot string) (HistoryS
 		if !ok {
 			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
 		}
+		if workspace, exists := item["workspace"]; exists && workspace != workspaceMain {
+			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
+		}
 		id, _ := item["save_point_id"].(string)
 		if !safeOpaqueID(id) {
 			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
 		}
-		savePoints = append(savePoints, SavePointSummary{SavePointID: id})
+		message, ok := item["message"].(string)
+		if !ok {
+			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
+		}
+		createdAt, ok := item["created_at"].(string)
+		if !ok || strings.TrimSpace(createdAt) == "" {
+			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
+		}
+		savePoints = append(savePoints, SavePointSummary{SavePointID: id, Message: safeHistoryMessageText(message), CreatedAt: safeSummaryText(createdAt)})
 	}
 	newest := ""
 	if len(savePoints) > 0 {
 		var newestOK bool
 		newest, newestOK = dataSafeID(envelope, "newest_save_point")
-		if !newestOK {
+		if !newestOK || newest != savePoints[0].SavePointID {
 			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
 		}
 	} else if _, exists := envelope.Data["newest_save_point"]; exists {
@@ -696,6 +711,57 @@ func safeSummaryText(value string) string {
 		return "redacted"
 	}
 	return value
+}
+
+func safeHistoryMessageText(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return value
+	}
+	if utf8.RuneCountInString(value) > maxHistoryMessageRunes || historyMessageLooksSensitive(value) {
+		return "redacted"
+	}
+	return value
+}
+
+func historyMessageLooksSensitive(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		".jvs",
+		"control_root",
+		"payload_root",
+		"raw_path",
+		"--control-root",
+		"--target-control-root",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	if containsAbsolutePath(value) || containsShellFragment(lower) {
+		return true
+	}
+	return false
+}
+
+func containsAbsolutePath(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] != '/' {
+			continue
+		}
+		if i == 0 || strings.ContainsRune(" \t\r\n'\"([{<=", rune(value[i-1])) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsShellFragment(lower string) bool {
+	for _, marker := range []string{"&&", "||", "`", "$(", "| sh", "|sh", " sh -c", " bash -c", "rm -rf", "sudo ", "jvs "} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateCleanAbsolute(path string, rejectRoot bool) error {
