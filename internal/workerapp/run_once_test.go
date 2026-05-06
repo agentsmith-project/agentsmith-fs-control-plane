@@ -299,6 +299,31 @@ func TestRunOnceClaimsQueuedNamespaceUpsertThroughDefaultRunner(t *testing.T) {
 	}
 }
 
+func TestRunOnceClaimsQueuedNamespaceDisableThroughDefaultRunner(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppNamespaceDisableOperationRecord(now)
+	store := newWorkerAppStore(record)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want claimed namespace disable", summary)
+	}
+	if store.namespace.ID != "ns_alpha01" || store.namespace.Status != resources.NamespaceStatusDisabled || store.namespace.DisabledAt == nil || store.namespace.DisabledReason != "security hold" {
+		t.Fatalf("namespace = %#v, want disabled security hold", store.namespace)
+	}
+	if store.operation.ID != record.ID || store.operation.Type != operations.OperationNamespaceDisable || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseNamespaceDisableCommitted {
+		t.Fatalf("operation = %#v, want committed namespace disable", store.operation)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeNamespaceDisable || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
+		t.Fatalf("audit events = %#v, want namespace disable succeeded", store.auditEvents)
+	}
+}
+
 func TestRunOnceClaimsQueuedNamespaceUpsertAndBindingPutThroughDefaultRunner(t *testing.T) {
 	now := workerAppNow()
 	namespaceRecord := workerAppOperationRecord(now)
@@ -1649,6 +1674,17 @@ func workerAppOperationRecord(now time.Time) operations.OperationRecord {
 		NamespaceID:      "ns_alpha01",
 		CreatedAt:        now.Add(-time.Hour),
 	}
+}
+
+func workerAppNamespaceDisableOperationRecord(now time.Time) operations.OperationRecord {
+	record := workerAppOperationRecord(now)
+	record.ID = "op_namespace_disable"
+	record.Type = operations.OperationNamespaceDisable
+	record.Phase = operations.OperationPhaseNamespaceDisableValidate
+	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationNamespaceDisable, "idem_namespace_disable").String()
+	record.IdempotencyKey = "idem_namespace_disable"
+	record.InputSummary = map[string]any{"namespace_id": "ns_alpha01", "reason": "security hold"}
+	return record
 }
 
 func workerAppRepoOperationRecord(operationID string, state operations.OperationState, now time.Time) operations.OperationRecord {

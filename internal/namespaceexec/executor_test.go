@@ -194,6 +194,51 @@ func TestExecutorClaimRetryReclaimCommitNamespaceOperationAndAuditAtomically(t *
 	}
 }
 
+func TestDisableExecutorCommitsDisabledNamespaceOperationAndAuditAtomically(t *testing.T) {
+	now := namespaceExecNow()
+	store := &fakeNamespaceDisableCommitStore{}
+	executor, err := NewDisableExecutor(DisableConfig{
+		CommitStore:  store,
+		Owner:        "worker-a",
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_namespace_disable" },
+	})
+	if err != nil {
+		t.Fatalf("NewDisableExecutor: %v", err)
+	}
+	record := namespaceDisableExecRecord("op_namespace_disable")
+	record.State = operations.OperationStateRunning
+	expiresAt := now.Add(5 * time.Minute)
+	record.LeaseOwner = "worker-a"
+	record.LeaseExpiresAt = &expiresAt
+
+	err = executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if store.commitCalls != 1 {
+		t.Fatalf("commit calls = %d, want 1", store.commitCalls)
+	}
+	call := store.lastCall
+	if call.namespace.ID != "ns_alpha01" || call.namespace.Status != resources.NamespaceStatusDisabled || call.namespace.DisabledAt == nil || call.namespace.DisabledReason != "security hold" {
+		t.Fatalf("namespace = %#v, want disabled security hold", call.namespace)
+	}
+	operation := call.record.Record()
+	if operation.Type != operations.OperationNamespaceDisable || operation.State != operations.OperationStateSucceeded || operation.Phase != operations.OperationPhaseNamespaceDisableCommitted {
+		t.Fatalf("operation = %#v, want succeeded namespace_disable committed", operation)
+	}
+	event := call.event
+	if event.Type != audit.EventTypeNamespaceDisable || event.Outcome != audit.OutcomeSucceeded || event.OperationID != operation.ID {
+		t.Fatalf("event = %#v, want namespace_disable succeeded for operation", event)
+	}
+	if event.Resource.Type != "namespace" || event.Resource.ID != "ns_alpha01" || event.Resource.NamespaceID != "ns_alpha01" {
+		t.Fatalf("event resource = %#v, want namespace scoped", event.Resource)
+	}
+	if event.Details["reason"] != "security hold" {
+		t.Fatalf("event details = %#v, want disable reason", event.Details)
+	}
+}
+
 func TestExecutorRejectsInvalidRecordPlanTimeAndEventIDBeforeStoreCalls(t *testing.T) {
 	now := namespaceExecNow()
 	baseRecord := namespaceExecRecord("op_invalid")
@@ -406,6 +451,17 @@ func namespaceExecRecord(operationID string) operations.OperationRecord {
 	}
 }
 
+func namespaceDisableExecRecord(operationID string) operations.OperationRecord {
+	record := namespaceExecRecord(operationID)
+	record.Type = operations.OperationNamespaceDisable
+	record.Phase = operations.OperationPhaseNamespaceDisableValidate
+	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationNamespaceDisable, "idem_namespace_disable").String()
+	record.IdempotencyKey = "idem_namespace_disable"
+	record.Resource = operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"}
+	record.InputSummary = map[string]any{"namespace_id": "ns_alpha01", "reason": "security hold"}
+	return record
+}
+
 func namespaceExecNow() time.Time {
 	return time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 }
@@ -414,6 +470,24 @@ type fakeNamespaceCommitStore struct {
 	commitCalls int
 	lastCall    namespaceCommitCall
 	err         error
+}
+
+type fakeNamespaceDisableCommitStore struct {
+	commitCalls int
+	lastCall    namespaceCommitCall
+	err         error
+}
+
+func (store *fakeNamespaceDisableCommitStore) CommitNamespaceDisableWithLease(_ context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
+	store.commitCalls++
+	store.lastCall = namespaceCommitCall{namespace: namespace, record: record, owner: owner, now: now, event: event}
+	if store.err != nil {
+		return resources.Namespace{}, operations.OperationRecord{}, store.err
+	}
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	return namespace, operation, nil
 }
 
 type namespaceCommitCall struct {

@@ -75,6 +75,19 @@ func TestWorkloadMountCreateCommitSQLHasDurableAdmissionGates(t *testing.T) {
 	)
 }
 
+func TestWorkloadMountPlanAllowsDisabledNamespaceOnlyForReleaseTrack(t *testing.T) {
+	sql := workloadMountPlanSelectSQL()
+
+	assertSQLContainsInOrder(t, sql,
+		"FROM workload_mount_bindings b JOIN repos r ON r.namespace_id = b.namespace_id AND r.repo_id = b.repo_id",
+		"JOIN namespace_volume_bindings nvb ON nvb.namespace_id = b.namespace_id",
+		"JOIN namespaces ns ON ns.namespace_id = b.namespace_id",
+		"WHERE b.namespace_id = $1 AND b.mount_binding_id = $2",
+		"nvb.status = 'active'",
+		"((ns.status = 'active' AND b.status IN ('issued','pending','active','releasing')) OR (ns.status = 'disabled' AND b.status = 'releasing'))",
+	)
+}
+
 func TestWorkloadMountUpdateCommitSQLBindsOperationAndBindingBoundary(t *testing.T) {
 	for _, sql := range []string{
 		workloadMountBindingStatusCommitSQL(),

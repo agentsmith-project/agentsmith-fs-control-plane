@@ -317,6 +317,32 @@ func TestGatewayCredentialReadsVerifierAndPayloadSubdirWithoutRawRoot(t *testing
 	}
 }
 
+func TestGatewayCredentialSQLFailsClosedOnInactiveNamespaceBindingOrSession(t *testing.T) {
+	query := exportGatewayCredentialSQL()
+
+	assertSQLContainsInOrder(t, query,
+		"FROM export_sessions s",
+		"JOIN namespaces ns ON ns.namespace_id = s.namespace_id AND ns.status = 'active'",
+		"JOIN namespace_volume_bindings nvb ON nvb.namespace_id = s.namespace_id AND nvb.status = 'active'",
+		"COALESCE((nvb.export_policy->>'webdav_enabled')::boolean, false) = true",
+		"JOIN repos r ON r.namespace_id = s.namespace_id AND r.repo_id = s.repo_id",
+		"JOIN volumes v ON v.volume_id = r.volume_id AND v.status = 'active'",
+		"COALESCE((v.capabilities->>'webdav_export')::boolean, false) = true",
+		"WHERE s.export_id = $1",
+		"s.status = 'active'",
+		"s.protocol = 'webdav'",
+		"r.repo_kind = 'repo'",
+		"r.status = 'active'",
+		"r.lifecycle_status = 'active'",
+	)
+
+	st := &Store{exec: &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}}
+	_, err := st.GetExportGatewayCredential(context.Background(), "export_123")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetExportGatewayCredential error = %v, want sql.ErrNoRows when predicates fail", err)
+	}
+}
+
 func TestMarkExportTerminalRejectsRevokingAsTerminalInput(t *testing.T) {
 	st := &Store{exec: &fakeExecutor{}}
 	_, err := st.MarkExportTerminal(context.Background(), "export_123", sessionstate.ExportStatusRevoking, time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC))

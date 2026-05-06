@@ -98,6 +98,21 @@ func TestInactiveAndExpiredSessionsDenyClosed(t *testing.T) {
 	}
 }
 
+func TestGatewayStoreFailClosedDeniesDisabledNamespaceCredential(t *testing.T) {
+	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+	env.store.getErr = errors.New("credential rejected by namespace or binding predicate")
+	env.writePayload(t, "hello.txt", "hello")
+
+	rec := env.request(http.MethodGet, "/e/"+testExportID+"/hello.txt", nil, "")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body %q", rec.Code, rec.Body.String())
+	}
+	if len(env.store.observations) != 0 {
+		t.Fatalf("runtime observations = %d, want 0", len(env.store.observations))
+	}
+}
+
 func TestReadOnlyMethodPolicy(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
 	env.writePayload(t, "hello.txt", "hello")

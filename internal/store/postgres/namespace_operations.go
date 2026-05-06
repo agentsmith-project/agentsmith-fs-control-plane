@@ -187,9 +187,21 @@ func namespaceDisableOperationCommitWithLeaseSQL() string {
 		"UPDATE namespaces SET status = $20, disabled_reason = $21, disabled_at = $22, updated_at = $24 " +
 		"FROM updated_operation WHERE namespaces.namespace_id = $19 AND namespaces.status = 'active' " +
 		"RETURNING " + prefixedColumns("namespaces", namespaceColumns) +
+		"), revoking_exports AS (" +
+		"UPDATE export_sessions SET status = CASE WHEN status IN ('revoked','expired','failed') THEN status ELSE 'revoking' END, " +
+		"revoked_at = CASE WHEN status IN ('revoked','expired','failed') THEN revoked_at ELSE COALESCE(revoked_at, $22) END, " +
+		"status_reason = CASE WHEN status IN ('revoked','expired','failed') THEN status_reason WHEN btrim(status_reason) = '' THEN 'namespace_disabled' ELSE status_reason END, " +
+		"updated_at = $24 FROM disabled_namespace WHERE export_sessions.namespace_id = disabled_namespace.namespace_id AND export_sessions.status IN ('active','revoking') RETURNING export_id" +
+		"), releasing_mounts AS (" +
+		"UPDATE workload_mount_bindings SET status = CASE WHEN status IN ('released','revoked','expired','failed') THEN status ELSE 'releasing' END, " +
+		"status_reason = CASE WHEN status IN ('released','revoked','expired','failed') THEN status_reason WHEN btrim(status_reason) = '' THEN 'namespace_disabled' ELSE status_reason END, " +
+		"confirmed_unmounted_at = confirmed_unmounted_at, terminal_observed_at = terminal_observed_at, unable_to_write_at = unable_to_write_at, updated_at = $24 " +
+		"FROM disabled_namespace WHERE workload_mount_bindings.namespace_id = disabled_namespace.namespace_id AND workload_mount_bindings.status IN ('issued','pending','active','releasing') RETURNING mount_binding_id" +
+		"), namespace_disable_effects AS (" +
+		"SELECT (SELECT count(*) FROM revoking_exports) AS export_count, (SELECT count(*) FROM releasing_mounts) AS mount_count" +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") " +
-		"SELECT " + placeholders(25, len(auditOutboxColumns)) + " FROM updated_operation, disabled_namespace " +
+		"SELECT " + placeholders(25, len(auditOutboxColumns)) + " FROM updated_operation, disabled_namespace, namespace_disable_effects " +
 		"RETURNING audit_event_id" +
 		") SELECT " + prefixedColumns("disabled_namespace", namespaceColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) +
 		" FROM disabled_namespace, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"

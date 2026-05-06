@@ -40,6 +40,58 @@ func TestCreateWorkloadMountBindingQueuesOperationAndDoesNotLeakPlan(t *testing.
 	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
 }
 
+func TestCreateWorkloadMountBindingRejectsDisabledNamespaceButReleaseStatusStayAvailable(t *testing.T) {
+	now := fixedNamespaceNow()
+	disabledAt := now
+	meta := workloadMountMetaFixture()
+	meta.namespace = resources.Namespace{ID: "ns_123", Status: resources.NamespaceStatusDisabled, DisabledReason: "security hold", DisabledAt: &disabledAt, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}
+	meta.mount.Status = sessionstate.MountStatusReleasing
+	intake := &fakeOperationIntakeStore{}
+	handler := workloadMountHandlerWithMeta(intake, meta, namespaceBindingAllowedPolicy(auth.RoleMountAdmin))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", `{"mount_path":"/mnt/repo","read_only":false,"lease_seconds":120}`, "ns_123"))
+	if rec.Code < 400 {
+		t.Fatalf("create status = %d body = %s, want namespace disabled denial", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeNamespaceDisabled {
+		t.Fatalf("create error = %#v, want namespace disabled", env.Error)
+	}
+	if intake.calls != 0 {
+		t.Fatalf("intake calls = %d, want create rejected before intake", intake.calls)
+	}
+
+	orchestratorConfig := workloadMountHandlerConfig(intake, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "sandbox-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
+		config.RepoReader = &fakeRepoReader{repos: []resources.Repo{meta.repo}}
+		config.NamespaceReader = &fakeNamespaceReader{namespace: meta.namespace}
+		config.BindingReader = &fakeNamespaceVolumeBindingReader{binding: meta.binding}
+		config.VolumeReader = fakeWorkloadMountVolumeReader{volume: meta.volume}
+		config.FenceReader = &fakeRepoFenceReader{fences: meta.fences}
+		config.MountReader = fakeWorkloadMountReader{binding: meta.mount}
+		config.PlanReader = fakeWorkloadMountPlanReader{plan: meta.plan}
+	})
+	orchestratorConfig.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:sandbox-orchestrator", CanonicalCallerService: "sandbox-orchestrator"}}
+	orchestrator := WorkloadMountHandler(orchestratorConfig)
+
+	rec = httptest.NewRecorder()
+	orchestrator.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPost, "/internal/v1/workload-mount-bindings/wmb_123:release", "", "ns_123", "sandbox-orchestrator"))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("release status = %d body = %s, want release intake preserved", rec.Code, rec.Body.String())
+	}
+	if intake.calls != 1 || intake.spec.Phase != operations.OperationPhaseMountBindingReleaseValidate || intake.spec.MountBindingID != "wmb_123" {
+		t.Fatalf("release intake = calls %d spec %#v", intake.calls, intake.spec)
+	}
+
+	rec = httptest.NewRecorder()
+	orchestrator.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", `{"status":"released","observed_at":"2026-05-05T12:00:00Z","reason":"unmounted"}`, "ns_123", "sandbox-orchestrator"))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status update = %d body = %s, want status intake preserved", rec.Code, rec.Body.String())
+	}
+	if intake.calls != 2 || intake.spec.Phase != operations.OperationPhaseMountBindingStatusValidate {
+		t.Fatalf("status intake = calls %d spec %#v", intake.calls, intake.spec)
+	}
+}
+
 func TestCreateWorkloadMountBindingRejectsCallerSuppliedVolumeID(t *testing.T) {
 	intake := &fakeOperationIntakeStore{}
 	handler := workloadMountHandlerForTest(intake, namespaceBindingAllowedPolicy(auth.RoleMountAdmin))

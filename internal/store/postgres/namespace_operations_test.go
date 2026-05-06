@@ -305,6 +305,58 @@ func TestCommitNamespaceUpsertWithLeaseAtomicBoundaryErrorsPropagate(t *testing.
 	}
 }
 
+func TestCommitNamespaceDisableWithLeaseRevokesExportsReleasesMountsAndAuditsAtomically(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	disabledAt := now
+	namespace := resources.Namespace{ID: "ns_alpha01", Status: resources.NamespaceStatusDisabled, DisabledReason: "security hold", DisabledAt: &disabledAt, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}
+	record := operationFixture(now.Add(-time.Hour))
+	record.ID = "op-namespace-disable"
+	record.Type = operations.OperationNamespaceDisable
+	record.State = operations.OperationStateSucceeded
+	record.Phase = operations.OperationPhaseNamespaceDisableCommitted
+	record.NamespaceID = "ns_alpha01"
+	record.Resource = operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"}
+	record.InputSummary = map[string]any{"namespace_id": "ns_alpha01", "reason": "security hold"}
+	record.FinishedAt = &now
+	exec := &fakeExecutor{row: fakeRow{values: append(namespaceRowValues(namespace), operationRowValues(record.SanitizedForPersistence().Record())...)}}
+	st := &Store{exec: exec}
+
+	gotNamespace, gotOperation, err := st.CommitNamespaceDisableWithLease(context.Background(), namespace, record.SanitizedForPersistence(), "worker-a", now, namespaceDisableCommitAuditEvent("audit-namespace-disable", "op-namespace-disable", now))
+	if err != nil {
+		t.Fatalf("CommitNamespaceDisableWithLease: %v", err)
+	}
+	if gotNamespace.Status != resources.NamespaceStatusDisabled || gotNamespace.DisabledAt == nil {
+		t.Fatalf("namespace = %#v, want disabled", gotNamespace)
+	}
+	if gotOperation.ID != "op-namespace-disable" || gotOperation.State != operations.OperationStateSucceeded {
+		t.Fatalf("operation = %#v, want committed disable operation", gotOperation)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"WITH updated_operation AS (",
+		"operation_type = 'namespace_disable'",
+		"phase = 'validate_namespace_disable'",
+		"), disabled_namespace AS (",
+		"UPDATE namespaces SET status = $20",
+		"WHERE namespaces.namespace_id = $19 AND namespaces.status = 'active'",
+		"), revoking_exports AS (",
+		"UPDATE export_sessions SET status = CASE WHEN status IN ('revoked','expired','failed') THEN status ELSE 'revoking' END",
+		"revoked_at = CASE WHEN status IN ('revoked','expired','failed') THEN revoked_at ELSE COALESCE(revoked_at, $22) END",
+		"WHERE export_sessions.namespace_id = disabled_namespace.namespace_id AND export_sessions.status IN ('active','revoking')",
+		"), releasing_mounts AS (",
+		"UPDATE workload_mount_bindings SET status = CASE WHEN status IN ('released','revoked','expired','failed') THEN status ELSE 'releasing' END",
+		"confirmed_unmounted_at = confirmed_unmounted_at",
+		"terminal_observed_at = terminal_observed_at",
+		"unable_to_write_at = unable_to_write_at",
+		"WHERE workload_mount_bindings.namespace_id = disabled_namespace.namespace_id AND workload_mount_bindings.status IN ('issued','pending','active','releasing')",
+		"), namespace_disable_effects AS (",
+		"FROM revoking_exports",
+		"FROM releasing_mounts",
+		"), inserted_audit AS (",
+		"INSERT INTO audit_outbox",
+		"FROM updated_operation, disabled_namespace, namespace_disable_effects",
+	)
+}
+
 func namespaceCommitAuditEvent(eventID, operationID string, now time.Time) audit.Event {
 	return audit.Event{
 		EventID:         eventID,
@@ -319,4 +371,12 @@ func namespaceCommitAuditEvent(eventID, operationID string, now time.Time) audit
 		Reason:          "namespace upsert committed",
 		Details:         map[string]any{"safe": "visible"},
 	}
+}
+
+func namespaceDisableCommitAuditEvent(eventID, operationID string, now time.Time) audit.Event {
+	event := namespaceCommitAuditEvent(eventID, operationID, now)
+	event.Type = audit.EventTypeNamespaceDisable
+	event.Reason = "namespace disable committed"
+	event.Details = map[string]any{"namespace_id": "ns_alpha01", "reason": "security hold"}
+	return event
 }

@@ -188,6 +188,26 @@ func TestRevokeExportIsIdempotentAndLeavesSessionRevoking(t *testing.T) {
 	}
 }
 
+func TestRevokeExportRemainsAvailableForRevokingSessionAfterNamespaceDisable(t *testing.T) {
+	now := fixedNamespaceNow()
+	disabledAt := now
+	meta := exportMetaFixture()
+	meta.namespace = resources.Namespace{ID: "ns_123", Status: resources.NamespaceStatusDisabled, DisabledReason: "security hold", DisabledAt: &disabledAt, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}
+	meta.namespaceReader = &fakeNamespaceReader{namespace: meta.namespace}
+	store := &fakeExportStore{session: exportSessionFixture(sessionstate.ExportStatusRevoking)}
+	handler := exportHandlerForTest(store, meta, namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodDelete, "/internal/v1/exports/export_123", "", "ns_123"))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want revoke preserved", rec.Code, rec.Body.String())
+	}
+	if store.revokeCalls != 1 || store.revoke.NamespaceID != "ns_123" || store.revoke.ExportID != "export_123" {
+		t.Fatalf("revoke request = %#v, want namespace-scoped close path", store.revoke)
+	}
+}
+
 func TestCreateExportAdmissionFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -197,6 +217,14 @@ func TestCreateExportAdmissionFailures(t *testing.T) {
 		code ErrorCode
 	}{
 		{name: "namespace mismatch", meta: exportMetaFixture(), body: `{"mode":"read_only","ttl_seconds":120}`, ns: "ns_other", code: CodeRepoNotFound},
+		{name: "namespace disabled", meta: func() exportMeta {
+			now := fixedNamespaceNow()
+			disabledAt := now
+			meta := exportMetaFixture()
+			meta.namespace = resources.Namespace{ID: "ns_123", Status: resources.NamespaceStatusDisabled, DisabledReason: "security hold", DisabledAt: &disabledAt, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}
+			meta.namespaceReader.namespace = meta.namespace
+			return meta
+		}(), body: `{"mode":"read_only","ttl_seconds":120}`, ns: "ns_123", code: CodeNamespaceDisabled},
 		{name: "repo not found", meta: func() exportMeta {
 			meta := exportMetaFixture()
 			meta.repoReader = &fakeRepoReader{}

@@ -506,7 +506,12 @@ func exportReconcileTerminalSQL() string {
 
 func exportGatewayCredentialSQL() string {
 	return "SELECT " + prefixedColumns("s", exportSessionPublicColumns) + ", s.verifier_algorithm, s.verifier_hash, s.verifier_salt, r.volume_id, r.payload_volume_subdir " +
-		"FROM export_sessions s JOIN repos r ON r.namespace_id = s.namespace_id AND r.repo_id = s.repo_id WHERE s.export_id = $1"
+		"FROM export_sessions s " +
+		"JOIN namespaces ns ON ns.namespace_id = s.namespace_id AND ns.status = 'active' " +
+		"JOIN namespace_volume_bindings nvb ON nvb.namespace_id = s.namespace_id AND nvb.status = 'active' AND COALESCE((nvb.export_policy->>'webdav_enabled')::boolean, false) = true " +
+		"JOIN repos r ON r.namespace_id = s.namespace_id AND r.repo_id = s.repo_id " +
+		"JOIN volumes v ON v.volume_id = r.volume_id AND v.status = 'active' AND COALESCE((v.capabilities->>'webdav_export')::boolean, false) = true " +
+		"WHERE s.export_id = $1 AND s.status = 'active' AND s.protocol = 'webdav' AND r.repo_kind = 'repo' AND r.status = 'active' AND r.lifecycle_status = 'active'"
 }
 
 func exportTerminalSQL() string {
