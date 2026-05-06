@@ -186,6 +186,70 @@ func TestRestorePlanStoreContractOwnsPreviewRunDiscardLifecycle(t *testing.T) {
 	}
 }
 
+func TestRestorePreviewOperationRecoveryStoreContractCommitsPlanOperationAndAuditTogether(t *testing.T) {
+	fake := &fakeRestorePreviewOperationStore{}
+	var _ RestorePreviewOperationCommitStore = fake
+	var _ RestorePreviewOperationMetadataReader = fake
+	var _ RestorePreviewOperationRecoveryStore = fake
+
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	leaseExpiresAt := now.Add(30 * time.Minute)
+	fake.record = operations.OperationRecord{
+		ID:               "op_preview01",
+		Type:             operations.OperationRestorePreview,
+		State:            operations.OperationStateRunning,
+		Phase:            operations.OperationPhaseRestorePreviewValidate,
+		LeaseOwner:       "worker-a",
+		LeaseExpiresAt:   &leaseExpiresAt,
+		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(),
+		IdempotencyKey:   "idem_preview",
+		RequestHash:      operations.RequestHash("sha256:restore-preview"),
+		CallerService:    "agentsmith-api",
+		CorrelationID:    "corr-preview",
+		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
+		NamespaceID:      "ns_alpha01",
+		RepoID:           "repo_alpha01",
+		InputSummary:     map[string]any{"save_point_id": "sp_001"},
+		CreatedAt:        now.Add(-time.Hour),
+	}
+
+	preflight := fake.record
+	preflight.Phase = operations.OperationPhaseRestorePreviewPreflightIdle
+	preflight.VerificationResult = map[string]any{"preflight_recovery_status_captured": true, "preflight_restore_state": "idle", "preflight_blocking": false}
+	updated, err := fake.UpdateRestorePreviewPreflightWithLease(context.Background(), preflight.SanitizedForPersistence(), "worker-a", now)
+	if err != nil {
+		t.Fatalf("preflight update: %v", err)
+	}
+	if updated.Phase != operations.OperationPhaseRestorePreviewPreflightIdle {
+		t.Fatalf("preflight operation = %#v", updated)
+	}
+
+	terminal := updated
+	terminal.State = operations.OperationStateSucceeded
+	terminal.Phase = operations.OperationPhaseRestorePreviewCommitted
+	terminal.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001"}
+	terminal.JVSJSONOutput = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "run_command_present": true}
+	terminal.VerificationResult = map[string]any{"preflight_recovery_status_captured": true, "preflight_restore_state": "idle", "preflight_blocking": false, "restore_plan_id": "plan_001", "source_save_point_id": "sp_001"}
+	terminal.FinishedAt = &now
+	plan := restoreplan.Plan{ID: "plan_001", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", PreviewOperationID: "op_preview01", SourceSavePointID: "sp_001", Status: restoreplan.StatusPending, CreatedAt: now, UpdatedAt: now}
+	event := audit.NewEvent(audit.Event{EventID: "audit-preview", Type: audit.EventTypeRestorePreview, Time: now, OperationID: "op_preview01", CallerService: "agentsmith-api", CorrelationID: "corr-preview", AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"}, Resource: audit.Resource{Type: "repo", ID: "repo_alpha01", NamespaceID: "ns_alpha01"}, Outcome: audit.OutcomeSucceeded, Reason: "restore_preview_committed"})
+
+	gotPlan, gotOperation, err := fake.CommitRestorePreviewSucceededWithLease(context.Background(), plan, terminal.SanitizedForPersistence(), "worker-a", now, event)
+	if err != nil {
+		t.Fatalf("success commit: %v", err)
+	}
+	if gotPlan.Status != restoreplan.StatusPending || gotOperation.State != operations.OperationStateSucceeded || len(fake.auditEvents) != 1 {
+		t.Fatalf("commit plan/operation/audit = %#v/%#v/%#v", gotPlan, gotOperation, fake.auditEvents)
+	}
+	if _, err := fake.GetRestorePlanByPreviewOperation(context.Background(), "op_preview01"); err != nil {
+		t.Fatalf("durable restore plan missing after commit: %v", err)
+	}
+	if strings.Contains(toStoreContractString(gotOperation.JVSJSONOutput), "run restore") || strings.Contains(toStoreContractString(gotOperation.VerificationResult), "recommended_next_command") {
+		t.Fatalf("restore preview operation persisted raw command fields: %#v", gotOperation)
+	}
+}
+
 func TestNamespaceUpsertOperationCommitStoreContractCommitsMetadataOperationAndAuditTogether(t *testing.T) {
 	fake := &fakeOperationStore{}
 	var _ NamespaceUpsertOperationCommitStore = fake
@@ -1127,6 +1191,129 @@ func (fake *fakeRestorePlanStore) TransitionRestorePlanStatus(_ context.Context,
 	plan.UpdatedAt = now
 	fake.plans[restorePlanID] = plan
 	return plan, nil
+}
+
+type fakeRestorePreviewOperationStore struct {
+	fakeRestorePlanStore
+	record      operations.OperationRecord
+	auditEvents []audit.Event
+}
+
+func (fake *fakeRestorePreviewOperationStore) ListRestorePreviewOperationsForRecovery(_ context.Context, _ time.Time, _ int) ([]operations.OperationRecord, error) {
+	return []operations.OperationRecord{fake.record.Sanitized()}, nil
+}
+
+func (fake *fakeRestorePreviewOperationStore) AcquireRestorePreviewOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	if fake.record.ID != operationID || fake.record.Type != operations.OperationRestorePreview {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	decision := operations.AcquireLease(fake.record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	fake.record = decision.Record
+	return fake.record, nil
+}
+
+func (fake *fakeRestorePreviewOperationStore) UpdateRestorePreviewPreflightWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	update := record.Record()
+	if fake.record.ID != update.ID || fake.record.State != operations.OperationStateRunning || fake.record.Phase != operations.OperationPhaseRestorePreviewValidate || fake.record.LeaseOwner != strings.TrimSpace(owner) || fake.record.LeaseExpiresAt == nil || !fake.record.LeaseExpiresAt.After(now) {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if !restorePreviewContractPreflightMarker(update) {
+		return operations.OperationRecord{}, operations.ErrInvalidLeaseRequest
+	}
+	update.LeaseOwner = fake.record.LeaseOwner
+	update.LeaseExpiresAt = fake.record.LeaseExpiresAt
+	fake.record = update
+	return fake.record, nil
+}
+
+func (fake *fakeRestorePreviewOperationStore) CommitRestorePreviewSucceededWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	update := record.Record()
+	if fake.record.ID != update.ID ||
+		fake.record.Type != operations.OperationRestorePreview ||
+		fake.record.State != operations.OperationStateRunning ||
+		fake.record.Phase != operations.OperationPhaseRestorePreviewPreflightIdle ||
+		fake.record.LeaseOwner != strings.TrimSpace(owner) ||
+		fake.record.LeaseExpiresAt == nil ||
+		!fake.record.LeaseExpiresAt.After(now) ||
+		update.State != operations.OperationStateSucceeded ||
+		update.Phase != operations.OperationPhaseRestorePreviewCommitted ||
+		plan.Status != restoreplan.StatusPending ||
+		plan.PreviewOperationID != update.ID ||
+		plan.NamespaceID != update.NamespaceID ||
+		plan.RepoID != update.RepoID ||
+		event.OperationID != update.ID ||
+		event.Type != audit.EventTypeRestorePreview ||
+		event.Outcome != audit.OutcomeSucceeded {
+		return restoreplan.Plan{}, operations.OperationRecord{}, operations.ErrInvalidLeaseRequest
+	}
+	if err := plan.Validate(); err != nil {
+		return restoreplan.Plan{}, operations.OperationRecord{}, err
+	}
+	update.LeaseOwner = ""
+	update.LeaseExpiresAt = nil
+	fake.record = update
+	if fake.plans == nil {
+		fake.plans = map[string]restoreplan.Plan{}
+	}
+	fake.plans[plan.ID] = plan
+	fake.auditEvents = append(fake.auditEvents, event.Sanitized())
+	return plan, update, nil
+}
+
+func (fake *fakeRestorePreviewOperationStore) CommitRestorePreviewFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	update := record.Record()
+	if fake.record.ID != update.ID ||
+		fake.record.Type != operations.OperationRestorePreview ||
+		fake.record.State != operations.OperationStateRunning ||
+		(fake.record.Phase != operations.OperationPhaseRestorePreviewValidate && fake.record.Phase != operations.OperationPhaseRestorePreviewPreflightIdle) ||
+		fake.record.LeaseOwner != strings.TrimSpace(owner) ||
+		fake.record.LeaseExpiresAt == nil ||
+		!fake.record.LeaseExpiresAt.After(now) ||
+		(update.State != operations.OperationStateFailed && update.State != operations.OperationStateOperatorInterventionRequired) ||
+		event.OperationID != update.ID ||
+		event.Type != audit.EventTypeRestorePreview ||
+		event.Outcome != audit.OutcomeFailed {
+		return operations.OperationRecord{}, operations.ErrInvalidLeaseRequest
+	}
+	update.LeaseOwner = ""
+	update.LeaseExpiresAt = nil
+	fake.record = update
+	fake.auditEvents = append(fake.auditEvents, event.Sanitized())
+	return update, nil
+}
+
+func (fake *fakeRestorePreviewOperationStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
+	return resources.Repo{}, nil
+}
+
+func (fake *fakeRestorePreviewOperationStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
+	return resources.Namespace{}, nil
+}
+
+func (fake *fakeRestorePreviewOperationStore) GetNamespaceVolumeBinding(context.Context, string) (resources.NamespaceVolumeBinding, error) {
+	return resources.NamespaceVolumeBinding{}, nil
+}
+
+func (fake *fakeRestorePreviewOperationStore) GetVolume(context.Context, string) (resources.Volume, error) {
+	return resources.Volume{}, nil
+}
+
+func (fake *fakeRestorePreviewOperationStore) ListHeldRepoFences(context.Context, string) ([]fences.Fence, error) {
+	return nil, nil
+}
+
+func restorePreviewContractPreflightMarker(record operations.OperationRecord) bool {
+	verification, ok := record.VerificationResult.(map[string]any)
+	if !ok {
+		return false
+	}
+	captured, _ := verification["preflight_recovery_status_captured"].(bool)
+	state, _ := verification["preflight_restore_state"].(string)
+	blocking, _ := verification["preflight_blocking"].(bool)
+	return captured && state == "idle" && !blocking
 }
 
 type fakeResourceStore struct {

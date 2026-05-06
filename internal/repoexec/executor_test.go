@@ -14,6 +14,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
@@ -576,21 +577,23 @@ func newFakeStore() *fakeRepoCreateStore {
 }
 
 type fakeRepoCreateStore struct {
-	namespace         resources.Namespace
-	binding           resources.NamespaceVolumeBinding
-	volume            resources.Volume
-	volumeRoots       map[string]string
-	fences            []fences.Fence
-	repo              resources.Repo
-	operation         operations.OperationRecord
-	auditEvents       []audit.Event
-	exports           []sessionstate.ExportSession
-	mounts            []sessionstate.WorkloadMountBinding
-	createFenceCalls  int
-	progressUpdates   int
-	releasedFenceID   string
-	successErr        error
-	blockingLifecycle []operations.OperationRecord
+	namespace                     resources.Namespace
+	binding                       resources.NamespaceVolumeBinding
+	volume                        resources.Volume
+	volumeRoots                   map[string]string
+	fences                        []fences.Fence
+	repo                          resources.Repo
+	restorePlan                   restoreplan.Plan
+	operation                     operations.OperationRecord
+	auditEvents                   []audit.Event
+	exports                       []sessionstate.ExportSession
+	mounts                        []sessionstate.WorkloadMountBinding
+	createFenceCalls              int
+	progressUpdates               int
+	restorePreviewProgressUpdates int
+	releasedFenceID               string
+	successErr                    error
+	blockingLifecycle             []operations.OperationRecord
 }
 
 func (store *fakeRepoCreateStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
@@ -684,19 +687,43 @@ func (store *fakeRepoCreateStore) CommitSavePointCreateFailedWithLease(_ context
 	return store.operation, nil
 }
 
+func (store *fakeRepoCreateStore) UpdateRestorePreviewPreflightWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time) (operations.OperationRecord, error) {
+	store.restorePreviewProgressUpdates++
+	store.operation = record.Record()
+	return store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitRestorePreviewSucceededWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	store.restorePlan = plan
+	store.operation = record.Record()
+	store.auditEvents = append(store.auditEvents, event)
+	return plan, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitRestorePreviewFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+
 type fakeJVSRunner struct {
-	calls          []string
-	payloadRoot    string
-	controlRoot    string
-	saveMessage    string
-	initSummary    jvsrunner.InitSummary
-	doctorSummary  jvsrunner.DoctorSummary
-	saveSummary    jvsrunner.SaveSummary
-	historySummary jvsrunner.HistorySummary
-	initErr        error
-	doctorErr      error
-	saveErr        error
-	historyErr     error
+	calls                 []string
+	payloadRoot           string
+	controlRoot           string
+	saveMessage           string
+	initSummary           jvsrunner.InitSummary
+	doctorSummary         jvsrunner.DoctorSummary
+	saveSummary           jvsrunner.SaveSummary
+	historySummary        jvsrunner.HistorySummary
+	recoveryStatusSummary jvsrunner.RecoveryStatusSummary
+	restorePreviewSummary jvsrunner.RestorePreviewSummary
+	beforeRestorePreview  func()
+	initErr               error
+	doctorErr             error
+	saveErr               error
+	historyErr            error
+	recoveryStatusErr     error
+	restorePreviewErr     error
 }
 
 func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot string) (jvsrunner.InitSummary, error) {
@@ -722,6 +749,21 @@ func (runner *fakeJVSRunner) History(_ context.Context, controlRoot string) (jvs
 	runner.calls = append(runner.calls, "history")
 	runner.controlRoot = controlRoot
 	return runner.historySummary, runner.historyErr
+}
+
+func (runner *fakeJVSRunner) RecoveryStatus(_ context.Context, controlRoot string) (jvsrunner.RecoveryStatusSummary, error) {
+	runner.calls = append(runner.calls, "recovery_status")
+	runner.controlRoot = controlRoot
+	return runner.recoveryStatusSummary, runner.recoveryStatusErr
+}
+
+func (runner *fakeJVSRunner) RestorePreview(_ context.Context, controlRoot, savePointID string) (jvsrunner.RestorePreviewSummary, error) {
+	runner.calls = append(runner.calls, "restore_preview")
+	runner.controlRoot = controlRoot
+	if runner.beforeRestorePreview != nil {
+		runner.beforeRestorePreview()
+	}
+	return runner.restorePreviewSummary, runner.restorePreviewErr
 }
 
 func repoCreateFence(now time.Time, fenceID, operationID string) fences.Fence {

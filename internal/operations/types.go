@@ -54,6 +54,10 @@ const (
 	OperationPhaseSavePointCreateValidate  = "validate_save_point_create"
 	OperationPhaseSavePointCreatePrepared  = "save_point_create_prepared"
 	OperationPhaseSavePointCreateCommitted = "save_point_create_committed"
+
+	OperationPhaseRestorePreviewValidate      = "validate_restore_preview"
+	OperationPhaseRestorePreviewPreflightIdle = "restore_preview_preflight_idle"
+	OperationPhaseRestorePreviewCommitted     = "restore_preview_committed"
 )
 
 var operationTypes = []OperationType{

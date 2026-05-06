@@ -78,15 +78,16 @@ type WorkerConfig struct {
 }
 
 type WorkerOperationRecoveryConfig struct {
-	Enabled       bool
-	PostgresDSN   string
-	Owner         string
-	Limit         int
-	LeaseDuration time.Duration
-	RepoCreate    WorkerRepoCreateRecoveryConfig
-	RepoLifecycle WorkerRepoCreateRecoveryConfig
-	RepoPurge     WorkerRepoCreateRecoveryConfig
-	SavePoint     WorkerRepoCreateRecoveryConfig
+	Enabled        bool
+	PostgresDSN    string
+	Owner          string
+	Limit          int
+	LeaseDuration  time.Duration
+	RepoCreate     WorkerRepoCreateRecoveryConfig
+	RepoLifecycle  WorkerRepoCreateRecoveryConfig
+	RepoPurge      WorkerRepoCreateRecoveryConfig
+	SavePoint      WorkerRepoCreateRecoveryConfig
+	RestorePreview WorkerRepoCreateRecoveryConfig
 }
 
 type WorkerRepoCreateRecoveryConfig struct {
@@ -226,6 +227,11 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.OperationRecovery.SavePoint = savePoint
+	restorePreview, err := loadRestorePreviewRecoveryConfig(source)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.OperationRecovery.RestorePreview = restorePreview
 
 	limit, err := intValue(source, "AFSCP_OPERATION_RECOVERY_LIMIT", worker.OperationRecovery.Limit)
 	if err != nil {
@@ -379,6 +385,10 @@ func loadRepoPurgeRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig,
 
 func loadSavePointRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
 	return loadJVSOperationRecoveryConfig(source, "AFSCP_SAVE_POINT_RECOVERY_ENABLED")
+}
+
+func loadRestorePreviewRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
+	return loadJVSOperationRecoveryConfig(source, "AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED")
 }
 
 func loadJVSOperationRecoveryConfig(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {

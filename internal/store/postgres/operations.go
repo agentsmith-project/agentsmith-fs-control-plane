@@ -203,6 +203,20 @@ func (store *Store) ListSavePointCreateOperationsForRecovery(ctx context.Context
 	return scanOperations(rows)
 }
 
+func (store *Store) ListRestorePreviewOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("list restore preview operations for recovery: now must be set")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list restore preview operations for recovery: limit must be positive")
+	}
+	rows, err := store.exec.QueryContext(ctx, restorePreviewOperationRecoveryCandidatesSQL(), now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanOperations(rows)
+}
+
 func (store *Store) RepoHasNonTerminalJVSMutation(ctx context.Context, repoID string) (bool, error) {
 	if err := pathresolver.ValidateID(pathresolver.RepoID, strings.TrimSpace(repoID)); err != nil {
 		return false, err
@@ -377,6 +391,25 @@ func (store *Store) AcquireSavePointCreateOperationLease(ctx context.Context, op
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return operations.OperationRecord{}, operationLeaseUnavailable("acquire save point create", args.operationID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) AcquireRestorePreviewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	args, err := operationLeaseRequestArgs(operationID, request)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	if args.recoveryMode != "" {
+		return operations.OperationRecord{}, operationLeaseInvalidRequest("recovery_mode", "restore preview recovery does not perform explicit recovery actions")
+	}
+	row := store.exec.QueryRowContext(ctx, restorePreviewOperationAcquireLeaseSQL(), args.operationID, args.owner, args.expiresAt, args.now, args.cancelPolicy)
+	record, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("acquire restore preview", args.operationID, err)
 		}
 		return operations.OperationRecord{}, err
 	}
@@ -694,6 +727,19 @@ func savePointCreateOperationRecoveryCandidatesSQL() string {
 		") ORDER BY created_at, operation_id LIMIT $2"
 }
 
+func restorePreviewOperationRecoveryCandidatesSQL() string {
+	noLeasePair := "(lease_owner IS NULL AND lease_expires_at IS NULL)"
+	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
+	invalidLeasePair := "((lease_owner IS NULL AND lease_expires_at IS NOT NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) = '') OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NULL))"
+	return operationSelectSQL() + " WHERE " +
+		"operation_type = 'restore_preview' AND phase IN ('validate_restore_preview','restore_preview_preflight_idle') AND (" +
+		"(operation_state = 'queued') OR " +
+		"(operation_state = 'running' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'cancel_requested' AND phase = 'validate_restore_preview' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'operator_intervention_required')" +
+		") ORDER BY created_at, operation_id LIMIT $2"
+}
+
 func operationUpdateSQL() string {
 	return "UPDATE operations SET " +
 		"operation_state = $1, " +
@@ -906,6 +952,42 @@ func savePointCreateOperationAcquireLeaseSQL() string {
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($5 = 'finalize_cancellation' OR (NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM active_restore_plan))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
+}
+
+func restorePreviewOperationAcquireLeaseSQL() string {
+	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
+	return "WITH eligible_operation AS (" +
+		"SELECT operation_id, repo_id, created_at, operation_state, phase FROM operations WHERE operation_id = $1 " +
+		"AND operation_type = 'restore_preview' " +
+		"AND phase IN ('validate_restore_preview','restore_preview_preflight_idle') " +
+		"AND (" +
+		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
+		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
+		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND phase = 'validate_restore_preview' AND " + cancelFinalizableLease + ")" +
+		") FOR UPDATE" +
+		"), earlier_jvs_mutation AS (" +
+		"SELECT 1 FROM operations o, eligible_operation e WHERE o.repo_id = e.repo_id AND o.operation_id <> e.operation_id " +
+		"AND (o.created_at < e.created_at OR (o.created_at = e.created_at AND o.operation_id < e.operation_id)) " +
+		"AND o.operation_type IN (" + repoJVSMutationOperationTypeSQLList() + ") AND o.operation_state NOT IN ('succeeded','failed','cancelled') LIMIT 1" +
+		"), earlier_repo_lifecycle AS (" +
+		"SELECT 1 FROM operations o, eligible_operation e WHERE o.repo_id = e.repo_id AND o.operation_id <> e.operation_id " +
+		"AND (o.created_at < e.created_at OR (o.created_at = e.created_at AND o.operation_id < e.operation_id)) " +
+		"AND o.operation_type IN (" + repoLifecycleAndPurgeOperationTypeSQLList() + ") AND o.operation_state NOT IN ('succeeded','failed','cancelled') LIMIT 1" +
+		"), active_restore_plan AS (" +
+		"SELECT 1 FROM restore_plans p, eligible_operation e WHERE p.repo_id = e.repo_id " +
+		"AND p.status IN (" + restorePlanActiveStatusSQLList() + ") LIMIT 1" +
+		"), updated_operation AS (" +
+		"UPDATE operations SET " +
+		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
+		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
+		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
+		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
+		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id " +
+		"AND ($5 <> 'finalize_cancellation' OR eligible_operation.phase = 'validate_restore_preview') " +
+		"AND ($5 = 'finalize_cancellation' OR (NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM active_restore_plan))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 

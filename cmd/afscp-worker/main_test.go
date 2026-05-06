@@ -19,6 +19,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workerapp"
@@ -364,6 +365,10 @@ func (store *cmdWorkerAppStore) ListSavePointCreateOperationsForRecovery(context
 	return nil, nil
 }
 
+func (store *cmdWorkerAppStore) ListRestorePreviewOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 func (store *cmdWorkerAppStore) AcquireNamespaceUpsertOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
@@ -389,6 +394,10 @@ func (store *cmdWorkerAppStore) AcquireRepoPurgeOperationLease(context.Context, 
 }
 
 func (store *cmdWorkerAppStore) AcquireSavePointCreateOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) AcquireRestorePreviewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
 
@@ -437,6 +446,18 @@ func (store *cmdWorkerAppStore) CommitSavePointCreateSucceededWithLease(context.
 }
 
 func (store *cmdWorkerAppStore) CommitSavePointCreateFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) UpdateRestorePreviewPreflightWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected progress update")
+}
+
+func (store *cmdWorkerAppStore) CommitRestorePreviewSucceededWithLease(context.Context, restoreplan.Plan, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	return restoreplan.Plan{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitRestorePreviewFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }
 

@@ -45,6 +45,9 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	if cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
 		t.Fatal("repo lifecycle recovery enabled by default, want disabled")
 	}
+	if cfg.Worker.OperationRecovery.RestorePreview.Enabled {
+		t.Fatal("restore preview recovery enabled by default, want disabled")
+	}
 	if cfg.Worker.AuditDelivery.Enabled {
 		t.Fatal("audit delivery enabled by default, want disabled")
 	}
@@ -225,6 +228,29 @@ func TestLoadRepoPurgeRecoveryParsesIndependentExplicitGate(t *testing.T) {
 	}
 	if !cfg.Worker.OperationRecovery.RepoLifecycle.Enabled || !cfg.Worker.OperationRecovery.RepoPurge.Enabled {
 		t.Fatalf("repo lifecycle/purge gates = %#v/%#v", cfg.Worker.OperationRecovery.RepoLifecycle, cfg.Worker.OperationRecovery.RepoPurge)
+	}
+}
+
+func TestLoadRestorePreviewRecoveryParsesIndependentExplicitGate(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
+		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
+		"AFSCP_WORKER_OWNER":                      "worker-a",
+		"AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED":  "true",
+		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":                 strings.Repeat("d", 64),
+		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	restorePreview := cfg.Worker.OperationRecovery.RestorePreview
+	if !restorePreview.Enabled || restorePreview.JVSBinaryPath != "/opt/afscp/bin/jvs" || restorePreview.JVSBinarySHA256 != strings.Repeat("d", 64) || restorePreview.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
+		t.Fatalf("restore preview config = %#v", restorePreview)
+	}
+	if cfg.Worker.OperationRecovery.SavePoint.Enabled || cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
+		t.Fatalf("restore preview gate should not enable other JVS workers: %#v", cfg.Worker.OperationRecovery)
 	}
 }
 

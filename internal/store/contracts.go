@@ -264,6 +264,32 @@ type RestorePlanStore interface {
 	RestorePlanWriter
 }
 
+type RestorePreviewOperationCommitStore interface {
+	UpdateRestorePreviewPreflightWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error)
+	CommitRestorePreviewSucceededWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error)
+	CommitRestorePreviewFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+}
+
+type RestorePreviewOperationMetadataReader interface {
+	GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error)
+	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
+	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
+	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
+	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
+}
+
+// RestorePreviewOperationRecoveryStore owns the safe restore_preview worker
+// boundary. Success commits must atomically write the lease-fenced operation
+// terminal state, audit outbox event, and pending restore plan in one durable
+// SQL boundary; callers must not compose generic operation commits with
+// CreatePendingRestorePlan.
+type RestorePreviewOperationRecoveryStore interface {
+	ListRestorePreviewOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireRestorePreviewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	RestorePreviewOperationCommitStore
+	RestorePreviewOperationMetadataReader
+}
+
 // RepoJVSMutationGateReader is the read-only durable gate for JVS history
 // readers. It observes operation-row non-terminal JVS mutations only; active
 // restore plan blocking for new mutations lives in mutation acquire SQL. It

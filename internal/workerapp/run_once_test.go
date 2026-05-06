@@ -16,6 +16,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
 )
@@ -686,6 +687,68 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	}
 }
 
+func TestRunOnceRestorePreviewDisabledDoesNotListOrClaim(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppRestorePreviewOperationRecord("op_preview", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if summary := result.Summary().Operation; summary.Scanned != 0 || summary.Claimed != 0 || store.restorePreviewListCalls != 0 || len(store.acquireIDs) != 0 {
+		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want restore_preview ignored while gate disabled", summary, store.restorePreviewListCalls, store.acquireIDs)
+	}
+}
+
+func TestRunOnceRestorePreviewEnabledClaimsThroughRestorePreviewExecutor(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppRestorePreviewOperationRecord("op_preview", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	jvs := &workerAppFakeJVSRunner{
+		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "idle", Workspace: "main"},
+		restorePreviewSummary: jvsrunner.RestorePreviewSummary{PlanID: "plan_001", SourceSavePointID: "sp_001", Workspace: "main", RunCommandPresent: true},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRestorePreviewConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_restore_preview" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want restore_preview claimed", summary)
+	}
+	if store.restorePreviewListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_preview" {
+		t.Fatalf("list/acquire = %d/%#v, want restore_preview listed and acquired", store.restorePreviewListCalls, store.acquireIDs)
+	}
+	if strings.Join(jvs.calls, ",") != "recovery_status,restore_preview" {
+		t.Fatalf("jvs calls = %#v, want recovery_status,restore_preview", jvs.calls)
+	}
+	if store.restorePlan.ID != "plan_001" || store.operation.Type != operations.OperationRestorePreview || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestorePreviewCommitted {
+		t.Fatalf("plan/operation = %#v/%#v, want pending restore plan and succeeded preview operation", store.restorePlan, store.operation)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestorePreview || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
+		t.Fatalf("audit events = %#v, want restore preview success", store.auditEvents)
+	}
+}
+
 func TestRunOnceRepoLifecycleOperatorInterventionReturnsManualError(t *testing.T) {
 	now := workerAppNow()
 	lifecycleRecord := workerAppRepoLifecycleOperationRecord("op_restore", operations.OperationRepoRestoreArchived, now)
@@ -1230,6 +1293,20 @@ func workerAppSavePointConfigSource(overrides config.MapSource) config.MapSource
 	return source
 }
 
+func workerAppRestorePreviewConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppConfigSource(config.MapSource{
+		"AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED": "true",
+		"AFSCP_JVS_BINARY_PATH":                  "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":                strings.Repeat("a", 64),
+		"AFSCP_JVS_CWD":                          "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                     "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return source
+}
+
 func workerAppOperationRecord(now time.Time) operations.OperationRecord {
 	return operations.OperationRecord{
 		ID:               "op_namespace",
@@ -1337,6 +1414,26 @@ func workerAppSavePointCreateOperationRecord(operationID string, now time.Time) 
 	}
 }
 
+func workerAppRestorePreviewOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	return operations.OperationRecord{
+		ID:               operationID,
+		Type:             operations.OperationRestorePreview,
+		State:            operations.OperationStateQueued,
+		Phase:            operations.OperationPhaseRestorePreviewValidate,
+		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(),
+		IdempotencyKey:   "idem_preview",
+		RequestHash:      operations.RequestHash("sha256:restore-preview"),
+		CorrelationID:    "corr-alpha",
+		CallerService:    "agentsmith-api",
+		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
+		NamespaceID:      "ns_alpha01",
+		RepoID:           "repo_alpha01",
+		InputSummary:     map[string]any{"save_point_id": "sp_001"},
+		CreatedAt:        now.Add(-time.Hour),
+	}
+}
+
 func workerAppRepoLifecycleResource(now time.Time, status resources.RepoStatus) resources.Repo {
 	return resources.Repo{
 		ID:                  "repo_alpha01",
@@ -1424,33 +1521,35 @@ func workerAppNow() time.Time {
 }
 
 type fakeWorkerAppStore struct {
-	records            map[string]operations.OperationRecord
-	order              []string
-	volume             resources.Volume
-	repo               resources.Repo
-	namespace          resources.Namespace
-	binding            resources.NamespaceVolumeBinding
-	exports            []sessionstate.ExportSession
-	mounts             []sessionstate.WorkloadMountBinding
-	operation          operations.OperationRecord
-	auditEvents        []audit.Event
-	fences             []fences.Fence
-	releasedFenceID    string
-	listDeadline       time.Time
-	closeCalls         int
-	acquireIDs         []string
-	acquirePolicies    map[string]operations.LeaseCancelPolicy
-	recoveredAudit     []audit.OutboxRecord
-	claimedAudit       []audit.OutboxRecord
-	auditCallOrder     []string
-	auditRecoverOwner  string
-	auditRecoverLimit  int
-	auditClaimOwner    string
-	auditClaimLimit    int
-	savePointListCalls int
-	auditDelivered     []string
-	auditFailed        []workerAppAuditFailedCall
-	auditDeliverErr    error
+	records                 map[string]operations.OperationRecord
+	order                   []string
+	volume                  resources.Volume
+	repo                    resources.Repo
+	namespace               resources.Namespace
+	binding                 resources.NamespaceVolumeBinding
+	exports                 []sessionstate.ExportSession
+	mounts                  []sessionstate.WorkloadMountBinding
+	operation               operations.OperationRecord
+	restorePlan             restoreplan.Plan
+	auditEvents             []audit.Event
+	fences                  []fences.Fence
+	releasedFenceID         string
+	listDeadline            time.Time
+	closeCalls              int
+	acquireIDs              []string
+	acquirePolicies         map[string]operations.LeaseCancelPolicy
+	recoveredAudit          []audit.OutboxRecord
+	claimedAudit            []audit.OutboxRecord
+	auditCallOrder          []string
+	auditRecoverOwner       string
+	auditRecoverLimit       int
+	auditClaimOwner         string
+	auditClaimLimit         int
+	savePointListCalls      int
+	restorePreviewListCalls int
+	auditDelivered          []string
+	auditFailed             []workerAppAuditFailedCall
+	auditDeliverErr         error
 }
 
 type workerAppAuditFailedCall struct {
@@ -1740,6 +1839,33 @@ func (store *fakeWorkerAppStore) ListSavePointCreateOperationsForRecovery(ctx co
 	return out, nil
 }
 
+func (store *fakeWorkerAppStore) ListRestorePreviewOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	store.restorePreviewListCalls++
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if record.Type != operations.OperationRestorePreview || (record.Phase != operations.OperationPhaseRestorePreviewValidate && record.Phase != operations.OperationPhaseRestorePreviewPreflightIdle) {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+		case operations.OperationStateRunning:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		case operations.OperationStateCancelRequested:
+			if record.Phase == operations.OperationPhaseRestorePreviewValidate && namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (store *fakeWorkerAppStore) AcquireRepoCreateOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	record, ok := store.records[operationID]
 	if !ok {
@@ -1824,6 +1950,27 @@ func (store *fakeWorkerAppStore) AcquireSavePointCreateOperationLease(_ context.
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	if record.Type != operations.OperationSavePointCreate || (record.Phase != operations.OperationPhaseSavePointCreateValidate && record.Phase != operations.OperationPhaseSavePointCreatePrepared) {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
+func (store *fakeWorkerAppStore) AcquireRestorePreviewOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if record.Type != operations.OperationRestorePreview || (record.Phase != operations.OperationPhaseRestorePreviewValidate && record.Phase != operations.OperationPhaseRestorePreviewPreflightIdle) {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if request.CancelPolicy == operations.LeaseCancelPolicyFinalize && record.Phase != operations.OperationPhaseRestorePreviewValidate {
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	store.acquireIDs = append(store.acquireIDs, operationID)
@@ -1974,6 +2121,34 @@ func (store *fakeWorkerAppStore) CommitSavePointCreateFailedWithLease(_ context.
 	return operation, nil
 }
 
+func (store *fakeWorkerAppStore) UpdateRestorePreviewPreflightWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time) (operations.OperationRecord, error) {
+	operation := record.Record()
+	store.records[operation.ID] = operation
+	store.operation = operation
+	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitRestorePreviewSucceededWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.restorePlan = plan
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return plan, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitRestorePreviewFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
+}
+
 func (store *fakeWorkerAppStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
 	if store.repo.ID == "" {
 		return resources.Repo{}, errors.New("repo not found")
@@ -2079,11 +2254,13 @@ func (store *fakeWorkerAppAuditStore) MarkAuditOutboxDeliveryFailed(context.Cont
 }
 
 type workerAppFakeJVSRunner struct {
-	calls          []string
-	initSummary    jvsrunner.InitSummary
-	doctorSummary  jvsrunner.DoctorSummary
-	saveSummary    jvsrunner.SaveSummary
-	historySummary jvsrunner.HistorySummary
+	calls                 []string
+	initSummary           jvsrunner.InitSummary
+	doctorSummary         jvsrunner.DoctorSummary
+	saveSummary           jvsrunner.SaveSummary
+	historySummary        jvsrunner.HistorySummary
+	recoveryStatusSummary jvsrunner.RecoveryStatusSummary
+	restorePreviewSummary jvsrunner.RestorePreviewSummary
 }
 
 type workerAppFakeStoragePurger struct {
@@ -2122,6 +2299,16 @@ func (runner *workerAppFakeJVSRunner) Save(context.Context, string, string) (jvs
 func (runner *workerAppFakeJVSRunner) History(context.Context, string) (jvsrunner.HistorySummary, error) {
 	runner.calls = append(runner.calls, "history")
 	return runner.historySummary, nil
+}
+
+func (runner *workerAppFakeJVSRunner) RecoveryStatus(context.Context, string) (jvsrunner.RecoveryStatusSummary, error) {
+	runner.calls = append(runner.calls, "recovery_status")
+	return runner.recoveryStatusSummary, nil
+}
+
+func (runner *workerAppFakeJVSRunner) RestorePreview(context.Context, string, string) (jvsrunner.RestorePreviewSummary, error) {
+	runner.calls = append(runner.calls, "restore_preview")
+	return runner.restorePreviewSummary, nil
 }
 
 func workerAppAuditRecord(eventID string, payload []byte) audit.OutboxRecord {
