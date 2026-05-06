@@ -80,6 +80,9 @@ them.
 ## Recovery Rules
 
 Each operation type must define deterministic recovery by `phase`.
+Rows marked as GA restore targets, including `restore_preview_discard`, still
+require the restore coding slice to update machine-readable OpenAPI/schema,
+operation-type fixtures, routes, and generated contracts before implementation.
 
 Minimum GA matrix:
 
@@ -95,8 +98,9 @@ Minimum GA matrix:
 | repo_restore_tombstoned | repo lifecycle exclusive | inspect tombstone status, retention policy, and repo health |
 | repo_purge | repo lifecycle exclusive plus session drain | inspect purge marker and absence of retained storage |
 | save_point_create | repo JVS exclusive | inspect JVS output/save point existence before retry |
-| restore_preview | repo JVS shared/read | retry safe from request input |
-| restore_run | repo JVS exclusive plus writer-session fence | inspect restore marker/JVS state, block new read-write sessions, run doctor, reject active or uncertain read-write sessions |
+| restore_preview | repo JVS exclusive restore-plan mutation | inspect durable restore plan, preview preflight idle marker, and JVS recovery status before retry or intervention |
+| restore_preview_discard | repo JVS exclusive matching active plan | inspect durable restore plan and JVS discard state before retry or intervention |
+| restore_run | repo JVS exclusive matching active plan plus writer-session fence | validate preview plan, preflight matching pending JVS plan, gate writer sessions, run doctor, verify recovery idle, and retain fence on ambiguity |
 | template_create | source repo exclusive during save phase, then source read gate plus target template exclusive create | inspect source save point, clone history mode, and target template path |
 | template_clone | template read gate plus target repo exclusive create | inspect target repo path and JVS identity |
 | export_create | export session lock | inspect credential/session record, revoke partial credential on failure |
@@ -125,6 +129,105 @@ tokens.
 `error.details`, and `verification_result` must be redacted before persistence
 or response. If a JVS or platform command emits secret material, AFSCP stores a
 redacted copy and records that redaction occurred.
+
+JVS restore preview `run_command` and recovery `recommended_next_command` must
+not be stored or returned verbatim because they may contain internal paths.
+Persist only safe metadata such as command kind, plan ID, source save point ID,
+normalized recovery state, and redaction flags.
+
+## Restore Plan Lifecycle
+
+Restore preview creates durable restore plan state. It is not a read-only
+operation, and its success operation record is not the source of truth for
+whether a repo has an active pending restore.
+
+The durable `RestorePlan` table/entity is the source of truth for restore plan
+lifecycle. `restore_plan_id` is the AFSCP-safe identifier normalized from the
+JVS preview `plan_id`; workers use the matching JVS plan ID when invoking
+`jvs restore --run <plan_id>` and `jvs restore discard <plan_id>`.
+`source_save_point_id` is also stored on the durable plan. These values must
+not be added as top-level `OperationRecord` DTO fields unless the
+OpenAPI/schema, Go structs, and migrations are updated in the same change.
+
+`OperationRecord` carries only safe restore metadata in existing structured
+containers: `external_resource_ids.restore_plan_id` and
+`external_resource_ids.source_save_point_id` when that container is approved for
+safe external IDs; otherwise the redacted `jvs_json_output` or
+`verification_result` safe summary records the plan metadata. Request linkage
+belongs in `input_summary.preview_operation_id`. Recovery evidence belongs in
+safe summaries such as `verification_result.restore_plan_match`,
+`verification_result.recovery_status`, and `verification_result.doctor`.
+
+Required GA plan statuses:
+
+- `pending`: preview succeeded and the plan may be consumed or discarded.
+- `consuming`: restore-run has passed writer-session gating and is about to
+  invoke or has invoked JVS restore-run.
+- `consumed`: restore-run, doctor, recovery-idle verification, audit, and fence
+  release completed atomically.
+- `discarding`: caller-triggered discard is about to invoke or has invoked JVS
+  restore discard.
+- `discarded`: JVS discard and audit completed.
+- `operator_intervention_required`: plan state cannot be proven safe by worker
+  recovery.
+
+`pending`, `consuming`, `discarding`, and
+`operator_intervention_required` are active states. `consumed` and `discarded`
+are terminal. Each repo may have at most one active restore plan. Active plans
+block unrelated same-repo JVS mutations, including save, restore preview,
+unrelated restore-run, template create, and template clone, but do not block
+ordinary file IO. The only allowed same-repo JVS mutations while a plan is
+active are the matching restore-run and matching discard operation.
+
+Valid restore-run input requires a preview operation and plan in the same
+namespace, repo, and resource boundary. The preview operation must have type
+`restore_preview`, be `succeeded`, and contain durable `restore_plan_id` and
+`source_save_point_id`. The plan must be `pending`, not consumed, discarded,
+discarding, or consuming, and not already referenced by a succeeded or
+non-terminal restore-run. Cross-namespace or cross-repo preview references use
+`OPERATION_NOT_FOUND` or the existing non-leaking equivalent.
+
+Restore preview recovery must persist a preflight idle marker before invoking
+JVS preview. After a crash, worker recovery may adopt a single pending JVS plan
+only when AFSCP-exclusive-control assumptions hold and the current operation is
+the earliest same-repo non-terminal restore preview or JVS mutation. Missing
+markers, mismatched plan IDs, multiple pending plans, unsafe plan IDs,
+competing operations, `stale_restore_preview`, or unknown recovery states move
+the operation or plan to `operator_intervention_required` unless a caller
+explicitly uses the discard flow.
+
+Restore-run phases are ordered:
+
+1. Validate the preview operation and durable plan.
+2. Preflight JVS recovery status and require exactly one pending plan matching
+   stored `restore_plan_id`.
+3. Acquire the writer-session fence.
+4. Reject active or uncertain read-write sessions.
+5. Mark the plan `consuming`.
+6. Invoke JVS restore-run.
+7. Run `jvs doctor --strict`.
+8. Verify JVS recovery status is idle.
+9. Atomically commit operation success, audit success, writer-fence release, and
+   plan `consumed`.
+
+Writer/session denial before JVS invocation releases the writer-session fence,
+records a stable writer error, and leaves the plan `pending`. Any JVS
+restore-run failure, doctor failure, or recovery-status ambiguity keeps the
+writer-session fence held and moves the operation and/or plan to
+`operator_intervention_required`.
+
+Restore preview discard is a caller-triggerable cleanup operation. It validates
+the matching pending preview plan, marks the plan `discarding`, invokes
+`jvs restore discard <plan_id>` through the runner, and atomically commits
+operation success, audit success, and plan `discarded`. It must never delete
+private `.jvs` files directly. Cancelled preview UX must call this flow instead
+of becoming operator filesystem cleanup.
+
+`restore_preview_discard` is a GA restore design operation type that the
+restore coding slice must add to the machine-readable endpoint, route,
+operation type, request/response schema, and contract fixtures before handlers
+or generated clients rely on it. This narrative contract does not mean the
+current OpenAPI already exposes the endpoint.
 
 ## Writer-Session Fence
 

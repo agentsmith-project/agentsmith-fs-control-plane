@@ -19,6 +19,7 @@ AFSCP should support:
 - save point history/list with a complete-history request
 - restore preview
 - restore-run
+- restore discard
 - recovery status/resume/rollback or an explicit operator-intervention state for failed restore runs
 - repo clone
 - `jvs doctor --strict`
@@ -84,6 +85,10 @@ External control root rules accepted for AFSCP:
 - Mutating JVS actions must use resource locks.
 - JVS JSON output stored with the operation record must be reduced to a safe
   summary and must not include absolute roots, raw stdout/stderr, or secrets.
+  Restore preview `run_command` and recovery `recommended_next_command` are
+  especially sensitive because they may contain internal paths; store only safe
+  metadata such as command kind, plan ID, source save point ID, redaction flags,
+  and normalized recovery state.
 - AFSCP should map JVS errors into stable caller-visible error codes.
 - Save point history/list must request complete history; if JVS reports
   `truncated:true`, AFSCP must fail closed instead of returning a partial list.
@@ -106,11 +111,73 @@ Before enabling workload mounts, CI should prove the pinned JVS binary can:
 
 ## Resource Locks
 
-- Save and restore-run use an exclusive repo JVS lock.
-- History and restore-preview use a shared/read repo gate.
+- Save, restore-preview, restore-run, and restore discard use an exclusive repo
+  JVS lock.
+- Restore-preview is a mutating operation because it creates a JVS pending
+  restore plan. It does not block ordinary file IO, but the resulting active
+  durable restore plan blocks other same-repo JVS mutations until it is consumed
+  by the matching restore-run, discarded by the matching discard operation, or
+  moved to operator intervention.
+- History uses a shared/read repo gate.
 - Template create uses an exclusive source repo JVS lock while materializing the source save point, then a shared/read gate on the source repo plus an exclusive create lock on the target template while cloning.
 - Template clone uses a shared/read gate on the template repo and an exclusive create lock on the target repo.
 - Multi-resource locks are acquired in lexical order by `(volume_id, namespace_id, repo_kind, resource_id)`.
+
+## Restore Preview And Run
+
+AFSCP owns the durable restore plan lifecycle around JVS pending plans. Each
+repo may have at most one active restore plan. Active plan statuses are
+`pending`, `consuming`, `discarding`, and `operator_intervention_required`;
+`consumed` and `discarded` are terminal. Active plans reject unrelated
+same-repo save, restore preview, restore-run, template create, and template
+clone JVS mutations with existing stable mutation or recovery errors.
+The durable `RestorePlan` table/entity is the source of truth for this
+lifecycle. `restore_plan_id` is normalized from the JVS preview `plan_id` and
+maps back to the JVS plan ID used for restore-run and discard commands; it is
+not a new top-level `OperationRecord` field.
+
+Restore preview flow:
+
+1. Acquire the repo JVS exclusive mutation lock.
+2. Verify the repo has no active durable restore plan.
+3. Run `jvs recovery status --json` and require idle recovery status.
+4. Persist a preview preflight idle marker on the operation record.
+5. Run JVS restore preview for the requested save point.
+6. Persist `restore_plan_id`, `source_save_point_id`, and plan `pending`.
+
+Crash recovery after JVS preview may adopt a single pending JVS plan only when
+AFSCP-exclusive-control assumptions hold and the current operation is the
+earliest same-repo non-terminal restore preview or JVS mutation. Any mismatch,
+multiple pending plans, unknown blocking state, unsafe plan ID, or competing
+operation moves the plan or operation to `operator_intervention_required`.
+`stale_restore_preview` defaults to intervention unless the caller explicitly
+uses restore preview discard.
+
+Restore-run flow:
+
+1. Validate the preview operation and durable plan against namespace, repo,
+   operation type, succeeded preview state, `restore_plan_id`,
+   `source_save_point_id`, `status=pending`, and restore-run references.
+2. Preflight `jvs recovery status --json` and require exactly one pending JVS
+   plan matching the stored `restore_plan_id`.
+3. Acquire the writer-session fence.
+4. Reject active or uncertain read-write sessions.
+5. Mark the plan `consuming`.
+6. Run JVS restore-run.
+7. Run `jvs doctor --strict`.
+8. Verify JVS recovery status is idle.
+9. Atomically record restore-run success, audit success, writer-fence release,
+   and plan `consumed`.
+
+If writer/session gating denies the run before JVS is invoked, release the
+writer-session fence and leave the plan `pending`. If JVS restore-run, doctor,
+or recovery-idle verification is ambiguous, keep the writer-session fence held
+and move the operation and/or plan to `operator_intervention_required`.
+
+Restore discard flow validates the same pending plan relationship, marks the
+plan `discarding`, runs `jvs restore discard <plan_id>` through the runner, and
+marks the plan `discarded` only after JVS confirms discard. AFSCP must never
+delete private `.jvs` files directly.
 
 ## Repo Create
 

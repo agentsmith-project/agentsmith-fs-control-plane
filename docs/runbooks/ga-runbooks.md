@@ -14,6 +14,8 @@ namespace/repo/export/mount/operation IDs, and audit event IDs.
   `operator_intervention_required` and keep the relevant fence held.
 - Do not release a writer or lifecycle fence until the corresponding session,
   JVS, storage, and audit state is known.
+- Do not manually delete JVS private restore-plan files. Pending preview cleanup
+  uses the restore preview discard API, which invokes `jvs restore discard`.
 - Purged storage must not be restored from backups into ordinary service without
   a new reviewed incident decision.
 
@@ -60,16 +62,56 @@ Terminal evidence:
 Symptoms:
 
 - restore preview failed or returned unexpected JVS shape.
+- same-repo save, restore, template, or clone is blocked by an active pending
+  restore plan.
+- recovery status reports `pending_restore_preview` or `stale_restore_preview`.
 
 Actions:
 
 - Confirm repo is active and no lifecycle fence is held.
-- Inspect save point ID and JVS output.
-- Do not create restore-run operation without a valid preview operation.
+- Inspect save point ID, preview operation phase, durable `RestorePlan`
+  `restore_plan_id`, `source_save_point_id`, restore plan status, and redacted
+  JVS output.
+- Verify whether the worker persisted the preflight idle marker before JVS
+  preview.
+- Adopt a single pending JVS plan only if AFSCP-exclusive-control assumptions
+  hold and the preview operation is the earliest same-repo non-terminal restore
+  preview or JVS mutation; otherwise move the plan or operation to
+  `operator_intervention_required`.
+- Treat `stale_restore_preview` as intervention unless a caller explicitly
+  invokes restore preview discard.
+- Do not create restore-run operation without a valid preview operation and
+  durable plan.
 
 Terminal evidence:
 
-- preview operation terminal with plan ID, or stable failure error.
+- preview operation succeeded with durable `status=pending` plan, preview
+  operation failed with no active JVS plan, plan discarded through the discard
+  flow, or intervention record with owner.
+
+## Discard Restore Preview
+
+Symptoms:
+
+- caller cancelled preview or no longer wants to run the pending plan.
+- repo JVS mutations are blocked by a pending restore plan that should not be
+  consumed.
+
+Actions:
+
+- Call `POST /internal/v1/repos/{repoId}/restore-preview:discard` with the
+  matching `preview_operation_id`.
+- Confirm namespace, repo, preview operation type, succeeded preview state,
+  `restore_plan_id`, `source_save_point_id`, and plan `status=pending`.
+- Let the worker mark the plan `discarding` and run `jvs restore discard
+  <plan_id>` through the runner.
+- If JVS discard confirmation or recovery status is ambiguous, move the plan or
+  operation to `operator_intervention_required`.
+- Do not delete `.jvs` private files.
+
+Terminal evidence:
+
+- plan `discarded` with audit event, or intervention record with owner.
 
 ## Failed Restore-Run
 
@@ -81,14 +123,27 @@ Actions:
 
 - Keep writer-session fence held.
 - Inspect active/uncertain read-write sessions.
+- Validate the referenced preview operation and durable plan: same
+  namespace/repo/resource, type `restore_preview`, preview succeeded,
+  `restore_plan_id` and `source_save_point_id` present, plan `pending`, and not
+  referenced by a succeeded or non-terminal restore-run.
 - Run `jvs recovery status` through the runner contract only.
+- Before JVS restore-run, require exactly one pending JVS plan matching the
+  stored plan ID.
+- If writer/session gating denies the run before JVS is invoked, release the
+  writer-session fence and leave the plan `pending`.
+- After writer/session gating passes, confirm the plan was marked `consuming`
+  before JVS restore-run.
+- After JVS restore-run, require `jvs doctor --strict` success and recovery
+  status idle before marking the plan `consumed`.
 - If recovery cannot prove safe terminal state, mark
-  `operator_intervention_required`.
+  `operator_intervention_required` and keep the writer-session fence held.
 - Do not manually delete JVS private restore-plan files.
 
 Terminal evidence:
 
-- repo doctor ok and fence released, or intervention record with runbook owner.
+- repo doctor ok, recovery status idle, plan `consumed`, audit emitted, and
+  fence released; or intervention record with runbook owner and fence retained.
 
 ## Restore-Run Blocked By Writers
 

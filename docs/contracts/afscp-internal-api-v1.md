@@ -48,7 +48,7 @@ AFSCP must reject and audit:
 - repo create/get/list
 - repo archive, restore-archived, delete, restore-tombstoned, and purge
 - save point create/list
-- restore preview/run
+- restore preview/run/discard
 - repo template create/clone
 - export create/get/revoke
 - workload mount binding create/get
@@ -58,6 +58,13 @@ AFSCP must reject and audit:
 
 Product display-name rename and catalog detach are outside AFSCP. Repo storage
 lifecycle is in GA through [repo-lifecycle-v1.md](repo-lifecycle-v1.md).
+
+Restore preview discard is listed here as the GA restore target. The restore
+coding slice must still add the endpoint, operation type
+`restore_preview_discard`, request/response schemas, route, and OpenAPI
+contract fixtures before handlers or generated clients use it; the current
+machine-readable API contract should not be read as already exposing this
+endpoint.
 
 See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft payloads.
 
@@ -73,6 +80,10 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
 - AFSCP rejects non-empty `X-AFSCP-Namespace-Id` on volume-global admin operations.
 - Cross-namespace template clone is rejected by default.
 - Cross-volume template clone is rejected with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
+- Restore-run and restore-preview discard references to preview operations must
+  stay inside the same namespace, repo, and resource boundary; cross-namespace
+  references return `OPERATION_NOT_FOUND` or the existing non-leaking
+  equivalent.
 - Mutations create operation records before executing external effects.
 - Ordinary product caller responses never include JuiceFS root credentials, raw root paths, or Secret references.
 - Errors are stable enough for callers to render product-facing messages.
@@ -96,7 +107,7 @@ operation inspection must not wrap the record in an `OperationEnvelope`.
 | `namespace_admin` | namespace create/disable and volume binding update |
 | `repo_admin` | repo create/get/list, save point create/list, history |
 | `repo_lifecycle_admin` | repo archive, restore-archived, delete, restore-tombstoned, purge when policy permits |
-| `restore_admin` | restore preview/run |
+| `restore_admin` | restore preview/run/discard |
 | `template_admin` | repo template create/clone |
 | `export_admin` | export create/get/revoke |
 | `mount_admin` | workload mount binding create/get/revoke |
@@ -118,6 +129,28 @@ restore rejection, JVS failure, export expiry/revoke, mount terminal state, repo
 lifecycle invalid state, lifecycle session drain failure, missing purge
 confirmation, purge retention denial, operation recovery required, durable
 metadata/store unavailability, and unclassified internal service bugs.
+
+Restore preview creates a durable pending JVS restore plan and is authorized as
+a mutating restore operation. Restore preview discard is the caller-triggerable
+cleanup path for a cancelled preview and is part of the `restore_admin` endpoint
+group. It must validate the matching preview operation and pending plan, invoke
+JVS restore discard through the runner, and never require ordinary callers to
+ask operators to delete private JVS files.
+
+The durable `RestorePlan` entity is the source of truth for pending, consuming,
+consumed, discarding, discarded, and operator-intervention restore states.
+Operation records should reference restore plans only through safe existing
+metadata containers such as `external_resource_ids`, redacted
+`jvs_json_output`, `input_summary`, and `verification_result` until the
+OpenAPI/schema/Go/DB contracts are intentionally upgraded.
+
+Restore error mapping should reuse existing codes. Active or stale writer
+denials use the writer-session codes. Dirty restore state uses
+`RESTORE_DIRTY_STATE`. JVS blocking state, mismatched or multiple pending
+plans, stale preview plans, or ambiguous recovery use
+`OPERATION_RECOVERY_REQUIRED` or operator intervention instead of introducing a
+new public enum or returning generic `JVS_COMMAND_FAILED` when caller/operator
+action is required.
 
 Repo-create intake resolves idempotency before checking target repo metadata:
 the same idempotency key and same request body reuses the original operation

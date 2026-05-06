@@ -46,9 +46,12 @@ Required smoke surface:
 - `history`
 - restore preview
 - restore-run
+- restore discard
+- recovery status for pending preview and post-discard/post-run idle states
 - `repo clone --target-control-root --save-points main`
 - `doctor --strict`
-- clean CWD behavior
+- clean controlled CWD behavior for post-init commands with explicit
+  `--control-root <control> --workspace main --json`
 - redacted JSON capture
 
 Accepted evidence:
@@ -57,6 +60,10 @@ Pre-dev smoke with the pinned `v0.4.8` release binary passed the required
 external control-root, save/history, restore preview/run, post-restore recovery
 status, doctor, and clone-after-restore checks. After restore-run, recovery
 status returned `ok=true` with no plans, and `doctor --strict` returned healthy.
+Follow-up clean-CWD lifecycle smoke with the same official binary and SHA-256
+verified post-init commands from a clean controlled CWD, restore discard,
+pending preview recovery status with `restore_state` blocking and empty
+`plans`, and idle recovery status after discard and restore-run.
 
 Evidence:
 

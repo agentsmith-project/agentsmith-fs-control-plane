@@ -138,6 +138,17 @@ handlers should map it to HTTP 500 and default `retryable=false`. Store outages
 must not be disguised as `CAPABILITY_DENIED` or `NAMESPACE_NOT_FOUND`.
 `REPO_JVS_MUTATION_IN_PROGRESS` means a same-repo JVS mutation is non-terminal;
 handlers should map it to HTTP 409 with `retryable=true`.
+Restore plan validation must use existing stable codes. A restore-run request
+that references a preview operation outside the caller namespace, repo, or
+resource boundary must return `OPERATION_NOT_FOUND` or the existing equivalent
+that does not reveal existence. Active or stale writers use
+`ACTIVE_WRITER_SESSIONS`, `WRITER_SESSION_FENCE_HELD`, or
+`STALE_WRITER_SESSION_UNCERTAIN`. Dirty restore state uses
+`RESTORE_DIRTY_STATE`. JVS blocking, mismatched plan IDs, multiple pending
+plans, stale preview plans, or ambiguous recovery state use
+`OPERATION_RECOVERY_REQUIRED` and/or move the operation or plan to
+`operator_intervention_required` rather than falling through to generic
+`JVS_COMMAND_FAILED` when caller or operator action is required.
 
 ## Core Types
 
@@ -245,6 +256,39 @@ product vocabulary: archive is retained but unavailable, delete is recoverable
 tombstone/trash while retention allows, and purge is permanent deletion. Delete
 is allowed from `active` or `archived`; restore-tombstoned returns the repo to
 the recorded pre-delete accessibility state.
+
+### RestorePlan
+
+`restore-preview` is not a pure read. It creates a JVS pending restore plan and
+AFSCP must persist that plan as durable restore lifecycle state. The terminal
+state of the preview operation is not enough to infer whether the repo has an
+active plan. The durable `RestorePlan` table/entity is the source of truth for
+restore plan lifecycle. `restore_plan_id` is the AFSCP-safe ID normalized from
+the JVS preview `plan_id`; workers use the matching JVS plan ID for
+`jvs restore --run <plan_id>` and `jvs restore discard <plan_id>`.
+
+```json
+{
+  "restore_plan_id": "rp_123",
+  "namespace_id": "ns_123",
+  "repo_id": "repo_123",
+  "preview_operation_id": "op_preview_123",
+  "source_save_point_id": "sp_456",
+  "status": "pending",
+  "created_at": "2026-05-03T12:00:00Z",
+  "updated_at": "2026-05-03T12:00:00Z"
+}
+```
+
+GA restore plan statuses are `pending`, `consuming`, `consumed`,
+`discarding`, `discarded`, and `operator_intervention_required`.
+`pending`, `consuming`, `discarding`, and `operator_intervention_required` are
+active statuses. Each repo may have at most one active restore plan. Active
+plans block other same-repo JVS mutations, including save, restore preview,
+unrelated restore-run, template create, and template clone. They do not block
+ordinary file IO. The only allowed same-repo JVS mutations while a plan is
+active are the matching restore-run that consumes the plan and the matching
+discard that cleans it up. `consumed` and `discarded` are terminal.
 
 ### RepoTemplate
 
@@ -453,11 +497,82 @@ POST /internal/v1/repos/{repoId}/save-points
 GET  /internal/v1/repos/{repoId}/save-points
 POST /internal/v1/repos/{repoId}/restore-preview
 POST /internal/v1/repos/{repoId}/restore-run
+POST /internal/v1/repos/{repoId}/restore-preview:discard
 ```
+
+`restore-preview:discard` is a GA target for the restore coding slice, not a
+claim that the current machine-readable OpenAPI already exposes the route. That
+slice must add the endpoint, operation type `restore_preview_discard`, schemas,
+route, and contract fixtures before handlers or generated clients depend on it.
 
 GA `restore-run` is version restore and must reject active or uncertain read-write export or workload mount sessions by default. Lifecycle restore is handled by `restore-archived` and `restore-tombstoned`; audit event names and product copy must distinguish these from version restore. An operator break-glass restore can be designed separately with explicit approval, session revoke/drain, and audit.
 
-Restore-run must acquire the per-repo writer-session fence before checking active or uncertain read-write sessions. While this fence is held, AFSCP rejects new read-write export and workload mount binding issuance for the repo. The fence is released only after restore, `jvs doctor --strict`, and audit completion.
+`restore-preview` runs under the repo JVS exclusive mutation lock and creates a
+durable `RestorePlan` with `status=pending`, `restore_plan_id`, and
+`source_save_point_id`. The request must fail if another active restore plan
+already exists for the repo or if JVS recovery status reports blocking,
+mismatched, multiple, stale, or ambiguous restore state. The worker persists a
+preflight idle marker before invoking JVS preview. After a crash, AFSCP may
+adopt a single pending JVS plan only when AFSCP-exclusive-control assumptions
+hold and the recovering operation is the earliest same-repo non-terminal
+restore preview or JVS mutation; otherwise the plan or operation enters
+`operator_intervention_required`. `stale_restore_preview` defaults to
+operator intervention unless the caller explicitly discards it through the
+discard flow below.
+
+Restore-run accepts a `preview_operation_id` that resolves to a valid preview
+operation and durable plan. A valid preview operation/plan must be in the same
+namespace, repo, and resource boundary; have operation type `restore_preview`;
+have succeeded; reference a durable `RestorePlan` with `restore_plan_id` and
+`source_save_point_id`; have restore plan status `pending`; not be consumed,
+discarded, discarding, or consuming; and not already be referenced by a
+succeeded or non-terminal restore-run operation. The preview operation record
+stores only safe metadata in existing containers such as
+`input_summary.preview_operation_id`, `external_resource_ids` when safe, and
+redacted `jvs_json_output` or `verification_result`; it does not gain new
+top-level DTO fields in this doc-only pass.
+
+Restore-run phase order is fixed:
+
+1. Validate the preview operation and durable plan.
+2. Preflight JVS recovery status and require exactly one pending plan matching
+   the stored `restore_plan_id`.
+3. Acquire the per-repo writer-session fence.
+4. Reject active or uncertain read-write sessions.
+5. Mark the restore plan `consuming` before invoking JVS.
+6. Run the JVS restore-run command for `<plan_id>` through the runner.
+7. Run `jvs doctor --strict`.
+8. Verify JVS recovery status is idle.
+9. Atomically record operation success, audit success, writer-fence release, and
+   restore plan `consumed`.
+
+Writer-session denial before JVS is invoked releases the writer-session fence
+and leaves the restore plan `pending` for a later restore-run or discard. JVS
+run failure, doctor failure, or recovery-status ambiguity keeps the fence held
+and moves the restore-run operation and/or plan to
+`operator_intervention_required`.
+
+Discard is a caller-triggerable cleanup path, not operator-only cleanup for
+cancelled previews. The request body contains the preview operation ID:
+
+```json
+{
+  "preview_operation_id": "op_preview_123"
+}
+```
+
+Discard validates the same namespace, repo, resource, preview operation, and
+pending plan relationship, marks the plan `discarding`, runs
+`jvs restore discard <plan_id>` through the runner, and atomically records
+operation success, audit success, and restore plan `discarded`. It must not
+delete `.jvs` private files directly. Discard failure or recovery ambiguity
+moves the plan or operation to `operator_intervention_required`.
+
+The writer-session fence is also the API contract for read-write export and
+mount issuance: while the fence is held, AFSCP rejects new read-write export and
+workload mount binding issuance for the repo. The fence is released only after
+restore, `jvs doctor --strict`, recovery-status idle verification, and audit
+completion.
 
 Dirty-state behavior is fail-closed by default with `RESTORE_DIRTY_STATE`.
 Any future `discard_unsaved` or `save_first` mode must be represented in the
@@ -590,8 +705,12 @@ Mutating endpoints must support:
 - resource locks where applicable
 - per-repo writer-session fence for restore-run versus read-write export/mount issuance
 - per-repo lifecycle fence for archive, restore-archived, delete, restore-tombstoned, and purge versus all export/mount/session issuance and repo storage mutations
+- durable `RestorePlan` lifecycle for restore-preview, restore-run, and
+  restore-preview discard
 - durable operation record with phase and external resource IDs
-- structured JVS JSON output capture
+- structured JVS JSON output capture reduced to safe metadata; `run_command`,
+  `recommended_next_command`, raw paths, stdout/stderr, and secrets must not be
+  stored or returned verbatim
 - retry-safe status transitions
 - stable caller-facing error codes
 - audit event emission for success, failure, and denied requests
@@ -607,8 +726,9 @@ Minimum GA operation matrix:
 | repo_restore_tombstoned | repo lifecycle exclusive | reject after purge or retention denial | inspect tombstone status, retention policy, and repo health |
 | repo_purge | repo lifecycle exclusive plus session drain | require no active or uncertain sessions | inspect purge marker and absence of retained storage |
 | save_point_create | repo JVS exclusive | allow ordinary IO | retry only from recorded phase |
-| restore_preview | repo JVS shared/read | allow ordinary IO | retry safe |
-| restore_run | repo JVS exclusive plus writer-session fence | block new read-write sessions, then reject existing active or uncertain read-write sessions | inspect and doctor |
+| restore_preview | repo JVS exclusive restore-plan mutation | allow ordinary IO; block other same-repo JVS mutations while the plan is active except matching restore-run or discard | recover from durable plan lifecycle and JVS recovery status |
+| restore_preview_discard | repo JVS exclusive matching active plan | allow ordinary IO; block unrelated same-repo JVS mutations until discarded or intervention | inspect durable plan and JVS discard status |
+| restore_run | repo JVS exclusive matching active plan plus writer-session fence | block new read-write sessions, then reject existing active or uncertain read-write sessions | validate preview plan, inspect JVS recovery status, run doctor, verify idle |
 | template_create | source repo JVS exclusive during save phase, then source read gate plus target template exclusive create | fail if source becomes dirty after template save point | inspect source save point, clone history mode, and target template path |
 | template_clone | template read gate plus target repo exclusive create | none | inspect target repo path |
 | export_create | repo export lock plus writer-session fence for read_write mode | reject if repo not active, restore fence is held for read_write, or lifecycle fence is held | revoke leaked partial credential |

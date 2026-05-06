@@ -31,8 +31,9 @@ Smoke root: `/tmp/afscp-jvs-smoke-v0.4.8.H6DaIB`
 CLI contract observation:
 
 - `--control-root` cannot be combined with `--repo`.
-- After `init`, run commands from the payload root CWD with
-  `--control-root <control> --workspace main --json`.
+- After `init`, run commands from a clean controlled CWD with
+  `--control-root <control> --workspace main --json`; do not depend on CWD repo
+  discovery.
 
 Smoke results:
 
@@ -72,6 +73,36 @@ Preview/discard cleanup smoke:
   `history_changed=false`.
 - After discard, `jvs recovery status` returned no `restore_state`, and
   `jvs doctor --strict` returned `healthy=true`.
+
+Follow-up clean-CWD lifecycle smoke:
+
+- Official release binary `jvs-linux-amd64` was reused with `SHA256SUMS`
+  verification OK and SHA-256
+  `f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521`.
+- Smoke root: `/tmp/afscp-jvs-restore.IyjnbY`; clean CWD:
+  `/tmp/afscp-jvs-restore.IyjnbY/cwd`; repo payload:
+  `/tmp/afscp-jvs-restore.IyjnbY/repo`; control:
+  `/tmp/afscp-jvs-restore.IyjnbY/control`.
+- Post-init commands ran from the clean CWD using
+  `--control-root <control> --workspace main --json`; no command relied on CWD
+  repo discovery, and `--control-root` still could not be combined with
+  `--repo`.
+- `init`, `save`, `history`, restore preview, recovery status, restore discard,
+  restore-run, `doctor --strict`, and recovery-idle checks all succeeded.
+- Preview returned `mode=preview`, matching `plan_id`, `source_save_point`,
+  `files_changed=false`, `history_changed=false`, and present `run_command`;
+  file content stayed `v2` after preview.
+- Pending recovery status returned
+  `restore_state.state=pending_restore_preview`, `blocking=true`, matching
+  `plan_id`, present `recommended_next_command`, and `plans=[]`; consumers must
+  inspect `restore_state`, not just `plans`.
+- Discard returned `mode=discard`, matching `plan_id`,
+  `plan_discarded=true`, `files_changed=false`, and `history_changed=false`;
+  recovery status was idle after discard.
+- Restore-run returned `mode=run`, matching `plan_id`,
+  `source_save_point`/`restored_save_point`, `files_changed=true`,
+  `history_changed=false`, and `unsaved_changes=false`; file content became
+  `v1`, `doctor --strict` was healthy, and recovery status was idle.
 
 Decision:
 
