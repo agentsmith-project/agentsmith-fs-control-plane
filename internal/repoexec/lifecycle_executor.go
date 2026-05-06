@@ -177,7 +177,7 @@ func (executor *LifecycleExecutor) ExecuteOperationRecovery(ctx context.Context,
 		}
 		doctor, err := executor.jvs.DoctorStrict(ctx, controlRoot)
 		if err != nil || !doctor.Healthy || doctor.Workspace != "main" || doctor.RepoID != repo.JVSRepoID {
-			return executor.commitLifecycleIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, map[string]any{"repo_id": repo.JVSRepoID, "workspace": "main"})
+			return executor.commitLifecycleIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, withJVSErrorDetails(map[string]any{"repo_id": repo.JVSRepoID, "workspace": "main"}, err))
 		}
 	}
 
@@ -256,6 +256,7 @@ func (executor *LifecycleExecutor) commitLifecycleFailed(ctx context.Context, re
 func (executor *LifecycleExecutor) commitLifecycleIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message, fenceID string, details map[string]any) error {
 	operation := repoLifecycleFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
 	operation.VerificationResult = details
+	attachJVSErrorDetails(&operation, details)
 	event, err := executor.lifecycleAuditEvent(operation, now, audit.OutcomeFailed, string(record.Type)+"_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err

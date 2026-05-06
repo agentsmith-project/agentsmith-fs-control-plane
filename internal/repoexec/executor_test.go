@@ -282,6 +282,28 @@ func TestExecutorRetryWithSameOperationFenceAdoptsHealthyDoctorWithoutInit(t *te
 	}
 }
 
+func TestExecutorStoresSafeJVSErrorDetails(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	runner := &fakeJVSRunner{initErr: &jvsrunner.CommandError{Command: "init", ExitCode: 17, Code: "E_SOURCE_DIRTY"}}
+	executor := newTestExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), repoCreateLeasedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.operation.Error == nil {
+		t.Fatalf("operation = %#v, want operator intervention error", store.operation)
+	}
+	details := store.operation.Error.Details
+	if details["jvs_error_code"] != "E_SOURCE_DIRTY" || details["jvs_command"] != "init" || details["jvs_exit_code"] != 17 {
+		t.Fatalf("operation error details = %#v, want safe JVS command error details", details)
+	}
+	if _, exists := details["jvs_message"]; exists {
+		t.Fatalf("operation error details leaked message field: %#v", details)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
 func TestExecutorFirstAttemptDoesNotAdoptOccupiedHealthyRoots(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()

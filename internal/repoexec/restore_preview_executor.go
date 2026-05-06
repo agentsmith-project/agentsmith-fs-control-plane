@@ -138,14 +138,14 @@ func (executor *RestorePreviewExecutor) ExecuteOperationRecovery(ctx context.Con
 		}
 		status, err := executor.jvs.RecoveryStatus(ctx, controlRoot)
 		if err != nil {
-			return executor.commitRestorePreviewIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", nil)
+			return executor.commitRestorePreviewIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", withJVSErrorDetails(nil, err))
 		}
 		return executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_PREFLIGHT_REQUIRES_OPERATOR", "restore preview preflight recovery requires operator intervention", restorePreviewRecoveryStatusDetails(status))
 	}
 
 	status, err := executor.jvs.RecoveryStatus(ctx, controlRoot)
 	if err != nil {
-		return executor.commitRestorePreviewIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", nil)
+		return executor.commitRestorePreviewIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", withJVSErrorDetails(nil, err))
 	}
 	if !restorePreviewRecoveryStatusIdle(status) {
 		return executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_RECOVERY_STATE_NOT_IDLE", "restore preview recovery state is not idle", restorePreviewRecoveryStatusDetails(status))
@@ -162,7 +162,7 @@ func (executor *RestorePreviewExecutor) ExecuteOperationRecovery(ctx context.Con
 
 	preview, err := executor.jvs.RestorePreview(ctx, controlRoot, savePointID)
 	if err != nil {
-		return executor.commitRestorePreviewIntervention(ctx, working, now, "JVS_RESTORE_PREVIEW_FAILED", "jvs restore preview failed", map[string]any{"source_save_point_id": savePointID})
+		return executor.commitRestorePreviewIntervention(ctx, working, now, "JVS_RESTORE_PREVIEW_FAILED", "jvs restore preview failed", withJVSErrorDetails(map[string]any{"source_save_point_id": savePointID}, err))
 	}
 	if err := validateRestorePreviewSummary(preview, savePointID); err != nil {
 		return executor.commitRestorePreviewIntervention(ctx, working, now, "RESTORE_PREVIEW_RESULT_MISMATCH", "restore preview result mismatch", map[string]any{"source_save_point_id": savePointID})
@@ -256,6 +256,7 @@ func (executor *RestorePreviewExecutor) commitRestorePreviewFailed(ctx context.C
 func (executor *RestorePreviewExecutor) commitRestorePreviewIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
 	operation := restorePreviewFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	attachJVSErrorDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "restore_preview_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err

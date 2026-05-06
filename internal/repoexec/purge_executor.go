@@ -216,7 +216,7 @@ func (executor *PurgeExecutor) ExecuteOperationRecovery(ctx context.Context, rec
 		if controlExists {
 			doctor, err := executor.jvs.DoctorStrict(ctx, paths.ControlRootPath)
 			if err != nil || !doctor.Healthy || doctor.Workspace != "main" || doctor.RepoID != repo.JVSRepoID {
-				return executor.commitPurgeIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", map[string]any{"repo_id": repo.JVSRepoID, "workspace": "main"})
+				return executor.commitPurgeIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"repo_id": repo.JVSRepoID, "workspace": "main"}, err))
 			}
 		}
 		if err := executor.purger.PurgeRepoStorage(ctx, paths); err != nil {
@@ -334,6 +334,7 @@ func validatePurgeRoot(volumeRoot, container, control, payload string) error {
 func (executor *PurgeExecutor) commitPurgeIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
 	operation := repoLifecycleFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
 	operation.VerificationResult = details
+	attachJVSErrorDetails(&operation, details)
 	event, err := executor.lifecycleAuditEvent(operation, now, audit.OutcomeFailed, string(record.Type)+"_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err

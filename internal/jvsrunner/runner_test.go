@@ -465,6 +465,68 @@ func TestRepoCloneUsesFixedCommandAndParsesEnvelope(t *testing.T) {
 	assertSummaryDoesNotLeakPaths(t, summary)
 }
 
+func TestCommandErrorEnvelopeFromNonZeroStdoutOnSharedPath(t *testing.T) {
+	t.Parallel()
+
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
+		ExitCode: 17,
+		Stdout:   jvsErrorStdout(t, "save", testControlRoot, "E_RECOVERY_BLOCKING"),
+		Stderr:   []byte("token=secret /srv/afscp/raw"),
+	}})
+
+	_, err := runner.Save(context.Background(), testControlRoot, "checkpoint")
+	assertJVSCommandError(t, err, "save", 17, "E_RECOVERY_BLOCKING")
+}
+
+func TestRepoCloneCommandErrorEnvelopeFromNonZeroStdoutSourceRoot(t *testing.T) {
+	t.Parallel()
+
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
+		ExitCode: 31,
+		Stdout:   jvsErrorStdout(t, "repo clone", testControlRoot, "E_SOURCE_DIRTY"),
+	}})
+
+	_, err := runner.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
+	assertJVSCommandError(t, err, "repo clone", 31, "E_SOURCE_DIRTY")
+}
+
+func TestInitCommandErrorEnvelopeFromNonZeroStdout(t *testing.T) {
+	t.Parallel()
+
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
+		ExitCode: 19,
+		Stdout:   jvsErrorStdout(t, "init", testControlRoot, "E_SOURCE_DIRTY"),
+		Stderr:   []byte("payload_root=/srv/afscp/secret/payload"),
+	}})
+
+	_, err := runner.Init(context.Background(), testPayloadRoot, testControlRoot)
+	assertJVSCommandError(t, err, "init", 19, "E_SOURCE_DIRTY")
+}
+
+func TestDoctorStrictCommandErrorEnvelopeFromNonZeroStderr(t *testing.T) {
+	t.Parallel()
+
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
+		ExitCode: 23,
+		Stdout:   []byte("not-json token=secret"),
+		Stderr:   jvsErrorStdout(t, "doctor", testControlRoot, "E_RECOVERY_BLOCKING"),
+	}})
+
+	_, err := runner.DoctorStrict(context.Background(), testControlRoot)
+	assertJVSCommandError(t, err, "doctor", 23, "E_RECOVERY_BLOCKING")
+}
+
+func TestCommandErrorEnvelopeFromExitZeroOKFalse(t *testing.T) {
+	t.Parallel()
+
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
+		Stdout: jvsErrorStdout(t, "save", testControlRoot, "E_SOURCE_DIRTY"),
+	}})
+
+	_, err := runner.Save(context.Background(), testControlRoot, "checkpoint")
+	assertJVSCommandError(t, err, "save", 0, "E_SOURCE_DIRTY")
+}
+
 func TestNewRejectsUnsafeConfig(t *testing.T) {
 	t.Parallel()
 
@@ -1096,6 +1158,25 @@ func assertErrorDoesNotLeak(t *testing.T, err error) {
 	}
 }
 
+func assertJVSCommandError(t *testing.T, err error, command string, exitCode int, code string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("call succeeded, want command error")
+	}
+	if !errors.Is(err, ErrCommandFailed) {
+		t.Fatalf("errors.Is(err, ErrCommandFailed) = false for %v", err)
+	}
+	var commandErr *CommandError
+	if !errors.As(err, &commandErr) {
+		t.Fatalf("errors.As(err, *CommandError) = false for %T %v", err, err)
+	}
+	if commandErr.Command != command || commandErr.ExitCode != exitCode || commandErr.Code != code {
+		t.Fatalf("command error = %#v, want command=%q exit=%d code=%q", commandErr, command, exitCode, code)
+	}
+	assertErrorDoesNotLeak(t, err)
+}
+
 func initSuccessStdout(t *testing.T) []byte {
 	t.Helper()
 	return initStdoutWith(t, nil)
@@ -1302,6 +1383,18 @@ func baseEnvelope(command string) map[string]any {
 		},
 		"error": nil,
 	}
+}
+
+func jvsErrorStdout(t *testing.T, command, repoRoot, code string) []byte {
+	t.Helper()
+	env := baseEnvelope(command)
+	env["repo_root"] = repoRoot
+	env["ok"] = false
+	env["error"] = map[string]any{
+		"code":    code,
+		"message": "raw message mentions /srv/afscp/secret and token=secret",
+	}
+	return mustJSON(t, env)
 }
 
 func mustJSON(t *testing.T, value any) []byte {

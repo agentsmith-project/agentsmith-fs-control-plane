@@ -147,7 +147,7 @@ func (executor *RestorePreviewDiscardExecutor) ExecuteOperationRecovery(ctx cont
 
 	status, err := executor.jvs.RecoveryStatus(ctx, controlRoot)
 	if err != nil {
-		return executor.commitRestorePreviewDiscardIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", nil)
+		return executor.commitRestorePreviewDiscardIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", withJVSErrorDetails(nil, err))
 	}
 	if !restorePreviewDiscardRecoveryStatusMatchesPlan(status, durablePlan.ID) {
 		return executor.commitRestorePreviewDiscardIntervention(ctx, record, now, "RESTORE_PREVIEW_DISCARD_RECOVERY_STATE_MISMATCH", "restore preview discard recovery state mismatch", restorePreviewDiscardRecoveryStatusDetails(status, durablePlan.ID))
@@ -166,7 +166,7 @@ func (executor *RestorePreviewDiscardExecutor) ExecuteOperationRecovery(ctx cont
 
 	discard, err := executor.jvs.RestoreDiscard(ctx, controlRoot, durablePlan.ID)
 	if err != nil {
-		return executor.commitRestorePreviewDiscardIntervention(ctx, working, now, "JVS_RESTORE_DISCARD_FAILED", "jvs restore discard failed", map[string]any{"restore_plan_id": durablePlan.ID})
+		return executor.commitRestorePreviewDiscardIntervention(ctx, working, now, "JVS_RESTORE_DISCARD_FAILED", "jvs restore discard failed", withJVSErrorDetails(map[string]any{"restore_plan_id": durablePlan.ID}, err))
 	}
 	if err := validateRestoreDiscardSummary(discard, durablePlan.ID); err != nil {
 		return executor.commitRestorePreviewDiscardIntervention(ctx, working, now, "RESTORE_PREVIEW_DISCARD_RESULT_MISMATCH", "restore preview discard result mismatch", map[string]any{"restore_plan_id": durablePlan.ID})
@@ -256,6 +256,7 @@ func (executor *RestorePreviewDiscardExecutor) commitRestorePreviewDiscardFailed
 func (executor *RestorePreviewDiscardExecutor) commitRestorePreviewDiscardIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
 	operation := restorePreviewDiscardFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	attachJVSErrorDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "restore_preview_discard_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err

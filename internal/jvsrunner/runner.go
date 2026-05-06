@@ -28,6 +28,26 @@ var (
 	ErrInvalidEnvelope = errors.New("invalid jvs json envelope")
 )
 
+type CommandError struct {
+	Command  string
+	ExitCode int
+	Code     string
+}
+
+func (err *CommandError) Error() string {
+	if err == nil {
+		return ErrCommandFailed.Error()
+	}
+	if err.Code != "" {
+		return fmt.Sprintf("%s: %s: %s", ErrCommandFailed, err.Command, err.Code)
+	}
+	return fmt.Sprintf("%s: %s", ErrCommandFailed, err.Command)
+}
+
+func (err *CommandError) Unwrap() error {
+	return ErrCommandFailed
+}
+
 type Config struct {
 	BinaryPath     string
 	CWD            string
@@ -188,12 +208,18 @@ func (runner *Runner) Init(ctx context.Context, payloadRoot, controlRoot string)
 	}
 	result = runner.capResult(result)
 	if result.ExitCode != 0 {
+		if commandErr, ok := commandErrorFromResult("init", controlRoot, result); ok {
+			return InitSummary{}, commandErr
+		}
 		return InitSummary{}, fmt.Errorf("%w: init", ErrCommandFailed)
 	}
 
 	envelope, err := decodeEnvelope(result.Stdout)
 	if err != nil {
 		return InitSummary{}, fmt.Errorf("%w: init", ErrInvalidEnvelope)
+	}
+	if commandErr, ok := commandErrorFromEnvelope("init", controlRoot, 0, envelope); ok {
+		return InitSummary{}, commandErr
 	}
 	repoID, _ := envelope.Data["repo_id"].(string)
 	workspace, _ := envelope.Data["workspace"].(string)
@@ -230,12 +256,18 @@ func (runner *Runner) DoctorStrict(ctx context.Context, controlRoot string) (Doc
 	}
 	result = runner.capResult(result)
 	if result.ExitCode != 0 {
+		if commandErr, ok := commandErrorFromResult("doctor", controlRoot, result); ok {
+			return DoctorSummary{}, commandErr
+		}
 		return DoctorSummary{}, fmt.Errorf("%w: doctor", ErrCommandFailed)
 	}
 
 	envelope, err := decodeEnvelope(result.Stdout)
 	if err != nil {
 		return DoctorSummary{}, fmt.Errorf("%w: doctor", ErrInvalidEnvelope)
+	}
+	if commandErr, ok := commandErrorFromEnvelope("doctor", controlRoot, 0, envelope); ok {
+		return DoctorSummary{}, commandErr
 	}
 	healthy, ok := envelope.Data["healthy"].(bool)
 	repoID, _ := envelope.Data["repo_id"].(string)
@@ -458,14 +490,14 @@ func (runner *Runner) runControlJSON(ctx context.Context, command, controlRoot s
 	return runner.runControlJSONExpectRoot(ctx, command, controlRoot, controlRoot, commandArgs)
 }
 
-func (runner *Runner) runControlJSONExpectRoot(ctx context.Context, command, selectorControlRoot, envelopeRepoRoot string, commandArgs []string) (envelope, error) {
+func (runner *Runner) runControlJSONExpectRoot(ctx context.Context, command, selectorControlRoot, expectedSuccessRepoRoot string, commandArgs []string) (envelope, error) {
 	if runner == nil {
 		return envelope{}, ErrInvalidConfig
 	}
 	if err := validateCleanAbsolute(selectorControlRoot, true); err != nil {
 		return envelope{}, fmt.Errorf("%w: control root", ErrInvalidArgument)
 	}
-	if err := validateCleanAbsolute(envelopeRepoRoot, true); err != nil {
+	if err := validateCleanAbsolute(expectedSuccessRepoRoot, true); err != nil {
 		return envelope{}, fmt.Errorf("%w: envelope repo root", ErrInvalidArgument)
 	}
 	args := []string{"--control-root", selectorControlRoot, "--workspace", workspaceMain}
@@ -476,13 +508,19 @@ func (runner *Runner) runControlJSONExpectRoot(ctx context.Context, command, sel
 	}
 	result = runner.capResult(result)
 	if result.ExitCode != 0 {
+		if commandErr, ok := commandErrorFromResult(command, expectedSuccessRepoRoot, result, selectorControlRoot); ok {
+			return envelope{}, commandErr
+		}
 		return envelope{}, fmt.Errorf("%w: %s", ErrCommandFailed, command)
 	}
 	parsed, err := decodeEnvelope(result.Stdout)
 	if err != nil {
 		return envelope{}, fmt.Errorf("%w: %s", ErrInvalidEnvelope, command)
 	}
-	if !parsed.validFor(command, envelopeRepoRoot) {
+	if commandErr, ok := commandErrorFromEnvelope(command, expectedSuccessRepoRoot, 0, parsed, selectorControlRoot); ok {
+		return envelope{}, commandErr
+	}
+	if !parsed.validFor(command, expectedSuccessRepoRoot) {
 		return envelope{}, fmt.Errorf("%w: %s", ErrInvalidEnvelope, command)
 	}
 	return parsed, nil
@@ -501,6 +539,11 @@ type envelope struct {
 	Workspace     string         `json:"workspace"`
 	OK            bool           `json:"ok"`
 	Data          map[string]any `json:"data"`
+	Error         *envelopeError `json:"error"`
+}
+
+type envelopeError struct {
+	Code string `json:"code"`
 }
 
 func decodeEnvelope(stdout []byte) (envelope, error) {
@@ -517,6 +560,44 @@ func decodeEnvelope(stdout []byte) (envelope, error) {
 		parsed.Data = map[string]any{}
 	}
 	return parsed, nil
+}
+
+func commandErrorFromResult(command, acceptedRepoRoot string, result CommandResult, otherAcceptedRepoRoots ...string) (*CommandError, bool) {
+	for _, output := range [][]byte{result.Stdout, result.Stderr} {
+		parsed, err := decodeEnvelope(output)
+		if err != nil {
+			continue
+		}
+		if commandErr, ok := commandErrorFromEnvelope(command, acceptedRepoRoot, result.ExitCode, parsed, otherAcceptedRepoRoots...); ok {
+			return commandErr, true
+		}
+	}
+	return nil, false
+}
+
+func commandErrorFromEnvelope(command, acceptedRepoRoot string, exitCode int, parsed envelope, otherAcceptedRepoRoots ...string) (*CommandError, bool) {
+	if parsed.SchemaVersion != schemaVersionV048 ||
+		parsed.Command != command ||
+		parsed.Workspace != workspaceMain ||
+		!repoRootMatches(parsed.RepoRoot, acceptedRepoRoot, otherAcceptedRepoRoots...) ||
+		parsed.OK ||
+		parsed.Error == nil ||
+		!safeOpaqueID(parsed.Error.Code) {
+		return nil, false
+	}
+	return &CommandError{Command: command, ExitCode: exitCode, Code: parsed.Error.Code}, true
+}
+
+func repoRootMatches(repoRoot, acceptedRepoRoot string, otherAcceptedRepoRoots ...string) bool {
+	if repoRoot == acceptedRepoRoot {
+		return true
+	}
+	for _, other := range otherAcceptedRepoRoots {
+		if repoRoot == other {
+			return true
+		}
+	}
+	return false
 }
 
 func (parsed envelope) validFor(command, controlRoot string) bool {

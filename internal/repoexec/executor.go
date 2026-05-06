@@ -164,7 +164,7 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 	if adoptionAllowed {
 		doctor, err := executor.jvs.DoctorStrict(ctx, roots.ControlRootPath)
 		if err != nil {
-			return executor.commitIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, nil)
+			return executor.commitIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, withJVSErrorDetails(nil, err))
 		}
 		jvsRepoID = doctor.RepoID
 		adopted = true
@@ -172,11 +172,11 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 		initSummary, err := executor.jvs.Init(ctx, roots.PayloadRootPath, roots.ControlRootPath)
 		if err != nil {
 			_, _ = executor.jvs.DoctorStrict(ctx, roots.ControlRootPath)
-			return executor.commitIntervention(ctx, record, now, "JVS_COMMAND_FAILED", "jvs init failed", fenceID, nil)
+			return executor.commitIntervention(ctx, record, now, "JVS_COMMAND_FAILED", "jvs init failed", fenceID, withJVSErrorDetails(nil, err))
 		}
 		doctor, err := executor.jvs.DoctorStrict(ctx, roots.ControlRootPath)
 		if err != nil {
-			return executor.commitIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, map[string]any{"repo_id": initSummary.RepoID, "workspace": initSummary.Workspace})
+			return executor.commitIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, withJVSErrorDetails(map[string]any{"repo_id": initSummary.RepoID, "workspace": initSummary.Workspace}, err))
 		}
 		if initSummary.RepoID != doctor.RepoID {
 			return executor.commitIntervention(ctx, record, now, "JVS_REPO_ID_MISMATCH", "jvs repo identity mismatch", fenceID, map[string]any{"init_repo_id": initSummary.RepoID, "doctor_repo_id": doctor.RepoID})
@@ -260,6 +260,7 @@ func (executor *Executor) commitFailed(ctx context.Context, record operations.Op
 func (executor *Executor) commitIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message, fenceID string, details map[string]any) error {
 	operation := failedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
 	operation.VerificationResult = details
+	attachJVSErrorDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "repo_create_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err

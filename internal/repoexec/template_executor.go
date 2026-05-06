@@ -156,15 +156,15 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 	}
 	save, err := executor.jvs.Save(ctx, sourceControlRoot, "template "+record.TemplateID)
 	if err != nil {
-		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs save failed", nil)
+		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs save failed", withJVSErrorDetails(nil, err))
 	}
 	clone, err := executor.jvs.RepoClone(ctx, sourceControlRoot, paths.PayloadRootPath, paths.ControlRootPath)
 	if err != nil {
-		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs repo clone failed", map[string]any{"source_save_point_id": save.SavePointID})
+		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs repo clone failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
 	}
 	doctor, err := executor.jvs.DoctorStrict(ctx, paths.ControlRootPath)
 	if err != nil {
-		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", map[string]any{"source_save_point_id": save.SavePointID})
+		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
 	}
 	if clone.SavePointsMode != "main" || clone.RuntimeStateCopied || clone.SourceRepoID != source.JVSRepoID || clone.TargetRepoID != doctor.RepoID {
 		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_REPO_ID_MISMATCH", "jvs repo identity mismatch", map[string]any{"source_save_point_id": save.SavePointID})
@@ -244,11 +244,11 @@ func (executor *TemplateCloneExecutor) ExecuteOperationRecovery(ctx context.Cont
 	}
 	clone, err := base.jvs.RepoClone(ctx, sourceControlRoot, paths.PayloadRootPath, paths.ControlRootPath)
 	if err != nil {
-		return base.commitTemplateCloneIntervention(ctx, record, now, "JVS_COMMAND_FAILED", "jvs repo clone failed", nil)
+		return base.commitTemplateCloneIntervention(ctx, record, now, "JVS_COMMAND_FAILED", "jvs repo clone failed", withJVSErrorDetails(nil, err))
 	}
 	doctor, err := base.jvs.DoctorStrict(ctx, paths.ControlRootPath)
 	if err != nil {
-		return base.commitTemplateCloneIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", nil)
+		return base.commitTemplateCloneIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(nil, err))
 	}
 	if clone.SavePointsMode != "main" || clone.RuntimeStateCopied || clone.SourceRepoID != template.JVSRepoID || clone.TargetRepoID != doctor.RepoID {
 		return base.commitTemplateCloneIntervention(ctx, record, now, "JVS_REPO_ID_MISMATCH", "jvs repo identity mismatch", nil)
@@ -424,6 +424,7 @@ func (executor *TemplateCreateExecutor) commitTemplateCreateIntervention(ctx con
 	}
 	operation := templateFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, phase, code, message)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	attachJVSErrorDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.EventTypeTemplateCreate, audit.OutcomeFailed, "template_create_operator_intervention_required", map[string]any{"source_repo_id": record.RepoID, "template_id": record.TemplateID})
 	if err != nil {
 		return err
@@ -480,6 +481,7 @@ func (executor *TemplateCreateExecutor) commitTemplateCloneFailed(ctx context.Co
 func (executor *TemplateCreateExecutor) commitTemplateCloneIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
 	operation := templateFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, operations.OperationPhaseTemplateCloneValidate, code, message)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	attachJVSErrorDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.EventTypeTemplateClone, audit.OutcomeFailed, "template_clone_operator_intervention_required", map[string]any{"template_id": record.TemplateID, "repo_id": record.RepoID})
 	if err != nil {
 		return err

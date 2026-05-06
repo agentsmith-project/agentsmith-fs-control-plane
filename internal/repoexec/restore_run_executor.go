@@ -155,7 +155,7 @@ func (executor *RestoreRunExecutor) ExecuteOperationRecovery(ctx context.Context
 
 	status, err := executor.jvs.RecoveryStatus(ctx, controlRoot)
 	if err != nil {
-		return executor.commitRestoreRunIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", nil)
+		return executor.commitRestoreRunIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", withJVSErrorDetails(nil, err))
 	}
 	if !restoreRunRecoveryStatusMatchesPendingPlan(status, durablePlan.ID) {
 		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_RECOVERY_STATE_MISMATCH", "restore run recovery state mismatch", restoreRunRecoveryStatusDetails(status, durablePlan.ID))
@@ -187,18 +187,18 @@ func (executor *RestoreRunExecutor) ExecuteOperationRecovery(ctx context.Context
 
 	run, err := executor.jvs.RestoreRun(ctx, controlRoot, durablePlan.ID)
 	if err != nil {
-		return executor.commitRestoreRunIntervention(ctx, working, now, "JVS_RESTORE_RUN_FAILED", "jvs restore run failed", map[string]any{"restore_plan_id": durablePlan.ID})
+		return executor.commitRestoreRunIntervention(ctx, working, now, "JVS_RESTORE_RUN_FAILED", "jvs restore run failed", withJVSErrorDetails(map[string]any{"restore_plan_id": durablePlan.ID}, err))
 	}
 	if err := validateRestoreRunSummary(run, durablePlan); err != nil {
 		return executor.commitRestoreRunIntervention(ctx, working, now, "RESTORE_RUN_RESULT_MISMATCH", "restore run result mismatch", map[string]any{"restore_plan_id": durablePlan.ID})
 	}
 	doctor, err := executor.jvs.DoctorStrict(ctx, controlRoot)
 	if err != nil || doctor.Workspace != "main" || !doctor.Healthy || doctor.RepoID != repo.JVSRepoID {
-		return executor.commitRestoreRunIntervention(ctx, working, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", map[string]any{"restore_plan_id": durablePlan.ID})
+		return executor.commitRestoreRunIntervention(ctx, working, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"restore_plan_id": durablePlan.ID}, err))
 	}
 	postStatus, err := executor.jvs.RecoveryStatus(ctx, controlRoot)
 	if err != nil {
-		return executor.commitRestoreRunIntervention(ctx, working, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", map[string]any{"restore_plan_id": durablePlan.ID})
+		return executor.commitRestoreRunIntervention(ctx, working, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", withJVSErrorDetails(map[string]any{"restore_plan_id": durablePlan.ID}, err))
 	}
 	if !restoreRunRecoveryStatusIdle(postStatus) {
 		return executor.commitRestoreRunIntervention(ctx, working, now, "RESTORE_RUN_RECOVERY_STATE_NOT_IDLE", "restore run recovery state is not idle", restoreRunRecoveryStatusDetails(postStatus, durablePlan.ID))
@@ -353,6 +353,7 @@ func (executor *RestoreRunExecutor) commitRestoreRunFailed(ctx context.Context, 
 func (executor *RestoreRunExecutor) commitRestoreRunIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
 	operation := restoreRunFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	attachJVSErrorDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "restore_run_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err

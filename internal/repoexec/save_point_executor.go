@@ -132,7 +132,7 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	if !hasMarker {
 		history, err = executor.jvs.History(ctx, controlRoot)
 		if err != nil {
-			return executor.commitSavePointIntervention(ctx, record, now, "JVS_HISTORY_FAILED", "jvs history failed", nil)
+			return executor.commitSavePointIntervention(ctx, record, now, "JVS_HISTORY_FAILED", "jvs history failed", withJVSErrorDetails(nil, err))
 		}
 		preSavePointer = history.NewestSavePointID
 		working = withPreSavePointer(working, preSavePointer)
@@ -146,7 +146,7 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	} else {
 		history, err = executor.jvs.History(ctx, controlRoot)
 		if err != nil {
-			return executor.commitSavePointIntervention(ctx, working, now, "JVS_HISTORY_FAILED", "jvs history failed", nil)
+			return executor.commitSavePointIntervention(ctx, working, now, "JVS_HISTORY_FAILED", "jvs history failed", withJVSErrorDetails(nil, err))
 		}
 	}
 
@@ -158,7 +158,7 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 
 	saved, err := executor.jvs.Save(ctx, controlRoot, message)
 	if err != nil {
-		return executor.commitSavePointIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs save failed", map[string]any{"pre_save_newest_save_point_id": preSavePointer})
+		return executor.commitSavePointIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs save failed", withJVSErrorDetails(map[string]any{"pre_save_newest_save_point_id": preSavePointer}, err))
 	}
 	return executor.commitSavePointSuccess(ctx, working, now, savePointFromSaveSummary(saved, message), message, saved.UnsavedChanges, true, false)
 }
@@ -245,6 +245,7 @@ func (executor *SavePointExecutor) commitSavePointFailed(ctx context.Context, re
 func (executor *SavePointExecutor) commitSavePointIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
 	operation := savePointFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	attachJVSErrorDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "save_point_create_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err
