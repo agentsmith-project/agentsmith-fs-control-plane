@@ -500,10 +500,10 @@ POST /internal/v1/repos/{repoId}/restore-run
 POST /internal/v1/repos/{repoId}/restore-preview:discard
 ```
 
-`restore-preview:discard` is a GA target for the restore coding slice, not a
-claim that the current machine-readable OpenAPI already exposes the route. That
-slice must add the endpoint, operation type `restore_preview_discard`, schemas,
-route, and contract fixtures before handlers or generated clients depend on it.
+`restore-preview:discard` is exposed in the current GA restore slice. The
+machine-readable OpenAPI/schema contract includes the route, operation type
+`restore_preview_discard`, request/response schemas, and contract fixtures for
+handlers and generated clients.
 
 GA `restore-run` is version restore and must reject active or uncertain read-write export or workload mount sessions by default. Lifecycle restore is handled by `restore-archived` and `restore-tombstoned`; audit event names and product copy must distinguish these from version restore. An operator break-glass restore can be designed separately with explicit approval, session revoke/drain, and audit.
 
@@ -519,6 +519,9 @@ restore preview or JVS mutation; otherwise the plan or operation enters
 `operator_intervention_required`. `stale_restore_preview` defaults to
 operator intervention unless the caller explicitly discards it through the
 discard flow below.
+Current GA namespace-bound restore preview follows ordinary namespace policy and
+fails closed when the namespace or namespace binding is disabled; any operator
+or break-glass exception is a future explicit capability, not this API path.
 
 Restore-run accepts a `preview_operation_id` that resolves to a valid preview
 operation and durable plan. A valid preview operation/plan must be in the same
@@ -531,6 +534,9 @@ stores only safe metadata in existing containers such as
 `input_summary.preview_operation_id`, `external_resource_ids` when safe, and
 redacted `jvs_json_output` or `verification_result`; it does not gain new
 top-level DTO fields in this doc-only pass.
+Brand-new restore-run intake follows ordinary restore mutation admission and
+fails closed when the namespace is disabled, even if the namespace volume
+binding remains active.
 
 Restore-run phase order is fixed:
 
@@ -567,6 +573,14 @@ pending plan relationship, marks the plan `discarding`, runs
 operation success, audit success, and restore plan `discarded`. It must not
 delete `.jvs` private files directly. Discard failure or recovery ambiguity
 moves the plan or operation to `operator_intervention_required`.
+Discard is the only restore flow with a namespace-disabled cleanup exception:
+when the matching preview and durable plan are still `pending`, the repo is
+active, lifecycle fences are clear, caller auth remains valid through the
+namespace binding, and the namespace binding itself is active, AFSCP may queue
+and execute the matching discard so the active JVS plan can be cleared. The
+exception does not allow disabled bindings, inactive repos, mismatched
+preview/plan metadata, inactive volume state, or unrelated lifecycle/recovery
+risk.
 
 The writer-session fence is also the API contract for read-write export and
 mount issuance: while the fence is held, AFSCP rejects new read-write export and

@@ -128,8 +128,8 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 		method string
 		path   string
 	}{
-		{name: "restore preview", method: http.MethodPost, path: "/internal/v1/repos/repo_123/restore-preview"},
-		{name: "restore run", method: http.MethodPost, path: "/internal/v1/repos/repo_123/restore-run"},
+		{name: "volume health", method: http.MethodGet, path: "/internal/v1/volumes/vol_123/health"},
+		{name: "create export", method: http.MethodPost, path: "/internal/v1/repos/repo_123/exports"},
 	}
 
 	for _, tt := range tests {

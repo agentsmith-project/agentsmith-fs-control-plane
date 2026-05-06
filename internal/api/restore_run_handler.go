@@ -19,18 +19,23 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 )
 
-type RestorePreviewDiscardMetadataReader interface {
+type RestoreRunMetadataReader interface {
 	GetOperation(ctx context.Context, operationID string) (operations.OperationRecord, error)
 	GetRestorePlanByPreviewOperation(ctx context.Context, previewOperationID string) (restoreplan.Plan, error)
 }
 
-type RestorePreviewDiscardHandlerConfig struct {
+type RestoreRunIntakeGateReader interface {
+	RestoreRunExistsForPreviewOperation(ctx context.Context, namespaceID, repoID, previewOperationID string) (bool, error)
+}
+
+type RestoreRunHandlerConfig struct {
 	RepoReader        RepoReader
 	NamespaceReader   NamespaceReader
 	BindingReader     NamespaceVolumeBindingReader
 	FenceReader       RepoFenceReader
-	MetadataReader    RestorePreviewDiscardMetadataReader
-	IntakeStore       RestorePreviewDiscardOperationIntakeStore
+	MetadataReader    RestoreRunMetadataReader
+	RunGate           RestoreRunIntakeGateReader
+	IntakeStore       RestoreRunOperationIntakeStore
 	IntakeLookupStore OperationIdempotencyLookupStore
 	PrincipalResolver PrincipalResolver
 	AllowedCallers    AllowedCallerPolicy
@@ -39,17 +44,17 @@ type RestorePreviewDiscardHandlerConfig struct {
 	AuditSink         audit.Sink
 }
 
-type restorePreviewDiscardRequestDTO struct {
+type restoreRunRequestDTO struct {
 	PreviewOperationID string `json:"preview_operation_id"`
 }
 
-type restorePreviewDiscardCanonicalRequest struct {
+type restoreRunCanonicalRequest struct {
 	RepoID             string `json:"repo_id"`
 	PreviewOperationID string `json:"preview_operation_id"`
 }
 
-func RestorePreviewDiscardHandler(config RestorePreviewDiscardHandlerConfig) http.Handler {
-	route, _ := RouteMetadataByOperationID("restorePreviewDiscard")
+func RestoreRunHandler(config RestoreRunHandlerConfig) http.Handler {
+	route, _ := RouteMetadataByOperationID("restoreRun")
 	lookupStore := config.IntakeLookupStore
 	if lookupStore == nil {
 		if typed, ok := config.IntakeStore.(OperationIdempotencyLookupStore); ok {
@@ -58,31 +63,38 @@ func RestorePreviewDiscardHandler(config RestorePreviewDiscardHandlerConfig) htt
 	}
 	reader := config.MetadataReader
 	if reader == nil {
-		if typed, ok := config.IntakeStore.(RestorePreviewDiscardMetadataReader); ok {
+		if typed, ok := config.IntakeStore.(RestoreRunMetadataReader); ok {
 			reader = typed
 		}
 	}
-	leaf := restorePreviewDiscardLeafHandler{
+	runGate := config.RunGate
+	if runGate == nil {
+		if typed, ok := config.IntakeStore.(RestoreRunIntakeGateReader); ok {
+			runGate = typed
+		}
+	}
+	leaf := restoreRunLeafHandler{
 		route:           route,
 		repoReader:      config.RepoReader,
 		namespaceReader: config.NamespaceReader,
 		bindingReader:   config.BindingReader,
 		fenceReader:     config.FenceReader,
 		metadataReader:  reader,
+		runGate:         runGate,
 		intakeStore:     config.IntakeStore,
 		lookupStore:     lookupStore,
 		operationID:     config.OperationID,
 		now:             config.Now,
 		sink:            config.AuditSink,
 	}
-	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, restorePreviewDiscardRouteResolver{route: route}, config.AllowedCallers, config.AuditSink)
+	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, restoreRunRouteResolver{route: route}, config.AllowedCallers, config.AuditSink)
 }
 
-type restorePreviewDiscardRouteResolver struct {
+type restoreRunRouteResolver struct {
 	route RouteMetadata
 }
 
-func (resolver restorePreviewDiscardRouteResolver) ResolveRouteClass(r *http.Request) (RouteMetadata, bool) {
+func (resolver restoreRunRouteResolver) ResolveRouteClass(r *http.Request) (RouteMetadata, bool) {
 	if r == nil || r.URL == nil {
 		return RouteMetadata{}, false
 	}
@@ -93,29 +105,30 @@ func (resolver restorePreviewDiscardRouteResolver) ResolveRouteClass(r *http.Req
 	return resolver.route, ok
 }
 
-type restorePreviewDiscardLeafHandler struct {
+type restoreRunLeafHandler struct {
 	route           RouteMetadata
 	repoReader      RepoReader
 	namespaceReader NamespaceReader
 	bindingReader   NamespaceVolumeBindingReader
 	fenceReader     RepoFenceReader
-	metadataReader  RestorePreviewDiscardMetadataReader
-	intakeStore     RestorePreviewDiscardOperationIntakeStore
+	metadataReader  RestoreRunMetadataReader
+	runGate         RestoreRunIntakeGateReader
+	intakeStore     RestoreRunOperationIntakeStore
 	lookupStore     OperationIdempotencyLookupStore
 	operationID     OperationIDGenerator
 	now             func() time.Time
 	sink            audit.Sink
 }
 
-func (handler restorePreviewDiscardLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (handler restoreRunLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestContext, ok := RequestContextFromRequest(r)
 	if !ok {
-		writeRestorePreviewDiscardError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+		writeRestoreRunError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return
 	}
 	params, ok := RoutePathParams(handler.route.Path, r.URL.Path)
 	if !ok {
-		writeRestorePreviewDiscardError(w, r, http.StatusNotFound, CodePathDenied, "route is not available", false)
+		writeRestoreRunError(w, r, http.StatusNotFound, CodePathDenied, "route is not available", false)
 		return
 	}
 	repoID := strings.TrimSpace(params["repoId"])
@@ -132,20 +145,20 @@ func (handler restorePreviewDiscardLeafHandler) ServeHTTP(w http.ResponseWriter,
 		writeValidationErrorWithAudit(w, r, handler.route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid namespace id", []string{"invalid_namespace_id"}, handler.sink)
 		return
 	}
-	if handler.metadataReader == nil || handler.intakeStore == nil || handler.lookupStore == nil || handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.fenceReader == nil {
-		writeRestorePreviewDiscardError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+	if handler.metadataReader == nil || handler.runGate == nil || handler.intakeStore == nil || handler.lookupStore == nil || handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.fenceReader == nil {
+		writeRestoreRunError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return
 	}
-	body, err := decodeRestorePreviewDiscardRequest(r)
+	body, err := decodeRestoreRunRequest(r)
 	if err != nil {
-		writeValidationErrorWithAudit(w, r, handler.route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid restore preview discard request", []string{"invalid_request_body"}, handler.sink)
+		writeValidationErrorWithAudit(w, r, handler.route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid restore run request", []string{"invalid_request_body"}, handler.sink)
 		return
 	}
 	if err := pathresolver.ValidateID(pathresolver.OperationID, body.PreviewOperationID); err != nil {
 		writeValidationErrorWithAudit(w, r, handler.route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid preview operation id", []string{"invalid_preview_operation_id"}, handler.sink)
 		return
 	}
-	canonical := restorePreviewDiscardCanonicalRequest{RepoID: repoID, PreviewOperationID: body.PreviewOperationID}
+	canonical := restoreRunCanonicalRequest{RepoID: repoID, PreviewOperationID: body.PreviewOperationID}
 	if handler.writeExistingIdempotentOperation(w, r, requestContext, namespaceID, canonical) {
 		return
 	}
@@ -153,12 +166,12 @@ func (handler restorePreviewDiscardLeafHandler) ServeHTTP(w http.ResponseWriter,
 	if !ok {
 		return
 	}
-	decision := repoaccess.Admit(repoaccess.Request{Repo: repo, Namespace: namespace, Binding: binding, HeldRepoFences: heldFences, Intent: repoaccess.IntentRestorePreviewDiscard, Mode: repoaccess.ModeReadOnly})
+	decision := repoaccess.Admit(repoaccess.Request{Repo: repo, Namespace: namespace, Binding: binding, HeldRepoFences: heldFences, Intent: repoaccess.IntentRestoreRun, Mode: repoaccess.ModeReadWrite})
 	if !decision.Allowed {
 		writeSavePointAdmissionDenied(w, r, handler.route, requestContext, decision, handler.sink)
 		return
 	}
-	if !handler.validatePreviewAndPlan(w, r, namespaceID, repoID, body.PreviewOperationID) {
+	if !handler.validatePreviewPlanAndRunGate(w, r, namespaceID, repoID, body.PreviewOperationID) {
 		return
 	}
 
@@ -166,7 +179,7 @@ func (handler restorePreviewDiscardLeafHandler) ServeHTTP(w http.ResponseWriter,
 	if handler.now != nil {
 		now = handler.now()
 	}
-	envelope, intakeErr := CreateOrReuseRestorePreviewDiscardOperationIntake(r.Context(), handler.intakeStore, OperationIntakeRequest{
+	envelope, intakeErr := CreateOrReuseRestoreRunOperationIntake(r.Context(), handler.intakeStore, OperationIntakeRequest{
 		RequestContext:      requestContext,
 		Route:               handler.route,
 		NamespaceID:         namespaceID,
@@ -174,7 +187,7 @@ func (handler restorePreviewDiscardLeafHandler) ServeHTTP(w http.ResponseWriter,
 		Resource:            operations.ResourceRef{Type: "repo", ID: repoID},
 		CanonicalRequest:    canonical,
 		InputSummary:        map[string]any{"preview_operation_id": body.PreviewOperationID},
-		Phase:               operations.OperationPhaseRestorePreviewDiscardValidate,
+		Phase:               operations.OperationPhaseRestoreRunValidate,
 		GenerateOperationID: handler.operationID,
 		Now:                 func() time.Time { return now },
 	})
@@ -185,19 +198,19 @@ func (handler restorePreviewDiscardLeafHandler) ServeHTTP(w http.ResponseWriter,
 	_ = writeJSON(w, http.StatusAccepted, envelope)
 }
 
-func (handler restorePreviewDiscardLeafHandler) writeExistingIdempotentOperation(w http.ResponseWriter, r *http.Request, requestContext auth.RequestContext, namespaceID string, canonical any) bool {
+func (handler restoreRunLeafHandler) writeExistingIdempotentOperation(w http.ResponseWriter, r *http.Request, requestContext auth.RequestContext, namespaceID string, canonical any) bool {
 	requestHash, err := operations.HashRequest(canonical)
 	if err != nil {
-		writeRestorePreviewDiscardError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+		writeRestoreRunError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return true
 	}
-	scope := operations.NewIdempotencyScope(requestContext.CallerService, namespaceID, operations.OperationRestorePreviewDiscard, requestContext.IdempotencyKey)
+	scope := operations.NewIdempotencyScope(requestContext.CallerService, namespaceID, operations.OperationRestoreRun, requestContext.IdempotencyKey)
 	record, err := handler.lookupStore.GetOperationByIdempotencyScope(r.Context(), scope)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false
 		}
-		writeRestorePreviewDiscardError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		writeRestoreRunError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
 		return true
 	}
 	if record.RequestHash != requestHash {
@@ -208,86 +221,140 @@ func (handler restorePreviewDiscardLeafHandler) writeExistingIdempotentOperation
 	return true
 }
 
-func (handler restorePreviewDiscardLeafHandler) validatePreviewAndPlan(w http.ResponseWriter, r *http.Request, namespaceID, repoID, previewOperationID string) bool {
+func (handler restoreRunLeafHandler) validatePreviewPlanAndRunGate(w http.ResponseWriter, r *http.Request, namespaceID, repoID, previewOperationID string) bool {
 	preview, err := handler.metadataReader.GetOperation(r.Context(), previewOperationID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeRestorePreviewDiscardError(w, r, http.StatusNotFound, CodeOperationNotFound, "preview operation was not found", false)
+			writeRestoreRunError(w, r, http.StatusNotFound, CodeOperationNotFound, "preview operation was not found", false)
 			return false
 		}
-		writeRestorePreviewDiscardError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		writeRestoreRunError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
 		return false
 	}
 	if preview.Type != operations.OperationRestorePreview || preview.State != operations.OperationStateSucceeded || preview.Phase != operations.OperationPhaseRestorePreviewCommitted || preview.NamespaceID != namespaceID || preview.RepoID != repoID || preview.Resource.Type != "repo" || preview.Resource.ID != repoID {
-		writeRestorePreviewDiscardError(w, r, http.StatusNotFound, CodeOperationNotFound, "preview operation was not found", false)
+		writeRestoreRunError(w, r, http.StatusNotFound, CodeOperationNotFound, "preview operation was not found", false)
 		return false
 	}
 	plan, err := handler.metadataReader.GetRestorePlanByPreviewOperation(r.Context(), previewOperationID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeRestorePreviewDiscardError(w, r, http.StatusConflict, CodeOperationRecoveryRequired, "restore preview plan requires operator recovery", true)
+			writeRestoreRunError(w, r, http.StatusConflict, CodeOperationRecoveryRequired, "restore preview plan requires operator recovery", true)
 			return false
 		}
-		writeRestorePreviewDiscardError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		writeRestoreRunError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
 		return false
 	}
 	if plan.NamespaceID != namespaceID || plan.RepoID != repoID || plan.PreviewOperationID != previewOperationID || plan.Status != restoreplan.StatusPending {
-		writeRestorePreviewDiscardError(w, r, http.StatusConflict, CodeOperationRecoveryRequired, "restore preview plan is not pending", true)
+		writeRestoreRunError(w, r, http.StatusConflict, CodeOperationRecoveryRequired, "restore preview plan is not pending", true)
+		return false
+	}
+	if err := plan.Validate(); err != nil {
+		writeRestoreRunError(w, r, http.StatusConflict, CodeOperationRecoveryRequired, "restore preview plan requires operator recovery", true)
+		return false
+	}
+	if !restoreRunPreviewMetadataMatchesPlan(preview, plan) {
+		writeRestoreRunError(w, r, http.StatusConflict, CodeOperationRecoveryRequired, "restore preview metadata does not match durable plan", true)
+		return false
+	}
+	exists, err := handler.runGate.RestoreRunExistsForPreviewOperation(r.Context(), namespaceID, repoID, previewOperationID)
+	if err != nil {
+		writeRestoreRunError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return false
+	}
+	if exists {
+		writeRestoreRunError(w, r, http.StatusConflict, CodeRepoJVSMutationInProgress, "restore run is already queued for this preview", true)
 		return false
 	}
 	return true
 }
 
-func (handler restorePreviewDiscardLeafHandler) loadMetadata(w http.ResponseWriter, r *http.Request, namespaceID, repoID string) (resources.Repo, resources.Namespace, resources.NamespaceVolumeBinding, []repoaccess.Fence, bool) {
+func (handler restoreRunLeafHandler) loadMetadata(w http.ResponseWriter, r *http.Request, namespaceID, repoID string) (resources.Repo, resources.Namespace, resources.NamespaceVolumeBinding, []repoaccess.Fence, bool) {
 	repo, err := handler.repoReader.GetRepoInNamespace(r.Context(), namespaceID, repoID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeRestorePreviewDiscardError(w, r, http.StatusNotFound, CodeRepoNotFound, "repo was not found", false)
+			writeRestoreRunError(w, r, http.StatusNotFound, CodeRepoNotFound, "repo was not found", false)
 			return resources.Repo{}, resources.Namespace{}, resources.NamespaceVolumeBinding{}, nil, false
 		}
-		writeRestorePreviewDiscardError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		writeRestoreRunError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
 		return resources.Repo{}, resources.Namespace{}, resources.NamespaceVolumeBinding{}, nil, false
 	}
 	if repo.NamespaceID != namespaceID {
-		writeRestorePreviewDiscardError(w, r, http.StatusNotFound, CodeRepoNotFound, "repo was not found", false)
+		writeRestoreRunError(w, r, http.StatusNotFound, CodeRepoNotFound, "repo was not found", false)
 		return resources.Repo{}, resources.Namespace{}, resources.NamespaceVolumeBinding{}, nil, false
 	}
 	namespace, err := handler.namespaceReader.GetNamespace(r.Context(), namespaceID)
 	if err != nil {
-		writeRestorePreviewDiscardError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		writeRestoreRunError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
 		return resources.Repo{}, resources.Namespace{}, resources.NamespaceVolumeBinding{}, nil, false
 	}
 	binding, err := handler.bindingReader.GetNamespaceVolumeBinding(r.Context(), namespaceID)
 	if err != nil {
-		writeRestorePreviewDiscardError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		writeRestoreRunError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
 		return resources.Repo{}, resources.Namespace{}, resources.NamespaceVolumeBinding{}, nil, false
 	}
 	held, err := handler.fenceReader.ListHeldRepoFences(r.Context(), repoID)
 	if err != nil {
-		writeRestorePreviewDiscardError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		writeRestoreRunError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
 		return resources.Repo{}, resources.Namespace{}, resources.NamespaceVolumeBinding{}, nil, false
 	}
 	return repo, namespace, binding, repoAccessFencesFromStore(held), true
 }
 
-func decodeRestorePreviewDiscardRequest(r *http.Request) (restorePreviewDiscardRequestDTO, error) {
-	var body restorePreviewDiscardRequestDTO
+func restoreRunPreviewMetadataMatchesPlan(preview operations.OperationRecord, plan restoreplan.Plan) bool {
+	seenPlanID, seenSourceSavePointID := false, false
+	for _, value := range restoreRunPreviewSafeMetadataValues(preview, "restore_plan_id") {
+		seenPlanID = true
+		if value != plan.ID || restoreplan.ValidateID(value) != nil {
+			return false
+		}
+	}
+	for _, value := range restoreRunPreviewSafeMetadataValues(preview, "source_save_point_id") {
+		seenSourceSavePointID = true
+		if value != plan.SourceSavePointID || operations.ValidateSavePointID(value) != nil {
+			return false
+		}
+	}
+	return seenPlanID && seenSourceSavePointID
+}
+
+func restoreRunPreviewSafeMetadataValues(preview operations.OperationRecord, key string) []string {
+	values := []string{}
+	for _, source := range []any{preview.ExternalResourceIDs, preview.VerificationResult, preview.JVSJSONOutput} {
+		switch typed := source.(type) {
+		case map[string]string:
+			value := strings.TrimSpace(typed[key])
+			if value != "" && value != redactedDetailValue {
+				values = append(values, value)
+			}
+		case map[string]any:
+			value, _ := typed[key].(string)
+			value = strings.TrimSpace(value)
+			if value != "" && value != redactedDetailValue {
+				values = append(values, value)
+			}
+		}
+	}
+	return values
+}
+
+func decodeRestoreRunRequest(r *http.Request) (restoreRunRequestDTO, error) {
+	var body restoreRunRequestDTO
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		return restorePreviewDiscardRequestDTO{}, err
+		return restoreRunRequestDTO{}, err
 	}
 	body.PreviewOperationID = strings.TrimSpace(body.PreviewOperationID)
 	var extra any
 	if err := decoder.Decode(&extra); err == nil {
-		return restorePreviewDiscardRequestDTO{}, errors.New("multiple json values")
+		return restoreRunRequestDTO{}, errors.New("multiple json values")
 	} else if !errors.Is(err, io.EOF) {
-		return restorePreviewDiscardRequestDTO{}, err
+		return restoreRunRequestDTO{}, err
 	}
 	return body, nil
 }
 
-func writeRestorePreviewDiscardError(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, message string, retryable bool) {
+func writeRestoreRunError(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, message string, retryable bool) {
 	envelope := NewErrorEnvelope(code, message, retryable, CorrelationIDFromRequest(r), nil, nil)
 	_ = WriteErrorEnvelope(w, status, envelope)
 }

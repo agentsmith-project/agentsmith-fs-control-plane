@@ -16,6 +16,7 @@ const (
 	IntentExportCreate               Intent = "export_create"
 	IntentWorkloadMount              Intent = "workload_mount"
 	IntentSavePointCreate            Intent = "save_point_create"
+	IntentRestorePreviewDiscard      Intent = "restore_preview_discard"
 	IntentRestoreRun                 Intent = "restore_run"
 	IntentTemplateCreateFromRepo     Intent = "template_create_from_repo"
 	IntentTemplateCloneIntoRepo      Intent = "template_clone_into_repo"
@@ -125,7 +126,7 @@ func Admit(request Request) Decision {
 		return deny(ErrorFamilyInternalError, "invalid stored control-plane state", "")
 	}
 
-	if request.Namespace.Status != resources.NamespaceStatusActive || request.Binding.Status != resources.NamespaceStatusActive {
+	if request.Binding.Status != resources.NamespaceStatusActive || (request.Namespace.Status != resources.NamespaceStatusActive && request.Intent != IntentRestorePreviewDiscard) {
 		return deny(ErrorFamilyNamespaceDisabled, "namespace or namespace binding is not active", "")
 	}
 
@@ -232,6 +233,7 @@ func (intent Intent) valid() bool {
 		IntentExportCreate,
 		IntentWorkloadMount,
 		IntentSavePointCreate,
+		IntentRestorePreviewDiscard,
 		IntentRestoreRun,
 		IntentTemplateCreateFromRepo,
 		IntentTemplateCloneIntoRepo,

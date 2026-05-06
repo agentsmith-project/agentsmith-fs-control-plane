@@ -13,6 +13,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
@@ -138,6 +139,31 @@ func TestRestoreRunExecutorPreflightRecoveryMismatchFailsClosedBeforeFence(t *te
 	}
 	if store.restorePlan.Status != restoreplan.StatusPending || store.operation.State != operations.OperationStateOperatorInterventionRequired {
 		t.Fatalf("plan/operation = %#v/%#v, want pending plan and operator intervention", store.restorePlan, store.operation)
+	}
+}
+
+func TestRestoreRunExecutorRejectsDisabledNamespaceBeforeJVSOrFence(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.previewOperation = restorePreviewSucceededOperationRecord(now)
+	store.restorePlan = restorePreviewPendingPlan(now)
+	store.namespace.Status = resources.NamespaceStatusDisabled
+	disabledAt := now.Add(-time.Minute)
+	store.namespace.DisabledAt = &disabledAt
+	store.namespace.DisabledReason = "maintenance"
+	runner := &fakeJVSRunner{}
+	executor := newTestRestoreRunExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), restoreRunLeasedRecord(now, operations.OperationPhaseRestoreRunValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if len(runner.calls) != 0 || store.restoreRunWriterFenceMarks != 0 || store.restoreRunConsumingMarks != 0 {
+		t.Fatalf("JVS/fence/consuming = %#v/%d/%d, want metadata denial before JVS or fence", runner.calls, store.restoreRunWriterFenceMarks, store.restoreRunConsumingMarks)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_RUN_VALIDATION_FAILED" {
+		t.Fatalf("operation = %#v, want failed restore-run validation", store.operation)
 	}
 }
 

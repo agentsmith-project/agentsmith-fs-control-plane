@@ -57,6 +57,81 @@ func TestAdmitDeniesInactiveNamespaceAndBinding(t *testing.T) {
 	}
 }
 
+func TestAdmitRestorePreviewDiscardCleanupIntentMatrix(t *testing.T) {
+	disabledNamespace := namespaceFixture(resources.NamespaceStatusDisabled)
+	activeBinding := bindingFixture(resources.NamespaceStatusActive)
+	disabledBinding := bindingFixture(resources.NamespaceStatusDisabled)
+
+	tests := []struct {
+		name       string
+		request    Request
+		wantAllow  bool
+		wantFamily ErrorFamily
+	}{
+		{
+			name: "disabled namespace active binding allows discard cleanup",
+			request: Request{
+				Repo:      repoFixture(resources.RepoStatusActive),
+				Namespace: disabledNamespace,
+				Binding:   activeBinding,
+				Intent:    IntentRestorePreviewDiscard,
+				Mode:      ModeReadOnly,
+			},
+			wantAllow: true,
+		},
+		{
+			name: "disabled namespace active binding does not allow ordinary restore-run",
+			request: Request{
+				Repo:      repoFixture(resources.RepoStatusActive),
+				Namespace: disabledNamespace,
+				Binding:   activeBinding,
+				Intent:    IntentRestoreRun,
+				Mode:      ModeReadWrite,
+			},
+			wantFamily: ErrorFamilyNamespaceDisabled,
+		},
+		{
+			name: "disabled binding denies discard cleanup",
+			request: Request{
+				Repo:      repoFixture(resources.RepoStatusActive),
+				Namespace: namespaceFixture(resources.NamespaceStatusActive),
+				Binding:   disabledBinding,
+				Intent:    IntentRestorePreviewDiscard,
+				Mode:      ModeReadOnly,
+			},
+			wantFamily: ErrorFamilyNamespaceDisabled,
+		},
+		{
+			name:       "inactive repo denies discard cleanup",
+			request:    activeRequest(IntentRestorePreviewDiscard, ModeReadOnly, resources.RepoStatusArchiving, nil),
+			wantFamily: ErrorFamilyOperationRecoveryRequired,
+		},
+		{
+			name:       "archived repo denies discard cleanup",
+			request:    activeRequest(IntentRestorePreviewDiscard, ModeReadOnly, resources.RepoStatusArchived, nil),
+			wantFamily: ErrorFamilyRepoArchived,
+		},
+		{
+			name:       "lifecycle fence denies discard cleanup",
+			request:    activeRequest(IntentRestorePreviewDiscard, ModeReadOnly, resources.RepoStatusActive, []Fence{fenceFixture(FenceKindLifecycle, FenceStatusActive)}),
+			wantFamily: ErrorFamilyRepoLifecycleFenceHeld,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision := Admit(tt.request)
+
+			if tt.wantAllow {
+				if !decision.Allowed {
+					t.Fatalf("decision = %#v, want allowed", decision)
+				}
+				return
+			}
+			assertDenied(t, decision, tt.wantFamily)
+		})
+	}
+}
+
 func TestAdmitDeniesTerminalRepoStatusFamiliesForOrdinaryAccess(t *testing.T) {
 	tests := []struct {
 		status resources.RepoStatus

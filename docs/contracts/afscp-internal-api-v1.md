@@ -59,12 +59,10 @@ AFSCP must reject and audit:
 Product display-name rename and catalog detach are outside AFSCP. Repo storage
 lifecycle is in GA through [repo-lifecycle-v1.md](repo-lifecycle-v1.md).
 
-Restore preview discard is listed here as the GA restore target. The restore
-coding slice must still add the endpoint, operation type
+Restore preview discard is part of the current GA restore slice. The
+machine-readable API contract exposes the endpoint, operation type
 `restore_preview_discard`, request/response schemas, route, and OpenAPI
-contract fixtures before handlers or generated clients use it; the current
-machine-readable API contract should not be read as already exposing this
-endpoint.
+contract fixtures for handlers and generated clients.
 
 See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft payloads.
 

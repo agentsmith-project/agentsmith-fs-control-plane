@@ -6,13 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
 var (
-	ErrIdempotencyConflict      = errors.New("idempotency conflict")
-	ErrRepoAlreadyExists        = errors.New("repo already exists")
-	ErrMissingOperationBoundary = errors.New("missing durable operation boundary")
+	ErrIdempotencyConflict       = errors.New("idempotency conflict")
+	ErrRepoAlreadyExists         = errors.New("repo already exists")
+	ErrMissingOperationBoundary  = errors.New("missing durable operation boundary")
+	ErrRepoJVSMutationInProgress = errors.New("repo jvs mutation in progress")
+	ErrActiveRestorePlan         = errors.New("active restore plan")
+	ErrRestoreRunAlreadyExists   = errors.New("restore run already exists")
+	ErrRestorePlanNotPending     = errors.New("restore plan not pending")
 )
 
 type IdempotencyScope struct {
@@ -75,6 +80,36 @@ func HashRequest(request any) (RequestHash, error) {
 
 	sum := sha256.Sum256(encoded)
 	return RequestHash("sha256:" + hex.EncodeToString(sum[:])), nil
+}
+
+func ValidateSavePointID(id string) error {
+	if !safeOpaqueID(id) {
+		return fmt.Errorf("invalid save_point_id %q", id)
+	}
+	return nil
+}
+
+func safeOpaqueID(id string) bool {
+	if len(id) == 0 || len(id) > 128 || strings.TrimSpace(id) != id {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		b := id[i]
+		if i == 0 {
+			if !asciiAlphaNum(b) {
+				return false
+			}
+			continue
+		}
+		if !asciiAlphaNum(b) && b != '_' && b != '-' && b != '.' && b != ':' {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiAlphaNum(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
 type IdempotencyResolution struct {

@@ -12,6 +12,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
+	"github.com/lib/pq"
 )
 
 var operationColumns = []string{
@@ -251,6 +252,27 @@ func (store *Store) RepoHasNonTerminalJVSMutation(ctx context.Context, repoID st
 	}
 	var exists bool
 	row := store.exec.QueryRowContext(ctx, repoHasNonTerminalJVSMutationSQL(), repoID)
+	if err := row.Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (store *Store) RestoreRunExistsForPreviewOperation(ctx context.Context, namespaceID, repoID, previewOperationID string) (bool, error) {
+	namespaceID = strings.TrimSpace(namespaceID)
+	repoID = strings.TrimSpace(repoID)
+	previewOperationID = strings.TrimSpace(previewOperationID)
+	if err := pathresolver.ValidateID(pathresolver.NamespaceID, namespaceID); err != nil {
+		return false, err
+	}
+	if err := pathresolver.ValidateID(pathresolver.RepoID, repoID); err != nil {
+		return false, err
+	}
+	if err := pathresolver.ValidateID(pathresolver.OperationID, previewOperationID); err != nil {
+		return false, err
+	}
+	var exists bool
+	row := store.exec.QueryRowContext(ctx, restoreRunExistsForPreviewOperationSQL(), namespaceID, repoID, previewOperationID)
 	if err := row.Scan(&exists); err != nil {
 		return false, err
 	}
@@ -581,6 +603,9 @@ func (store *Store) CreateOrReuseOperation(ctx context.Context, spec operations.
 	row := store.exec.QueryRowContext(ctx, operationCreateOrReuseSQL(), args...)
 	got, err := scanOperationWithInserted(row, &inserted)
 	if err != nil {
+		if mapped := mapOperationUniqueViolation(err, record.RepoID); mapped != nil {
+			return operations.IdempotencyResolution{}, mapped
+		}
 		return operations.IdempotencyResolution{}, err
 	}
 	if !inserted && got.RequestHash != spec.RequestHash {
@@ -623,6 +648,9 @@ func (store *Store) CreateOrReuseRepoCreateOperation(ctx context.Context, spec o
 		if errors.Is(err, sql.ErrNoRows) {
 			return operations.IdempotencyResolution{}, fmt.Errorf("%w: repo %q already exists", operations.ErrRepoAlreadyExists, record.RepoID)
 		}
+		if mapped := mapOperationUniqueViolation(err, record.RepoID); mapped != nil {
+			return operations.IdempotencyResolution{}, mapped
+		}
 		return operations.IdempotencyResolution{}, err
 	}
 	if !inserted && got.RequestHash != spec.RequestHash {
@@ -633,6 +661,108 @@ func (store *Store) CreateOrReuseRepoCreateOperation(ctx context.Context, spec o
 		Existing:  !inserted,
 		Reused:    !inserted,
 	}, nil
+}
+
+func (store *Store) CreateOrReuseRestorePreviewOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	if err := validateRestorePreviewOperationSpec(record); err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	record = record.SanitizedForPersistence().Record()
+
+	args, err := operationInsertArgs(record)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+
+	var inserted bool
+	var gateCode string
+	row := store.exec.QueryRowContext(ctx, restorePreviewOperationCreateOrReuseSQL(), args...)
+	got, err := scanOperationWithInsertedAndGate(row, &inserted, &gateCode)
+	if err != nil {
+		if mapped := mapOperationUniqueViolation(err, record.RepoID); mapped != nil {
+			return operations.IdempotencyResolution{}, mapped
+		}
+		return operations.IdempotencyResolution{}, err
+	}
+	if !inserted && got.RequestHash != spec.RequestHash {
+		return operations.IdempotencyResolution{}, fmt.Errorf("%w: scope %q already exists with a different request hash", operations.ErrIdempotencyConflict, spec.Scope.String())
+	}
+	if gateCode != "" {
+		return operations.IdempotencyResolution{}, restorePreviewIntakeGateError(gateCode, record.RepoID)
+	}
+	return operations.IdempotencyResolution{Operation: got.Sanitized(), Existing: !inserted, Reused: !inserted}, nil
+}
+
+func (store *Store) CreateOrReuseRestorePreviewDiscardOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	if err := validateRestorePreviewDiscardOperationSpec(record); err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	record = record.SanitizedForPersistence().Record()
+
+	args, err := operationInsertArgs(record)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+
+	var inserted bool
+	var gateCode string
+	row := store.exec.QueryRowContext(ctx, restorePreviewDiscardOperationCreateOrReuseSQL(), args...)
+	got, err := scanOperationWithInsertedAndGate(row, &inserted, &gateCode)
+	if err != nil {
+		if mapped := mapOperationUniqueViolation(err, record.RepoID); mapped != nil {
+			return operations.IdempotencyResolution{}, mapped
+		}
+		return operations.IdempotencyResolution{}, err
+	}
+	if !inserted && got.RequestHash != spec.RequestHash {
+		return operations.IdempotencyResolution{}, fmt.Errorf("%w: scope %q already exists with a different request hash", operations.ErrIdempotencyConflict, spec.Scope.String())
+	}
+	if gateCode != "" {
+		return operations.IdempotencyResolution{}, restorePreviewDiscardIntakeGateError(gateCode, record.RepoID)
+	}
+	return operations.IdempotencyResolution{Operation: got.Sanitized(), Existing: !inserted, Reused: !inserted}, nil
+}
+
+func (store *Store) CreateOrReuseRestoreRunOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	if err := validateRestoreRunOperationSpec(record); err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	record = record.SanitizedForPersistence().Record()
+
+	args, err := operationInsertArgs(record)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+
+	var inserted bool
+	var gateCode string
+	row := store.exec.QueryRowContext(ctx, restoreRunOperationCreateOrReuseSQL(), args...)
+	got, err := scanOperationWithInsertedAndGate(row, &inserted, &gateCode)
+	if err != nil {
+		if mapped := mapOperationUniqueViolation(err, record.RepoID); mapped != nil {
+			return operations.IdempotencyResolution{}, mapped
+		}
+		return operations.IdempotencyResolution{}, err
+	}
+	if !inserted && got.RequestHash != spec.RequestHash {
+		return operations.IdempotencyResolution{}, fmt.Errorf("%w: scope %q already exists with a different request hash", operations.ErrIdempotencyConflict, spec.Scope.String())
+	}
+	if gateCode != "" {
+		return operations.IdempotencyResolution{}, restoreRunIntakeGateError(gateCode, record.RepoID)
+	}
+	return operations.IdempotencyResolution{Operation: got.Sanitized(), Existing: !inserted, Reused: !inserted}, nil
 }
 
 func validateRepoCreateOperationSpec(record operations.OperationRecord) error {
@@ -652,6 +782,121 @@ func validateRepoCreateOperationSpec(record operations.OperationRecord) error {
 		return operationLeaseInvalidRequest("resource", "repo_create resource must match target repo")
 	}
 	return nil
+}
+
+func validateRestorePreviewOperationSpec(record operations.OperationRecord) error {
+	if record.Type != operations.OperationRestorePreview {
+		return operationLeaseInvalidRequest("operation_type", "operation record must be restore_preview")
+	}
+	if record.State != operations.OperationStateQueued {
+		return operationLeaseInvalidRequest("operation_state", "restore_preview intake requires queued operation")
+	}
+	if record.Phase != operations.OperationPhaseRestorePreviewValidate {
+		return operationLeaseInvalidRequest("phase", "restore_preview intake requires validate phase")
+	}
+	if strings.TrimSpace(record.NamespaceID) == "" || strings.TrimSpace(record.RepoID) == "" {
+		return operationLeaseInvalidRequest("resource", "restore_preview intake requires namespace and repo ids")
+	}
+	if record.Resource.Type != "repo" || record.Resource.ID != record.RepoID {
+		return operationLeaseInvalidRequest("resource", "restore_preview resource must match target repo")
+	}
+	savePointID, _ := record.InputSummary["save_point_id"].(string)
+	if err := operations.ValidateSavePointID(strings.TrimSpace(savePointID)); err != nil {
+		return operationLeaseInvalidRequest("input_summary.save_point_id", "restore_preview intake requires safe save point id")
+	}
+	return nil
+}
+
+func validateRestoreRunOperationSpec(record operations.OperationRecord) error {
+	if record.Type != operations.OperationRestoreRun {
+		return operationLeaseInvalidRequest("operation_type", "operation record must be restore_run")
+	}
+	if record.State != operations.OperationStateQueued {
+		return operationLeaseInvalidRequest("operation_state", "restore_run intake requires queued operation")
+	}
+	if record.Phase != operations.OperationPhaseRestoreRunValidate {
+		return operationLeaseInvalidRequest("phase", "restore_run intake requires validate phase")
+	}
+	if strings.TrimSpace(record.NamespaceID) == "" || strings.TrimSpace(record.RepoID) == "" {
+		return operationLeaseInvalidRequest("resource", "restore_run intake requires namespace and repo ids")
+	}
+	if record.Resource.Type != "repo" || record.Resource.ID != record.RepoID {
+		return operationLeaseInvalidRequest("resource", "restore_run resource must match target repo")
+	}
+	previewOperationID, _ := record.InputSummary["preview_operation_id"].(string)
+	if err := pathresolver.ValidateID(pathresolver.OperationID, strings.TrimSpace(previewOperationID)); err != nil {
+		return operationLeaseInvalidRequest("input_summary.preview_operation_id", "restore_run intake requires safe preview operation id")
+	}
+	return nil
+}
+
+func validateRestorePreviewDiscardOperationSpec(record operations.OperationRecord) error {
+	if record.Type != operations.OperationRestorePreviewDiscard {
+		return operationLeaseInvalidRequest("operation_type", "operation record must be restore_preview_discard")
+	}
+	if record.State != operations.OperationStateQueued {
+		return operationLeaseInvalidRequest("operation_state", "restore_preview_discard intake requires queued operation")
+	}
+	if record.Phase != operations.OperationPhaseRestorePreviewDiscardValidate {
+		return operationLeaseInvalidRequest("phase", "restore_preview_discard intake requires validate phase")
+	}
+	if strings.TrimSpace(record.NamespaceID) == "" || strings.TrimSpace(record.RepoID) == "" {
+		return operationLeaseInvalidRequest("resource", "restore_preview_discard intake requires namespace and repo ids")
+	}
+	if record.Resource.Type != "repo" || record.Resource.ID != record.RepoID {
+		return operationLeaseInvalidRequest("resource", "restore_preview_discard resource must match target repo")
+	}
+	previewOperationID, _ := record.InputSummary["preview_operation_id"].(string)
+	if err := pathresolver.ValidateID(pathresolver.OperationID, strings.TrimSpace(previewOperationID)); err != nil {
+		return operationLeaseInvalidRequest("input_summary.preview_operation_id", "restore_preview_discard intake requires safe preview operation id")
+	}
+	return nil
+}
+
+func restorePreviewIntakeGateError(gateCode, repoID string) error {
+	switch gateCode {
+	case "active_restore_plan":
+		return fmt.Errorf("%w: repo %q has active restore plan", operations.ErrActiveRestorePlan, repoID)
+	case "same_repo_jvs_mutation":
+		return fmt.Errorf("%w: repo %q has non-terminal JVS mutation", operations.ErrRepoJVSMutationInProgress, repoID)
+	default:
+		return fmt.Errorf("%w: unknown restore preview intake gate %q", operations.ErrMissingOperationBoundary, gateCode)
+	}
+}
+
+func restorePreviewDiscardIntakeGateError(gateCode, repoID string) error {
+	switch gateCode {
+	case "plan_not_pending":
+		return fmt.Errorf("%w: repo %q restore preview plan is not pending", operations.ErrRestorePlanNotPending, repoID)
+	default:
+		return fmt.Errorf("%w: unknown restore preview discard intake gate %q", operations.ErrMissingOperationBoundary, gateCode)
+	}
+}
+
+func restoreRunIntakeGateError(gateCode, repoID string) error {
+	switch gateCode {
+	case "duplicate_restore_run":
+		return fmt.Errorf("%w: repo %q preview already has restore_run", operations.ErrRestoreRunAlreadyExists, repoID)
+	case "plan_not_pending":
+		return fmt.Errorf("%w: repo %q restore preview plan is not pending", operations.ErrRestorePlanNotPending, repoID)
+	default:
+		return fmt.Errorf("%w: unknown restore run intake gate %q", operations.ErrMissingOperationBoundary, gateCode)
+	}
+}
+
+func mapOperationUniqueViolation(err error, repoID string) error {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) || string(pqErr.Code) != "23505" {
+		return nil
+	}
+	switch pqErr.Constraint {
+	case "operations_one_non_terminal_jvs_mutation_per_repo_idx":
+		return fmt.Errorf("%w: repo %q has concurrent non-terminal JVS mutation", operations.ErrRepoJVSMutationInProgress, repoID)
+	case "operations_restore_run_one_per_preview_idx":
+		return fmt.Errorf("%w: repo %q preview already has restore_run", operations.ErrRestoreRunAlreadyExists, repoID)
+	default:
+		return nil
+	}
 }
 
 func operationInsertSQL() string {
@@ -683,12 +928,113 @@ func repoCreateOperationCreateOrReuseSQL() string {
 		"LIMIT 1"
 }
 
+func restorePreviewOperationCreateOrReuseSQL() string {
+	return "WITH existing_operation AS (" +
+		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", false AS inserted, '' AS gate_code FROM operations " +
+		"WHERE caller_service = $12 AND namespace_id = $17 AND operation_type = 'restore_preview' AND idempotency_key = $9" +
+		"), same_repo_jvs_mutation AS (" +
+		"SELECT 1 FROM operations WHERE repo_id = $18 " +
+		"AND operation_type IN (" + repoJVSMutationOperationTypeSQLList() + ") " +
+		"AND operation_state NOT IN ('succeeded','failed','cancelled') " +
+		"AND NOT EXISTS (SELECT 1 FROM existing_operation) LIMIT 1" +
+		"), active_restore_plan AS (" +
+		"SELECT 1 FROM restore_plans WHERE repo_id = $18 " +
+		"AND status IN (" + restorePlanActiveStatusSQLList() + ") " +
+		"AND NOT EXISTS (SELECT 1 FROM existing_operation) LIMIT 1" +
+		"), inserted_operation AS (" +
+		"INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") " +
+		"SELECT " + placeholders(1, len(operationColumns)) + " " +
+		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
+		"AND NOT EXISTS (SELECT 1 FROM same_repo_jvs_mutation) " +
+		"AND NOT EXISTS (SELECT 1 FROM active_restore_plan) " +
+		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
+		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted, '' AS gate_code" +
+		"), selected_operation AS (" +
+		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM existing_operation " +
+		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM inserted_operation" +
+		"), gate_failure AS (" +
+		"SELECT " + operationSelectColumnPlaceholdersSQL() + ", false AS inserted, " +
+		"CASE WHEN EXISTS (SELECT 1 FROM active_restore_plan) THEN 'active_restore_plan' WHEN EXISTS (SELECT 1 FROM same_repo_jvs_mutation) THEN 'same_repo_jvs_mutation' ELSE '' END AS gate_code " +
+		"WHERE NOT EXISTS (SELECT 1 FROM selected_operation)" +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM selected_operation " +
+		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM gate_failure LIMIT 1"
+}
+
+func restoreRunOperationCreateOrReuseSQL() string {
+	return "WITH existing_operation AS (" +
+		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", false AS inserted, '' AS gate_code FROM operations " +
+		"WHERE caller_service = $12 AND namespace_id = $17 AND operation_type = 'restore_run' AND idempotency_key = $9" +
+		"), duplicate_restore_run AS (" +
+		"SELECT 1 FROM operations WHERE operation_type = 'restore_run' " +
+		"AND namespace_id = $17 AND repo_id = $18 " +
+		"AND resource_type = 'repo' AND resource_id = $18 " +
+		"AND input_summary->>'preview_operation_id' = $24::jsonb->>'preview_operation_id' " +
+		"AND operation_state NOT IN ('failed','cancelled') " +
+		"AND NOT EXISTS (SELECT 1 FROM existing_operation) LIMIT 1" +
+		"), matching_pending_restore_plan AS (" +
+		"SELECT restore_plan_id FROM restore_plans WHERE namespace_id = $17 AND repo_id = $18 " +
+		"AND preview_operation_id = $24::jsonb->>'preview_operation_id' " +
+		"AND status = 'pending' " +
+		"AND NOT EXISTS (SELECT 1 FROM existing_operation) LIMIT 1 FOR UPDATE" +
+		"), inserted_operation AS (" +
+		"INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") " +
+		"SELECT " + placeholders(1, len(operationColumns)) + " " +
+		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
+		"AND EXISTS (SELECT 1 FROM matching_pending_restore_plan) " +
+		"AND NOT EXISTS (SELECT 1 FROM duplicate_restore_run) " +
+		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
+		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted, '' AS gate_code" +
+		"), selected_operation AS (" +
+		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM existing_operation " +
+		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM inserted_operation" +
+		"), gate_failure AS (" +
+		"SELECT " + operationSelectColumnPlaceholdersSQL() + ", false AS inserted, " +
+		"CASE WHEN EXISTS (SELECT 1 FROM duplicate_restore_run) THEN 'duplicate_restore_run' ELSE 'plan_not_pending' END AS gate_code " +
+		"WHERE NOT EXISTS (SELECT 1 FROM selected_operation)" +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM selected_operation " +
+		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM gate_failure LIMIT 1"
+}
+
+func restorePreviewDiscardOperationCreateOrReuseSQL() string {
+	return "WITH existing_operation AS (" +
+		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", false AS inserted, '' AS gate_code FROM operations " +
+		"WHERE caller_service = $12 AND namespace_id = $17 AND operation_type = 'restore_preview_discard' AND idempotency_key = $9" +
+		"), matching_pending_restore_plan AS (" +
+		"SELECT restore_plan_id FROM restore_plans WHERE namespace_id = $17 AND repo_id = $18 " +
+		"AND preview_operation_id = $24::jsonb->>'preview_operation_id' " +
+		"AND status = 'pending' " +
+		"AND NOT EXISTS (SELECT 1 FROM existing_operation) LIMIT 1 FOR UPDATE" +
+		"), inserted_operation AS (" +
+		"INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") " +
+		"SELECT " + placeholders(1, len(operationColumns)) + " " +
+		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
+		"AND EXISTS (SELECT 1 FROM matching_pending_restore_plan) " +
+		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
+		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted, '' AS gate_code" +
+		"), selected_operation AS (" +
+		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM existing_operation " +
+		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM inserted_operation" +
+		"), gate_failure AS (" +
+		"SELECT " + operationSelectColumnPlaceholdersSQL() + ", false AS inserted, 'plan_not_pending' AS gate_code " +
+		"WHERE NOT EXISTS (SELECT 1 FROM selected_operation)" +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM selected_operation " +
+		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM gate_failure LIMIT 1"
+}
+
 func operationSelectSQL() string {
 	return "SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM operations"
 }
 
 func operationSelectByIdempotencyScopeSQL() string {
 	return operationSelectSQL() + " WHERE caller_service = $1 AND namespace_id = $2 AND operation_type = $3 AND idempotency_key = $4"
+}
+
+func operationSelectColumnPlaceholdersSQL() string {
+	parts := make([]string, len(operationSelectColumns))
+	for idx, column := range operationSelectColumns {
+		parts[idx] = fmt.Sprintf("$%d AS %s", idx+1, column)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func operationRecoveryCandidatesSQL() string {
@@ -1176,6 +1522,10 @@ func repoHasNonTerminalJVSMutationSQL() string {
 	return "SELECT EXISTS (SELECT 1 FROM operations WHERE repo_id = $1 AND operation_type IN (" + repoJVSMutationOperationTypeSQLList() + ") AND operation_state NOT IN ('succeeded','failed','cancelled'))"
 }
 
+func restoreRunExistsForPreviewOperationSQL() string {
+	return "SELECT EXISTS (SELECT 1 FROM operations WHERE operation_type = 'restore_run' AND namespace_id = $1 AND repo_id = $2 AND resource_type = 'repo' AND resource_id = $2 AND input_summary->>'preview_operation_id' = $3 AND operation_state NOT IN ('failed','cancelled'))"
+}
+
 func repoLifecycleAndPurgeOperationTypeSQLList() string {
 	return repoLifecycleOperationTypeSQLList() + ", 'repo_purge'"
 }
@@ -1509,12 +1859,17 @@ func scanOperations(rows rowsScanner) (records []operations.OperationRecord, err
 }
 
 func scanOperationWithInserted(row rowScanner, inserted *bool) (operations.OperationRecord, error) {
+	return scanOperationWithInsertedAndGate(row, inserted, nil)
+}
+
+func scanOperationWithInsertedAndGate(row rowScanner, inserted *bool, gateCode *string) (operations.OperationRecord, error) {
 	var record operations.OperationRecord
 	var operationType, operationState, requestHash string
 	var leaseOwner, repoID, templateID, exportID, mountBindingID, sessionFenceID, compensationStatus sql.NullString
 	var leaseExpiresAt, startedAt, finishedAt sql.NullTime
 	var externalResourceIDsJSON, inputSummaryJSON, jvsJSONOutputJSON, verificationResultJSON, errorJSON []byte
 	var insertedValue bool
+	var gateCodeValue string
 
 	dest := []any{
 		&record.ID,
@@ -1551,6 +1906,9 @@ func scanOperationWithInserted(row rowScanner, inserted *bool) (operations.Opera
 	}
 	if inserted != nil {
 		dest = append(dest, &insertedValue)
+	}
+	if gateCode != nil {
+		dest = append(dest, &gateCodeValue)
 	}
 	if err := row.Scan(dest...); err != nil {
 		return operations.OperationRecord{}, err
@@ -1591,6 +1949,9 @@ func scanOperationWithInserted(row rowScanner, inserted *bool) (operations.Opera
 	}
 	if inserted != nil {
 		*inserted = insertedValue
+	}
+	if gateCode != nil {
+		*gateCode = gateCodeValue
 	}
 
 	return record.Sanitized(), nil

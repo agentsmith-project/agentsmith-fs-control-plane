@@ -2,6 +2,7 @@ package operations
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,6 +35,19 @@ func TestIdempotencyScopeAndRequestHashAreStable(t *testing.T) {
 	}
 	if first == "" {
 		t.Fatalf("unexpected empty request hash")
+	}
+}
+
+func TestValidateSavePointIDMatchesSafeOpaqueSchema(t *testing.T) {
+	for _, id := range []string{"sp_001", "1.a:b-c_2", strings.Repeat("a", 128)} {
+		if err := ValidateSavePointID(id); err != nil {
+			t.Fatalf("ValidateSavePointID(%q): %v", id, err)
+		}
+	}
+	for _, id := range []string{"", "_sp", " sp_001", "sp/001", strings.Repeat("a", 129)} {
+		if err := ValidateSavePointID(id); err == nil {
+			t.Fatalf("ValidateSavePointID(%q) succeeded, want error", id)
+		}
 	}
 }
 

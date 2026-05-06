@@ -80,9 +80,9 @@ them.
 ## Recovery Rules
 
 Each operation type must define deterministic recovery by `phase`.
-Rows marked as GA restore targets, including `restore_preview_discard`, still
-require the restore coding slice to update machine-readable OpenAPI/schema,
-operation-type fixtures, routes, and generated contracts before implementation.
+Rows in the current GA restore slice, including `restore_preview_discard`, are
+represented in the machine-readable OpenAPI/schema, operation-type fixtures,
+routes, and generated contracts used by implementation.
 
 Minimum GA matrix:
 
@@ -223,11 +223,9 @@ operation success, audit success, and plan `discarded`. It must never delete
 private `.jvs` files directly. Cancelled preview UX must call this flow instead
 of becoming operator filesystem cleanup.
 
-`restore_preview_discard` is a GA restore design operation type that the
-restore coding slice must add to the machine-readable endpoint, route,
-operation type, request/response schema, and contract fixtures before handlers
-or generated clients rely on it. This narrative contract does not mean the
-current OpenAPI already exposes the endpoint.
+`restore_preview_discard` is included in the current GA restore slice. The
+machine-readable endpoint, route, operation type, request/response schema, and
+contract fixtures expose it for handlers and generated clients.
 
 ## Writer-Session Fence
 

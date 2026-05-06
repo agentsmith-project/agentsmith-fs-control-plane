@@ -58,6 +58,27 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		table.requireColumn(t, "namespace_id", "text", "not null")
 	})
 
+	t.Run("jvs mutation intake has index-backed concurrency gates", func(t *testing.T) {
+		contract.requireRawFragments(t,
+			"create unique index if not exists operations_one_non_terminal_jvs_mutation_per_repo_idx",
+			"on operations (repo_id)",
+			"where repo_id is not null",
+			"'save_point_create'",
+			"'restore_preview'",
+			"'restore_preview_discard'",
+			"'restore_run'",
+			"'template_create'",
+			"'template_clone'",
+			"operation_state not in ('succeeded', 'failed', 'cancelled')",
+			"create unique index if not exists operations_restore_run_one_per_preview_idx",
+			"on operations (namespace_id, repo_id, (input_summary->>'preview_operation_id'))",
+			"where operation_type = 'restore_run'",
+			"operation_state not in ('failed', 'cancelled')",
+			"(input_summary->>'preview_operation_id') is not null",
+			"btrim(input_summary->>'preview_operation_id') <> ''",
+		)
+	})
+
 	t.Run("audit outbox table", func(t *testing.T) {
 		table := contract.requireTable(t, "audit_outbox")
 
@@ -421,6 +442,16 @@ func (contract migrationContract) requireIndex(t *testing.T, tableName string, c
 		}
 	}
 	t.Fatalf("missing index on %s(%s)", tableName, strings.Join(columns, ", "))
+}
+
+func (contract migrationContract) requireRawFragments(t *testing.T, fragments ...string) {
+	t.Helper()
+
+	for _, fragment := range fragments {
+		if !strings.Contains(contract.raw, compactSpace(strings.ToLower(fragment))) {
+			t.Fatalf("migration SQL missing fragment %q", fragment)
+		}
+	}
 }
 
 func (table tableContract) requireColumn(t *testing.T, name string, fragments ...string) {

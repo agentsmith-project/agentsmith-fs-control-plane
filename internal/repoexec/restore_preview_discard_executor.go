@@ -195,7 +195,7 @@ func (executor *RestorePreviewDiscardExecutor) validateMetadata(ctx context.Cont
 	if err != nil {
 		return err
 	}
-	decision := repoaccess.Admit(repoaccess.Request{Repo: repo, Namespace: namespace, Binding: binding, HeldRepoFences: savePointRepoAccessFencesFromStore(held), Intent: repoaccess.IntentSavePointCreate, Mode: repoaccess.ModeReadOnly})
+	decision := repoaccess.Admit(repoaccess.Request{Repo: repo, Namespace: namespace, Binding: binding, HeldRepoFences: savePointRepoAccessFencesFromStore(held), Intent: repoaccess.IntentRestorePreviewDiscard, Mode: repoaccess.ModeReadOnly})
 	if !decision.Allowed {
 		return errors.New("repo access denied")
 	}

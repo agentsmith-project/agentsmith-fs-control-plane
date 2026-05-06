@@ -133,6 +133,32 @@ type IdempotencyStore interface {
 	CreateOrReuseOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
+// RestorePreviewOperationIntakeStore owns the durable HTTP intake boundary for
+// restore_preview. Implementations must resolve idempotency first, and only for
+// brand-new requests atomically reject same-repo non-terminal JVS mutations and
+// active RestorePlan rows before inserting the queued operation.
+type RestorePreviewOperationIntakeStore interface {
+	CreateOrReuseRestorePreviewOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+}
+
+// RestorePreviewDiscardOperationIntakeStore owns the durable HTTP intake
+// boundary for restore_preview_discard. Implementations must resolve
+// idempotency first, and only for brand-new requests atomically lock and verify
+// the matching RestorePlan is still pending before inserting the queued cleanup
+// operation.
+type RestorePreviewDiscardOperationIntakeStore interface {
+	CreateOrReuseRestorePreviewDiscardOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+}
+
+// RestoreRunOperationIntakeStore owns the durable HTTP intake boundary for
+// restore_run. Implementations must resolve idempotency first, and only for
+// brand-new requests atomically reject any existing non-failed/non-cancelled
+// restore_run for the same namespace/repo/preview_operation_id before inserting
+// the queued operation.
+type RestoreRunOperationIntakeStore interface {
+	CreateOrReuseRestoreRunOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+}
+
 // OperationIdempotencyLookupStore is the read-only side of the operation
 // idempotency boundary. It exists so handlers that must validate durable
 // metadata before creating a new operation can still reuse an already-created
@@ -345,6 +371,13 @@ type RestoreRunOperationRecoveryStore interface {
 // must not claim, fence, lease, or mutate operation state.
 type RepoJVSMutationGateReader interface {
 	RepoHasNonTerminalJVSMutation(ctx context.Context, repoID string) (bool, error)
+}
+
+// RestoreRunIntakeGateReader is the narrow HTTP intake gate that prevents
+// multiple restore_run operations from being queued for the same pending
+// restore plan under different idempotency keys.
+type RestoreRunIntakeGateReader interface {
+	RestoreRunExistsForPreviewOperation(ctx context.Context, namespaceID, repoID, previewOperationID string) (bool, error)
 }
 
 // SavePointCreateOperationRecoveryStore owns save_point_create recovery. It

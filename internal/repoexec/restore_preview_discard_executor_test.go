@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 )
 
@@ -93,6 +95,76 @@ func TestRestorePreviewDiscardExecutorAllowsMatchingPendingOrStaleRecoveryState(
 			}
 			if store.restorePlan.Status != restoreplan.StatusDiscarded || store.operation.State != operations.OperationStateSucceeded {
 				t.Fatalf("plan/operation = %#v/%#v, want discarded/succeeded", store.restorePlan, store.operation)
+			}
+		})
+	}
+}
+
+func TestRestorePreviewDiscardExecutorAllowsDisabledNamespaceCleanupAndCommitsDiscarded(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.namespace.Status = resources.NamespaceStatusDisabled
+	disabledAt := now.Add(-time.Minute)
+	store.namespace.DisabledAt = &disabledAt
+	store.namespace.DisabledReason = "maintenance"
+	store.previewOperation = restorePreviewSucceededOperationRecord(now)
+	store.restorePlan = restorePreviewPendingPlan(now)
+	runner := &fakeJVSRunner{
+		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "pending_restore_preview", ActivePlanID: "plan_001", Blocking: true, Workspace: "main"},
+		restoreDiscardSummary: jvsrunner.RestoreDiscardSummary{PlanID: "plan_001", PlanDiscarded: true, Workspace: "main"},
+	}
+	executor := newTestRestorePreviewDiscardExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), restorePreviewDiscardLeasedRecord(now, operations.OperationPhaseRestorePreviewDiscardValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "recovery_status,restore_discard" {
+		t.Fatalf("JVS calls = %#v, want recovery_status then restore_discard", runner.calls)
+	}
+	if store.restorePlan.Status != restoreplan.StatusDiscarded || store.operation.State != operations.OperationStateSucceeded {
+		t.Fatalf("plan/operation = %#v/%#v, want discarded/succeeded cleanup", store.restorePlan, store.operation)
+	}
+}
+
+func TestRestorePreviewDiscardExecutorRejectsCleanupAdmissionRisksBeforeJVS(t *testing.T) {
+	now := repoExecNow()
+	tests := []struct {
+		name string
+		edit func(*fakeRepoCreateStore)
+	}{
+		{name: "disabled binding", edit: func(store *fakeRepoCreateStore) {
+			store.binding.Status = resources.NamespaceStatusDisabled
+		}},
+		{name: "archived repo", edit: func(store *fakeRepoCreateStore) {
+			store.repo.Status = resources.RepoStatusArchived
+			store.repo.Lifecycle.Status = resources.RepoStatusArchived
+		}},
+		{name: "lifecycle fence", edit: func(store *fakeRepoCreateStore) {
+			store.fences = []fences.Fence{repoCreateFence(now, "fence_lifecycle", "op_lifecycle")}
+		}},
+		{name: "invalid volume", edit: func(store *fakeRepoCreateStore) {
+			store.volume.Status = resources.VolumeStatusDisabled
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.repo = activeRepoResource(now)
+			store.previewOperation = restorePreviewSucceededOperationRecord(now)
+			store.restorePlan = restorePreviewPendingPlan(now)
+			tt.edit(store)
+			runner := &fakeJVSRunner{}
+			executor := newTestRestorePreviewDiscardExecutor(t, store, runner, now)
+
+			if err := executor.ExecuteOperationRecovery(context.Background(), restorePreviewDiscardLeasedRecord(now, operations.OperationPhaseRestorePreviewDiscardValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+				t.Fatalf("ExecuteOperationRecovery: %v", err)
+			}
+			if len(runner.calls) != 0 || store.restorePreviewDiscardProgressUpdates != 0 {
+				t.Fatalf("JVS/progress = %#v/%d, want denied before JVS", runner.calls, store.restorePreviewDiscardProgressUpdates)
+			}
+			if store.operation.State != operations.OperationStateFailed || store.restorePlan.Status != restoreplan.StatusPending {
+				t.Fatalf("operation/plan = %#v/%#v, want failed operation and pending plan", store.operation, store.restorePlan)
 			}
 		})
 	}

@@ -18,6 +18,18 @@ type OperationIntakeStore interface {
 	CreateOrReuseOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
+type RestorePreviewOperationIntakeStore interface {
+	CreateOrReuseRestorePreviewOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+}
+
+type RestorePreviewDiscardOperationIntakeStore interface {
+	CreateOrReuseRestorePreviewDiscardOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+}
+
+type RestoreRunOperationIntakeStore interface {
+	CreateOrReuseRestoreRunOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+}
+
 type OperationIdempotencyLookupStore interface {
 	GetOperationByIdempotencyScope(ctx context.Context, scope operations.IdempotencyScope) (operations.OperationRecord, error)
 }
@@ -66,42 +78,108 @@ func CreateOrReuseOperationIntake(ctx context.Context, config OperationIntakeCon
 		return OperationEnvelope{}, internalOperationIntakeError()
 	}
 
+	spec, err := operationIntakeSpec(request)
+	if err != nil {
+		return OperationEnvelope{}, err
+	}
+	resolution, err := config.Store.CreateOrReuseOperation(ctx, spec)
+	if err != nil {
+		return OperationEnvelope{}, mapOperationIntakeError(err)
+	}
+	return operationEnvelopeFromRecord(resolution.Operation), nil
+}
+
+func CreateOrReuseRestorePreviewOperationIntake(ctx context.Context, store RestorePreviewOperationIntakeStore, request OperationIntakeRequest) (OperationEnvelope, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if isNilOperationIntakeValue(store) {
+		return OperationEnvelope{}, internalOperationIntakeError()
+	}
+	spec, err := operationIntakeSpec(request)
+	if err != nil {
+		return OperationEnvelope{}, err
+	}
+	resolution, err := store.CreateOrReuseRestorePreviewOperation(ctx, spec)
+	if err != nil {
+		return OperationEnvelope{}, mapOperationIntakeError(err)
+	}
+	return operationEnvelopeFromRecord(resolution.Operation), nil
+}
+
+func CreateOrReuseRestorePreviewDiscardOperationIntake(ctx context.Context, store RestorePreviewDiscardOperationIntakeStore, request OperationIntakeRequest) (OperationEnvelope, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if isNilOperationIntakeValue(store) {
+		return OperationEnvelope{}, internalOperationIntakeError()
+	}
+	spec, err := operationIntakeSpec(request)
+	if err != nil {
+		return OperationEnvelope{}, err
+	}
+	resolution, err := store.CreateOrReuseRestorePreviewDiscardOperation(ctx, spec)
+	if err != nil {
+		return OperationEnvelope{}, mapOperationIntakeError(err)
+	}
+	return operationEnvelopeFromRecord(resolution.Operation), nil
+}
+
+func CreateOrReuseRestoreRunOperationIntake(ctx context.Context, store RestoreRunOperationIntakeStore, request OperationIntakeRequest) (OperationEnvelope, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if isNilOperationIntakeValue(store) {
+		return OperationEnvelope{}, internalOperationIntakeError()
+	}
+	spec, err := operationIntakeSpec(request)
+	if err != nil {
+		return OperationEnvelope{}, err
+	}
+	resolution, err := store.CreateOrReuseRestoreRunOperation(ctx, spec)
+	if err != nil {
+		return OperationEnvelope{}, mapOperationIntakeError(err)
+	}
+	return operationEnvelopeFromRecord(resolution.Operation), nil
+}
+
+func operationIntakeSpec(request OperationIntakeRequest) (operations.QueuedOperationSpec, error) {
 	operationType, ok := operations.OperationTypeForRouteOperationID(request.Route.OperationID)
 	if !ok {
-		return OperationEnvelope{}, internalOperationIntakeError()
+		return operations.QueuedOperationSpec{}, internalOperationIntakeError()
 	}
 	canonicalRoute, ok := RouteMetadataByOperationID(request.Route.OperationID)
 	if !ok {
-		return OperationEnvelope{}, internalOperationIntakeError()
+		return operations.QueuedOperationSpec{}, internalOperationIntakeError()
 	}
 	if isNilOperationIntakeValue(request.CanonicalRequest) {
-		return OperationEnvelope{}, internalOperationIntakeError()
+		return operations.QueuedOperationSpec{}, internalOperationIntakeError()
 	}
 	if canonicalRoute.Class == auth.RouteClassNamespaceBound {
 		requestNamespace := strings.TrimSpace(request.NamespaceID)
 		contextNamespace := strings.TrimSpace(request.RequestContext.NamespaceID)
 		if requestNamespace == "" || contextNamespace == "" || requestNamespace != contextNamespace {
-			return OperationEnvelope{}, internalOperationIntakeError()
+			return operations.QueuedOperationSpec{}, internalOperationIntakeError()
 		}
 	}
 	if request.GenerateOperationID == nil {
-		return OperationEnvelope{}, internalOperationIntakeError()
+		return operations.QueuedOperationSpec{}, internalOperationIntakeError()
 	}
 	operationID := strings.TrimSpace(request.GenerateOperationID())
 	if operationID == "" {
-		return OperationEnvelope{}, internalOperationIntakeError()
+		return operations.QueuedOperationSpec{}, internalOperationIntakeError()
 	}
 	now := time.Now().UTC()
 	if request.Now != nil {
 		now = request.Now()
 	}
 	if now.IsZero() {
-		return OperationEnvelope{}, internalOperationIntakeError()
+		return operations.QueuedOperationSpec{}, internalOperationIntakeError()
 	}
 
 	requestHash, err := operations.HashRequest(request.CanonicalRequest)
 	if err != nil {
-		return OperationEnvelope{}, internalOperationIntakeError()
+		return operations.QueuedOperationSpec{}, internalOperationIntakeError()
 	}
 
 	spec := operations.QueuedOperationSpec{
@@ -128,12 +206,7 @@ func CreateOrReuseOperationIntake(ctx context.Context, config OperationIntakeCon
 		InputSummary:        cloneAnyMap(request.InputSummary),
 		CreatedAt:           now,
 	}
-
-	resolution, err := config.Store.CreateOrReuseOperation(ctx, spec)
-	if err != nil {
-		return OperationEnvelope{}, mapOperationIntakeError(err)
-	}
-	return operationEnvelopeFromRecord(resolution.Operation), nil
+	return spec, nil
 }
 
 func idempotencyStoreNil(store OperationIntakeStore) bool {
@@ -192,6 +265,14 @@ func mapOperationIntakeError(err error) error {
 		return &OperationIntakeError{Code: CodeIdempotencyConflict, Status: http.StatusConflict, Retryable: false, Message: "idempotency key conflicts with a different request"}
 	case errors.Is(err, operations.ErrRepoAlreadyExists):
 		return &OperationIntakeError{Code: CodeRepoAlreadyExists, Status: http.StatusConflict, Retryable: false, Message: "target repo already exists"}
+	case errors.Is(err, operations.ErrActiveRestorePlan):
+		return &OperationIntakeError{Code: CodeOperationRecoveryRequired, Status: http.StatusConflict, Retryable: true, Message: "active restore plan requires operator recovery"}
+	case errors.Is(err, operations.ErrRepoJVSMutationInProgress):
+		return &OperationIntakeError{Code: CodeRepoJVSMutationInProgress, Status: http.StatusConflict, Retryable: true, Message: "repo JVS mutation is in progress"}
+	case errors.Is(err, operations.ErrRestoreRunAlreadyExists):
+		return &OperationIntakeError{Code: CodeRepoJVSMutationInProgress, Status: http.StatusConflict, Retryable: true, Message: "restore run is already queued for this preview"}
+	case errors.Is(err, operations.ErrRestorePlanNotPending):
+		return &OperationIntakeError{Code: CodeOperationRecoveryRequired, Status: http.StatusConflict, Retryable: true, Message: "restore preview plan is not pending"}
 	case errors.Is(err, operations.ErrMissingOperationBoundary):
 		return internalOperationIntakeError()
 	default:

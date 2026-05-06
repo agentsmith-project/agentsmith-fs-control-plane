@@ -370,6 +370,8 @@ func savePointAdmissionError(family repoaccess.ErrorFamily) (ErrorCode, int) {
 		return CodeNamespaceDisabled, http.StatusConflict
 	case repoaccess.ErrorFamilyRepoLifecycleFenceHeld:
 		return CodeRepoLifecycleFenceHeld, http.StatusConflict
+	case repoaccess.ErrorFamilyWriterSessionFenceHeld:
+		return CodeWriterSessionFenceHeld, http.StatusConflict
 	case repoaccess.ErrorFamilyOperationRecoveryRequired:
 		return CodeOperationRecoveryRequired, http.StatusConflict
 	case repoaccess.ErrorFamilyRepoArchived:

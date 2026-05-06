@@ -105,6 +105,26 @@ CREATE INDEX IF NOT EXISTS operations_repo_idx
     ON operations (repo_id)
     WHERE repo_id IS NOT NULL;
 
+CREATE UNIQUE INDEX IF NOT EXISTS operations_one_non_terminal_jvs_mutation_per_repo_idx
+    ON operations (repo_id)
+    WHERE repo_id IS NOT NULL
+        AND operation_type IN (
+            'save_point_create',
+            'restore_preview',
+            'restore_preview_discard',
+            'restore_run',
+            'template_create',
+            'template_clone'
+        )
+        AND operation_state NOT IN ('succeeded', 'failed', 'cancelled');
+
+CREATE UNIQUE INDEX IF NOT EXISTS operations_restore_run_one_per_preview_idx
+    ON operations (namespace_id, repo_id, (input_summary->>'preview_operation_id'))
+    WHERE operation_type = 'restore_run'
+        AND operation_state NOT IN ('failed', 'cancelled')
+        AND (input_summary->>'preview_operation_id') IS NOT NULL
+        AND btrim(input_summary->>'preview_operation_id') <> '';
+
 CREATE TABLE IF NOT EXISTS audit_outbox (
     audit_event_id text PRIMARY KEY,
     event_type text NOT NULL,
