@@ -14,6 +14,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
 func TestOperationStoreContractComposesReaderAndWriter(t *testing.T) {
@@ -247,6 +248,89 @@ func TestRestorePreviewOperationRecoveryStoreContractCommitsPlanOperationAndAudi
 	}
 	if strings.Contains(toStoreContractString(gotOperation.JVSJSONOutput), "run restore") || strings.Contains(toStoreContractString(gotOperation.VerificationResult), "recommended_next_command") {
 		t.Fatalf("restore preview operation persisted raw command fields: %#v", gotOperation)
+	}
+}
+
+func TestRestoreRunOperationRecoveryStoreContractOwnsFencePlanOperationAndAudit(t *testing.T) {
+	fake := &fakeRestoreRunOperationStore{}
+	var _ RestoreRunOperationCommitStore = fake
+	var _ RestoreRunOperationMetadataReader = fake
+	var _ RestoreRunOperationRecoveryStore = fake
+
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	fake.previewOperation = operations.OperationRecord{
+		ID:          "op_preview01",
+		Type:        operations.OperationRestorePreview,
+		State:       operations.OperationStateSucceeded,
+		Phase:       operations.OperationPhaseRestorePreviewCommitted,
+		NamespaceID: "ns_alpha01",
+		RepoID:      "repo_alpha01",
+		Resource:    operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
+		CreatedAt:   now.Add(-time.Hour),
+	}
+	fake.plan = restoreplan.Plan{ID: "plan_001", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", PreviewOperationID: "op_preview01", SourceSavePointID: "sp_001", Status: restoreplan.StatusPending, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)}
+	fake.record = operations.OperationRecord{
+		ID:               "op_restore_run01",
+		Type:             operations.OperationRestoreRun,
+		State:            operations.OperationStateQueued,
+		Phase:            operations.OperationPhaseRestoreRunValidate,
+		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestoreRun, "idem_run").String(),
+		IdempotencyKey:   "idem_run",
+		RequestHash:      operations.RequestHash("sha256:restore-run"),
+		CallerService:    "agentsmith-api",
+		CorrelationID:    "corr-run",
+		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
+		NamespaceID:      "ns_alpha01",
+		RepoID:           "repo_alpha01",
+		InputSummary:     map[string]any{"preview_operation_id": "op_preview01"},
+		CreatedAt:        now.Add(-30 * time.Minute),
+	}
+
+	claimed, err := fake.AcquireRestoreRunOperationLease(context.Background(), "op_restore_run01", operations.LeaseRequest{Owner: "worker-a", Duration: 30 * time.Minute, Now: now})
+	if err != nil {
+		t.Fatalf("acquire restore run: %v", err)
+	}
+	if claimed.Type != operations.OperationRestoreRun || claimed.Phase != operations.OperationPhaseRestoreRunValidate {
+		t.Fatalf("claimed operation = %#v", claimed)
+	}
+
+	writerFenced := claimed
+	writerFenced.Phase = operations.OperationPhaseRestoreRunWriterFenced
+	writerFenced.SessionFenceID = "fence_restore_run01"
+	fence := fences.Fence{ID: "fence_restore_run01", RepoID: "repo_alpha01", Kind: fences.KindWriterSession, HolderOperationID: "op_restore_run01", Status: fences.StatusActive, ExpiresAt: now.Add(20 * time.Minute), CreatedAt: now, UpdatedAt: now}
+	gotFence, gotOperation, err := fake.MarkRestoreRunWriterFencedWithLease(context.Background(), fence, writerFenced.SanitizedForPersistence(), "worker-a", now)
+	if err != nil {
+		t.Fatalf("mark writer fenced: %v", err)
+	}
+	if gotFence.Kind != fences.KindWriterSession || gotOperation.SessionFenceID != "fence_restore_run01" || gotOperation.Phase != operations.OperationPhaseRestoreRunWriterFenced {
+		t.Fatalf("writer fence/operation = %#v/%#v", gotFence, gotOperation)
+	}
+
+	consuming := gotOperation
+	consuming.Phase = operations.OperationPhaseRestoreRunConsuming
+	consuming.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001"}
+	consumedPlan, consumingOperation, err := fake.MarkRestoreRunConsumingWithLease(context.Background(), consuming.SanitizedForPersistence(), "worker-a", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("mark consuming: %v", err)
+	}
+	if consumedPlan.Status != restoreplan.StatusConsuming || consumingOperation.Phase != operations.OperationPhaseRestoreRunConsuming {
+		t.Fatalf("consuming plan/operation = %#v/%#v", consumedPlan, consumingOperation)
+	}
+
+	success := consumingOperation
+	success.State = operations.OperationStateSucceeded
+	success.Phase = operations.OperationPhaseRestoreRunCommitted
+	success.VerificationResult = map[string]any{"restore_plan_id": "plan_001", "restore_plan_status": "consumed"}
+	success.FinishedAt = &now
+	event := audit.NewEvent(audit.Event{EventID: "audit-run", Type: audit.EventTypeRestoreRun, Time: now, OperationID: "op_restore_run01", CallerService: "agentsmith-api", CorrelationID: "corr-run", AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"}, Resource: audit.Resource{Type: "repo", ID: "repo_alpha01", NamespaceID: "ns_alpha01"}, Outcome: audit.OutcomeSucceeded, Reason: "restore_run_committed"})
+
+	finalPlan, finalOperation, err := fake.CommitRestoreRunSucceededWithLease(context.Background(), success.SanitizedForPersistence(), "worker-a", now.Add(2*time.Minute), event)
+	if err != nil {
+		t.Fatalf("success commit: %v", err)
+	}
+	if finalPlan.Status != restoreplan.StatusConsumed || finalOperation.State != operations.OperationStateSucceeded || fake.fence.Status != fences.StatusReleased || len(fake.auditEvents) != 1 {
+		t.Fatalf("final plan/operation/fence/audit = %#v/%#v/%#v/%#v", finalPlan, finalOperation, fake.fence, fake.auditEvents)
 	}
 }
 
@@ -1302,6 +1386,181 @@ func (fake *fakeRestorePreviewOperationStore) GetVolume(context.Context, string)
 }
 
 func (fake *fakeRestorePreviewOperationStore) ListHeldRepoFences(context.Context, string) ([]fences.Fence, error) {
+	return nil, nil
+}
+
+type fakeRestoreRunOperationStore struct {
+	record           operations.OperationRecord
+	previewOperation operations.OperationRecord
+	plan             restoreplan.Plan
+	fence            fences.Fence
+	auditEvents      []audit.Event
+}
+
+func (fake *fakeRestoreRunOperationStore) ListRestoreRunOperationsForRecovery(_ context.Context, _ time.Time, _ int) ([]operations.OperationRecord, error) {
+	return []operations.OperationRecord{fake.record.Sanitized()}, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) AcquireRestoreRunOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	if fake.record.ID != operationID || fake.record.Type != operations.OperationRestoreRun || fake.plan.PreviewOperationID != fake.record.InputSummary["preview_operation_id"] {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	decision := operations.AcquireLease(fake.record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	fake.record = decision.Record
+	return fake.record, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) MarkRestoreRunWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error) {
+	update := record.Record()
+	if fake.record.ID != update.ID ||
+		fake.record.Type != operations.OperationRestoreRun ||
+		fake.record.Phase != operations.OperationPhaseRestoreRunValidate ||
+		fake.record.LeaseOwner != strings.TrimSpace(owner) ||
+		fake.record.LeaseExpiresAt == nil ||
+		!fake.record.LeaseExpiresAt.After(now) ||
+		update.Phase != operations.OperationPhaseRestoreRunWriterFenced ||
+		update.SessionFenceID != fence.ID ||
+		fence.Kind != fences.KindWriterSession ||
+		fence.HolderOperationID != update.ID ||
+		fence.RepoID != update.RepoID {
+		return fences.Fence{}, operations.OperationRecord{}, operations.ErrInvalidLeaseRequest
+	}
+	fake.fence = fence
+	fake.record = update
+	return fence, update, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) MarkRestoreRunConsumingWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
+	update := record.Record()
+	if fake.record.ID != update.ID ||
+		fake.record.Phase != operations.OperationPhaseRestoreRunWriterFenced ||
+		fake.record.LeaseOwner != strings.TrimSpace(owner) ||
+		fake.record.LeaseExpiresAt == nil ||
+		!fake.record.LeaseExpiresAt.After(now) ||
+		fake.fence.ID != update.SessionFenceID ||
+		fake.fence.Status != fences.StatusActive ||
+		fake.plan.Status != restoreplan.StatusPending ||
+		fake.previewOperation.ID != update.InputSummary["preview_operation_id"] ||
+		fake.previewOperation.Type != operations.OperationRestorePreview ||
+		fake.previewOperation.State != operations.OperationStateSucceeded ||
+		update.Phase != operations.OperationPhaseRestoreRunConsuming {
+		return restoreplan.Plan{}, operations.OperationRecord{}, operations.ErrInvalidLeaseRequest
+	}
+	fake.plan.Status = restoreplan.StatusConsuming
+	fake.plan.UpdatedAt = now
+	fake.record = update
+	return fake.plan, update, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) CommitRestoreRunSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	update := record.Record()
+	if fake.record.ID != update.ID ||
+		fake.record.Phase != operations.OperationPhaseRestoreRunConsuming ||
+		fake.record.LeaseOwner != strings.TrimSpace(owner) ||
+		fake.record.LeaseExpiresAt == nil ||
+		!fake.record.LeaseExpiresAt.After(now) ||
+		fake.plan.Status != restoreplan.StatusConsuming ||
+		fake.fence.ID != update.SessionFenceID ||
+		fake.fence.Status != fences.StatusActive ||
+		update.State != operations.OperationStateSucceeded ||
+		update.Phase != operations.OperationPhaseRestoreRunCommitted ||
+		event.OperationID != update.ID ||
+		event.Type != audit.EventTypeRestoreRun ||
+		event.Outcome != audit.OutcomeSucceeded {
+		return restoreplan.Plan{}, operations.OperationRecord{}, operations.ErrInvalidLeaseRequest
+	}
+	fake.plan.Status = restoreplan.StatusConsumed
+	fake.plan.UpdatedAt = now
+	fake.fence.Status = fences.StatusReleased
+	fake.fence.ReleasedAt = &now
+	fake.fence.UpdatedAt = now
+	update.LeaseOwner = ""
+	update.LeaseExpiresAt = nil
+	fake.record = update
+	fake.auditEvents = append(fake.auditEvents, event.Sanitized())
+	return fake.plan, update, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) CommitRestoreRunFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	update := record.Record()
+	if fake.record.ID != update.ID ||
+		fake.record.LeaseOwner != strings.TrimSpace(owner) ||
+		fake.record.LeaseExpiresAt == nil ||
+		!fake.record.LeaseExpiresAt.After(now) ||
+		(update.State != operations.OperationStateFailed && update.State != operations.OperationStateOperatorInterventionRequired) ||
+		event.OperationID != update.ID ||
+		event.Type != audit.EventTypeRestoreRun ||
+		event.Outcome != audit.OutcomeFailed {
+		return operations.OperationRecord{}, operations.ErrInvalidLeaseRequest
+	}
+	if fake.record.Phase == operations.OperationPhaseRestoreRunWriterFenced {
+		fake.fence.Status = fences.StatusReleased
+		fake.fence.ReleasedAt = &now
+		fake.fence.UpdatedAt = now
+	}
+	if fake.record.Phase == operations.OperationPhaseRestoreRunConsuming {
+		fake.plan.Status = restoreplan.StatusOperatorInterventionRequired
+		fake.plan.UpdatedAt = now
+	}
+	update.LeaseOwner = ""
+	update.LeaseExpiresAt = nil
+	fake.record = update
+	fake.auditEvents = append(fake.auditEvents, event.Sanitized())
+	return update, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) GetOperation(_ context.Context, operationID string) (operations.OperationRecord, error) {
+	if fake.previewOperation.ID == operationID {
+		return fake.previewOperation, nil
+	}
+	if fake.record.ID == operationID {
+		return fake.record, nil
+	}
+	return operations.OperationRecord{}, errors.New("operation not found")
+}
+
+func (fake *fakeRestoreRunOperationStore) GetRestorePlanByPreviewOperation(_ context.Context, previewOperationID string) (restoreplan.Plan, error) {
+	if fake.plan.PreviewOperationID == previewOperationID {
+		return fake.plan, nil
+	}
+	return restoreplan.Plan{}, errors.New("restore plan not found")
+}
+
+func (fake *fakeRestoreRunOperationStore) GetActiveRestorePlanByRepo(_ context.Context, repoID string) (restoreplan.Plan, error) {
+	if fake.plan.RepoID == repoID && fake.plan.Active() {
+		return fake.plan, nil
+	}
+	return restoreplan.Plan{}, errors.New("active restore plan not found")
+}
+
+func (fake *fakeRestoreRunOperationStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
+	return resources.Repo{}, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
+	return resources.Namespace{}, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) GetNamespaceVolumeBinding(context.Context, string) (resources.NamespaceVolumeBinding, error) {
+	return resources.NamespaceVolumeBinding{}, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) GetVolume(context.Context, string) (resources.Volume, error) {
+	return resources.Volume{}, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) ListHeldRepoFences(context.Context, string) ([]fences.Fence, error) {
+	return nil, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) ListExportSessionsByRepo(context.Context, string) ([]sessionstate.ExportSession, error) {
+	return nil, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
 	return nil, nil
 }
 

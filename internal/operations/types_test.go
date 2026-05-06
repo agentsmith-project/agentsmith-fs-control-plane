@@ -109,6 +109,21 @@ func TestRestorePreviewDiscardPhasesAreStable(t *testing.T) {
 	}
 }
 
+func TestRestoreRunPhasesAreStable(t *testing.T) {
+	if OperationPhaseRestoreRunValidate != "validate_restore_run" {
+		t.Fatalf("validate phase = %q, want validate_restore_run", OperationPhaseRestoreRunValidate)
+	}
+	if OperationPhaseRestoreRunWriterFenced != "restore_run_writer_fenced" {
+		t.Fatalf("writer-fenced phase = %q, want restore_run_writer_fenced", OperationPhaseRestoreRunWriterFenced)
+	}
+	if OperationPhaseRestoreRunConsuming != "restore_run_consuming" {
+		t.Fatalf("consuming phase = %q, want restore_run_consuming", OperationPhaseRestoreRunConsuming)
+	}
+	if OperationPhaseRestoreRunCommitted != "restore_run_committed" {
+		t.Fatalf("committed phase = %q, want restore_run_committed", OperationPhaseRestoreRunCommitted)
+	}
+}
+
 func TestRouteOperationTypesReturnsDefensiveCopy(t *testing.T) {
 	mapped := RouteOperationTypes()
 	mapped["createRepo"] = OperationMigrationCutover

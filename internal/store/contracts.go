@@ -313,6 +313,32 @@ type RestorePreviewDiscardOperationRecoveryStore interface {
 	RestorePreviewDiscardOperationMetadataReader
 }
 
+type RestoreRunOperationCommitStore interface {
+	MarkRestoreRunWriterFencedWithLease(ctx context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error)
+	MarkRestoreRunConsumingWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error)
+	CommitRestoreRunSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error)
+	CommitRestoreRunFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+}
+
+type RestoreRunOperationMetadataReader interface {
+	RestorePreviewOperationMetadataReader
+	RepoSessionStateReader
+	OperationReader
+	RestorePlanReader
+}
+
+// RestoreRunOperationRecoveryStore owns the durable restore_run state machine
+// boundary. It may consume only the pending plan linked by
+// input_summary.preview_operation_id, and its commits must atomically coordinate
+// the writer_session fence, durable restore plan, lease-fenced operation, and
+// audit outbox without invoking JVS.
+type RestoreRunOperationRecoveryStore interface {
+	ListRestoreRunOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireRestoreRunOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	RestoreRunOperationCommitStore
+	RestoreRunOperationMetadataReader
+}
+
 // RepoJVSMutationGateReader is the read-only durable gate for JVS history
 // readers. It observes operation-row non-terminal JVS mutations only; active
 // restore plan blocking for new mutations lives in mutation acquire SQL. It

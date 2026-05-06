@@ -62,6 +62,11 @@ const (
 	OperationPhaseRestorePreviewDiscardValidate  = "validate_restore_preview_discard"
 	OperationPhaseRestorePreviewDiscarding       = "restore_preview_discarding"
 	OperationPhaseRestorePreviewDiscardCommitted = "restore_preview_discard_committed"
+
+	OperationPhaseRestoreRunValidate     = "validate_restore_run"
+	OperationPhaseRestoreRunWriterFenced = "restore_run_writer_fenced"
+	OperationPhaseRestoreRunConsuming    = "restore_run_consuming"
+	OperationPhaseRestoreRunCommitted    = "restore_run_committed"
 )
 
 var operationTypes = []OperationType{
