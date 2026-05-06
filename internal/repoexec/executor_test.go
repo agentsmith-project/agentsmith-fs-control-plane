@@ -593,9 +593,12 @@ type fakeRepoCreateStore struct {
 	progressUpdates                      int
 	restorePreviewProgressUpdates        int
 	restorePreviewDiscardProgressUpdates int
+	restoreRunWriterFenceMarks           int
+	restoreRunConsumingMarks             int
 	releasedFenceID                      string
 	successErr                           error
 	blockingLifecycle                    []operations.OperationRecord
+	beforeListSessions                   func()
 }
 
 func (store *fakeRepoCreateStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
@@ -636,9 +639,15 @@ func (store *fakeRepoCreateStore) CommitRepoCreateFailedWithLease(_ context.Cont
 	return store.operation, nil
 }
 func (store *fakeRepoCreateStore) ListExportSessionsByRepo(context.Context, string) ([]sessionstate.ExportSession, error) {
+	if store.beforeListSessions != nil {
+		store.beforeListSessions()
+	}
 	return append([]sessionstate.ExportSession(nil), store.exports...), nil
 }
 func (store *fakeRepoCreateStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
+	if store.beforeListSessions != nil {
+		store.beforeListSessions()
+	}
 	return append([]sessionstate.WorkloadMountBinding(nil), store.mounts...), nil
 }
 func (store *fakeRepoCreateStore) ListEarlierNonTerminalRepoLifecycleOperations(context.Context, string, string, time.Time) ([]operations.OperationRecord, error) {
@@ -764,27 +773,86 @@ func (store *fakeRepoCreateStore) CommitRestorePreviewDiscardFailedWithLease(_ c
 	return store.operation, nil
 }
 
+func (store *fakeRepoCreateStore) MarkRestoreRunWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
+	store.restoreRunWriterFenceMarks++
+	store.operation = record.Record()
+	for _, existing := range store.fences {
+		if existing.ID == fence.ID && existing.Kind == fences.KindWriterSession && existing.HolderOperationID == store.operation.ID && existing.Status == fences.StatusActive && existing.ReleasedAt == nil && existing.RecoveredAt == nil {
+			return existing, store.operation, nil
+		}
+	}
+	store.fences = append(store.fences, fence)
+	return fence, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) MarkRestoreRunConsumingWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
+	store.restoreRunConsumingMarks++
+	store.operation = record.Record()
+	store.restorePlan.Status = restoreplan.StatusConsuming
+	store.restorePlan.UpdatedAt = now
+	return store.restorePlan, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitRestoreRunSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	store.operation = record.Record()
+	store.restorePlan.Status = restoreplan.StatusConsumed
+	store.restorePlan.UpdatedAt = now
+	store.releaseWriterFence(store.operation.SessionFenceID, now)
+	store.auditEvents = append(store.auditEvents, event)
+	return store.restorePlan, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitRestoreRunFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	switch store.operation.Phase {
+	case operations.OperationPhaseRestoreRunWriterFenced:
+		store.releaseWriterFence(store.operation.SessionFenceID, now)
+	case operations.OperationPhaseRestoreRunConsuming:
+		store.restorePlan.Status = restoreplan.StatusOperatorInterventionRequired
+		store.restorePlan.UpdatedAt = now
+	}
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) releaseWriterFence(fenceID string, now time.Time) {
+	for idx, fence := range store.fences {
+		if fence.ID == fenceID && fence.Kind == fences.KindWriterSession && fence.Status == fences.StatusActive && fence.ReleasedAt == nil && fence.RecoveredAt == nil {
+			releasedAt := now
+			store.fences[idx].Status = fences.StatusReleased
+			store.fences[idx].ReleasedAt = &releasedAt
+			store.fences[idx].UpdatedAt = now
+			store.releasedFenceID = fenceID
+			return
+		}
+	}
+}
+
 type fakeJVSRunner struct {
-	calls                 []string
-	payloadRoot           string
-	controlRoot           string
-	saveMessage           string
-	initSummary           jvsrunner.InitSummary
-	doctorSummary         jvsrunner.DoctorSummary
-	saveSummary           jvsrunner.SaveSummary
-	historySummary        jvsrunner.HistorySummary
-	recoveryStatusSummary jvsrunner.RecoveryStatusSummary
-	restorePreviewSummary jvsrunner.RestorePreviewSummary
-	restoreDiscardSummary jvsrunner.RestoreDiscardSummary
-	beforeRestorePreview  func()
-	beforeRestoreDiscard  func()
-	initErr               error
-	doctorErr             error
-	saveErr               error
-	historyErr            error
-	recoveryStatusErr     error
-	restorePreviewErr     error
-	restoreDiscardErr     error
+	calls                   []string
+	payloadRoot             string
+	controlRoot             string
+	saveMessage             string
+	initSummary             jvsrunner.InitSummary
+	doctorSummary           jvsrunner.DoctorSummary
+	saveSummary             jvsrunner.SaveSummary
+	historySummary          jvsrunner.HistorySummary
+	recoveryStatusSummary   jvsrunner.RecoveryStatusSummary
+	recoveryStatusSummaries []jvsrunner.RecoveryStatusSummary
+	restorePreviewSummary   jvsrunner.RestorePreviewSummary
+	restoreRunSummary       jvsrunner.RestoreRunSummary
+	restoreDiscardSummary   jvsrunner.RestoreDiscardSummary
+	beforeRestorePreview    func()
+	beforeRestoreRun        func()
+	beforeRestoreDiscard    func()
+	initErr                 error
+	doctorErr               error
+	saveErr                 error
+	historyErr              error
+	recoveryStatusErr       error
+	restorePreviewErr       error
+	restoreRunErr           error
+	restoreDiscardErr       error
 }
 
 func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot string) (jvsrunner.InitSummary, error) {
@@ -815,6 +883,11 @@ func (runner *fakeJVSRunner) History(_ context.Context, controlRoot string) (jvs
 func (runner *fakeJVSRunner) RecoveryStatus(_ context.Context, controlRoot string) (jvsrunner.RecoveryStatusSummary, error) {
 	runner.calls = append(runner.calls, "recovery_status")
 	runner.controlRoot = controlRoot
+	if len(runner.recoveryStatusSummaries) > 0 {
+		summary := runner.recoveryStatusSummaries[0]
+		runner.recoveryStatusSummaries = runner.recoveryStatusSummaries[1:]
+		return summary, runner.recoveryStatusErr
+	}
 	return runner.recoveryStatusSummary, runner.recoveryStatusErr
 }
 
@@ -825,6 +898,15 @@ func (runner *fakeJVSRunner) RestorePreview(_ context.Context, controlRoot, save
 		runner.beforeRestorePreview()
 	}
 	return runner.restorePreviewSummary, runner.restorePreviewErr
+}
+
+func (runner *fakeJVSRunner) RestoreRun(_ context.Context, controlRoot, planID string) (jvsrunner.RestoreRunSummary, error) {
+	runner.calls = append(runner.calls, "restore_run")
+	runner.controlRoot = controlRoot
+	if runner.beforeRestoreRun != nil {
+		runner.beforeRestoreRun()
+	}
+	return runner.restoreRunSummary, runner.restoreRunErr
 }
 
 func (runner *fakeJVSRunner) RestoreDiscard(_ context.Context, controlRoot, planID string) (jvsrunner.RestoreDiscardSummary, error) {

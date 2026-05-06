@@ -44,6 +44,7 @@ type OperationRecoveryStore interface {
 	store.SavePointCreateOperationRecoveryStore
 	store.RestorePreviewOperationRecoveryStore
 	store.RestorePreviewDiscardOperationRecoveryStore
+	store.RestoreRunOperationRecoveryStore
 }
 
 type WorkerStore interface {
@@ -388,6 +389,44 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			executors = append(executors, restorePreviewDiscardExecutor)
 			scopedStore.restorePreviewDiscardEnabled = true
 		}
+		if opConfig.RestoreRun.Enabled {
+			jvsFactory := options.JVSRunnerFactory
+			if jvsFactory == nil {
+				jvsFactory = NewJVSRunnerFromConfig
+			}
+			jvs, err := jvsFactory(opConfig.RestoreRun)
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			restoreRunJVS, ok := jvs.(repoexec.RestoreRunJVSRunner)
+			if !ok {
+				if handle.Close != nil {
+					err = errors.Join(errors.New("restore run jvs runner does not support restore run"), handle.Close())
+				} else {
+					err = errors.New("restore run jvs runner does not support restore run")
+				}
+				return nil, err
+			}
+			restoreRunExecutor, err := repoexec.NewRestoreRunExecutor(repoexec.RestoreRunConfig{
+				Store:        scopedStore,
+				JVSRunner:    restoreRunJVS,
+				Owner:        opConfig.Owner,
+				Clock:        now,
+				AuditEventID: func() string { return eventID() },
+				VolumeRoots:  opConfig.RestoreRun.VolumeRoots,
+			})
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			executors = append(executors, restoreRunExecutor)
+			scopedStore.restoreRunEnabled = true
+		}
 		operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
 			Reader:        scopedStore,
 			LeaseStore:    scopedStore,
@@ -545,6 +584,7 @@ type operationRecoveryStore struct {
 	savePointEnabled             bool
 	restorePreviewEnabled        bool
 	restorePreviewDiscardEnabled bool
+	restoreRunEnabled            bool
 }
 
 func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
@@ -604,6 +644,13 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 		}
 		records = append(records, restorePreviewDiscardRecords...)
 	}
+	if scoped.restoreRunEnabled {
+		restoreRunRecords, err := scoped.store.ListRestoreRunOperationsForRecovery(ctx, now, limit)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, restoreRunRecords...)
+	}
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
 			return records[i].ID < records[j].ID
@@ -631,36 +678,42 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 	}
 	if scoped.repoCreateEnabled {
 		record, err = scoped.store.AcquireRepoCreateOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoLifecycleEnabled && !scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled) {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoLifecycleEnabled && !scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
 			return record, err
 		}
 	}
 	if scoped.repoLifecycleEnabled {
 		record, err = scoped.store.AcquireRepoLifecycleOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled) {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
 			return record, err
 		}
 	}
 	if scoped.repoPurgeEnabled {
 		record, err = scoped.store.AcquireRepoPurgeOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.savePointEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled) {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.savePointEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
 			return record, err
 		}
 	}
 	if scoped.savePointEnabled {
 		record, err = scoped.store.AcquireSavePointCreateOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled) {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
 			return record, err
 		}
 	}
 	if scoped.restorePreviewEnabled {
 		record, err = scoped.store.AcquireRestorePreviewOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || !scoped.restorePreviewDiscardEnabled {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
 			return record, err
 		}
 	}
 	if scoped.restorePreviewDiscardEnabled {
-		return scoped.store.AcquireRestorePreviewDiscardOperationLease(ctx, operationID, request)
+		record, err = scoped.store.AcquireRestorePreviewDiscardOperationLease(ctx, operationID, request)
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || !scoped.restoreRunEnabled {
+			return record, err
+		}
+	}
+	if scoped.restoreRunEnabled {
+		return scoped.store.AcquireRestoreRunOperationLease(ctx, operationID, request)
 	}
 	return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 }
@@ -743,6 +796,22 @@ func (scoped operationRecoveryStore) CommitRestorePreviewDiscardSucceededWithLea
 
 func (scoped operationRecoveryStore) CommitRestorePreviewDiscardFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	return scoped.store.CommitRestorePreviewDiscardFailedWithLease(ctx, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) MarkRestoreRunWriterFencedWithLease(ctx context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error) {
+	return scoped.store.MarkRestoreRunWriterFencedWithLease(ctx, fence, record, owner, now)
+}
+
+func (scoped operationRecoveryStore) MarkRestoreRunConsumingWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
+	return scoped.store.MarkRestoreRunConsumingWithLease(ctx, record, owner, now)
+}
+
+func (scoped operationRecoveryStore) CommitRestoreRunSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	return scoped.store.CommitRestoreRunSucceededWithLease(ctx, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitRestoreRunFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return scoped.store.CommitRestoreRunFailedWithLease(ctx, record, owner, now, event)
 }
 
 func (scoped operationRecoveryStore) GetOperation(ctx context.Context, operationID string) (operations.OperationRecord, error) {
@@ -856,5 +925,6 @@ var (
 	_ store.SavePointCreateOperationCommitStore        = operationRecoveryStore{}
 	_ store.RestorePreviewOperationCommitStore         = operationRecoveryStore{}
 	_ store.RestorePreviewDiscardOperationCommitStore  = operationRecoveryStore{}
+	_ store.RestoreRunOperationCommitStore             = operationRecoveryStore{}
 	_ recovery.OperationExecutor                       = multiExecutor{}
 )

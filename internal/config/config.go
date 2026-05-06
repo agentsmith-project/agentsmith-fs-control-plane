@@ -89,6 +89,7 @@ type WorkerOperationRecoveryConfig struct {
 	SavePoint             WorkerRepoCreateRecoveryConfig
 	RestorePreview        WorkerRepoCreateRecoveryConfig
 	RestorePreviewDiscard WorkerRepoCreateRecoveryConfig
+	RestoreRun            WorkerRepoCreateRecoveryConfig
 }
 
 type WorkerRepoCreateRecoveryConfig struct {
@@ -238,6 +239,11 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.OperationRecovery.RestorePreviewDiscard = restorePreviewDiscard
+	restoreRun, err := loadRestoreRunRecoveryConfig(source)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.OperationRecovery.RestoreRun = restoreRun
 
 	limit, err := intValue(source, "AFSCP_OPERATION_RECOVERY_LIMIT", worker.OperationRecovery.Limit)
 	if err != nil {
@@ -399,6 +405,10 @@ func loadRestorePreviewRecoveryConfig(source Source) (WorkerRepoCreateRecoveryCo
 
 func loadRestorePreviewDiscardRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
 	return loadJVSOperationRecoveryConfig(source, "AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED")
+}
+
+func loadRestoreRunRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
+	return loadJVSOperationRecoveryConfig(source, "AFSCP_RESTORE_RUN_RECOVERY_ENABLED")
 }
 
 func loadJVSOperationRecoveryConfig(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {
