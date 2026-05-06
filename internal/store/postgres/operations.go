@@ -832,6 +832,9 @@ func repoLifecycleOperationAcquireLeaseSQL() string {
 		"SELECT 1 FROM operations o, eligible_operation e WHERE o.repo_id = e.repo_id AND o.operation_id <> e.operation_id " +
 		"AND (o.created_at < e.created_at OR (o.created_at = e.created_at AND o.operation_id < e.operation_id)) " +
 		"AND o.operation_type IN (" + repoJVSMutationOperationTypeSQLList() + ") AND o.operation_state NOT IN ('succeeded','failed','cancelled') LIMIT 1" +
+		"), active_restore_plan AS (" +
+		"SELECT 1 FROM restore_plans p, eligible_operation e WHERE p.repo_id = e.repo_id " +
+		"AND p.status IN (" + restorePlanActiveStatusSQLList() + ") LIMIT 1" +
 		"), updated_operation AS (" +
 		"UPDATE operations SET " +
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
@@ -840,7 +843,7 @@ func repoLifecycleOperationAcquireLeaseSQL() string {
 		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
-		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)) AND ($5 <> 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM held_fence) OR EXISTS (SELECT 1 FROM released_fence)) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)) AND ($5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM active_restore_plan)) AND ($5 <> 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM held_fence) OR EXISTS (SELECT 1 FROM released_fence)) RETURNING " + strings.Join(operationSelectColumns, ", ") +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
@@ -858,6 +861,9 @@ func repoPurgeOperationAcquireLeaseSQL() string {
 		"SELECT 1 FROM operations o, eligible_operation e WHERE o.repo_id = e.repo_id AND o.operation_id <> e.operation_id " +
 		"AND (o.created_at < e.created_at OR (o.created_at = e.created_at AND o.operation_id < e.operation_id)) " +
 		"AND o.operation_type IN (" + repoJVSMutationOperationTypeSQLList() + ") AND o.operation_state NOT IN ('succeeded','failed','cancelled') LIMIT 1" +
+		"), active_restore_plan AS (" +
+		"SELECT 1 FROM restore_plans p, eligible_operation e WHERE p.repo_id = e.repo_id " +
+		"AND p.status IN (" + restorePlanActiveStatusSQLList() + ") LIMIT 1" +
 		"), updated_operation AS (" +
 		"UPDATE operations SET " +
 		"operation_state = 'running', " +
@@ -865,7 +871,7 @@ func repoPurgeOperationAcquireLeaseSQL() string {
 		"lease_owner = $2, " +
 		"lease_expires_at = $3, " +
 		"started_at = COALESCE(started_at, $4), " +
-		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM active_restore_plan) RETURNING " + strings.Join(operationSelectColumns, ", ") +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
@@ -888,6 +894,9 @@ func savePointCreateOperationAcquireLeaseSQL() string {
 		"SELECT 1 FROM operations o, eligible_operation e WHERE o.repo_id = e.repo_id AND o.operation_id <> e.operation_id " +
 		"AND (o.created_at < e.created_at OR (o.created_at = e.created_at AND o.operation_id < e.operation_id)) " +
 		"AND o.operation_type IN (" + repoLifecycleAndPurgeOperationTypeSQLList() + ") AND o.operation_state NOT IN ('succeeded','failed','cancelled') LIMIT 1" +
+		"), active_restore_plan AS (" +
+		"SELECT 1 FROM restore_plans p, eligible_operation e WHERE p.repo_id = e.repo_id " +
+		"AND p.status IN (" + restorePlanActiveStatusSQLList() + ") LIMIT 1" +
 		"), updated_operation AS (" +
 		"UPDATE operations SET " +
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
@@ -896,7 +905,7 @@ func savePointCreateOperationAcquireLeaseSQL() string {
 		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
-		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($5 = 'finalize_cancellation' OR (NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($5 = 'finalize_cancellation' OR (NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM active_restore_plan))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 

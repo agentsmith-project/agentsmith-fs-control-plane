@@ -34,8 +34,13 @@ func TestAcquireSavePointCreateOperationLeaseSerializesEarlierLifecycleAndJVSMut
 		"o.operation_id <> e.operation_id",
 		"o.operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned', 'repo_purge')",
 		"operation_state NOT IN ('succeeded','failed','cancelled')",
+		"active_restore_plan AS",
+		"FROM restore_plans p, eligible_operation e",
+		"p.repo_id = e.repo_id",
+		"p.status IN ('pending', 'consuming', 'discarding', 'operator_intervention_required')",
 		"NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)",
 		"NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle)",
+		"NOT EXISTS (SELECT 1 FROM active_restore_plan)",
 		"RETURNING",
 	)
 	if strings.Contains(exec.query, "repo_fences") {

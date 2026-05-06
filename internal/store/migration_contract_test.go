@@ -192,6 +192,25 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		)
 	})
 
+	t.Run("restore plans table", func(t *testing.T) {
+		table := contract.requireTable(t, "restore_plans")
+
+		table.requireColumn(t, "restore_plan_id", "text", "primary key")
+		table.requireColumn(t, "namespace_id", "text", "not null")
+		table.requireColumn(t, "repo_id", "text", "not null")
+		table.requireColumn(t, "preview_operation_id", "text", "not null", "references operations")
+		table.requireColumn(t, "source_save_point_id", "text", "not null")
+		table.requireColumn(t, "status", "text", "not null")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireUniqueColumns(t, "preview_operation_id")
+		table.requireCheckMentions(t, "status", expectedRestorePlanStatusValuesForMigrationContract()...)
+		table.requireBodyFragments(t,
+			"foreign key (namespace_id, repo_id) references repos (namespace_id, repo_id)",
+		)
+		contract.requirePartialUniqueIndex(t, "restore_plans", []string{"repo_id"}, "status in ('pending', 'consuming', 'discarding', 'operator_intervention_required')")
+	})
+
 	t.Run("export sessions table", func(t *testing.T) {
 		table := contract.requireTable(t, "export_sessions")
 
@@ -296,6 +315,17 @@ func expectedRepoStatusValuesForMigrationContract() []string {
 		"restoring_tombstoned",
 		"purging",
 		"purged",
+		"operator_intervention_required",
+	}
+}
+
+func expectedRestorePlanStatusValuesForMigrationContract() []string {
+	return []string{
+		"pending",
+		"consuming",
+		"consumed",
+		"discarding",
+		"discarded",
 		"operator_intervention_required",
 	}
 }

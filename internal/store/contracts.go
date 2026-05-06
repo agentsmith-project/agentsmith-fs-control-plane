@@ -8,6 +8,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
@@ -241,8 +242,32 @@ type SavePointCreateOperationMetadataReader interface {
 	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
 }
 
+// RestorePlanReader is the read side of the durable restore preview/run/discard
+// lifecycle source of truth. Callers must not infer active restore plan state
+// from operation terminal status.
+type RestorePlanReader interface {
+	GetRestorePlanByPreviewOperation(ctx context.Context, previewOperationID string) (restoreplan.Plan, error)
+	GetActiveRestorePlanByRepo(ctx context.Context, repoID string) (restoreplan.Plan, error)
+}
+
+// RestorePlanWriter is the write side of the durable restore plan lifecycle.
+// Status transitions must be conditional durable mutations so workers cannot
+// consume or discard a plan after another owner has moved it.
+type RestorePlanWriter interface {
+	CreatePendingRestorePlan(ctx context.Context, plan restoreplan.Plan) error
+	TransitionRestorePlanStatus(ctx context.Context, restorePlanID string, from, to restoreplan.Status, now time.Time) (restoreplan.Plan, error)
+}
+
+// RestorePlanStore is the complete durable restore plan boundary.
+type RestorePlanStore interface {
+	RestorePlanReader
+	RestorePlanWriter
+}
+
 // RepoJVSMutationGateReader is the read-only durable gate for JVS history
-// readers. It must not claim, fence, lease, or mutate operation state.
+// readers. It observes operation-row non-terminal JVS mutations only; active
+// restore plan blocking for new mutations lives in mutation acquire SQL. It
+// must not claim, fence, lease, or mutate operation state.
 type RepoJVSMutationGateReader interface {
 	RepoHasNonTerminalJVSMutation(ctx context.Context, repoID string) (bool, error)
 }

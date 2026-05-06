@@ -355,6 +355,34 @@ CREATE INDEX IF NOT EXISTS repos_namespace_idx
 CREATE INDEX IF NOT EXISTS repos_volume_idx
     ON repos (volume_id);
 
+CREATE TABLE IF NOT EXISTS restore_plans (
+    restore_plan_id text PRIMARY KEY,
+    namespace_id text NOT NULL,
+    repo_id text NOT NULL,
+    preview_operation_id text NOT NULL REFERENCES operations (operation_id),
+    source_save_point_id text NOT NULL,
+    status text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT restore_plans_preview_operation_unique UNIQUE (preview_operation_id),
+    CONSTRAINT restore_plans_repo_fk FOREIGN KEY (namespace_id, repo_id)
+        REFERENCES repos (namespace_id, repo_id),
+    CONSTRAINT restore_plans_status_check CHECK (
+        status IN (
+            'pending',
+            'consuming',
+            'consumed',
+            'discarding',
+            'discarded',
+            'operator_intervention_required'
+        )
+    )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS restore_plans_one_active_per_repo_idx
+    ON restore_plans (repo_id)
+    WHERE status IN ('pending', 'consuming', 'discarding', 'operator_intervention_required');
+
 CREATE TABLE IF NOT EXISTS export_sessions (
     export_id text PRIMARY KEY,
     namespace_id text NOT NULL,

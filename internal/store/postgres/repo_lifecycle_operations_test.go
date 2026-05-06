@@ -54,9 +54,14 @@ func TestAcquireRepoLifecycleOperationLeaseScopesBeforeMutation(t *testing.T) {
 		"o.operation_id <> e.operation_id",
 		"o.operation_type IN ('save_point_create', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
 		"o.operation_state NOT IN ('succeeded','failed','cancelled')",
+		"active_restore_plan AS",
+		"FROM restore_plans p, eligible_operation e",
+		"p.repo_id = e.repo_id",
+		"p.status IN ('pending', 'consuming', 'discarding', 'operator_intervention_required')",
 		"updated_operation AS",
 		"UPDATE operations SET",
 		"$5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)",
+		"$5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM active_restore_plan)",
 		"RETURNING",
 	)
 	if strings.Contains(exec.query, "operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned', 'repo_purge')") {
@@ -92,8 +97,10 @@ func TestAcquireRepoLifecycleOperationLeaseFinalizeCancellationReleasesSameOpera
 				"released_fence AS",
 				"UPDATE repo_fences SET status = 'released'",
 				"earlier_jvs_mutation AS",
+				"active_restore_plan AS",
 				"updated_operation AS",
 				"$5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)",
+				"$5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM active_restore_plan)",
 				"SELECT",
 				"FROM updated_operation",
 			)

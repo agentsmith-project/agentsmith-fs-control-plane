@@ -63,7 +63,7 @@ func TestRepoHasNonTerminalJVSMutationScopesRepoTypeAndNonTerminalState(t *testi
 		"operation_type IN ('save_point_create', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
 		"operation_state NOT IN ('succeeded','failed','cancelled')",
 	)
-	for _, forbidden := range []string{"UPDATE ", "INSERT ", "DELETE ", "FOR UPDATE", "lease_owner", "repo_fences"} {
+	for _, forbidden := range []string{"UPDATE ", "INSERT ", "DELETE ", "FOR UPDATE", "lease_owner", "repo_fences", "restore_plans"} {
 		if strings.Contains(strings.ToUpper(exec.query), strings.ToUpper(forbidden)) {
 			t.Fatalf("gate query contains mutating or unrelated SQL %q: %s", forbidden, exec.query)
 		}

@@ -13,6 +13,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 )
 
 func TestOperationStoreContractComposesReaderAndWriter(t *testing.T) {
@@ -145,6 +146,43 @@ func TestOperationWorkerCommitStoreContractCommitsSanitizedOperationAndAuditToge
 	if strings.Contains(toStoreContractString(fake.record.InputSummary), "contract-secret") ||
 		strings.Contains(fake.auditEvents[0].Reason, "audit-secret") {
 		t.Fatalf("commit stored unsanitized operation/audit: %#v %#v", fake.record, fake.auditEvents)
+	}
+}
+
+func TestRestorePlanStoreContractOwnsPreviewRunDiscardLifecycle(t *testing.T) {
+	fake := &fakeRestorePlanStore{}
+	var _ RestorePlanReader = fake
+	var _ RestorePlanWriter = fake
+	var _ RestorePlanStore = fake
+
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	plan := restoreplan.Plan{
+		ID:                 "b644aec4-bcb6-4480-b5fa-a283927dd3cd",
+		NamespaceID:        "ns_alpha01",
+		RepoID:             "repo_alpha01",
+		PreviewOperationID: "op_preview01",
+		SourceSavePointID:  "sp_001",
+		Status:             restoreplan.StatusPending,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	if err := fake.CreatePendingRestorePlan(context.Background(), plan); err != nil {
+		t.Fatalf("create pending restore plan: %v", err)
+	}
+	active, err := fake.GetActiveRestorePlanByRepo(context.Background(), "repo_alpha01")
+	if err != nil {
+		t.Fatalf("get active restore plan: %v", err)
+	}
+	if active.ID != "b644aec4-bcb6-4480-b5fa-a283927dd3cd" || !active.Active() {
+		t.Fatalf("active plan = %#v, want pending UUID-like JVS plan id", active)
+	}
+
+	discarding, err := fake.TransitionRestorePlanStatus(context.Background(), "b644aec4-bcb6-4480-b5fa-a283927dd3cd", restoreplan.StatusPending, restoreplan.StatusDiscarding, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("transition restore plan: %v", err)
+	}
+	if discarding.Status != restoreplan.StatusDiscarding || discarding.PreviewOperationID != "op_preview01" {
+		t.Fatalf("transitioned plan = %#v, want discarding with preview linkage", discarding)
 	}
 }
 
@@ -1039,6 +1077,56 @@ func (fake *fakeRepoRecoveryInspectionReader) ListAllHeldRepoFences(_ context.Co
 	out := make([]fences.Fence, len(fake.fences))
 	copy(out, fake.fences)
 	return out, nil
+}
+
+type fakeRestorePlanStore struct {
+	plans map[string]restoreplan.Plan
+}
+
+func (fake *fakeRestorePlanStore) CreatePendingRestorePlan(_ context.Context, plan restoreplan.Plan) error {
+	if plan.Status != restoreplan.StatusPending {
+		return errors.New("restore plan must be pending")
+	}
+	if err := plan.Validate(); err != nil {
+		return err
+	}
+	if fake.plans == nil {
+		fake.plans = map[string]restoreplan.Plan{}
+	}
+	fake.plans[plan.ID] = plan
+	return nil
+}
+
+func (fake *fakeRestorePlanStore) GetRestorePlanByPreviewOperation(_ context.Context, previewOperationID string) (restoreplan.Plan, error) {
+	for _, plan := range fake.plans {
+		if plan.PreviewOperationID == previewOperationID {
+			return plan, nil
+		}
+	}
+	return restoreplan.Plan{}, errors.New("restore plan not found")
+}
+
+func (fake *fakeRestorePlanStore) GetActiveRestorePlanByRepo(_ context.Context, repoID string) (restoreplan.Plan, error) {
+	for _, plan := range fake.plans {
+		if plan.RepoID == repoID && plan.Active() {
+			return plan, nil
+		}
+	}
+	return restoreplan.Plan{}, errors.New("active restore plan not found")
+}
+
+func (fake *fakeRestorePlanStore) TransitionRestorePlanStatus(_ context.Context, restorePlanID string, from, to restoreplan.Status, now time.Time) (restoreplan.Plan, error) {
+	plan, ok := fake.plans[restorePlanID]
+	if !ok || plan.Status != from {
+		return restoreplan.Plan{}, errors.New("restore plan transition conflict")
+	}
+	if !restoreplan.ValidTransition(from, to) {
+		return restoreplan.Plan{}, errors.New("invalid restore plan transition")
+	}
+	plan.Status = to
+	plan.UpdatedAt = now
+	fake.plans[restorePlanID] = plan
+	return plan, nil
 }
 
 type fakeResourceStore struct {
