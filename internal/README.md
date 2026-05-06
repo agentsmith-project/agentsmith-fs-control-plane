@@ -65,7 +65,8 @@ needed before real handlers and storage mutation work:
   uses a separate explicit worker gate, dedicated store boundary, and storage
   purger for destructive AFSCP-managed retained storage removal.
 - `workerapp`: production `afscp-worker --run-once` bootstrap for the
-  opt-in metadata operation recovery runner.
+  opt-in metadata operation recovery runner and the independent audit outbox
+  stale-recovery plus HTTP JSON delivery runner.
 - `pathresolver`: path safety helpers, denial tests, shared resolver corpus, and
   canonical internal repo root resolution from trusted volume roots plus repo
   IDs.
@@ -74,14 +75,17 @@ Repo create intake, repo lifecycle operation intake/admission, namespace-bound
 repo read handlers, and operation inspection exist. Still intentionally absent:
 JVS save/restore/template execution, WebDAV/mount/save/restore/template endpoint
 handlers beyond intake/admission, real external audit delivery worker/sink
-integration, WebDAV export serving, workload mount issuance, repo/template
-lifecycle mutation beyond the implemented lifecycle workers, and fence
-enforcement beyond the minimal repo fence adapter slice.
+integration beyond the HTTP JSON at-least-once sink, WebDAV export serving,
+workload mount issuance, repo/template lifecycle mutation beyond the
+implemented lifecycle workers, and fence enforcement beyond the minimal repo
+fence adapter slice.
 The worker app currently wires
 `volume_ensure`, `namespace_upsert`, `namespace_volume_binding_put`, and opt-in
 `repo_create` plus `repo_archive`/`repo_restore_archived`/`repo_delete`/
 `repo_restore_tombstoned`, plus separately gated `repo_purge` operation recovery
-when explicitly enabled.
+when explicitly enabled. It also wires audit outbox stale recovery and HTTP JSON
+delivery when `AFSCP_WORKER_AUDIT_DELIVERY_ENABLED=true`; delivery is
+at-least-once and the external sink must dedupe by `audit_event_id`.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

@@ -120,8 +120,6 @@ func (store *Store) RecoverStaleAuditOutboxRecords(ctx context.Context, owner st
 	staleBefore := failure.Now.Add(-staleThreshold)
 
 	rows, err := store.exec.QueryContext(ctx, auditOutboxRecoverStaleDeliveringSQL(),
-		failure.MaxAttempts,
-		string(audit.OutboxStatusFailed),
 		string(audit.OutboxStatusRetryWait),
 		failure.Now.Add(failure.Backoff),
 		lastError,
@@ -215,13 +213,13 @@ func auditOutboxClaimDueSQL() string {
 
 func auditOutboxRecoverStaleDeliveringSQL() string {
 	return "UPDATE audit_outbox " +
-		"SET delivery_status = CASE WHEN delivery_attempt >= $1 THEN $2 ELSE $3 END, " +
-		"next_retry_at = CASE WHEN delivery_attempt >= $1 THEN NULL ELSE $4 END, " +
-		"last_error = $5, delivered_at = NULL, updated_at = $6 " +
+		"SET delivery_status = $1, " +
+		"next_retry_at = $2, " +
+		"last_error = $3, delivered_at = NULL, updated_at = $4 " +
 		"WHERE audit_event_id IN (" +
 		"SELECT audit_event_id FROM audit_outbox " +
-		"WHERE delivery_status = $7 AND updated_at <= $8 " +
-		"ORDER BY updated_at, audit_event_id LIMIT $9 FOR UPDATE SKIP LOCKED" +
+		"WHERE delivery_status = $5 AND updated_at <= $6 " +
+		"ORDER BY updated_at, audit_event_id LIMIT $7 FOR UPDATE SKIP LOCKED" +
 		") RETURNING " + auditOutboxSelectColumnsSQL()
 }
 

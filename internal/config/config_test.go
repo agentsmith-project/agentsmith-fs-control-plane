@@ -45,6 +45,24 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	if cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
 		t.Fatal("repo lifecycle recovery enabled by default, want disabled")
 	}
+	if cfg.Worker.AuditDelivery.Enabled {
+		t.Fatal("audit delivery enabled by default, want disabled")
+	}
+	if cfg.Worker.AuditDelivery.Limit != 10 {
+		t.Fatalf("audit delivery limit = %d, want 10", cfg.Worker.AuditDelivery.Limit)
+	}
+	if cfg.Worker.AuditDelivery.MaxAttempts != 5 {
+		t.Fatalf("audit delivery max attempts = %d, want 5", cfg.Worker.AuditDelivery.MaxAttempts)
+	}
+	if cfg.Worker.AuditDelivery.RetryBackoff != time.Minute {
+		t.Fatalf("audit delivery retry backoff = %v, want 1m", cfg.Worker.AuditDelivery.RetryBackoff)
+	}
+	if cfg.Worker.AuditDelivery.StaleThreshold != 5*time.Minute {
+		t.Fatalf("audit delivery stale threshold = %v, want 5m", cfg.Worker.AuditDelivery.StaleThreshold)
+	}
+	if cfg.Worker.AuditDelivery.Timeout != 10*time.Second {
+		t.Fatalf("audit delivery timeout = %v, want 10s", cfg.Worker.AuditDelivery.Timeout)
+	}
 }
 
 func TestLoadNormalizesFieldsAndCapabilities(t *testing.T) {
@@ -332,6 +350,93 @@ func TestLoadWorkerOperationRecoveryParsesDefaultsOverridesAndFallbackDSN(t *tes
 	}
 	if cfg.Worker.OperationRecovery.Owner != "worker-b" || cfg.Worker.OperationRecovery.Limit != 25 || cfg.Worker.OperationRecovery.LeaseDuration != 2*time.Minute || cfg.Worker.RunOnceTimeout != 45*time.Second {
 		t.Fatalf("overrides = %#v", cfg.Worker)
+	}
+}
+
+func TestLoadWorkerAuditDeliveryRequiresExplicitConfigWhenEnabled(t *testing.T) {
+	base := MapSource{"AFSCP_WORKER_AUDIT_DELIVERY_ENABLED": "true"}
+	tests := []struct {
+		name     string
+		override MapSource
+		want     string
+	}{
+		{name: "missing dsn", want: "AFSCP_POSTGRES_DSN"},
+		{name: "missing owner", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://audit:password@db/afscp"}, want: "AFSCP_WORKER_AUDIT_DELIVERY_OWNER"},
+		{name: "missing sink", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://audit:password@db/afscp", "AFSCP_WORKER_AUDIT_DELIVERY_OWNER": "audit-worker"}, want: "AFSCP_AUDIT_DELIVERY_SINK_KIND"},
+		{name: "missing endpoint", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://audit:password@db/afscp", "AFSCP_WORKER_AUDIT_DELIVERY_OWNER": "audit-worker", "AFSCP_AUDIT_DELIVERY_SINK_KIND": "http_json"}, want: "AFSCP_AUDIT_DELIVERY_ENDPOINT"},
+		{name: "unsupported sink", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://audit:password@db/afscp", "AFSCP_WORKER_AUDIT_DELIVERY_OWNER": "audit-worker", "AFSCP_AUDIT_DELIVERY_SINK_KIND": "stdout", "AFSCP_AUDIT_DELIVERY_ENDPOINT": "https://audit.example/sink"}, want: "AFSCP_AUDIT_DELIVERY_SINK_KIND"},
+		{name: "bad endpoint", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://audit:password@db/afscp", "AFSCP_WORKER_AUDIT_DELIVERY_OWNER": "audit-worker", "AFSCP_AUDIT_DELIVERY_SINK_KIND": "http_json", "AFSCP_AUDIT_DELIVERY_ENDPOINT": "ftp://secret.example/sink"}, want: "AFSCP_AUDIT_DELIVERY_ENDPOINT"},
+		{name: "http non-loopback endpoint", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://audit:password@db/afscp", "AFSCP_WORKER_AUDIT_DELIVERY_OWNER": "audit-worker", "AFSCP_AUDIT_DELIVERY_SINK_KIND": "http_json", "AFSCP_AUDIT_DELIVERY_ENDPOINT": "http://audit.example/sink"}, want: "AFSCP_AUDIT_DELIVERY_ENDPOINT"},
+		{name: "endpoint userinfo", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://audit:password@db/afscp", "AFSCP_WORKER_AUDIT_DELIVERY_OWNER": "audit-worker", "AFSCP_AUDIT_DELIVERY_SINK_KIND": "http_json", "AFSCP_AUDIT_DELIVERY_ENDPOINT": "https://user:secret@audit.example/sink"}, want: "AFSCP_AUDIT_DELIVERY_ENDPOINT"},
+		{name: "invalid timeout", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://audit:password@db/afscp", "AFSCP_WORKER_AUDIT_DELIVERY_OWNER": "audit-worker", "AFSCP_AUDIT_DELIVERY_SINK_KIND": "http_json", "AFSCP_AUDIT_DELIVERY_ENDPOINT": "https://audit.example/sink", "AFSCP_AUDIT_DELIVERY_TIMEOUT": "soon"}, want: "AFSCP_AUDIT_DELIVERY_TIMEOUT"},
+		{name: "zero timeout", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://audit:password@db/afscp", "AFSCP_WORKER_AUDIT_DELIVERY_OWNER": "audit-worker", "AFSCP_AUDIT_DELIVERY_SINK_KIND": "http_json", "AFSCP_AUDIT_DELIVERY_ENDPOINT": "https://audit.example/sink", "AFSCP_AUDIT_DELIVERY_TIMEOUT": "0s"}, want: "AFSCP_AUDIT_DELIVERY_TIMEOUT"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := MapSource{}
+			for key, value := range base {
+				source[key] = value
+			}
+			for key, value := range tt.override {
+				source[key] = value
+			}
+			_, err := Load(source)
+			if err == nil {
+				t.Fatal("Load succeeded, want audit delivery config error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want %s", err, tt.want)
+			}
+			for _, leaked := range []string{"secret.example", "password@db", "user:secret"} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Fatalf("error leaked sensitive config %q: %v", leaked, err)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadWorkerAuditDeliveryParsesDefaultsOverridesAndFallbackDSN(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_WORKER_AUDIT_DELIVERY_ENABLED": "true",
+		"AFSCP_DATABASE_URL":                  "postgres://fallback:password@db/afscp",
+		"AFSCP_WORKER_AUDIT_DELIVERY_OWNER":   " audit-worker ",
+		"AFSCP_AUDIT_DELIVERY_SINK_KIND":      " http_json ",
+		"AFSCP_AUDIT_DELIVERY_ENDPOINT":       " https://audit.example/sink ",
+	})
+	if err != nil {
+		t.Fatalf("Load defaults: %v", err)
+	}
+	auditDelivery := cfg.Worker.AuditDelivery
+	if !auditDelivery.Enabled {
+		t.Fatal("audit delivery disabled, want enabled")
+	}
+	if auditDelivery.PostgresDSN != "postgres://fallback:password@db/afscp" || auditDelivery.Owner != "audit-worker" || auditDelivery.SinkKind != "http_json" || auditDelivery.Endpoint != "https://audit.example/sink" {
+		t.Fatalf("audit delivery config = %#v", auditDelivery)
+	}
+	if auditDelivery.Limit != 10 || auditDelivery.MaxAttempts != 5 || auditDelivery.RetryBackoff != time.Minute || auditDelivery.StaleThreshold != 5*time.Minute || auditDelivery.Timeout != 10*time.Second {
+		t.Fatalf("audit delivery defaults = %#v", auditDelivery)
+	}
+
+	cfg, err = Load(MapSource{
+		"AFSCP_WORKER_AUDIT_DELIVERY_ENABLED": "true",
+		"AFSCP_POSTGRES_DSN":                  "postgres://primary:password@db/afscp",
+		"AFSCP_WORKER_AUDIT_DELIVERY_OWNER":   "audit-worker-b",
+		"AFSCP_AUDIT_DELIVERY_LIMIT":          "25",
+		"AFSCP_AUDIT_DELIVERY_MAX_ATTEMPTS":   "8",
+		"AFSCP_AUDIT_DELIVERY_RETRY_BACKOFF":  "3m",
+		"AFSCP_AUDIT_DELIVERY_STALE_AFTER":    "9m",
+		"AFSCP_AUDIT_DELIVERY_SINK_KIND":      "http_json",
+		"AFSCP_AUDIT_DELIVERY_ENDPOINT":       "http://127.0.0.1:8080/sink",
+		"AFSCP_AUDIT_DELIVERY_BEARER_TOKEN":   "audit-secret-token",
+		"AFSCP_AUDIT_DELIVERY_TIMEOUT":        "2s",
+	})
+	if err != nil {
+		t.Fatalf("Load overrides: %v", err)
+	}
+	auditDelivery = cfg.Worker.AuditDelivery
+	if auditDelivery.PostgresDSN != "postgres://primary:password@db/afscp" || auditDelivery.Owner != "audit-worker-b" || auditDelivery.Limit != 25 || auditDelivery.MaxAttempts != 8 || auditDelivery.RetryBackoff != 3*time.Minute || auditDelivery.StaleThreshold != 9*time.Minute || auditDelivery.Endpoint != "http://127.0.0.1:8080/sink" || auditDelivery.BearerToken != "audit-secret-token" || auditDelivery.Timeout != 2*time.Second {
+		t.Fatalf("audit delivery overrides = %#v", auditDelivery)
 	}
 }
 

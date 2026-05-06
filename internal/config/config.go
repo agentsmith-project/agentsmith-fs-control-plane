@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,6 +21,11 @@ const (
 	defaultOperationRecoveryLimit         = 10
 	defaultOperationRecoveryLeaseDuration = 5 * time.Minute
 	defaultWorkerRunOnceTimeout           = 30 * time.Second
+	defaultAuditDeliveryLimit             = 10
+	defaultAuditDeliveryMaxAttempts       = 5
+	defaultAuditDeliveryRetryBackoff      = time.Minute
+	defaultAuditDeliveryStaleThreshold    = 5 * time.Minute
+	defaultAuditDeliveryTimeout           = 10 * time.Second
 )
 
 // Source supplies configuration values without tying tests to process env.
@@ -67,6 +74,7 @@ type Capability struct {
 type WorkerConfig struct {
 	RunOnceTimeout    time.Duration
 	OperationRecovery WorkerOperationRecoveryConfig
+	AuditDelivery     WorkerAuditDeliveryConfig
 }
 
 type WorkerOperationRecoveryConfig struct {
@@ -88,6 +96,20 @@ type WorkerRepoCreateRecoveryConfig struct {
 	VolumeRoots     map[string]string
 }
 
+type WorkerAuditDeliveryConfig struct {
+	Enabled        bool
+	PostgresDSN    string
+	Owner          string
+	Limit          int
+	MaxAttempts    int
+	RetryBackoff   time.Duration
+	StaleThreshold time.Duration
+	SinkKind       string
+	Endpoint       string
+	BearerToken    string
+	Timeout        time.Duration
+}
+
 func (c Capability) Available() bool {
 	return c.Enabled && c.Ready
 }
@@ -106,6 +128,13 @@ func Load(source Source) (Config, error) {
 			OperationRecovery: WorkerOperationRecoveryConfig{
 				Limit:         defaultOperationRecoveryLimit,
 				LeaseDuration: defaultOperationRecoveryLeaseDuration,
+			},
+			AuditDelivery: WorkerAuditDeliveryConfig{
+				Limit:          defaultAuditDeliveryLimit,
+				MaxAttempts:    defaultAuditDeliveryMaxAttempts,
+				RetryBackoff:   defaultAuditDeliveryRetryBackoff,
+				StaleThreshold: defaultAuditDeliveryStaleThreshold,
+				Timeout:        defaultAuditDeliveryTimeout,
 			},
 		},
 	}
@@ -227,8 +256,107 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 			return WorkerConfig{}, fmt.Errorf("AFSCP_WORKER_OWNER is required when AFSCP_WORKER_OPERATION_RECOVERY_ENABLED is true")
 		}
 	}
+	auditDelivery, err := loadWorkerAuditDeliveryConfig(source, worker.AuditDelivery)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.AuditDelivery = auditDelivery
 
 	return worker, nil
+}
+
+func loadWorkerAuditDeliveryConfig(source Source, defaults WorkerAuditDeliveryConfig) (WorkerAuditDeliveryConfig, error) {
+	cfg := defaults
+	enabled, err := boolValue(source, "AFSCP_WORKER_AUDIT_DELIVERY_ENABLED")
+	if err != nil {
+		return WorkerAuditDeliveryConfig{}, err
+	}
+	cfg.Enabled = enabled
+	cfg.PostgresDSN = valueOrDefault(source, "AFSCP_AUDIT_DELIVERY_POSTGRES_DSN", "")
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_POSTGRES_DSN", "")
+	}
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_DATABASE_URL", "")
+	}
+	cfg.Owner = valueOrDefault(source, "AFSCP_WORKER_AUDIT_DELIVERY_OWNER", "")
+	cfg.SinkKind = strings.ToLower(valueOrDefault(source, "AFSCP_AUDIT_DELIVERY_SINK_KIND", ""))
+	cfg.Endpoint = valueOrDefault(source, "AFSCP_AUDIT_DELIVERY_ENDPOINT", "")
+	cfg.BearerToken = valueOrDefault(source, "AFSCP_AUDIT_DELIVERY_BEARER_TOKEN", "")
+
+	if cfg.Limit, err = intValue(source, "AFSCP_AUDIT_DELIVERY_LIMIT", cfg.Limit); err != nil {
+		return WorkerAuditDeliveryConfig{}, err
+	}
+	if cfg.Limit <= 0 {
+		return WorkerAuditDeliveryConfig{}, fmt.Errorf("AFSCP_AUDIT_DELIVERY_LIMIT must be positive")
+	}
+	if cfg.MaxAttempts, err = intValue(source, "AFSCP_AUDIT_DELIVERY_MAX_ATTEMPTS", cfg.MaxAttempts); err != nil {
+		return WorkerAuditDeliveryConfig{}, err
+	}
+	if cfg.MaxAttempts <= 0 {
+		return WorkerAuditDeliveryConfig{}, fmt.Errorf("AFSCP_AUDIT_DELIVERY_MAX_ATTEMPTS must be positive")
+	}
+	if cfg.RetryBackoff, err = durationValue(source, "AFSCP_AUDIT_DELIVERY_RETRY_BACKOFF", cfg.RetryBackoff); err != nil {
+		return WorkerAuditDeliveryConfig{}, err
+	}
+	if cfg.RetryBackoff < 0 {
+		return WorkerAuditDeliveryConfig{}, fmt.Errorf("AFSCP_AUDIT_DELIVERY_RETRY_BACKOFF cannot be negative")
+	}
+	if cfg.StaleThreshold, err = durationValue(source, "AFSCP_AUDIT_DELIVERY_STALE_AFTER", cfg.StaleThreshold); err != nil {
+		return WorkerAuditDeliveryConfig{}, err
+	}
+	if cfg.StaleThreshold <= 0 {
+		return WorkerAuditDeliveryConfig{}, fmt.Errorf("AFSCP_AUDIT_DELIVERY_STALE_AFTER must be positive")
+	}
+	if cfg.Timeout, err = durationValue(source, "AFSCP_AUDIT_DELIVERY_TIMEOUT", cfg.Timeout); err != nil {
+		return WorkerAuditDeliveryConfig{}, err
+	}
+	if cfg.Timeout <= 0 {
+		return WorkerAuditDeliveryConfig{}, fmt.Errorf("AFSCP_AUDIT_DELIVERY_TIMEOUT must be positive")
+	}
+
+	if !cfg.Enabled {
+		return cfg, nil
+	}
+	if cfg.PostgresDSN == "" {
+		return WorkerAuditDeliveryConfig{}, fmt.Errorf("AFSCP_POSTGRES_DSN is required when AFSCP_WORKER_AUDIT_DELIVERY_ENABLED is true")
+	}
+	if strings.TrimSpace(cfg.Owner) == "" {
+		return WorkerAuditDeliveryConfig{}, fmt.Errorf("AFSCP_WORKER_AUDIT_DELIVERY_OWNER is required when AFSCP_WORKER_AUDIT_DELIVERY_ENABLED is true")
+	}
+	cfg.Owner = strings.TrimSpace(cfg.Owner)
+	if cfg.SinkKind == "" {
+		return WorkerAuditDeliveryConfig{}, fmt.Errorf("AFSCP_AUDIT_DELIVERY_SINK_KIND is required when AFSCP_WORKER_AUDIT_DELIVERY_ENABLED is true")
+	}
+	if cfg.SinkKind != "http_json" {
+		return WorkerAuditDeliveryConfig{}, fmt.Errorf("AFSCP_AUDIT_DELIVERY_SINK_KIND must be http_json")
+	}
+	if err := validateAuditDeliveryEndpoint(cfg.Endpoint); err != nil {
+		return WorkerAuditDeliveryConfig{}, err
+	}
+	return cfg, nil
+}
+
+func validateAuditDeliveryEndpoint(endpoint string) error {
+	if strings.TrimSpace(endpoint) == "" {
+		return fmt.Errorf("AFSCP_AUDIT_DELIVERY_ENDPOINT is required when AFSCP_WORKER_AUDIT_DELIVERY_ENABLED is true")
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Host == "" || parsed.User != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return fmt.Errorf("AFSCP_AUDIT_DELIVERY_ENDPOINT must be an http or https URL without userinfo")
+	}
+	if parsed.Scheme == "http" && !auditDeliveryEndpointHostIsLoopback(parsed.Hostname()) {
+		return fmt.Errorf("AFSCP_AUDIT_DELIVERY_ENDPOINT must use https except for loopback http development endpoints")
+	}
+	return nil
+}
+
+func auditDeliveryEndpointHostIsLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func loadRepoCreateRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {

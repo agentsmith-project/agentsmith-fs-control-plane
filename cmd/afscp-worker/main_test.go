@@ -456,6 +456,26 @@ func (store *cmdWorkerAppStore) ListEarlierNonTerminalRepoLifecycleOperations(co
 	return nil, errors.New("unexpected lifecycle read")
 }
 
+func (store *cmdWorkerAppStore) ListDueAuditOutboxRecords(context.Context, time.Time, int) ([]audit.OutboxRecord, error) {
+	return nil, nil
+}
+
+func (store *cmdWorkerAppStore) ClaimDueAuditOutboxRecords(context.Context, string, time.Time, int) ([]audit.OutboxRecord, error) {
+	return nil, nil
+}
+
+func (store *cmdWorkerAppStore) RecoverStaleAuditOutboxRecords(context.Context, string, time.Duration, int, audit.DeliveryFailure) ([]audit.OutboxRecord, error) {
+	return nil, nil
+}
+
+func (store *cmdWorkerAppStore) MarkAuditOutboxDelivered(context.Context, string, time.Time) error {
+	return nil
+}
+
+func (store *cmdWorkerAppStore) MarkAuditOutboxDeliveryFailed(context.Context, string, audit.DeliveryFailure) error {
+	return nil
+}
+
 func (runner *fakeRunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error) {
 	runner.calls++
 	runner.ctx = ctx

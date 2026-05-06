@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
@@ -36,6 +37,99 @@ func TestNewRunOnceRunnerDisabledFailsBeforeOpeningStore(t *testing.T) {
 	}
 	if factoryCalls != 0 {
 		t.Fatalf("factory calls = %d, want 0", factoryCalls)
+	}
+}
+
+func TestRunOnceAuditOnlyRunsStaleRecoveryBeforeDelivery(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore()
+	store.recoveredAudit = []audit.OutboxRecord{workerAppAuditRecord("audit-stale", []byte(`{"audit_event_id":"audit-stale"}`))}
+	store.claimedAudit = []audit.OutboxRecord{workerAppAuditRecord("audit-due", []byte(`{"audit_event_id":"audit-due"}`))}
+	runner := newWorkerAppRunner(t, store, workerAppAuditConfigSource(config.MapSource{
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "false",
+	}), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.AuditStaleRecovery.Recovered != 1 || result.AuditDelivery.Claimed != 1 || result.AuditDelivery.Delivered != 1 {
+		t.Fatalf("result = %#v, want stale recovered and one delivered", result)
+	}
+	if got := strings.Join(store.auditCallOrder, ","); got != "recover_stale,claim_due,mark_delivered" {
+		t.Fatalf("audit call order = %q, want stale before delivery", got)
+	}
+	if store.auditRecoverOwner != "audit-worker" || store.auditClaimOwner != "audit-worker" || store.auditClaimLimit != 10 || store.auditRecoverLimit != 10 {
+		t.Fatalf("audit owner/limit = recover %q/%d claim %q/%d", store.auditRecoverOwner, store.auditRecoverLimit, store.auditClaimOwner, store.auditClaimLimit)
+	}
+}
+
+func TestRunOnceAuditOnlyAcceptsAuditStoreWithoutOperationStore(t *testing.T) {
+	now := workerAppNow()
+	auditStore := &fakeWorkerAppAuditStore{
+		claimedAudit: []audit.OutboxRecord{workerAppAuditRecord("audit-due", []byte(`{"audit_event_id":"audit-due"}`))},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppAuditConfigSource(config.MapSource{
+			"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "false",
+		}),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{AuditStore: auditStore}, nil
+		},
+		Clock: func() time.Time { return now },
+		AuditDelivererFactory: func(config.WorkerAuditDeliveryConfig) (auditdelivery.Deliverer, error) {
+			return fakeWorkerAppAuditDeliverer{deliverErr: nil}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.AuditDelivery.Delivered != 1 || result.OperationRecovery.Scanned != 0 {
+		t.Fatalf("result = %#v, want audit-only delivery", result)
+	}
+}
+
+func TestRunOnceOperationAndAuditCanRunTogether(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore(workerAppOperationRecord(now))
+	store.claimedAudit = []audit.OutboxRecord{workerAppAuditRecord("audit-due", []byte(`{"audit_event_id":"audit-due"}`))}
+	runner := newWorkerAppRunner(t, store, workerAppAuditConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.OperationRecovery.Claimed != 1 || result.AuditDelivery.Delivered != 1 {
+		t.Fatalf("result = %#v, want operation and audit work", result)
+	}
+}
+
+func TestRunOnceAuditDeliveryFailureRecordsRetryWithoutLeakingSecret(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore()
+	store.claimedAudit = []audit.OutboxRecord{workerAppAuditRecord("audit-fail", []byte(`{"audit_event_id":"audit-fail"}`))}
+	store.auditDeliverErr = errors.New("sink failed token=delivery-secret")
+	runner := newWorkerAppRunner(t, store, workerAppAuditConfigSource(config.MapSource{
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "false",
+	}), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want audit delivery count error")
+	}
+	if result.AuditDelivery.DeliveryFailuresRecorded != 1 || len(store.auditFailed) != 1 {
+		t.Fatalf("result/failed marks = %#v/%d, want recorded failure", result.AuditDelivery, len(store.auditFailed))
+	}
+	if !strings.Contains(err.Error(), "audit delivery incomplete") {
+		t.Fatalf("error = %q, want audit delivery incomplete", err)
+	}
+	if strings.Contains(store.auditFailed[0].failure.LastError, "delivery-secret") || !strings.Contains(store.auditFailed[0].failure.LastError, "[REDACTED]") {
+		t.Fatalf("failure LastError = %q, want redacted", store.auditFailed[0].failure.LastError)
 	}
 }
 
@@ -641,7 +735,7 @@ func TestNewRunOnceRunnerStoreFactoryErrorsFailClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewRunOnceRunner succeeded, want store error")
 	}
-	if !strings.Contains(err.Error(), "open worker operation recovery store") {
+	if !strings.Contains(err.Error(), "open worker store") {
 		t.Fatalf("error = %q, want store context", err)
 	}
 }
@@ -986,6 +1080,9 @@ func newWorkerAppRunner(t *testing.T, store *fakeWorkerAppStore, source config.M
 		},
 		Clock:        func() time.Time { return now },
 		AuditEventID: func() string { return "evt_namespace" },
+		AuditDelivererFactory: func(config.WorkerAuditDeliveryConfig) (auditdelivery.Deliverer, error) {
+			return fakeWorkerAppAuditDeliverer{store: store}, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("NewRunOnceRunner: %v", err)
@@ -999,6 +1096,19 @@ func workerAppConfigSource(overrides config.MapSource) config.MapSource {
 		"AFSCP_POSTGRES_DSN":                      "postgres://worker:password@db/afscp",
 		"AFSCP_WORKER_OWNER":                      "worker-a",
 	}
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return source
+}
+
+func workerAppAuditConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppConfigSource(config.MapSource{
+		"AFSCP_WORKER_AUDIT_DELIVERY_ENABLED": "true",
+		"AFSCP_WORKER_AUDIT_DELIVERY_OWNER":   "audit-worker",
+		"AFSCP_AUDIT_DELIVERY_SINK_KIND":      "http_json",
+		"AFSCP_AUDIT_DELIVERY_ENDPOINT":       "https://audit.example/sink",
+	})
 	for key, value := range overrides {
 		source[key] = value
 	}
@@ -1214,22 +1324,37 @@ func workerAppNow() time.Time {
 }
 
 type fakeWorkerAppStore struct {
-	records         map[string]operations.OperationRecord
-	order           []string
-	volume          resources.Volume
-	repo            resources.Repo
-	namespace       resources.Namespace
-	binding         resources.NamespaceVolumeBinding
-	exports         []sessionstate.ExportSession
-	mounts          []sessionstate.WorkloadMountBinding
-	operation       operations.OperationRecord
-	auditEvents     []audit.Event
-	fences          []fences.Fence
-	releasedFenceID string
-	listDeadline    time.Time
-	closeCalls      int
-	acquireIDs      []string
-	acquirePolicies map[string]operations.LeaseCancelPolicy
+	records           map[string]operations.OperationRecord
+	order             []string
+	volume            resources.Volume
+	repo              resources.Repo
+	namespace         resources.Namespace
+	binding           resources.NamespaceVolumeBinding
+	exports           []sessionstate.ExportSession
+	mounts            []sessionstate.WorkloadMountBinding
+	operation         operations.OperationRecord
+	auditEvents       []audit.Event
+	fences            []fences.Fence
+	releasedFenceID   string
+	listDeadline      time.Time
+	closeCalls        int
+	acquireIDs        []string
+	acquirePolicies   map[string]operations.LeaseCancelPolicy
+	recoveredAudit    []audit.OutboxRecord
+	claimedAudit      []audit.OutboxRecord
+	auditCallOrder    []string
+	auditRecoverOwner string
+	auditRecoverLimit int
+	auditClaimOwner   string
+	auditClaimLimit   int
+	auditDelivered    []string
+	auditFailed       []workerAppAuditFailedCall
+	auditDeliverErr   error
+}
+
+type workerAppAuditFailedCall struct {
+	eventID string
+	failure audit.DeliveryFailure
 }
 
 func newWorkerAppStore(records ...operations.OperationRecord) *fakeWorkerAppStore {
@@ -1239,6 +1364,40 @@ func newWorkerAppStore(records ...operations.OperationRecord) *fakeWorkerAppStor
 		store.order = append(store.order, record.ID)
 	}
 	return store
+}
+
+func (store *fakeWorkerAppStore) ListDueAuditOutboxRecords(context.Context, time.Time, int) ([]audit.OutboxRecord, error) {
+	return nil, errors.New("ListDueAuditOutboxRecords must not be used by workerapp audit delivery")
+}
+
+func (store *fakeWorkerAppStore) RecoverStaleAuditOutboxRecords(_ context.Context, owner string, _ time.Duration, limit int, _ audit.DeliveryFailure) ([]audit.OutboxRecord, error) {
+	store.auditCallOrder = append(store.auditCallOrder, "recover_stale")
+	store.auditRecoverOwner = owner
+	store.auditRecoverLimit = limit
+	out := make([]audit.OutboxRecord, len(store.recoveredAudit))
+	copy(out, store.recoveredAudit)
+	return out, nil
+}
+
+func (store *fakeWorkerAppStore) ClaimDueAuditOutboxRecords(_ context.Context, owner string, _ time.Time, limit int) ([]audit.OutboxRecord, error) {
+	store.auditCallOrder = append(store.auditCallOrder, "claim_due")
+	store.auditClaimOwner = owner
+	store.auditClaimLimit = limit
+	out := make([]audit.OutboxRecord, len(store.claimedAudit))
+	copy(out, store.claimedAudit)
+	return out, nil
+}
+
+func (store *fakeWorkerAppStore) MarkAuditOutboxDelivered(_ context.Context, eventID string, _ time.Time) error {
+	store.auditCallOrder = append(store.auditCallOrder, "mark_delivered")
+	store.auditDelivered = append(store.auditDelivered, eventID)
+	return nil
+}
+
+func (store *fakeWorkerAppStore) MarkAuditOutboxDeliveryFailed(_ context.Context, eventID string, failure audit.DeliveryFailure) error {
+	store.auditCallOrder = append(store.auditCallOrder, "mark_failed")
+	store.auditFailed = append(store.auditFailed, workerAppAuditFailedCall{eventID: eventID, failure: failure})
+	return nil
 }
 
 func (store *fakeWorkerAppStore) ListNamespaceUpsertOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
@@ -1707,6 +1866,49 @@ func (runner *fakeOperationRecoveryRunner) RunOnce(context.Context) (recovery.Op
 	return runner.result, runner.err
 }
 
+type fakeWorkerAppAuditDeliverer struct {
+	store      *fakeWorkerAppStore
+	deliverErr error
+}
+
+func (deliverer fakeWorkerAppAuditDeliverer) DeliverAuditOutboxRecord(context.Context, audit.OutboxRecord) error {
+	if deliverer.store == nil {
+		return deliverer.deliverErr
+	}
+	return deliverer.store.auditDeliverErr
+}
+
+type fakeWorkerAppAuditStore struct {
+	recoveredAudit []audit.OutboxRecord
+	claimedAudit   []audit.OutboxRecord
+	delivered      []string
+}
+
+func (store *fakeWorkerAppAuditStore) ListDueAuditOutboxRecords(context.Context, time.Time, int) ([]audit.OutboxRecord, error) {
+	return nil, errors.New("ListDueAuditOutboxRecords must not be used by workerapp audit delivery")
+}
+
+func (store *fakeWorkerAppAuditStore) RecoverStaleAuditOutboxRecords(context.Context, string, time.Duration, int, audit.DeliveryFailure) ([]audit.OutboxRecord, error) {
+	out := make([]audit.OutboxRecord, len(store.recoveredAudit))
+	copy(out, store.recoveredAudit)
+	return out, nil
+}
+
+func (store *fakeWorkerAppAuditStore) ClaimDueAuditOutboxRecords(context.Context, string, time.Time, int) ([]audit.OutboxRecord, error) {
+	out := make([]audit.OutboxRecord, len(store.claimedAudit))
+	copy(out, store.claimedAudit)
+	return out, nil
+}
+
+func (store *fakeWorkerAppAuditStore) MarkAuditOutboxDelivered(_ context.Context, eventID string, _ time.Time) error {
+	store.delivered = append(store.delivered, eventID)
+	return nil
+}
+
+func (store *fakeWorkerAppAuditStore) MarkAuditOutboxDeliveryFailed(context.Context, string, audit.DeliveryFailure) error {
+	return nil
+}
+
 type workerAppFakeJVSRunner struct {
 	calls         []string
 	initSummary   jvsrunner.InitSummary
@@ -1736,4 +1938,18 @@ func (runner *workerAppFakeJVSRunner) Init(context.Context, string, string) (jvs
 func (runner *workerAppFakeJVSRunner) DoctorStrict(context.Context, string) (jvsrunner.DoctorSummary, error) {
 	runner.calls = append(runner.calls, "doctor")
 	return runner.doctorSummary, nil
+}
+
+func workerAppAuditRecord(eventID string, payload []byte) audit.OutboxRecord {
+	now := workerAppNow()
+	return audit.OutboxRecord{
+		EventID:         eventID,
+		EventType:       audit.EventTypeRepoCreate,
+		EventTime:       now.Add(-time.Minute),
+		PayloadJSON:     append([]byte(nil), payload...),
+		Status:          audit.OutboxStatusDelivering,
+		DeliveryAttempt: 1,
+		CreatedAt:       now.Add(-time.Minute),
+		UpdatedAt:       now,
+	}
 }

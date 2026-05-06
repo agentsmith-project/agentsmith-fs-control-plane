@@ -65,7 +65,7 @@ func TestRunOnceAllowsNilComponentRunners(t *testing.T) {
 	}
 }
 
-func TestRunOnceKeepsPartialResultAndContinuesAfterNonContextErrors(t *testing.T) {
+func TestRunOnceKeepsPartialResultButStopsAuditDeliveryAfterStaleRecoveryError(t *testing.T) {
 	opErr := errors.New("operation failed")
 	staleErr := errors.New("stale failed")
 	order := []string{}
@@ -77,11 +77,11 @@ func TestRunOnceKeepsPartialResultAndContinuesAfterNonContextErrors(t *testing.T
 	if !errors.Is(err, opErr) || !errors.Is(err, staleErr) {
 		t.Fatalf("RunOnce error = %v, want joined operation and stale errors", err)
 	}
-	if strings.Join(order, ",") != "operation,stale,delivery" {
-		t.Fatalf("order = %#v, want all runners despite non-context errors", order)
+	if strings.Join(order, ",") != "operation,stale" {
+		t.Fatalf("order = %#v, want operation then stale only", order)
 	}
 	summary := result.Summary()
-	if summary.Operation.Failed != 1 || summary.AuditStale.Failed != 1 || summary.AuditDelivery.Delivered != 2 {
+	if summary.Operation.Failed != 1 || summary.AuditStale.Failed != 1 || summary.AuditDelivery.Delivered != 0 {
 		t.Fatalf("summary = %#v, want partial plus later results", summary)
 	}
 }

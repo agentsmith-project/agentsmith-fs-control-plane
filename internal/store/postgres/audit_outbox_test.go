@@ -351,7 +351,7 @@ func TestClaimDueAuditOutboxRecordsRejectsInvalidRequestBeforeSQL(t *testing.T) 
 	}
 }
 
-func TestRecoverStaleAuditOutboxRecordsAtomicallyUpdatesRetryWaitAndFailed(t *testing.T) {
+func TestRecoverStaleAuditOutboxRecordsAtomicallyUpdatesRetryWaitWithoutTerminalFailure(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	staleThreshold := 10 * time.Minute
 	staleBefore := now.Add(-staleThreshold)
@@ -362,15 +362,16 @@ func TestRecoverStaleAuditOutboxRecordsAtomicallyUpdatesRetryWaitAndFailed(t *te
 	retry.NextRetryAt = &retryAt
 	retry.LastError = "stale_delivering_recovered_for_replay"
 	retry.UpdatedAt = now
-	failed := auditOutboxRecordFixture(now)
-	failed.EventID = "audit-failed"
-	failed.Status = audit.OutboxStatusFailed
-	failed.DeliveryAttempt = 3
-	failed.LastError = "stale_delivering_recovered_for_replay"
-	failed.UpdatedAt = now
+	maxAttempt := auditOutboxRecordFixture(now)
+	maxAttempt.EventID = "audit-max-attempt"
+	maxAttempt.Status = audit.OutboxStatusRetryWait
+	maxAttempt.DeliveryAttempt = 3
+	maxAttempt.NextRetryAt = &retryAt
+	maxAttempt.LastError = "stale_delivering_recovered_for_replay"
+	maxAttempt.UpdatedAt = now
 	exec := &fakeExecutor{rows: fakeRows{rows: []fakeRow{
 		{values: auditOutboxRowValues(retry)},
-		{values: auditOutboxRowValues(failed)},
+		{values: auditOutboxRowValues(maxAttempt)},
 	}}}
 	st := &Store{exec: exec}
 
@@ -386,17 +387,17 @@ func TestRecoverStaleAuditOutboxRecordsAtomicallyUpdatesRetryWaitAndFailed(t *te
 
 	assertSQLContainsInOrder(t, exec.query,
 		"UPDATE audit_outbox",
-		"delivery_status = CASE WHEN delivery_attempt >= $1 THEN $2 ELSE $3 END",
-		"next_retry_at = CASE WHEN delivery_attempt >= $1 THEN NULL ELSE $4 END",
-		"last_error = $5",
-		"updated_at = $6",
+		"SET delivery_status = $1",
+		"next_retry_at = $2",
+		"last_error = $3",
+		"updated_at = $4",
 		"WHERE audit_event_id IN",
 		"SELECT audit_event_id",
 		"FROM audit_outbox",
-		"delivery_status = $7",
-		"updated_at <= $8",
+		"delivery_status = $5",
+		"updated_at <= $6",
 		"ORDER BY updated_at, audit_event_id",
-		"LIMIT $9",
+		"LIMIT $7",
 		"FOR UPDATE SKIP LOCKED",
 		"RETURNING",
 	)
@@ -408,8 +409,6 @@ func TestRecoverStaleAuditOutboxRecordsAtomicallyUpdatesRetryWaitAndFailed(t *te
 		t.Fatalf("recover stale must not use due claim helpers: %s", exec.query)
 	}
 	wantArgs := []any{
-		3,
-		string(audit.OutboxStatusFailed),
 		string(audit.OutboxStatusRetryWait),
 		now.Add(5 * time.Minute),
 		"stale_delivering_recovered_for_replay token=[REDACTED]",
@@ -423,8 +422,8 @@ func TestRecoverStaleAuditOutboxRecordsAtomicallyUpdatesRetryWaitAndFailed(t *te
 			t.Fatalf("arg %d = %#v, want %#v", idx+1, exec.args[idx], want)
 		}
 	}
-	if len(got) != 2 || got[0].Status != audit.OutboxStatusRetryWait || got[0].NextRetryAt == nil || got[1].Status != audit.OutboxStatusFailed || got[1].NextRetryAt != nil {
-		t.Fatalf("recovered = %#v, want retry_wait then failed", got)
+	if len(got) != 2 || got[0].Status != audit.OutboxStatusRetryWait || got[0].NextRetryAt == nil || got[1].Status != audit.OutboxStatusRetryWait || got[1].NextRetryAt == nil {
+		t.Fatalf("recovered = %#v, want retry_wait records even at max attempts", got)
 	}
 	if !exec.rows.closed {
 		t.Fatal("rows were not closed")

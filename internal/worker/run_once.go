@@ -110,9 +110,7 @@ func (runner Runner) RunOnce(ctx context.Context) (Result, error) {
 		result.AuditStaleRecovery = staleResult
 		if err != nil {
 			errs = append(errs, fmt.Errorf("audit stale recovery: %w", err))
-			if isContextError(err) {
-				return result, errors.Join(errs...)
-			}
+			return result, errors.Join(errs...)
 		}
 		if ctx.Err() != nil {
 			errs = append(errs, ctx.Err())

@@ -46,7 +46,7 @@ func TestStaleRecoveryCoordinatorPassesConfigAndCountsRecoveredRecords(t *testin
 	now := deliveryTestNow()
 	store := &fakeAuditOutboxDeliveryStore{recoveredStale: []audit.OutboxRecord{
 		staleRecoveredRecord("audit-retry", audit.OutboxStatusRetryWait, now),
-		staleRecoveredRecord("audit-failed", audit.OutboxStatusFailed, now),
+		staleRecoveredRecord("audit-retry-max-attempt", audit.OutboxStatusRetryWait, now),
 	}}
 	coordinator := NewStaleRecoveryCoordinator(StaleRecoveryConfig{
 		Store:          store,
@@ -62,8 +62,8 @@ func TestStaleRecoveryCoordinatorPassesConfigAndCountsRecoveredRecords(t *testin
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if result.Recovered != 2 || result.RetryWait != 1 || result.FailedTerminal != 1 || result.Failed != 0 {
-		t.Fatalf("result = %#v, want recovered retry and failed counts", result)
+	if result.Recovered != 2 || result.RetryWait != 2 || result.FailedTerminal != 0 || result.Failed != 0 {
+		t.Fatalf("result = %#v, want recovered retry counts without terminal failed", result)
 	}
 	if store.recoverStaleContext != ctx ||
 		store.recoverStaleOwner != "audit-deliverer" ||

@@ -4,8 +4,9 @@ Status: neutral Go skeleton, contract guardrails, resource metadata
 persistence, metadata recovery workers, opt-in `repo_create` JVS execution, and
 explicit-gated repo lifecycle recovery for archive, restore-archived, delete,
 restore-tombstoned, plus separately gated `repo_purge` recovery are in place;
-WebDAV, mount, save/restore, template, and audit delivery workers remain
-unimplemented.
+the audit outbox stale-recovery and HTTP JSON delivery worker is wired behind an
+explicit gate. WebDAV, mount, save/restore, template, and non-HTTP audit sink
+integrations remain unimplemented.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -200,7 +201,8 @@ Partially completed:
   recorded `pre_delete_status`. With the repo purge gate enabled, purge removes
   AFSCP-managed retained storage and commits `purged` metadata through a
   dedicated purge boundary. It does not implement save/restore, template,
-  WebDAV, mount, or external audit delivery.
+  WebDAV, mount, or audit sinks beyond the explicitly configured HTTP JSON
+  outbox delivery worker.
 - Path resolver guardrails exist and are used by repo create recovery; broader
   WebDAV, mount, file API, and remaining lifecycle integration remains absent.
 
@@ -214,7 +216,8 @@ Not implemented:
 - concrete handler wiring for the session admission model beyond lifecycle
   intake checks; repo access admission is already wired for lifecycle
   intake/admission
-- real external audit delivery worker/sink integration
+- audit delivery sinks beyond the minimal HTTP JSON at-least-once worker; the
+  external sink must dedupe by `audit_event_id`
 - JVS execution beyond repo create `init`/`doctor --strict` and repo lifecycle
   restore `doctor --strict`
 - WebDAV export gateway file serving

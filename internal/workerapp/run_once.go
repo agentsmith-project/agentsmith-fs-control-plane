@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
@@ -41,22 +42,31 @@ type OperationRecoveryStore interface {
 	store.RepoPurgeOperationRecoveryStore
 }
 
+type WorkerStore interface {
+	OperationRecoveryStore
+	store.AuditOutboxDeliveryStore
+}
+
 type StoreFactory func(context.Context, string) (StoreHandle, error)
 type JVSRunnerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error)
 type StoragePurgerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error)
+type AuditDelivererFactory func(config.WorkerAuditDeliveryConfig) (auditdelivery.Deliverer, error)
 
 type StoreHandle struct {
-	Store OperationRecoveryStore
-	Close func() error
+	Store          WorkerStore
+	OperationStore OperationRecoveryStore
+	AuditStore     store.AuditOutboxDeliveryStore
+	Close          func() error
 }
 
 type Options struct {
-	Source               config.Source
-	StoreFactory         StoreFactory
-	JVSRunnerFactory     JVSRunnerFactory
-	StoragePurgerFactory StoragePurgerFactory
-	Clock                func() time.Time
-	AuditEventID         namespaceexec.AuditEventIDGenerator
+	Source                config.Source
+	StoreFactory          StoreFactory
+	JVSRunnerFactory      JVSRunnerFactory
+	StoragePurgerFactory  StoragePurgerFactory
+	AuditDelivererFactory AuditDelivererFactory
+	Clock                 func() time.Time
+	AuditEventID          namespaceexec.AuditEventIDGenerator
 }
 
 type RunOnceRunner struct {
@@ -81,8 +91,9 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		return nil, err
 	}
 	opConfig := cfg.Worker.OperationRecovery
-	if !opConfig.Enabled {
-		return nil, errors.New("worker operation recovery is disabled")
+	auditConfig := cfg.Worker.AuditDelivery
+	if !opConfig.Enabled && !auditConfig.Enabled {
+		return nil, errors.New("worker run-once requires operation recovery or audit delivery to be enabled")
 	}
 
 	now := nowFunc(options.Clock)
@@ -92,79 +103,51 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}
 	openCtx, cancel := context.WithTimeout(context.Background(), cfg.Worker.RunOnceTimeout)
 	defer cancel()
-	handle, err := storeFactory(openCtx, opConfig.PostgresDSN)
+	dsn, err := workerStoreDSN(opConfig, auditConfig)
 	if err != nil {
-		return nil, fmt.Errorf("open worker operation recovery store: %w", err)
+		return nil, err
 	}
-	if handle.Store == nil {
+	handle, err := storeFactory(openCtx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open worker store: %w", err)
+	}
+	operationStore := handle.OperationStore
+	auditStore := handle.AuditStore
+	if handle.Store != nil {
+		if operationStore == nil {
+			operationStore = handle.Store
+		}
+		if auditStore == nil {
+			auditStore = handle.Store
+		}
+	}
+	if opConfig.Enabled && operationStore == nil {
 		err := errors.New("worker operation recovery store is required")
 		if handle.Close != nil {
 			err = errors.Join(err, handle.Close())
 		}
 		return nil, err
 	}
-	scopedStore := operationRecoveryStore{store: handle.Store}
+	if auditConfig.Enabled && auditStore == nil {
+		err := errors.New("worker audit delivery store is required")
+		if handle.Close != nil {
+			err = errors.Join(err, handle.Close())
+		}
+		return nil, err
+	}
+	scopedStore := operationRecoveryStore{store: operationStore}
+	workerConfig := worker.Config{}
 
-	eventID := options.AuditEventID
-	if eventID == nil {
-		eventID = NewAuditEventID
-	}
-	namespaceExecutor, err := namespaceexec.NewExecutor(namespaceexec.Config{
-		CommitStore:  scopedStore,
-		Owner:        opConfig.Owner,
-		Clock:        now,
-		AuditEventID: eventID,
-	})
-	if err != nil {
-		if handle.Close != nil {
-			err = errors.Join(err, handle.Close())
+	if opConfig.Enabled {
+		eventID := options.AuditEventID
+		if eventID == nil {
+			eventID = NewAuditEventID
 		}
-		return nil, err
-	}
-	bindingExecutor, err := namespacebindingexec.NewExecutor(namespacebindingexec.Config{
-		CommitStore:  scopedStore,
-		Owner:        opConfig.Owner,
-		Clock:        now,
-		AuditEventID: func() string { return eventID() },
-	})
-	if err != nil {
-		if handle.Close != nil {
-			err = errors.Join(err, handle.Close())
-		}
-		return nil, err
-	}
-	volumeExecutor, err := volumeexec.NewExecutor(volumeexec.Config{
-		CommitStore:  scopedStore,
-		Owner:        opConfig.Owner,
-		Clock:        now,
-		AuditEventID: func() string { return eventID() },
-	})
-	if err != nil {
-		if handle.Close != nil {
-			err = errors.Join(err, handle.Close())
-		}
-		return nil, err
-	}
-	executors := []recovery.OperationExecutor{volumeExecutor, namespaceExecutor, bindingExecutor}
-	if opConfig.RepoCreate.Enabled {
-		jvsFactory := options.JVSRunnerFactory
-		if jvsFactory == nil {
-			jvsFactory = NewJVSRunnerFromConfig
-		}
-		jvs, err := jvsFactory(opConfig.RepoCreate)
-		if err != nil {
-			if handle.Close != nil {
-				err = errors.Join(err, handle.Close())
-			}
-			return nil, err
-		}
-		repoExecutor, err := repoexec.NewExecutor(repoexec.Config{
-			Store:        scopedStore,
-			JVSRunner:    jvs,
+		namespaceExecutor, err := namespaceexec.NewExecutor(namespaceexec.Config{
+			CommitStore:  scopedStore,
 			Owner:        opConfig.Owner,
 			Clock:        now,
-			AuditEventID: func() string { return eventID() },
-			VolumeRoots:  opConfig.RepoCreate.VolumeRoots,
+			AuditEventID: eventID,
 		})
 		if err != nil {
 			if handle.Close != nil {
@@ -172,28 +155,11 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			}
 			return nil, err
 		}
-		executors = append(executors, repoExecutor)
-		scopedStore.repoCreateEnabled = true
-	}
-	if opConfig.RepoLifecycle.Enabled {
-		jvsFactory := options.JVSRunnerFactory
-		if jvsFactory == nil {
-			jvsFactory = NewJVSRunnerFromConfig
-		}
-		jvs, err := jvsFactory(opConfig.RepoLifecycle)
-		if err != nil {
-			if handle.Close != nil {
-				err = errors.Join(err, handle.Close())
-			}
-			return nil, err
-		}
-		lifecycleExecutor, err := repoexec.NewLifecycleExecutor(repoexec.LifecycleConfig{
-			Store:        scopedStore,
-			JVSRunner:    jvs,
+		bindingExecutor, err := namespacebindingexec.NewExecutor(namespacebindingexec.Config{
+			CommitStore:  scopedStore,
 			Owner:        opConfig.Owner,
 			Clock:        now,
 			AuditEventID: func() string { return eventID() },
-			VolumeRoots:  opConfig.RepoLifecycle.VolumeRoots,
 		})
 		if err != nil {
 			if handle.Close != nil {
@@ -201,64 +167,184 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			}
 			return nil, err
 		}
-		executors = append(executors, lifecycleExecutor)
-		scopedStore.repoLifecycleEnabled = true
-	}
-	if opConfig.RepoPurge.Enabled {
-		jvsFactory := options.JVSRunnerFactory
-		if jvsFactory == nil {
-			jvsFactory = NewJVSRunnerFromConfig
-		}
-		jvs, err := jvsFactory(opConfig.RepoPurge)
+		volumeExecutor, err := volumeexec.NewExecutor(volumeexec.Config{
+			CommitStore:  scopedStore,
+			Owner:        opConfig.Owner,
+			Clock:        now,
+			AuditEventID: func() string { return eventID() },
+		})
 		if err != nil {
 			if handle.Close != nil {
 				err = errors.Join(err, handle.Close())
 			}
 			return nil, err
 		}
-		purgerFactory := options.StoragePurgerFactory
-		if purgerFactory == nil {
-			purgerFactory = NewStoragePurgerFromConfig
-		}
-		purger, err := purgerFactory(opConfig.RepoPurge)
-		if err != nil {
-			if handle.Close != nil {
-				err = errors.Join(err, handle.Close())
+		executors := []recovery.OperationExecutor{volumeExecutor, namespaceExecutor, bindingExecutor}
+		if opConfig.RepoCreate.Enabled {
+			jvsFactory := options.JVSRunnerFactory
+			if jvsFactory == nil {
+				jvsFactory = NewJVSRunnerFromConfig
 			}
-			return nil, err
+			jvs, err := jvsFactory(opConfig.RepoCreate)
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			repoExecutor, err := repoexec.NewExecutor(repoexec.Config{
+				Store:        scopedStore,
+				JVSRunner:    jvs,
+				Owner:        opConfig.Owner,
+				Clock:        now,
+				AuditEventID: func() string { return eventID() },
+				VolumeRoots:  opConfig.RepoCreate.VolumeRoots,
+			})
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			executors = append(executors, repoExecutor)
+			scopedStore.repoCreateEnabled = true
 		}
-		purgeExecutor, err := repoexec.NewPurgeExecutor(repoexec.PurgeConfig{
-			Store:         scopedStore,
-			JVSRunner:     jvs,
-			StoragePurger: purger,
+		if opConfig.RepoLifecycle.Enabled {
+			jvsFactory := options.JVSRunnerFactory
+			if jvsFactory == nil {
+				jvsFactory = NewJVSRunnerFromConfig
+			}
+			jvs, err := jvsFactory(opConfig.RepoLifecycle)
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			lifecycleExecutor, err := repoexec.NewLifecycleExecutor(repoexec.LifecycleConfig{
+				Store:        scopedStore,
+				JVSRunner:    jvs,
+				Owner:        opConfig.Owner,
+				Clock:        now,
+				AuditEventID: func() string { return eventID() },
+				VolumeRoots:  opConfig.RepoLifecycle.VolumeRoots,
+			})
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			executors = append(executors, lifecycleExecutor)
+			scopedStore.repoLifecycleEnabled = true
+		}
+		if opConfig.RepoPurge.Enabled {
+			jvsFactory := options.JVSRunnerFactory
+			if jvsFactory == nil {
+				jvsFactory = NewJVSRunnerFromConfig
+			}
+			jvs, err := jvsFactory(opConfig.RepoPurge)
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			purgerFactory := options.StoragePurgerFactory
+			if purgerFactory == nil {
+				purgerFactory = NewStoragePurgerFromConfig
+			}
+			purger, err := purgerFactory(opConfig.RepoPurge)
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			purgeExecutor, err := repoexec.NewPurgeExecutor(repoexec.PurgeConfig{
+				Store:         scopedStore,
+				JVSRunner:     jvs,
+				StoragePurger: purger,
+				Owner:         opConfig.Owner,
+				Clock:         now,
+				AuditEventID:  func() string { return eventID() },
+				VolumeRoots:   opConfig.RepoPurge.VolumeRoots,
+			})
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			executors = append(executors, purgeExecutor)
+			scopedStore.repoPurgeEnabled = true
+		}
+		operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
+			Reader:        scopedStore,
+			LeaseStore:    scopedStore,
+			Executor:      multiExecutor{executors: executors},
 			Owner:         opConfig.Owner,
+			LeaseDuration: opConfig.LeaseDuration,
+			Limit:         opConfig.Limit,
 			Clock:         now,
-			AuditEventID:  func() string { return eventID() },
-			VolumeRoots:   opConfig.RepoPurge.VolumeRoots,
 		})
+		workerConfig.OperationRecovery = operationRecovery
+	}
+
+	if auditConfig.Enabled {
+		delivererFactory := options.AuditDelivererFactory
+		if delivererFactory == nil {
+			delivererFactory = NewAuditDelivererFromConfig
+		}
+		deliverer, err := delivererFactory(auditConfig)
 		if err != nil {
 			if handle.Close != nil {
 				err = errors.Join(err, handle.Close())
 			}
 			return nil, err
 		}
-		executors = append(executors, purgeExecutor)
-		scopedStore.repoPurgeEnabled = true
+		workerConfig.AuditStaleRecovery = auditdelivery.NewStaleRecoveryCoordinator(auditdelivery.StaleRecoveryConfig{
+			Store:          auditStore,
+			Owner:          auditConfig.Owner,
+			StaleThreshold: auditConfig.StaleThreshold,
+			Limit:          auditConfig.Limit,
+			MaxAttempts:    auditConfig.MaxAttempts,
+			RetryBackoff:   auditConfig.RetryBackoff,
+			Clock:          now,
+		})
+		workerConfig.AuditDelivery = auditdelivery.NewCoordinator(auditdelivery.Config{
+			Store:        auditStore,
+			Deliverer:    deliverer,
+			Owner:        auditConfig.Owner,
+			Limit:        auditConfig.Limit,
+			MaxAttempts:  auditConfig.MaxAttempts,
+			RetryBackoff: auditConfig.RetryBackoff,
+			Clock:        now,
+		})
 	}
-	operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
-		Reader:        scopedStore,
-		LeaseStore:    scopedStore,
-		Executor:      multiExecutor{executors: executors},
-		Owner:         opConfig.Owner,
-		LeaseDuration: opConfig.LeaseDuration,
-		Limit:         opConfig.Limit,
-		Clock:         now,
-	})
 	return &RunOnceRunner{
-		runner:  worker.New(worker.Config{OperationRecovery: operationRecovery}),
+		runner:  worker.New(workerConfig),
 		timeout: cfg.Worker.RunOnceTimeout,
 		close:   handle.Close,
 	}, nil
+}
+
+func workerStoreDSN(opConfig config.WorkerOperationRecoveryConfig, auditConfig config.WorkerAuditDeliveryConfig) (string, error) {
+	if opConfig.Enabled && auditConfig.Enabled && opConfig.PostgresDSN != auditConfig.PostgresDSN {
+		return "", errors.New("worker operation recovery and audit delivery must use the same postgres dsn")
+	}
+	if opConfig.Enabled {
+		return opConfig.PostgresDSN, nil
+	}
+	return auditConfig.PostgresDSN, nil
+}
+
+func NewAuditDelivererFromConfig(cfg config.WorkerAuditDeliveryConfig) (auditdelivery.Deliverer, error) {
+	return NewHTTPAuditDeliverer(HTTPAuditDelivererConfig{
+		Endpoint:    cfg.Endpoint,
+		BearerToken: cfg.BearerToken,
+		Timeout:     cfg.Timeout,
+	})
 }
 
 func NewJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
@@ -304,7 +390,7 @@ func (runner *RunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error)
 
 	result, err := runner.runner.RunOnce(runCtx)
 	if err == nil {
-		err = operationRecoveryCountError(result.OperationRecovery)
+		err = errors.Join(operationRecoveryCountError(result.OperationRecovery), auditDeliveryCountError(result.AuditStaleRecovery, result.AuditDelivery))
 	}
 	if runner.close != nil {
 		err = errors.Join(err, runner.close())
@@ -321,9 +407,12 @@ func OpenPostgresOperationRecoveryStore(ctx context.Context, dsn string) (StoreH
 		closeErr := db.Close()
 		return StoreHandle{}, errors.Join(err, closeErr)
 	}
+	st := postgres.New(db)
 	return StoreHandle{
-		Store: postgres.New(db),
-		Close: db.Close,
+		Store:          st,
+		OperationStore: st,
+		AuditStore:     st,
+		Close:          db.Close,
 	}, nil
 }
 
@@ -510,6 +599,13 @@ func operationRecoveryCountError(result recovery.OperationBatchResult) error {
 		return nil
 	}
 	return fmt.Errorf("operation recovery incomplete: unsupported=%d manual=%d failed=%d", result.Unsupported, result.Manual, result.Failed)
+}
+
+func auditDeliveryCountError(stale auditdelivery.StaleRecoveryResult, delivery auditdelivery.BatchResult) error {
+	if stale.Failed == 0 && stale.FailedTerminal == 0 && delivery.Failed == 0 && delivery.DeliveryFailuresRecorded == 0 {
+		return nil
+	}
+	return fmt.Errorf("audit delivery incomplete: stale_failed=%d stale_failed_terminal=%d delivery_failures_recorded=%d failed=%d", stale.Failed, stale.FailedTerminal, delivery.DeliveryFailuresRecorded, delivery.Failed)
 }
 
 type multiExecutor struct {

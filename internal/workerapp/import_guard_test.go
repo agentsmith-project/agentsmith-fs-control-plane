@@ -14,11 +14,11 @@ func TestWorkerAppImportBoundaries(t *testing.T) {
 		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/namespacebindingexec": true,
 		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner":            true,
 		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec":             true,
+		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery":        true,
 	}
 	forbidden := []string{
 		"/internal/api",
 		"/internal/operationexec",
-		"/internal/auditdelivery",
 		"/cmd",
 		"/jvs",
 		"/webdav",

@@ -403,11 +403,29 @@ Symptoms:
 
 Actions:
 
-- Keep outbox records durable.
-- Replay idempotently.
-- Alert if denied/security events are delayed.
+- Inspect the durable outbox status distribution for `pending`, `retry_wait`,
+  `delivering`, and `failed` records, preserving records for evidence.
+- Confirm the audit delivery worker configuration is present and redacted in
+  operator notes: delivery enabled, PostgreSQL DSN source, delivery owner,
+  limit, max attempts, retry backoff, stale threshold, `http_json` sink kind,
+  endpoint, optional bearer token, and timeout.
+- Confirm the configured external sink treats `audit_event_id` as an idempotency
+  key before replaying.
+- Run a bounded delivery pass with `afscp-worker --run-once` using the audit
+  delivery gate and configured HTTP JSON sink.
+- Confirm sink behavior: only HTTP 2xx is success; 3xx redirects are not
+  followed automatically; every POST carries `X-AFSCP-Audit-Event-Id`,
+  `X-AFSCP-Audit-Event-Type`, and `Idempotency-Key` using the audit event ID.
+- Recheck lag and status distribution. `pending`/`retry_wait` should drain when
+  the sink is healthy; stale `delivering` should be recovered for replay before
+  due delivery in the same run-once pass. A recovered record may remain
+  `retry_wait` until its backoff is due.
+- For terminal `failed` records or sustained lag, retain the outbox evidence,
+  delivery summary, and sink-side receipt evidence, then open an incident or
+  operator intervention item.
+- Alert if denied/security events remain delayed after replay attempts.
 
 Terminal evidence:
 
-- lag cleared or incident opened with retained outbox.
-
+- lag cleared with sink receipts keyed by `audit_event_id`, or an incident is
+  opened with retained outbox and worker summary evidence.
