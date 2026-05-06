@@ -246,6 +246,20 @@ func (store *Store) ListRestoreRunOperationsForRecovery(ctx context.Context, now
 	return scanOperations(rows)
 }
 
+func (store *Store) ListWorkloadMountBindingOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("list workload mount binding operations for recovery: now must be set")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list workload mount binding operations for recovery: limit must be positive")
+	}
+	rows, err := store.exec.QueryContext(ctx, workloadMountBindingOperationRecoveryCandidatesSQL(), now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanOperations(rows)
+}
+
 func (store *Store) RepoHasNonTerminalJVSMutation(ctx context.Context, repoID string) (bool, error) {
 	if err := pathresolver.ValidateID(pathresolver.RepoID, strings.TrimSpace(repoID)); err != nil {
 		return false, err
@@ -498,6 +512,25 @@ func (store *Store) AcquireRestoreRunOperationLease(ctx context.Context, operati
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return operations.OperationRecord{}, operationLeaseUnavailable("acquire restore run", args.operationID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) AcquireWorkloadMountBindingOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	args, err := operationLeaseRequestArgs(operationID, request)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	if args.recoveryMode != "" {
+		return operations.OperationRecord{}, operationLeaseInvalidRequest("recovery_mode", "workload mount binding recovery does not perform explicit recovery actions")
+	}
+	row := store.exec.QueryRowContext(ctx, workloadMountBindingOperationAcquireLeaseSQL(), args.operationID, args.owner, args.expiresAt, args.now, args.cancelPolicy)
+	record, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("acquire workload mount binding", args.operationID, err)
 		}
 		return operations.OperationRecord{}, err
 	}
@@ -1178,6 +1211,20 @@ func restoreRunOperationRecoveryCandidatesSQL() string {
 		") ORDER BY created_at, operation_id LIMIT $2"
 }
 
+func workloadMountBindingOperationRecoveryCandidatesSQL() string {
+	noLeasePair := "(lease_owner IS NULL AND lease_expires_at IS NULL)"
+	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
+	invalidLeasePair := "((lease_owner IS NULL AND lease_expires_at IS NOT NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) = '') OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NULL))"
+	return operationSelectSQL() + " WHERE " +
+		"operation_type IN ('mount_binding_create','mount_binding_status_update','mount_binding_heartbeat','mount_binding_release','mount_binding_revoke') " +
+		"AND phase IN ('validate_mount_binding_create','validate_mount_binding_status_update','validate_mount_binding_heartbeat','validate_mount_binding_release','validate_mount_binding_revoke') AND (" +
+		"(operation_state = 'queued') OR " +
+		"(operation_state = 'running' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'cancel_requested' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'operator_intervention_required')" +
+		") ORDER BY created_at, operation_id LIMIT $2"
+}
+
 func operationUpdateSQL() string {
 	return "UPDATE operations SET " +
 		"operation_state = $1, " +
@@ -1512,6 +1559,26 @@ func restoreRunOperationAcquireLeaseSQL() string {
 		"AND ($5 <> 'finalize_cancellation' OR eligible_operation.phase = 'validate_restore_run') " +
 		"AND ($5 = 'finalize_cancellation' OR (EXISTS (SELECT 1 FROM matching_restore_plan) AND NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM unrelated_active_restore_plan))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
+}
+
+func workloadMountBindingOperationAcquireLeaseSQL() string {
+	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
+	return "UPDATE operations SET " +
+		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
+		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
+		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
+		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
+		"updated_at = $4 " +
+		"WHERE operation_id = $1 " +
+		"AND operation_type IN ('mount_binding_create','mount_binding_status_update','mount_binding_heartbeat','mount_binding_release','mount_binding_revoke') " +
+		"AND phase IN ('validate_mount_binding_create','validate_mount_binding_status_update','validate_mount_binding_heartbeat','validate_mount_binding_release','validate_mount_binding_revoke') " +
+		"AND (" +
+		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
+		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
+		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
+		") RETURNING " + strings.Join(operationSelectColumns, ", ")
 }
 
 func repoJVSMutationOperationTypeSQLList() string {

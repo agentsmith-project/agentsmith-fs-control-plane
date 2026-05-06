@@ -23,6 +23,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workerapp"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -349,6 +350,10 @@ func (store *cmdWorkerAppStore) ListNamespaceVolumeBindingPutOperationsForRecove
 	return nil, nil
 }
 
+func (store *cmdWorkerAppStore) ListWorkloadMountBindingOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 func (store *cmdWorkerAppStore) ListRepoCreateOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
 	return nil, nil
 }
@@ -386,6 +391,10 @@ func (store *cmdWorkerAppStore) AcquireVolumeEnsureOperationLease(context.Contex
 }
 
 func (store *cmdWorkerAppStore) AcquireNamespaceVolumeBindingPutOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) AcquireWorkloadMountBindingOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
 
@@ -427,6 +436,26 @@ func (store *cmdWorkerAppStore) CommitVolumeEnsureWithLease(context.Context, res
 
 func (store *cmdWorkerAppStore) CommitNamespaceVolumeBindingPutWithLease(context.Context, resources.NamespaceVolumeBinding, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error) {
 	return resources.NamespaceVolumeBinding{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitWorkloadMountBindingCreateWithLease(context.Context, workloadmount.Binding, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	return workloadmount.Binding{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitWorkloadMountBindingStatusWithLease(context.Context, string, sessionstate.MountStatus, string, time.Time, *time.Time, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	return workloadmount.Binding{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitWorkloadMountBindingHeartbeatWithLease(context.Context, string, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	return workloadmount.Binding{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitWorkloadMountBindingReleaseWithLease(context.Context, string, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	return workloadmount.Binding{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitWorkloadMountBindingRevokeWithLease(context.Context, string, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	return workloadmount.Binding{}, operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
 func (store *cmdWorkerAppStore) CommitRepoCreateSucceededWithLease(context.Context, resources.Repo, operations.SanitizedOperationRecord, string, time.Time, audit.Event, string) (resources.Repo, operations.OperationRecord, error) {

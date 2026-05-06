@@ -19,6 +19,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
 func TestNewRuntimeFailsClosedWithoutDSN(t *testing.T) {
@@ -179,11 +180,13 @@ func TestInternalRuntimeReadinessIsNotNeutralAndDoesNotAdvertiseUnimplementedHan
 	if storage := body.Capabilities[api.CapabilityStorage]; !storage.Enabled || !storage.Ready || storage.Gated {
 		t.Fatalf("storage gate = %#v, want ready storage", storage)
 	}
-	for _, capability := range []string{api.CapabilityWebDAVExport, api.CapabilityWorkloadMount} {
-		gate := body.Capabilities[capability]
-		if !gate.Enabled || gate.Ready || !gate.Gated || gate.Reason != "handler_not_implemented" {
-			t.Fatalf("%s gate = %#v, want enabled but gated not implemented", capability, gate)
-		}
+	webdav := body.Capabilities[api.CapabilityWebDAVExport]
+	if !webdav.Enabled || webdav.Ready || !webdav.Gated || webdav.Reason != "handler_not_implemented" {
+		t.Fatalf("webdav gate = %#v, want enabled but gated not implemented", webdav)
+	}
+	mount := body.Capabilities[api.CapabilityWorkloadMount]
+	if !mount.Enabled || !mount.Ready || mount.Gated || mount.Reason != "" {
+		t.Fatalf("mount gate = %#v, want enabled and ready", mount)
 	}
 }
 
@@ -355,6 +358,14 @@ func (*fakeRuntimeStore) ListReposByNamespace(context.Context, string) ([]resour
 
 func (*fakeRuntimeStore) GetVolume(context.Context, string) (resources.Volume, error) {
 	return resources.Volume{}, sql.ErrNoRows
+}
+
+func (*fakeRuntimeStore) GetWorkloadMountBinding(context.Context, string) (workloadmount.Binding, error) {
+	return workloadmount.Binding{}, sql.ErrNoRows
+}
+
+func (*fakeRuntimeStore) GetOrchestratorMountPlan(context.Context, string, string) (workloadmount.Plan, error) {
+	return workloadmount.Plan{}, sql.ErrNoRows
 }
 
 func (*fakeRuntimeStore) ListHeldRepoFences(context.Context, string) ([]fences.Fence, error) {

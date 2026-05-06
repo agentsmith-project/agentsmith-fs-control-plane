@@ -10,6 +10,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
 // OperationReader is the read side of the durable operation record boundary.
@@ -443,6 +444,28 @@ type RepoRecoveryInspectionReader interface {
 type RepoSessionStateReader interface {
 	ListExportSessionsByRepo(ctx context.Context, repoID string) ([]sessionstate.ExportSession, error)
 	ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error)
+}
+
+type WorkloadMountBindingReader interface {
+	GetWorkloadMountBinding(ctx context.Context, mountBindingID string) (workloadmount.Binding, error)
+}
+
+type WorkloadMountPlanReader interface {
+	GetOrchestratorMountPlan(ctx context.Context, namespaceID, mountBindingID string) (workloadmount.Plan, error)
+}
+
+type WorkloadMountBindingOperationCommitStore interface {
+	CommitWorkloadMountBindingCreateWithLease(ctx context.Context, binding workloadmount.Binding, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error)
+	CommitWorkloadMountBindingStatusWithLease(ctx context.Context, mountBindingID string, status sessionstate.MountStatus, reason string, observedAt time.Time, leaseExpiresAt *time.Time, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error)
+	CommitWorkloadMountBindingHeartbeatWithLease(ctx context.Context, mountBindingID string, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error)
+	CommitWorkloadMountBindingReleaseWithLease(ctx context.Context, mountBindingID string, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error)
+	CommitWorkloadMountBindingRevokeWithLease(ctx context.Context, mountBindingID string, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error)
+}
+
+type WorkloadMountBindingOperationRecoveryStore interface {
+	ListWorkloadMountBindingOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireWorkloadMountBindingOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	WorkloadMountBindingOperationCommitStore
 }
 
 type VolumeStore interface {

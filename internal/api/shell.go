@@ -39,6 +39,8 @@ type InternalAPIShellConfig struct {
 	NamespaceReader             NamespaceReader
 	RepoReader                  RepoReader
 	VolumeReader                VolumeReader
+	WorkloadMountBindingReader  WorkloadMountBindingReader
+	WorkloadMountPlanReader     WorkloadMountPlanReader
 	RepoFenceReader             RepoFenceReader
 	SavePointHistoryReader      SavePointHistoryReader
 	SavePointMutationGate       RepoJVSMutationGateReader
@@ -183,6 +185,18 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	if typed, ok := config.OperationIntakeStore.(RestoreRunIntakeGateReader); ok {
 		restoreRunGate = typed
 	}
+	mountReader := config.WorkloadMountBindingReader
+	if mountReader == nil {
+		if typed, ok := config.OperationIntakeStore.(WorkloadMountBindingReader); ok {
+			mountReader = typed
+		}
+	}
+	mountPlanReader := config.WorkloadMountPlanReader
+	if mountPlanReader == nil {
+		if typed, ok := config.OperationIntakeStore.(WorkloadMountPlanReader); ok {
+			mountPlanReader = typed
+		}
+	}
 
 	savePointHandler := SavePointHandler(SavePointHandlerConfig{
 		RepoReader:        config.RepoReader,
@@ -309,28 +323,62 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	})
 	upsertNamespaceHandler = requestLogHandler(upsertNamespaceHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/namespaces/{namespaceId}", "upsertNamespace")
 
+	workloadMountHandler := WorkloadMountHandler(WorkloadMountHandlerConfig{
+		RepoReader:        config.RepoReader,
+		NamespaceReader:   config.NamespaceReader,
+		BindingReader:     config.NamespaceBindingReader,
+		VolumeReader:      config.VolumeReader,
+		FenceReader:       config.RepoFenceReader,
+		MountReader:       mountReader,
+		PlanReader:        mountPlanReader,
+		IntakeStore:       config.OperationIntakeStore,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
+	})
+	createWorkloadMountHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/workload-mount-bindings", "createWorkloadMountBinding")
+	getWorkloadMountHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/workload-mount-bindings/{mountBindingId}", "getWorkloadMountBinding")
+	updateWorkloadMountStatusHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/workload-mount-bindings/{mountBindingId}/status", "updateWorkloadMountBindingStatus")
+	getOrchestratorMountPlanHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/workload-mount-bindings/{mountBindingId}/orchestrator-plan", "getOrchestratorMountPlan")
+	heartbeatWorkloadMountHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/workload-mount-bindings/{mountBindingId}:heartbeat", "heartbeatWorkloadMountBinding")
+	releaseWorkloadMountHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/workload-mount-bindings/{mountBindingId}:release", "releaseWorkloadMountBinding")
+	revokeWorkloadMountHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/workload-mount-bindings/{mountBindingId}:revoke", "revokeWorkloadMountBinding")
+
 	// This shell enables only the implemented internal API subset. Known contract
 	// routes without handlers remain fail-closed instead of being silently absent.
 	fallback := internalAPIFallbackHandler(config.Logger, config.AuditSink)
 	mux.Handle("/", routeDispatchHandler(map[string]http.Handler{
-		"createRepo":                createRepoHandler,
-		"createSavePoint":           createSavePointHandler,
-		"archiveRepo":               archiveRepoHandler,
-		"restoreArchivedRepo":       restoreArchivedRepoHandler,
-		"deleteRepo":                deleteRepoHandler,
-		"ensureVolume":              volumeHandler,
-		"getRepo":                   getRepoHandler,
-		"getNamespaceVolumeBinding": getBindingHandler,
-		"listRepos":                 listReposHandler,
-		"purgeRepo":                 purgeRepoHandler,
-		"restorePreview":            restorePreviewHandler,
-		"restorePreviewDiscard":     restorePreviewDiscardHandler,
-		"restoreRun":                restoreRunHandler,
-		"restoreTombstonedRepo":     restoreTombstonedRepoHandler,
-		"getOperation":              operationInspectionHandler,
-		"listSavePoints":            listSavePointsHandler,
-		"putNamespaceVolumeBinding": putBindingHandler,
-		"upsertNamespace":           upsertNamespaceHandler,
+		"createRepo":                       createRepoHandler,
+		"createSavePoint":                  createSavePointHandler,
+		"createWorkloadMountBinding":       createWorkloadMountHandler,
+		"archiveRepo":                      archiveRepoHandler,
+		"restoreArchivedRepo":              restoreArchivedRepoHandler,
+		"deleteRepo":                       deleteRepoHandler,
+		"ensureVolume":                     volumeHandler,
+		"getRepo":                          getRepoHandler,
+		"getNamespaceVolumeBinding":        getBindingHandler,
+		"getOrchestratorMountPlan":         getOrchestratorMountPlanHandler,
+		"getWorkloadMountBinding":          getWorkloadMountHandler,
+		"heartbeatWorkloadMountBinding":    heartbeatWorkloadMountHandler,
+		"listRepos":                        listReposHandler,
+		"purgeRepo":                        purgeRepoHandler,
+		"restorePreview":                   restorePreviewHandler,
+		"restorePreviewDiscard":            restorePreviewDiscardHandler,
+		"restoreRun":                       restoreRunHandler,
+		"restoreTombstonedRepo":            restoreTombstonedRepoHandler,
+		"releaseWorkloadMountBinding":      releaseWorkloadMountHandler,
+		"revokeWorkloadMountBinding":       revokeWorkloadMountHandler,
+		"getOperation":                     operationInspectionHandler,
+		"listSavePoints":                   listSavePointsHandler,
+		"putNamespaceVolumeBinding":        putBindingHandler,
+		"upsertNamespace":                  upsertNamespaceHandler,
+		"updateWorkloadMountBindingStatus": updateWorkloadMountStatusHandler,
 	}, fallback))
 	return mux
 }

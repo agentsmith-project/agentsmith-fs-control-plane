@@ -429,13 +429,21 @@ CREATE TABLE IF NOT EXISTS workload_mount_bindings (
     mount_binding_id text PRIMARY KEY,
     namespace_id text NOT NULL,
     repo_id text NOT NULL,
+    volume_id text NOT NULL,
+    mount_path text NOT NULL,
     read_only boolean NOT NULL,
     status text NOT NULL,
+    lease_seconds integer NOT NULL,
     lease_expires_at timestamp with time zone NOT NULL,
+    last_heartbeat_at timestamp with time zone,
+    last_observed_at timestamp with time zone,
+    status_reason text NOT NULL DEFAULT '',
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT workload_mount_bindings_repo_fk FOREIGN KEY (namespace_id, repo_id)
         REFERENCES repos (namespace_id, repo_id),
+    CONSTRAINT workload_mount_bindings_volume_fk FOREIGN KEY (volume_id)
+        REFERENCES volumes (volume_id),
     CONSTRAINT workload_mount_bindings_status_check CHECK (
         status IN ('issued', 'pending', 'active', 'releasing', 'released', 'revoked', 'expired', 'failed')
     )

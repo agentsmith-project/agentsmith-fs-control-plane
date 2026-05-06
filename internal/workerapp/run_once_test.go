@@ -19,6 +19,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
 func TestNewRunOnceRunnerDisabledFailsBeforeOpeningStore(t *testing.T) {
@@ -1876,6 +1877,31 @@ func (store *fakeWorkerAppStore) ListNamespaceVolumeBindingPutOperationsForRecov
 	return out, nil
 }
 
+func (store *fakeWorkerAppStore) ListWorkloadMountBindingOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		store.listDeadline = deadline
+	}
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if !workerAppMountOperation(record.Type) {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+		case operations.OperationStateRunning, operations.OperationStateCancelRequested:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
 func namespaceRecoveryLeaseDue(record operations.OperationRecord, now time.Time) bool {
 	owner := strings.TrimSpace(record.LeaseOwner)
 	hasOwner := owner != ""
@@ -1931,6 +1957,24 @@ func (store *fakeWorkerAppStore) AcquireNamespaceVolumeBindingPutOperationLease(
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	if record.Type != operations.OperationNamespaceVolumeBindingPut || record.Phase != operations.OperationPhaseNamespaceVolumeBindingPutValidate {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
+func (store *fakeWorkerAppStore) AcquireWorkloadMountBindingOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if !workerAppMountOperation(record.Type) {
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	store.acquireIDs = append(store.acquireIDs, operationID)
@@ -2287,6 +2331,22 @@ func workerAppRepoLifecycleSupportedType(typ operations.OperationType) bool {
 	}
 }
 
+func workerAppMountOperation(typ operations.OperationType) bool {
+	switch typ {
+	case operations.OperationMountBindingCreate, operations.OperationMountBindingStatusUpdate, operations.OperationMountBindingHeartbeat, operations.OperationMountBindingRelease, operations.OperationMountBindingRevoke:
+		return true
+	default:
+		return false
+	}
+}
+
+func workerAppCommittedOperation(record operations.SanitizedOperationRecord) operations.OperationRecord {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	return operation
+}
+
 func (store *fakeWorkerAppStore) CommitNamespaceUpsertWithLease(_ context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
 	operation := record.Record()
 	operation.LeaseOwner = ""
@@ -2318,6 +2378,46 @@ func (store *fakeWorkerAppStore) CommitNamespaceVolumeBindingPutWithLease(_ cont
 	store.operation = operation
 	store.auditEvents = append(store.auditEvents, event)
 	return binding, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitWorkloadMountBindingCreateWithLease(_ context.Context, binding workloadmount.Binding, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	operation := workerAppCommittedOperation(record)
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return binding, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitWorkloadMountBindingStatusWithLease(_ context.Context, _ string, _ sessionstate.MountStatus, _ string, _ time.Time, _ *time.Time, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	operation := workerAppCommittedOperation(record)
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return workloadmount.Binding{}, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitWorkloadMountBindingHeartbeatWithLease(_ context.Context, _ string, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	operation := workerAppCommittedOperation(record)
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return workloadmount.Binding{}, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitWorkloadMountBindingReleaseWithLease(_ context.Context, _ string, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	operation := workerAppCommittedOperation(record)
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return workloadmount.Binding{}, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitWorkloadMountBindingRevokeWithLease(_ context.Context, _ string, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	operation := workerAppCommittedOperation(record)
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return workloadmount.Binding{}, operation, nil
 }
 
 func (store *fakeWorkerAppStore) CommitRepoCreateSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {

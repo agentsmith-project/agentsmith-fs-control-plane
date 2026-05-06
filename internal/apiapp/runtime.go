@@ -39,6 +39,8 @@ type InternalStore interface {
 	api.RestorePreviewDiscardMetadataReader
 	api.RestoreRunMetadataReader
 	api.RestoreRunIntakeGateReader
+	api.WorkloadMountBindingReader
+	api.WorkloadMountPlanReader
 	auditAppendStore
 }
 
@@ -137,6 +139,8 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		NamespaceReader:            handle.Store,
 		RepoReader:                 handle.Store,
 		VolumeReader:               handle.Store,
+		WorkloadMountBindingReader: handle.Store,
+		WorkloadMountPlanReader:    handle.Store,
 		RepoFenceReader:            handle.Store,
 		SavePointMutationGate:      handle.Store,
 		OperationInspectionReader:  handle.Store,
@@ -329,9 +333,9 @@ func internalReadiness(cfg config.Config) api.ReadinessResponse {
 			},
 			api.CapabilityWorkloadMount: {
 				Enabled: cfg.Capabilities.Mount.Enabled,
-				Ready:   false,
-				Gated:   true,
-				Reason:  "handler_not_implemented",
+				Ready:   cfg.Capabilities.Mount.Ready,
+				Gated:   !cfg.Capabilities.Mount.Available(),
+				Reason:  mountReadinessReason(cfg.Capabilities.Mount),
 			},
 		},
 	}
@@ -366,7 +370,20 @@ func internalRequiredReadinessCapabilities(cfg config.Config) []string {
 	if cfg.Capabilities.JVS.Enabled {
 		required = append(required, api.CapabilityJVS)
 	}
+	if cfg.Capabilities.Mount.Enabled {
+		required = append(required, api.CapabilityWorkloadMount)
+	}
 	return required
+}
+
+func mountReadinessReason(capability config.Capability) string {
+	if !capability.Enabled {
+		return "mount_not_configured"
+	}
+	if !capability.Ready {
+		return "mount_not_ready"
+	}
+	return ""
 }
 
 func capabilityReadiness(capability config.Capability, disabledReason string, unreadyReason string) api.CapabilityGate {

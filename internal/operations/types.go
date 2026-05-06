@@ -67,6 +67,17 @@ const (
 	OperationPhaseRestoreRunWriterFenced = "restore_run_writer_fenced"
 	OperationPhaseRestoreRunConsuming    = "restore_run_consuming"
 	OperationPhaseRestoreRunCommitted    = "restore_run_committed"
+
+	OperationPhaseMountBindingCreateValidate     = "validate_mount_binding_create"
+	OperationPhaseMountBindingCreateCommitted    = "mount_binding_create_committed"
+	OperationPhaseMountBindingStatusValidate     = "validate_mount_binding_status_update"
+	OperationPhaseMountBindingStatusCommitted    = "mount_binding_status_update_committed"
+	OperationPhaseMountBindingHeartbeatValidate  = "validate_mount_binding_heartbeat"
+	OperationPhaseMountBindingHeartbeatCommitted = "mount_binding_heartbeat_committed"
+	OperationPhaseMountBindingReleaseValidate    = "validate_mount_binding_release"
+	OperationPhaseMountBindingReleaseCommitted   = "mount_binding_release_committed"
+	OperationPhaseMountBindingRevokeValidate     = "validate_mount_binding_revoke"
+	OperationPhaseMountBindingRevokeCommitted    = "mount_binding_revoke_committed"
 )
 
 var operationTypes = []OperationType{

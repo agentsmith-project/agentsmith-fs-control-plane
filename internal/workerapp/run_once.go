@@ -18,6 +18,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/mountbindingexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/namespacebindingexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/namespaceexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
@@ -30,6 +31,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store/postgres"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/volumeexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 
 	_ "github.com/lib/pq"
 )
@@ -45,6 +47,7 @@ type OperationRecoveryStore interface {
 	store.RestorePreviewOperationRecoveryStore
 	store.RestorePreviewDiscardOperationRecoveryStore
 	store.RestoreRunOperationRecoveryStore
+	store.WorkloadMountBindingOperationRecoveryStore
 }
 
 type WorkerStore interface {
@@ -184,7 +187,19 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			}
 			return nil, err
 		}
-		executors := []recovery.OperationExecutor{volumeExecutor, namespaceExecutor, bindingExecutor}
+		mountExecutor, err := mountbindingexec.NewExecutor(mountbindingexec.Config{
+			CommitStore:  scopedStore,
+			Owner:        opConfig.Owner,
+			Clock:        now,
+			AuditEventID: func() string { return eventID() },
+		})
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		executors := []recovery.OperationExecutor{volumeExecutor, namespaceExecutor, bindingExecutor, mountExecutor}
 		if opConfig.RepoCreate.Enabled {
 			jvsFactory := options.JVSRunnerFactory
 			if jvsFactory == nil {
@@ -600,8 +615,13 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
+	mountRecords, err := scoped.store.ListWorkloadMountBindingOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
 	records := append(volumeRecords, namespaceRecords...)
 	records = append(records, bindingRecords...)
+	records = append(records, mountRecords...)
 	if scoped.repoCreateEnabled {
 		repoRecords, err := scoped.store.ListRepoCreateOperationsForRecovery(ctx, now, limit)
 		if err != nil {
@@ -676,6 +696,10 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
 		return record, err
 	}
+	record, err = scoped.store.AcquireWorkloadMountBindingOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
+	}
 	if scoped.repoCreateEnabled {
 		record, err = scoped.store.AcquireRepoCreateOperationLease(ctx, operationID, request)
 		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoLifecycleEnabled && !scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
@@ -736,6 +760,26 @@ func (scoped operationRecoveryStore) CommitNamespaceUpsertWithLease(ctx context.
 
 func (scoped operationRecoveryStore) CommitNamespaceVolumeBindingPutWithLease(ctx context.Context, binding resources.NamespaceVolumeBinding, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error) {
 	return scoped.store.CommitNamespaceVolumeBindingPutWithLease(ctx, binding, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitWorkloadMountBindingCreateWithLease(ctx context.Context, binding workloadmount.Binding, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	return scoped.store.CommitWorkloadMountBindingCreateWithLease(ctx, binding, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitWorkloadMountBindingStatusWithLease(ctx context.Context, mountBindingID string, status sessionstate.MountStatus, reason string, observedAt time.Time, leaseExpiresAt *time.Time, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	return scoped.store.CommitWorkloadMountBindingStatusWithLease(ctx, mountBindingID, status, reason, observedAt, leaseExpiresAt, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitWorkloadMountBindingHeartbeatWithLease(ctx context.Context, mountBindingID string, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	return scoped.store.CommitWorkloadMountBindingHeartbeatWithLease(ctx, mountBindingID, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitWorkloadMountBindingReleaseWithLease(ctx context.Context, mountBindingID string, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	return scoped.store.CommitWorkloadMountBindingReleaseWithLease(ctx, mountBindingID, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitWorkloadMountBindingRevokeWithLease(ctx context.Context, mountBindingID string, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
+	return scoped.store.CommitWorkloadMountBindingRevokeWithLease(ctx, mountBindingID, record, owner, now, event)
 }
 
 func (scoped operationRecoveryStore) CommitRepoCreateSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
@@ -919,6 +963,7 @@ var (
 	_ store.VolumeEnsureOperationCommitStore           = operationRecoveryStore{}
 	_ store.NamespaceUpsertOperationCommitStore        = operationRecoveryStore{}
 	_ store.NamespaceVolumeBindingOperationCommitStore = operationRecoveryStore{}
+	_ store.WorkloadMountBindingOperationCommitStore   = operationRecoveryStore{}
 	_ store.RepoCreateOperationCommitStore             = operationRecoveryStore{}
 	_ store.RepoLifecycleOperationCommitStore          = operationRecoveryStore{}
 	_ store.RepoPurgeOperationCommitStore              = operationRecoveryStore{}

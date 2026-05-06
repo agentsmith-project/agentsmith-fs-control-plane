@@ -12,6 +12,7 @@ import (
 func TestWorkerAppImportBoundaries(t *testing.T) {
 	allowed := map[string]bool{
 		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/namespacebindingexec": true,
+		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/mountbindingexec":     true,
 		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner":            true,
 		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec":             true,
 		"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery":        true,

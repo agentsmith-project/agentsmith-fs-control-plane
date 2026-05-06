@@ -258,16 +258,22 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		table.requireColumn(t, "mount_binding_id", "text", "primary key")
 		table.requireColumn(t, "namespace_id", "text", "not null")
 		table.requireColumn(t, "repo_id", "text", "not null")
+		table.requireColumn(t, "volume_id", "text", "not null")
+		table.requireColumn(t, "mount_path", "text", "not null")
 		table.requireColumn(t, "read_only", "boolean", "not null")
 		table.requireColumn(t, "status", "text", "not null")
+		table.requireColumn(t, "lease_seconds", "integer", "not null")
 		table.requireColumn(t, "lease_expires_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "last_heartbeat_at", "timestamp with time zone")
+		table.requireColumn(t, "last_observed_at", "timestamp with time zone")
+		table.requireColumn(t, "status_reason", "text", "not null")
 		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
 		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
 		table.requireCheckMentions(t, "status", "issued", "pending", "active", "releasing", "released", "revoked", "expired", "failed")
 		table.requireBodyFragments(t,
 			"foreign key (namespace_id, repo_id) references repos (namespace_id, repo_id)",
 		)
-		table.requireNoSensitiveColumns(t)
+		table.requireNoSensitiveColumnsExcept(t, "mount_path")
 		contract.requireIndex(t, "workload_mount_bindings", []string{"repo_id", "created_at", "mount_binding_id"})
 	})
 }
@@ -506,6 +512,16 @@ func (table tableContract) requireBodyFragments(t *testing.T, fragments ...strin
 
 func (table tableContract) requireNoSensitiveColumns(t *testing.T) {
 	t.Helper()
+	table.requireNoSensitiveColumnsExcept(t)
+}
+
+func (table tableContract) requireNoSensitiveColumnsExcept(t *testing.T, allowed ...string) {
+	t.Helper()
+
+	allowedSet := map[string]bool{}
+	for _, column := range allowed {
+		allowedSet[column] = true
+	}
 
 	forbidden := []string{
 		"credential",
@@ -518,6 +534,9 @@ func (table tableContract) requireNoSensitiveColumns(t *testing.T) {
 		"storage",
 	}
 	for column := range table.columns {
+		if allowedSet[column] {
+			continue
+		}
 		for _, word := range forbidden {
 			if strings.Contains(column, word) {
 				t.Fatalf("table %s has sensitive/session-external column %q", table.name, column)
