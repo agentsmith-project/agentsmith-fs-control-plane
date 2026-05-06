@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -151,20 +152,25 @@ func (executor *LifecycleExecutor) ExecuteOperationRecovery(ctx context.Context,
 		fenceID = fence.ID
 	}
 
-	if record.Type == operations.OperationRepoArchive || record.Type == operations.OperationRepoRestoreArchived {
+	targetRepo, err := repoLifecycleTarget(repo, record, now)
+	if err != nil {
+		return executor.commitLifecycleIntervention(ctx, record, now, "REPO_LIFECYCLE_VALIDATION_FAILED", "repo lifecycle validation failed", releaseOnTerminalFailure, nil)
+	}
+
+	if repoLifecycleRequiresSessionDrain(record.Type) {
 		decision, err := executor.lifecycleDrainDecision(ctx, record, now)
 		if err != nil {
 			return executor.commitLifecycleIntervention(ctx, record, now, "REPO_LIFECYCLE_SESSION_READ_FAILED", "repo lifecycle session validation failed", fenceID, nil)
 		}
 		if !decision.Allowed {
-			if record.Type == operations.OperationRepoArchive && decision.ErrorFamily == sessionstate.ErrorFamilyActiveSessionsBlockLifecycle {
+			if repoLifecycleWaitsForActiveSessions(record.Type) && decision.ErrorFamily == sessionstate.ErrorFamilyActiveSessionsBlockLifecycle {
 				return nil
 			}
 			return executor.commitLifecycleIntervention(ctx, record, now, decision.ErrorFamily.String(), "repo lifecycle session drain requires operator intervention", fenceID, map[string]any{"blocking_kind": decision.BlockingKind})
 		}
 	}
 
-	if record.Type == operations.OperationRepoRestoreArchived {
+	if repoLifecycleRequiresDoctor(record.Type) {
 		controlRoot, err := executor.controlRoot(repo)
 		if err != nil {
 			return executor.commitLifecycleIntervention(ctx, record, now, "REPO_LIFECYCLE_VALIDATION_FAILED", "repo lifecycle validation failed", fenceID, nil)
@@ -175,22 +181,17 @@ func (executor *LifecycleExecutor) ExecuteOperationRecovery(ctx context.Context,
 		}
 	}
 
-	target := repoLifecycleTarget(record.Type)
-	repo.Status = target
-	repo.Lifecycle.Status = target
-	repo.Lifecycle.LastLifecycleOperationID = record.ID
-	repo.UpdatedAt = now
 	operation := record
 	operation.State = operations.OperationStateSucceeded
 	operation.Phase = operations.OperationPhaseRepoLifecycleCommitted
-	operation.VerificationResult = map[string]any{"repo_id": record.RepoID, "lifecycle_status": string(target)}
+	operation.VerificationResult = map[string]any{"repo_id": record.RepoID, "lifecycle_status": string(targetRepo.Status)}
 	operation.Error = nil
 	operation.FinishedAt = &now
-	event, err := executor.lifecycleAuditEvent(operation, now, audit.OutcomeSucceeded, string(record.Type)+"_committed", map[string]any{"repo_id": record.RepoID, "lifecycle_status": string(target)})
+	event, err := executor.lifecycleAuditEvent(operation, now, audit.OutcomeSucceeded, string(record.Type)+"_committed", map[string]any{"repo_id": record.RepoID, "lifecycle_status": string(targetRepo.Status)})
 	if err != nil {
 		return err
 	}
-	if _, _, err := executor.store.CommitRepoLifecycleSucceededWithLease(ctx, repo, operation.SanitizedForPersistence(), executor.owner, now, event, fenceID); err != nil {
+	if _, _, err := executor.store.CommitRepoLifecycleSucceededWithLease(ctx, targetRepo, operation.SanitizedForPersistence(), executor.owner, now, event, fenceID); err != nil {
 		return errors.New("repo lifecycle success commit failed")
 	}
 	return nil
@@ -300,7 +301,12 @@ func validateRepoLifecycleLeasedRecord(record operations.OperationRecord, owner 
 }
 
 func repoLifecycleSupportedType(typ operations.OperationType) bool {
-	return typ == operations.OperationRepoArchive || typ == operations.OperationRepoRestoreArchived
+	switch typ {
+	case operations.OperationRepoArchive, operations.OperationRepoRestoreArchived, operations.OperationRepoDelete, operations.OperationRepoRestoreTombstoned:
+		return true
+	default:
+		return false
+	}
 }
 
 func repoLifecycleSourceMatches(typ operations.OperationType, status resources.RepoStatus) bool {
@@ -309,16 +315,112 @@ func repoLifecycleSourceMatches(typ operations.OperationType, status resources.R
 		return status == resources.RepoStatusActive
 	case operations.OperationRepoRestoreArchived:
 		return status == resources.RepoStatusArchived
+	case operations.OperationRepoDelete:
+		return status == resources.RepoStatusActive || status == resources.RepoStatusArchived
+	case operations.OperationRepoRestoreTombstoned:
+		return status == resources.RepoStatusTombstoned
 	default:
 		return false
 	}
 }
 
-func repoLifecycleTarget(typ operations.OperationType) resources.RepoStatus {
-	if typ == operations.OperationRepoRestoreArchived {
-		return resources.RepoStatusActive
+func repoLifecycleRequiresSessionDrain(typ operations.OperationType) bool {
+	switch typ {
+	case operations.OperationRepoArchive, operations.OperationRepoRestoreArchived, operations.OperationRepoDelete, operations.OperationRepoRestoreTombstoned:
+		return true
+	default:
+		return false
 	}
-	return resources.RepoStatusArchived
+}
+
+func repoLifecycleWaitsForActiveSessions(typ operations.OperationType) bool {
+	return typ == operations.OperationRepoArchive || typ == operations.OperationRepoDelete
+}
+
+func repoLifecycleRequiresDoctor(typ operations.OperationType) bool {
+	return typ == operations.OperationRepoRestoreArchived || typ == operations.OperationRepoRestoreTombstoned
+}
+
+func repoLifecycleTarget(repo resources.Repo, record operations.OperationRecord, now time.Time) (resources.Repo, error) {
+	target := repo
+	target.Lifecycle.LastLifecycleOperationID = record.ID
+	target.UpdatedAt = now
+	switch record.Type {
+	case operations.OperationRepoArchive:
+		target.Status = resources.RepoStatusArchived
+		target.Lifecycle.Status = resources.RepoStatusArchived
+		target.Lifecycle.RetentionExpiresAt = nil
+		target.Lifecycle.PreDeleteStatus = ""
+	case operations.OperationRepoRestoreArchived:
+		target.Status = resources.RepoStatusActive
+		target.Lifecycle.Status = resources.RepoStatusActive
+		target.Lifecycle.RetentionExpiresAt = nil
+		target.Lifecycle.PreDeleteStatus = ""
+	case operations.OperationRepoDelete:
+		retentionExpiresAt, err := repoLifecycleDeleteRetentionExpiresAt(record)
+		if err != nil {
+			return resources.Repo{}, err
+		}
+		target.Status = resources.RepoStatusTombstoned
+		target.Lifecycle.Status = resources.RepoStatusTombstoned
+		target.Lifecycle.RetentionExpiresAt = &retentionExpiresAt
+		target.Lifecycle.PreDeleteStatus = repo.Status
+	case operations.OperationRepoRestoreTombstoned:
+		if repo.Lifecycle.PreDeleteStatus != resources.RepoStatusActive && repo.Lifecycle.PreDeleteStatus != resources.RepoStatusArchived {
+			return resources.Repo{}, errors.New("invalid tombstone pre-delete status")
+		}
+		if repo.Lifecycle.RetentionExpiresAt == nil || !record.CreatedAt.Before(*repo.Lifecycle.RetentionExpiresAt) {
+			return resources.Repo{}, errors.New("restore operation is not eligible for tombstone retention")
+		}
+		if !record.CreatedAt.After(repo.UpdatedAt) {
+			return resources.Repo{}, errors.New("restore operation is not in current tombstone cycle")
+		}
+		target.Status = repo.Lifecycle.PreDeleteStatus
+		target.Lifecycle.Status = repo.Lifecycle.PreDeleteStatus
+		target.Lifecycle.RetentionExpiresAt = nil
+		target.Lifecycle.PreDeleteStatus = ""
+	default:
+		return resources.Repo{}, errors.New("unsupported repo lifecycle target")
+	}
+	return target, nil
+}
+
+func repoLifecycleDeleteRetentionExpiresAt(record operations.OperationRecord) (time.Time, error) {
+	snapshot, ok := record.InputSummary["lifecycle_policy_snapshot"].(map[string]any)
+	if !ok {
+		return time.Time{}, errors.New("missing lifecycle policy snapshot")
+	}
+	value, ok := snapshot["tombstone_retention_seconds"]
+	if !ok {
+		return time.Time{}, errors.New("missing tombstone retention")
+	}
+	seconds, err := repoLifecycleRetentionSeconds(value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return record.CreatedAt.Add(time.Duration(seconds) * time.Second), nil
+}
+
+func repoLifecycleRetentionSeconds(value any) (int64, error) {
+	const maxDurationSeconds = int64(math.MaxInt64 / int64(time.Second))
+	var seconds int64
+	switch typed := value.(type) {
+	case int:
+		seconds = int64(typed)
+	case int64:
+		seconds = typed
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) || typed < 0 || typed > float64(maxDurationSeconds) || typed != math.Trunc(typed) {
+			return 0, errors.New("invalid tombstone retention")
+		}
+		seconds = int64(typed)
+	default:
+		return 0, errors.New("invalid tombstone retention")
+	}
+	if seconds < 0 || seconds > maxDurationSeconds {
+		return 0, errors.New("invalid tombstone retention")
+	}
+	return seconds, nil
 }
 
 var _ recovery.OperationExecutor = (*LifecycleExecutor)(nil)

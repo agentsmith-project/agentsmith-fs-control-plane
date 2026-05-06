@@ -3,6 +3,7 @@ package repoexec
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,261 @@ func TestLifecycleExecutorRestoresArchivedRepoAfterDoctor(t *testing.T) {
 	}
 	if store.repo.Status != resources.RepoStatusActive || store.operation.Type != operations.OperationRepoRestoreArchived || store.auditEvents[0].Type != audit.EventTypeRepoRestoreArchived {
 		t.Fatalf("repo/operation/audit = %#v/%#v/%#v", store.repo, store.operation, store.auditEvents)
+	}
+}
+
+func TestLifecycleExecutorDeletesActiveAndArchivedReposToTombstone(t *testing.T) {
+	now := repoExecNow()
+	tests := []struct {
+		name   string
+		source resources.RepoStatus
+	}{
+		{name: "active", source: resources.RepoStatusActive},
+		{name: "archived", source: resources.RepoStatusArchived},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.repo = repoLifecycleResource(now, tt.source)
+			executor := newTestLifecycleExecutor(t, store, &fakeJVSRunner{}, now)
+
+			if err := executor.ExecuteOperationRecovery(context.Background(), repoLifecycleDeleteRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+				t.Fatalf("ExecuteOperationRecovery: %v", err)
+			}
+			wantRetention := now.Add(-time.Hour).Add(7 * 24 * time.Hour)
+			if store.repo.Status != resources.RepoStatusTombstoned || store.repo.Lifecycle.Status != resources.RepoStatusTombstoned || store.repo.Lifecycle.PreDeleteStatus != tt.source {
+				t.Fatalf("repo lifecycle = %#v, want tombstoned from %s", store.repo.Lifecycle, tt.source)
+			}
+			if store.repo.Lifecycle.RetentionExpiresAt == nil || !store.repo.Lifecycle.RetentionExpiresAt.Equal(wantRetention) {
+				t.Fatalf("retention = %v, want %s from durable input summary snapshot", store.repo.Lifecycle.RetentionExpiresAt, wantRetention)
+			}
+			if store.operation.State != operations.OperationStateSucceeded || store.operation.Type != operations.OperationRepoDelete || store.auditEvents[0].Type != audit.EventTypeRepoDelete {
+				t.Fatalf("operation/audit = %#v/%#v, want repo_delete success", store.operation, store.auditEvents)
+			}
+			assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+		})
+	}
+}
+
+func TestLifecycleExecutorDeleteAllowsZeroRetentionSnapshot(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = repoLifecycleResource(now, resources.RepoStatusActive)
+	record := repoLifecycleDeleteRecord(now, 1)
+	record.InputSummary["lifecycle_policy_snapshot"].(map[string]any)["tombstone_retention_seconds"] = float64(0)
+	executor := newTestLifecycleExecutor(t, store, &fakeJVSRunner{}, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if store.repo.Status != resources.RepoStatusTombstoned || store.repo.Lifecycle.RetentionExpiresAt == nil || !store.repo.Lifecycle.RetentionExpiresAt.Equal(record.CreatedAt) {
+		t.Fatalf("repo lifecycle = %#v, want tombstoned with retention at operation created_at %s", store.repo.Lifecycle, record.CreatedAt)
+	}
+}
+
+func TestLifecycleExecutorDeleteMissingOrInvalidRetentionSnapshotRequiresManualIntervention(t *testing.T) {
+	now := repoExecNow()
+	tests := []struct {
+		name string
+		edit func(operations.OperationRecord) operations.OperationRecord
+	}{
+		{name: "missing snapshot", edit: func(record operations.OperationRecord) operations.OperationRecord {
+			record.InputSummary = map[string]any{"repo_id": record.RepoID}
+			return record
+		}},
+		{name: "invalid snapshot", edit: func(record operations.OperationRecord) operations.OperationRecord {
+			record.InputSummary["lifecycle_policy_snapshot"].(map[string]any)["tombstone_retention_seconds"] = "secret-duration"
+			return record
+		}},
+		{name: "negative snapshot", edit: func(record operations.OperationRecord) operations.OperationRecord {
+			record.InputSummary["lifecycle_policy_snapshot"].(map[string]any)["tombstone_retention_seconds"] = float64(-1)
+			return record
+		}},
+		{name: "fractional snapshot", edit: func(record operations.OperationRecord) operations.OperationRecord {
+			record.InputSummary["lifecycle_policy_snapshot"].(map[string]any)["tombstone_retention_seconds"] = float64(1.5)
+			return record
+		}},
+		{name: "overflow int64 snapshot", edit: func(record operations.OperationRecord) operations.OperationRecord {
+			record.InputSummary["lifecycle_policy_snapshot"].(map[string]any)["tombstone_retention_seconds"] = int64(math.MaxInt64)
+			return record
+		}},
+		{name: "overflow float snapshot", edit: func(record operations.OperationRecord) operations.OperationRecord {
+			record.InputSummary["lifecycle_policy_snapshot"].(map[string]any)["tombstone_retention_seconds"] = math.MaxFloat64
+			return record
+		}},
+		{name: "nan snapshot", edit: func(record operations.OperationRecord) operations.OperationRecord {
+			record.InputSummary["lifecycle_policy_snapshot"].(map[string]any)["tombstone_retention_seconds"] = math.NaN()
+			return record
+		}},
+		{name: "inf snapshot", edit: func(record operations.OperationRecord) operations.OperationRecord {
+			record.InputSummary["lifecycle_policy_snapshot"].(map[string]any)["tombstone_retention_seconds"] = math.Inf(1)
+			return record
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.repo = repoLifecycleResource(now, resources.RepoStatusActive)
+			executor := newTestLifecycleExecutor(t, store, &fakeJVSRunner{}, now)
+			record := tt.edit(repoLifecycleDeleteRecord(now, 1))
+
+			if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); !errors.Is(err, recovery.ErrOperationManualIntervention) {
+				t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+			}
+			if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.repo.Status != resources.RepoStatusActive {
+				t.Fatalf("operation/repo = %#v/%#v, want manual without lifecycle mutation", store.operation, store.repo)
+			}
+			assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+		})
+	}
+}
+
+func TestLifecycleExecutorRestoresTombstonedRepoToPreDeleteStatusAfterDoctor(t *testing.T) {
+	now := repoExecNow()
+	tests := []struct {
+		name      string
+		preDelete resources.RepoStatus
+	}{
+		{name: "active", preDelete: resources.RepoStatusActive},
+		{name: "archived", preDelete: resources.RepoStatusArchived},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.repo = repoLifecycleTombstonedResource(now, tt.preDelete, now.Add(time.Hour))
+			runner := &fakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}
+			executor := newTestLifecycleExecutor(t, store, runner, now)
+
+			if err := executor.ExecuteOperationRecovery(context.Background(), repoLifecycleRestoreTombstonedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+				t.Fatalf("ExecuteOperationRecovery: %v", err)
+			}
+			if strings.Join(runner.calls, ",") != "doctor" {
+				t.Fatalf("jvs calls = %#v, want doctor", runner.calls)
+			}
+			if store.repo.Status != tt.preDelete || store.repo.Lifecycle.Status != tt.preDelete || store.repo.Lifecycle.RetentionExpiresAt != nil || store.repo.Lifecycle.PreDeleteStatus != "" {
+				t.Fatalf("repo lifecycle = %#v, want restored to %s with tombstone metadata cleared", store.repo.Lifecycle, tt.preDelete)
+			}
+			if store.operation.Type != operations.OperationRepoRestoreTombstoned || store.auditEvents[0].Type != audit.EventTypeRepoRestoreTombstoned {
+				t.Fatalf("operation/audit = %#v/%#v, want restore tombstoned success", store.operation, store.auditEvents)
+			}
+		})
+	}
+}
+
+func TestLifecycleExecutorRestoreTombstonedUsesOperationCreatedAtForRetentionEligibility(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	retentionExpiredBeforeWorker := now.Add(-time.Minute)
+	store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, retentionExpiredBeforeWorker)
+	store.repo.UpdatedAt = now.Add(-2 * time.Hour)
+	record := repoLifecycleRestoreTombstonedRecord(now, 1)
+	record.CreatedAt = retentionExpiredBeforeWorker.Add(-time.Minute)
+	runner := &fakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}
+	executor := newTestLifecycleExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if store.repo.Status != resources.RepoStatusActive || strings.Join(runner.calls, ",") != "doctor" {
+		t.Fatalf("repo/calls = %#v/%#v, want restore accepted by operation created_at within retention", store.repo, runner.calls)
+	}
+}
+
+func TestLifecycleExecutorRestoreTombstonedValidationAndSessionFailuresRequireManualIntervention(t *testing.T) {
+	now := repoExecNow()
+	tests := []struct {
+		name       string
+		edit       func(*fakeRepoCreateStore, *fakeJVSRunner)
+		wantDoctor bool
+	}{
+		{name: "accepted after retention expiry", edit: func(store *fakeRepoCreateStore, _ *fakeJVSRunner) {
+			store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(-2*time.Hour))
+		}},
+		{name: "old restore from previous tombstone cycle", edit: func(store *fakeRepoCreateStore, _ *fakeJVSRunner) {
+			store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(time.Hour))
+			store.repo.UpdatedAt = now.Add(-30 * time.Minute)
+		}},
+		{name: "missing pre-delete status", edit: func(store *fakeRepoCreateStore, _ *fakeJVSRunner) {
+			store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(time.Hour))
+			store.repo.Lifecycle.PreDeleteStatus = ""
+		}},
+		{name: "doctor mismatch", wantDoctor: true, edit: func(store *fakeRepoCreateStore, runner *fakeJVSRunner) {
+			store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(time.Hour))
+			runner.doctorSummary = jvsrunner.DoctorSummary{RepoID: "jvs_repo_other", Healthy: true, Workspace: "main"}
+		}},
+		{name: "nonterminal session before doctor", edit: func(store *fakeRepoCreateStore, _ *fakeJVSRunner) {
+			store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(time.Hour))
+			store.exports = []sessionstate.ExportSession{{ID: "export_alpha", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			runner := &fakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}
+			tt.edit(store, runner)
+			executor := newTestLifecycleExecutor(t, store, runner, now)
+
+			record := repoLifecycleRestoreTombstonedRecord(now, 1)
+			if tt.name == "old restore from previous tombstone cycle" {
+				record.CreatedAt = now.Add(-time.Hour)
+			}
+			err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+			if !errors.Is(err, recovery.ErrOperationManualIntervention) {
+				t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+			}
+			if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.releasedFenceID != "" {
+				t.Fatalf("operation/release = %#v/%q, want intervention keep fence", store.operation, store.releasedFenceID)
+			}
+			if gotDoctor := strings.Contains(strings.Join(runner.calls, ","), "doctor"); gotDoctor != tt.wantDoctor {
+				t.Fatalf("doctor called = %v, want %v; calls=%#v", gotDoctor, tt.wantDoctor, runner.calls)
+			}
+			assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+		})
+	}
+}
+
+func TestLifecycleExecutorDeleteSessionHandling(t *testing.T) {
+	now := repoExecNow()
+	tests := []struct {
+		name      string
+		session   sessionstate.ExportSession
+		wantWait  bool
+		wantState operations.OperationState
+	}{
+		{name: "active session waits", wantWait: true, session: sessionstate.ExportSession{ID: "export_active", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}},
+		{name: "stale session manual", wantState: operations.OperationStateOperatorInterventionRequired, session: sessionstate.ExportSession{ID: "export_stale", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.repo = repoLifecycleResource(now, resources.RepoStatusActive)
+			store.exports = []sessionstate.ExportSession{tt.session}
+			executor := newTestLifecycleExecutor(t, store, &fakeJVSRunner{}, now)
+
+			err := executor.ExecuteOperationRecovery(context.Background(), repoLifecycleDeleteRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+			if tt.wantWait {
+				if err != nil || store.operation.ID != "" || store.releasedFenceID != "" {
+					t.Fatalf("err/operation/release = %v/%#v/%q, want wait without mutation", err, store.operation, store.releasedFenceID)
+				}
+				return
+			}
+			if !errors.Is(err, recovery.ErrOperationManualIntervention) || store.operation.State != tt.wantState || store.releasedFenceID != "" {
+				t.Fatalf("err/operation/release = %v/%#v/%q, want stale manual keep fence", err, store.operation, store.releasedFenceID)
+			}
+		})
+	}
+}
+
+func TestLifecycleExecutorRejectsRepoPurgeRecovery(t *testing.T) {
+	now := repoExecNow()
+	executor := newTestLifecycleExecutor(t, newFakeStore(), &fakeJVSRunner{}, now)
+	record := repoLifecycleLeasedRecord(now, operations.OperationRepoPurge, 1)
+
+	if support := executor.SupportsOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); support.Supported {
+		t.Fatalf("SupportsOperationRecovery = supported, want repo_purge unsupported")
+	}
+	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err == nil {
+		t.Fatal("ExecuteOperationRecovery succeeded for repo_purge, want unsupported error")
 	}
 }
 
@@ -237,11 +493,37 @@ func repoLifecycleLeasedRecord(now time.Time, typ operations.OperationType, atte
 	record.Type = typ
 	record.Phase = operations.OperationPhaseRepoLifecycleValidate
 	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", typ, "idem_lifecycle").String()
+	record.InputSummary = map[string]any{"repo_id": "repo_alpha01", "reason_present": false}
 	return record
+}
+
+func repoLifecycleDeleteRecord(now time.Time, attempt int) operations.OperationRecord {
+	record := repoLifecycleLeasedRecord(now, operations.OperationRepoDelete, attempt)
+	record.InputSummary = map[string]any{
+		"repo_id":        "repo_alpha01",
+		"reason_present": false,
+		"lifecycle_policy_snapshot": map[string]any{
+			"tombstone_retention_seconds": float64(604800),
+		},
+	}
+	return record
+}
+
+func repoLifecycleRestoreTombstonedRecord(now time.Time, attempt int) operations.OperationRecord {
+	return repoLifecycleLeasedRecord(now, operations.OperationRepoRestoreTombstoned, attempt)
 }
 
 func repoLifecycleResource(now time.Time, status resources.RepoStatus) resources.Repo {
 	return resources.Repo{ID: "repo_alpha01", NamespaceID: "ns_alpha01", VolumeID: "vol_123", JVSRepoID: "jvs_repo_alpha", Kind: resources.RepoKindRepo, Status: status, ControlVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/control", PayloadVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload", Lifecycle: resources.RepoLifecycle{Status: status, LastLifecycleOperationID: "op_repo_create"}, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}
+}
+
+func repoLifecycleTombstonedResource(now time.Time, preDelete resources.RepoStatus, retention time.Time) resources.Repo {
+	repo := repoLifecycleResource(now, resources.RepoStatusTombstoned)
+	repo.Lifecycle.RetentionExpiresAt = &retention
+	repo.Lifecycle.PreDeleteStatus = preDelete
+	repo.Lifecycle.LastLifecycleOperationID = "op_delete_current"
+	repo.UpdatedAt = now.Add(-2 * time.Hour)
+	return repo
 }
 
 func repoLifecycleFence(now time.Time, fenceID, operationID string, status fences.Status) fences.Fence {

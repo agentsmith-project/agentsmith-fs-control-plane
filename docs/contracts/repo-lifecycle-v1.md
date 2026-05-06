@@ -116,6 +116,11 @@ Delete:
 Restore tombstoned:
 
 - is allowed only before purge and within retention policy
+- evaluates retention eligibility against the restore operation accepted time:
+  the operation is eligible only when its accepted time is earlier than
+  `retention_expires_at`; an accepted time equal to or later than
+  `retention_expires_at` is expired and must be rejected or moved to operator
+  handling
 - preserves repo ID and JVS identity unless a separate reviewed import contract says otherwise
 - must verify repo health before returning to the recorded pre-delete accessibility state
 

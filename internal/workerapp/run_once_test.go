@@ -186,8 +186,10 @@ func TestRunOnceRepoCreateEnabledClaimsThroughRepoExecutor(t *testing.T) {
 
 func TestRunOnceRepoLifecycleDisabledDoesNotListLifecycle(t *testing.T) {
 	now := workerAppNow()
-	lifecycleRecord := workerAppRepoLifecycleOperationRecord("op_archive", operations.OperationRepoArchive, now)
-	store := newWorkerAppStore(lifecycleRecord)
+	archiveRecord := workerAppRepoLifecycleOperationRecord("op_archive", operations.OperationRepoArchive, now)
+	deleteRecord := workerAppRepoLifecycleOperationRecord("op_delete", operations.OperationRepoDelete, now)
+	restoreRecord := workerAppRepoLifecycleOperationRecord("op_restore_tombstoned", operations.OperationRepoRestoreTombstoned, now)
+	store := newWorkerAppStore(archiveRecord, deleteRecord, restoreRecord)
 	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
 	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
 
@@ -234,6 +236,57 @@ func TestRunOnceRepoLifecycleEnabledArchivesThroughLifecycleExecutor(t *testing.
 	}
 }
 
+func TestRunOnceRepoLifecycleEnabledProcessesDeleteAndRestoreTombstoned(t *testing.T) {
+	now := workerAppNow()
+	tests := []struct {
+		name       string
+		typ        operations.OperationType
+		repo       resources.Repo
+		wantStatus resources.RepoStatus
+		wantDoctor bool
+	}{
+		{name: "delete", typ: operations.OperationRepoDelete, repo: workerAppRepoLifecycleResource(now, resources.RepoStatusActive), wantStatus: resources.RepoStatusTombstoned},
+		{name: "restore tombstoned", typ: operations.OperationRepoRestoreTombstoned, repo: workerAppRepoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(time.Hour)), wantStatus: resources.RepoStatusActive, wantDoctor: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := workerAppRepoLifecycleOperationRecord("op_lifecycle", tt.typ, now)
+			store := newWorkerAppStore(record)
+			store.repo = tt.repo
+			jvs := &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}
+			runner, err := NewRunOnceRunner(Options{
+				Source: workerAppRepoLifecycleConfigSource(nil),
+				StoreFactory: func(context.Context, string) (StoreHandle, error) {
+					return StoreHandle{Store: store}, nil
+				},
+				JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+					return jvs, nil
+				},
+				Clock:        func() time.Time { return now },
+				AuditEventID: func() string { return "evt_lifecycle" },
+			})
+			if err != nil {
+				t.Fatalf("NewRunOnceRunner: %v", err)
+			}
+
+			result, err := runner.RunOnce(context.Background())
+			if err != nil {
+				t.Fatalf("RunOnce: %v", err)
+			}
+			summary := result.Summary().Operation
+			if summary.Claimed != 1 || summary.Manual != 0 || summary.Failed != 0 {
+				t.Fatalf("summary = %#v, want claimed success", summary)
+			}
+			if store.repo.Status != tt.wantStatus || store.operation.Type != tt.typ || store.operation.State != operations.OperationStateSucceeded {
+				t.Fatalf("repo/operation = %#v/%#v, want %s success", store.repo, store.operation, tt.wantStatus)
+			}
+			if gotDoctor := strings.Contains(strings.Join(jvs.calls, ","), "doctor"); gotDoctor != tt.wantDoctor {
+				t.Fatalf("doctor called = %v, want %v; calls=%#v", gotDoctor, tt.wantDoctor, jvs.calls)
+			}
+		})
+	}
+}
+
 func TestRunOnceRepoLifecycleFinalizeCancellationReleasesSameOperationFence(t *testing.T) {
 	now := workerAppNow()
 	cancelRecord := workerAppRepoLifecycleOperationRecord("op_archive", operations.OperationRepoArchive, now)
@@ -276,6 +329,70 @@ func TestRunOnceRepoLifecycleFinalizeCancellationReleasesSameOperationFence(t *t
 	got := store.records[cancelRecord.ID]
 	if got.State != operations.OperationStateCancelled || store.releasedFenceID != "fence_op_archive" {
 		t.Fatalf("operation/release = %#v/%q, want cancelled with fence release", got, store.releasedFenceID)
+	}
+}
+
+func TestRunOnceRepoLifecycleActiveSessionWaitExitsZeroWithoutClaimedSuccess(t *testing.T) {
+	now := workerAppNow()
+	lifecycleRecord := workerAppRepoLifecycleOperationRecord("op_delete", operations.OperationRepoDelete, now)
+	store := newWorkerAppStore(lifecycleRecord)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	store.exports = []sessionstate.ExportSession{{ID: "export_active", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoLifecycleConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_lifecycle" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Manual != 0 || summary.Failed != 0 {
+		t.Fatalf("summary = %#v, want claimed execution that waits cleanly", summary)
+	}
+	if store.operation.ID != "" || store.releasedFenceID != "" {
+		t.Fatalf("operation/release = %#v/%q, want no mutation while session active", store.operation, store.releasedFenceID)
+	}
+}
+
+func TestRunOnceRepoLifecycleDoesNotClaimPurge(t *testing.T) {
+	now := workerAppNow()
+	purgeRecord := workerAppRepoLifecycleOperationRecord("op_purge", operations.OperationRepoPurge, now)
+	store := newWorkerAppStore(purgeRecord)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusTombstoned)
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoLifecycleConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_lifecycle" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 0 || summary.Claimed != 0 || len(store.acquireIDs) != 0 {
+		t.Fatalf("summary/acquire = %#v/%#v, want purge ignored by lifecycle runner", summary, store.acquireIDs)
 	}
 }
 
@@ -847,8 +964,12 @@ func workerAppRepoLifecycleOperationRecord(operationID string, typ operations.Op
 		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:      "ns_alpha01",
 		RepoID:           "repo_alpha01",
-		InputSummary:     map[string]any{"repo_id": "repo_alpha01", "reason_present": false},
-		CreatedAt:        now.Add(-time.Hour),
+		InputSummary: map[string]any{
+			"repo_id":                   "repo_alpha01",
+			"reason_present":            false,
+			"lifecycle_policy_snapshot": map[string]any{"tombstone_retention_seconds": float64(604800)},
+		},
+		CreatedAt: now.Add(-time.Hour),
 	}
 }
 
@@ -866,6 +987,15 @@ func workerAppRepoLifecycleResource(now time.Time, status resources.RepoStatus) 
 		CreatedAt:           now.Add(-time.Hour),
 		UpdatedAt:           now,
 	}
+}
+
+func workerAppRepoLifecycleTombstonedResource(now time.Time, preDelete resources.RepoStatus, retention time.Time) resources.Repo {
+	repo := workerAppRepoLifecycleResource(now, resources.RepoStatusTombstoned)
+	repo.Lifecycle.RetentionExpiresAt = &retention
+	repo.Lifecycle.PreDeleteStatus = preDelete
+	repo.Lifecycle.LastLifecycleOperationID = "op_delete_current"
+	repo.UpdatedAt = now.Add(-2 * time.Hour)
+	return repo
 }
 
 func workerAppVolumeOperationRecord(operationID string, now time.Time) operations.OperationRecord {
@@ -1136,7 +1266,7 @@ func (store *fakeWorkerAppStore) ListRepoLifecycleOperationsForRecovery(ctx cont
 		if len(out) >= limit {
 			break
 		}
-		if (record.Type != operations.OperationRepoArchive && record.Type != operations.OperationRepoRestoreArchived) || record.Phase != operations.OperationPhaseRepoLifecycleValidate {
+		if !workerAppRepoLifecycleSupportedType(record.Type) || record.Phase != operations.OperationPhaseRepoLifecycleValidate {
 			continue
 		}
 		switch record.State {
@@ -1186,7 +1316,7 @@ func (store *fakeWorkerAppStore) AcquireRepoLifecycleOperationLease(_ context.Co
 	if !ok {
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
-	if (record.Type != operations.OperationRepoArchive && record.Type != operations.OperationRepoRestoreArchived) || record.Phase != operations.OperationPhaseRepoLifecycleValidate {
+	if !workerAppRepoLifecycleSupportedType(record.Type) || record.Phase != operations.OperationPhaseRepoLifecycleValidate {
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	store.acquireIDs = append(store.acquireIDs, operationID)
@@ -1209,6 +1339,15 @@ func (store *fakeWorkerAppStore) AcquireRepoLifecycleOperationLease(_ context.Co
 		}
 	}
 	return decision.Record, nil
+}
+
+func workerAppRepoLifecycleSupportedType(typ operations.OperationType) bool {
+	switch typ {
+	case operations.OperationRepoArchive, operations.OperationRepoRestoreArchived, operations.OperationRepoDelete, operations.OperationRepoRestoreTombstoned:
+		return true
+	default:
+		return false
+	}
 }
 
 func (store *fakeWorkerAppStore) CommitNamespaceUpsertWithLease(_ context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {

@@ -195,9 +195,10 @@ type RepoLifecycleOperationMetadataReader interface {
 	ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error)
 }
 
-// RepoLifecycleOperationRecoveryStore owns repo_archive and
-// repo_restore_archived recovery. Implementations must scope list/acquire at
-// the durable boundary to those operation types and validate_repo_lifecycle,
+// RepoLifecycleOperationRecoveryStore owns repo_archive,
+// repo_restore_archived, repo_delete, and repo_restore_tombstoned recovery.
+// Implementations must scope list/acquire at the durable boundary to those
+// operation types and validate_repo_lifecycle, explicitly excluding repo_purge,
 // and terminal writes must atomically update repo lifecycle metadata,
 // operation state, audit outbox, and lifecycle fence release when applicable.
 type RepoLifecycleOperationRecoveryStore interface {

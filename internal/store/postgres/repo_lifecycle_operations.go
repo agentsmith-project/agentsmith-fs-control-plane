@@ -80,7 +80,7 @@ func (store *Store) CommitRepoLifecycleFailedWithLease(ctx context.Context, sani
 }
 
 func validateRepoLifecycleSuccessRecord(repo resources.Repo, record operations.OperationRecord) error {
-	if record.Type != operations.OperationRepoArchive && record.Type != operations.OperationRepoRestoreArchived {
+	if !repoLifecycleOperationTypeSupported(record.Type) {
 		return operationLeaseInvalidRequest("operation_type", "operation record must be supported repo lifecycle type")
 	}
 	if record.State != operations.OperationStateSucceeded {
@@ -99,7 +99,7 @@ func validateRepoLifecycleSuccessRecord(repo resources.Repo, record operations.O
 }
 
 func validateRepoLifecycleFailureRecord(record operations.OperationRecord) error {
-	if record.Type != operations.OperationRepoArchive && record.Type != operations.OperationRepoRestoreArchived {
+	if !repoLifecycleOperationTypeSupported(record.Type) {
 		return operationLeaseInvalidRequest("operation_type", "operation record must be supported repo lifecycle type")
 	}
 	if record.State != operations.OperationStateFailed && record.State != operations.OperationStateOperatorInterventionRequired {
@@ -136,14 +136,27 @@ func validateRepoLifecycleFailureAuditEvent(record operations.OperationRecord, e
 	return validateRepoLifecycleAuditEvent(repo, record, event, audit.OutcomeFailed)
 }
 
+func repoLifecycleOperationTypeSupported(typ operations.OperationType) bool {
+	switch typ {
+	case operations.OperationRepoArchive, operations.OperationRepoRestoreArchived, operations.OperationRepoDelete, operations.OperationRepoRestoreTombstoned:
+		return true
+	default:
+		return false
+	}
+}
+
+func repoLifecycleOperationTypeSQLList() string {
+	return "'repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned'"
+}
+
 func repoLifecycleStoredPredicateArgs(record operations.OperationRecord) []any {
 	return []any{record.NamespaceID, record.RepoID, record.CallerService, record.CorrelationID, record.AuthorizedActor.Type, record.AuthorizedActor.ID}
 }
 
 func repoLifecycleSuccessCommitWithLeaseSQL() string {
 	return "WITH eligible_operation AS (" +
-		"SELECT operation_id, operation_type FROM operations WHERE operation_id = $12 AND operation_state = 'running' AND lease_owner = $13 AND lease_expires_at IS NOT NULL AND lease_expires_at > $11 " +
-		"AND operation_type IN ('repo_archive', 'repo_restore_archived') AND phase = 'validate_repo_lifecycle' AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
+		"SELECT operation_id, operation_type, created_at FROM operations WHERE operation_id = $12 AND operation_state = 'running' AND lease_owner = $13 AND lease_expires_at IS NOT NULL AND lease_expires_at > $11 " +
+		"AND operation_type IN (" + repoLifecycleOperationTypeSQLList() + ") AND phase = 'validate_repo_lifecycle' AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
 		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 FOR UPDATE" +
 		"), active_namespace AS (" +
 		"SELECT namespace_id FROM namespaces WHERE namespace_id = $14 AND status = 'active'" +
@@ -157,7 +170,12 @@ func repoLifecycleSuccessCommitWithLeaseSQL() string {
 		"SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM export_sessions WHERE repo_id = $15 AND status NOT IN ('revoked','expired','failed')) AND NOT EXISTS (SELECT 1 FROM workload_mount_bindings WHERE repo_id = $15 AND status NOT IN ('released','revoked','expired','failed'))" +
 		"), updated_repo AS (" +
 		"UPDATE repos SET status = $25, lifecycle_status = $28, retention_expires_at = $29, last_lifecycle_operation_id = $30, pre_delete_status = $31, updated_at = $33 " +
-		"FROM eligible_operation, active_namespace, active_binding, active_volume, held_fence, no_sessions WHERE repos.repo_id = $15 AND repos.namespace_id = $14 AND repos.volume_id = active_volume.volume_id AND repos.volume_id = $22 AND repos.jvs_repo_id = $23 AND repos.repo_kind = $24 AND repos.control_volume_subdir = $26 AND repos.payload_volume_subdir = $27 AND ((eligible_operation.operation_type = 'repo_archive' AND repos.status = 'active') OR (eligible_operation.operation_type = 'repo_restore_archived' AND repos.status = 'archived')) RETURNING " + strings.Join(repoColumns, ", ") +
+		"FROM eligible_operation, active_namespace, active_binding, active_volume, held_fence, no_sessions WHERE repos.repo_id = $15 AND repos.namespace_id = $14 AND repos.volume_id = active_volume.volume_id AND repos.volume_id = $22 AND repos.jvs_repo_id = $23 AND repos.repo_kind = $24 AND repos.control_volume_subdir = $26 AND repos.payload_volume_subdir = $27 AND (" +
+		"(eligible_operation.operation_type = 'repo_archive' AND repos.status = 'active' AND $25 = 'archived' AND $28 = 'archived' AND $29 IS NULL AND $31 IS NULL) OR " +
+		"(eligible_operation.operation_type = 'repo_restore_archived' AND repos.status = 'archived' AND $25 = 'active' AND $28 = 'active' AND $29 IS NULL AND $31 IS NULL) OR " +
+		"(eligible_operation.operation_type = 'repo_delete' AND repos.status IN ('active','archived') AND $25 = 'tombstoned' AND $28 = 'tombstoned' AND $29 IS NOT NULL AND $31 = repos.status) OR " +
+		"(eligible_operation.operation_type = 'repo_restore_tombstoned' AND repos.status = 'tombstoned' AND eligible_operation.created_at < repos.retention_expires_at AND eligible_operation.created_at > repos.updated_at AND $25 = repos.pre_delete_status AND $28 = repos.pre_delete_status AND $29 IS NULL AND $31 IS NULL)" +
+		") RETURNING " + strings.Join(repoColumns, ", ") +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() + "FROM eligible_operation, updated_repo WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
 		"), released_fence AS (" +
@@ -170,7 +188,7 @@ func repoLifecycleSuccessCommitWithLeaseSQL() string {
 func repoLifecycleFailureCommitWithLeaseSQL() string {
 	return "WITH eligible_operation AS (" +
 		"SELECT operation_id FROM operations WHERE operation_id = $12 AND operation_state = 'running' AND lease_owner = $13 AND lease_expires_at IS NOT NULL AND lease_expires_at > $11 " +
-		"AND operation_type IN ('repo_archive', 'repo_restore_archived') AND phase = 'validate_repo_lifecycle' AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
+		"AND operation_type IN (" + repoLifecycleOperationTypeSQLList() + ") AND phase = 'validate_repo_lifecycle' AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
 		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 FOR UPDATE" +
 		"), released_fence AS (" +
 		"UPDATE repo_fences SET status = 'released', released_at = $11, updated_at = $11 FROM eligible_operation WHERE $20 <> '' AND repo_fences.repo_id = $15 AND repo_fences.fence_id = $20 AND repo_fences.fence_kind = 'lifecycle' AND repo_fences.holder_operation_id = $12 AND repo_fences.status = 'active' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL RETURNING repo_fences.fence_id" +

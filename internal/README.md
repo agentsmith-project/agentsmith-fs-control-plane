@@ -37,8 +37,8 @@ needed before real handlers and storage mutation work:
   returns stable error-family decisions.
 - `sessionstate`: pure export and workload-mount session substrate for
   restore-run writer gating and repo lifecycle drain gating. It is wired into
-  the opt-in repo archive recovery path for drain checks, but not yet to WebDAV,
-  mount, restore-run, or storage-backed session handlers.
+  the opt-in repo archive/delete recovery path for drain checks, but not yet to
+  WebDAV, mount, restore-run, or storage-backed session handlers.
 - `operationinspect`: operation-only inspection authorization service used by
   the API without importing repo recovery/fence inspection code.
 - `inspection`: recovery classification and read-only repo recovery inspection
@@ -59,9 +59,10 @@ needed before real handlers and storage mutation work:
 - `repoexec`: opt-in repo recovery executors. `repo_create` resolves metadata,
   acquires the create fence, runs JVS `init`/`doctor --strict`, and commits repo
   metadata, terminal operation, audit, and fence release through dedicated store
-  boundaries. The repo lifecycle executor currently covers `repo_archive` and
-  `repo_restore_archived` behind an explicit worker gate with dedicated
-  lifecycle store boundaries.
+  boundaries. The repo lifecycle executor currently covers `repo_archive`,
+  `repo_restore_archived`, `repo_delete`, and `repo_restore_tombstoned` behind
+  an explicit worker gate with dedicated lifecycle store boundaries; `repo_purge`
+  is excluded.
 - `workerapp`: production `afscp-worker --run-once` bootstrap for the
   opt-in metadata operation recovery runner.
 - `pathresolver`: path safety helpers, denial tests, shared resolver corpus, and
@@ -70,16 +71,17 @@ needed before real handlers and storage mutation work:
 
 Repo create intake, repo lifecycle operation intake/admission, namespace-bound
 repo read handlers, and operation inspection exist. Still intentionally absent:
-repo lifecycle delete/restore-tombstoned/purge workers, JVS save/restore/template
-execution, WebDAV/mount/save/restore/template endpoint handlers beyond intake/admission,
+repo lifecycle purge worker, JVS save/restore/template execution,
+WebDAV/mount/save/restore/template endpoint handlers beyond intake/admission,
 real external audit delivery worker/sink integration, WebDAV export serving,
 workload mount issuance, repo/template lifecycle mutation, storage mutation
-implementations beyond JVS repo init and repo archive/restore-archived metadata
-transitions, and fence enforcement beyond the minimal repo fence adapter slice.
+implementations beyond JVS repo init and repo
+archive/restore-archived/delete/restore-tombstoned metadata transitions, and
+fence enforcement beyond the minimal repo fence adapter slice.
 The worker app currently wires
 `volume_ensure`, `namespace_upsert`, `namespace_volume_binding_put`, and opt-in
-`repo_create` plus `repo_archive`/`repo_restore_archived` operation recovery
-when explicitly enabled.
+`repo_create` plus `repo_archive`/`repo_restore_archived`/`repo_delete`/
+`repo_restore_tombstoned` operation recovery when explicitly enabled.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

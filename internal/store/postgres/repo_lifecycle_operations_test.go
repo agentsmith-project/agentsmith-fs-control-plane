@@ -14,7 +14,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
 )
 
-func TestRepoLifecycleRecoverySQLScopedToArchiveRestoreAndValidatePhase(t *testing.T) {
+func TestRepoLifecycleRecoverySQLScopedToSupportedTypesAndValidatePhase(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	exec := &fakeExecutor{rows: fakeRows{}}
 	st := &Store{exec: exec}
@@ -23,11 +23,11 @@ func TestRepoLifecycleRecoverySQLScopedToArchiveRestoreAndValidatePhase(t *testi
 
 	assertSQLContainsInOrder(t, exec.query,
 		"FROM operations",
-		"operation_type IN ('repo_archive', 'repo_restore_archived')",
+		"operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned')",
 		"phase = 'validate_repo_lifecycle'",
 		"ORDER BY created_at, operation_id LIMIT $2",
 	)
-	if strings.Contains(exec.query, "repo_delete") || strings.Contains(exec.query, "repo_purge") {
+	if strings.Contains(exec.query, "repo_purge") {
 		t.Fatalf("repo lifecycle SQL includes unsupported operation: %s", exec.query)
 	}
 }
@@ -48,7 +48,7 @@ func TestAcquireRepoLifecycleOperationLeaseScopesBeforeMutation(t *testing.T) {
 	assertSQLContainsInOrder(t, exec.query,
 		"WITH eligible_operation AS",
 		"WHERE operation_id = $1",
-		"operation_type IN ('repo_archive', 'repo_restore_archived')",
+		"operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned')",
 		"phase = 'validate_repo_lifecycle'",
 		"updated_operation AS",
 		"UPDATE operations SET",
@@ -58,33 +58,37 @@ func TestAcquireRepoLifecycleOperationLeaseScopesBeforeMutation(t *testing.T) {
 
 func TestAcquireRepoLifecycleOperationLeaseFinalizeCancellationReleasesSameOperationFence(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
-	record := operationFixture(now)
-	record.Type = operations.OperationRepoArchive
-	record.Phase = operations.OperationPhaseRepoLifecycleValidate
-	record.State = operations.OperationStateCancelled
-	record.FinishedAt = &now
-	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
-	st := &Store{exec: exec}
+	for _, typ := range []operations.OperationType{operations.OperationRepoArchive, operations.OperationRepoDelete, operations.OperationRepoRestoreTombstoned} {
+		t.Run(string(typ), func(t *testing.T) {
+			record := operationFixture(now)
+			record.Type = typ
+			record.Phase = operations.OperationPhaseRepoLifecycleValidate
+			record.State = operations.OperationStateCancelled
+			record.FinishedAt = &now
+			exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
+			st := &Store{exec: exec}
 
-	_, err := st.AcquireRepoLifecycleOperationLease(context.Background(), record.ID, operations.LeaseRequest{Owner: "worker-a", Duration: time.Minute, Now: now, CancelPolicy: operations.LeaseCancelPolicyFinalize})
-	if err != nil {
-		t.Fatalf("AcquireRepoLifecycleOperationLease finalize: %v", err)
+			_, err := st.AcquireRepoLifecycleOperationLease(context.Background(), record.ID, operations.LeaseRequest{Owner: "worker-a", Duration: time.Minute, Now: now, CancelPolicy: operations.LeaseCancelPolicyFinalize})
+			if err != nil {
+				t.Fatalf("AcquireRepoLifecycleOperationLease finalize: %v", err)
+			}
+
+			assertSQLContainsInOrder(t, exec.query,
+				"WITH eligible_operation AS",
+				"operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned')",
+				"phase = 'validate_repo_lifecycle'",
+				"operation_state = 'cancel_requested'",
+				"held_fence AS",
+				"holder_operation_id = $1",
+				"FOR UPDATE",
+				"released_fence AS",
+				"UPDATE repo_fences SET status = 'released'",
+				"updated_operation AS",
+				"SELECT",
+				"FROM updated_operation",
+			)
+		})
 	}
-
-	assertSQLContainsInOrder(t, exec.query,
-		"WITH eligible_operation AS",
-		"operation_type IN ('repo_archive', 'repo_restore_archived')",
-		"phase = 'validate_repo_lifecycle'",
-		"operation_state = 'cancel_requested'",
-		"held_fence AS",
-		"holder_operation_id = $1",
-		"FOR UPDATE",
-		"released_fence AS",
-		"UPDATE repo_fences SET status = 'released'",
-		"updated_operation AS",
-		"SELECT",
-		"FROM updated_operation",
-	)
 }
 
 func TestRepoLifecycleSuccessCommitSQLIsAtomicBoundaryWithSessionGuardAndFenceRelease(t *testing.T) {
@@ -100,7 +104,7 @@ func TestRepoLifecycleSuccessCommitSQLIsAtomicBoundaryWithSessionGuardAndFenceRe
 
 	assertSQLContainsInOrder(t, exec.query,
 		"WITH eligible_operation AS",
-		"operation_type IN ('repo_archive', 'repo_restore_archived')",
+		"operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned')",
 		"phase = 'validate_repo_lifecycle'",
 		"active_namespace AS",
 		"status = 'active'",
@@ -134,6 +138,31 @@ func TestRepoLifecycleSuccessCommitSQLIsAtomicBoundaryWithSessionGuardAndFenceRe
 	}
 }
 
+func TestRepoLifecycleSuccessCommitSQLHasDeleteAndRestoreTombstonedPredicates(t *testing.T) {
+	sql := repoLifecycleSuccessCommitWithLeaseSQL()
+	assertSQLContainsInOrder(t, sql,
+		"eligible_operation.operation_type = 'repo_delete'",
+		"repos.status IN ('active','archived')",
+		"$25 = 'tombstoned'",
+		"$28 = 'tombstoned'",
+		"$29 IS NOT NULL",
+		"$31 = repos.status",
+	)
+	assertSQLContainsInOrder(t, sql,
+		"eligible_operation.operation_type = 'repo_restore_tombstoned'",
+		"repos.status = 'tombstoned'",
+		"eligible_operation.created_at < repos.retention_expires_at",
+		"eligible_operation.created_at > repos.updated_at",
+		"$25 = repos.pre_delete_status",
+		"$28 = repos.pre_delete_status",
+		"$29 IS NULL",
+		"$31 IS NULL",
+	)
+	if strings.Contains(sql, "repo_purge") {
+		t.Fatalf("success SQL includes repo_purge: %s", sql)
+	}
+}
+
 func TestRepoLifecycleFailureCommitSQLReleaseGate(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	_, record := repoLifecycleCommitFixtures(now, operations.OperationRepoArchive, resources.RepoStatusArchived)
@@ -155,6 +184,50 @@ func TestRepoLifecycleFailureCommitSQLReleaseGate(t *testing.T) {
 		"($20 = '' OR EXISTS (SELECT 1 FROM released_fence))",
 		"inserted_audit AS",
 	)
+}
+
+func TestRepoLifecycleValidatorsAcceptDeleteAndRestoreTombstonedButRejectPurge(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		typ    operations.OperationType
+		target resources.RepoStatus
+		edit   func(*resources.Repo, *operations.OperationRecord)
+	}{
+		{name: "delete", typ: operations.OperationRepoDelete, target: resources.RepoStatusTombstoned, edit: func(repo *resources.Repo, _ *operations.OperationRecord) {
+			retention := now.Add(7 * 24 * time.Hour)
+			repo.Lifecycle.RetentionExpiresAt = &retention
+			repo.Lifecycle.PreDeleteStatus = resources.RepoStatusActive
+		}},
+		{name: "restore tombstoned", typ: operations.OperationRepoRestoreTombstoned, target: resources.RepoStatusActive},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, record := repoLifecycleCommitFixtures(now, tt.typ, tt.target)
+			if tt.edit != nil {
+				tt.edit(&repo, &record)
+			}
+			if err := validateRepoLifecycleSuccessRecord(repo, record); err != nil {
+				t.Fatalf("validateRepoLifecycleSuccessRecord: %v", err)
+			}
+			record.State = operations.OperationStateOperatorInterventionRequired
+			record.Phase = operations.OperationPhaseRepoLifecycleValidate
+			record.Error = &operations.OperationError{Code: "FAILED", Message: "failed", CorrelationID: record.CorrelationID, OperationID: record.ID}
+			if err := validateRepoLifecycleFailureRecord(record); err != nil {
+				t.Fatalf("validateRepoLifecycleFailureRecord: %v", err)
+			}
+		})
+	}
+	repo, purge := repoLifecycleCommitFixtures(now, operations.OperationRepoPurge, resources.RepoStatusPurged)
+	purge.Error = &operations.OperationError{Code: "FAILED", Message: "failed", CorrelationID: purge.CorrelationID, OperationID: purge.ID}
+	if err := validateRepoLifecycleSuccessRecord(repo, purge); err == nil {
+		t.Fatal("validateRepoLifecycleSuccessRecord accepted repo_purge")
+	}
+	purge.State = operations.OperationStateFailed
+	purge.Phase = operations.OperationPhaseRepoLifecycleValidate
+	if err := validateRepoLifecycleFailureRecord(purge); err == nil {
+		t.Fatal("validateRepoLifecycleFailureRecord accepted repo_purge")
+	}
 }
 
 func TestRepoLifecycleCommitNoRowsWrapsLeaseUnavailable(t *testing.T) {

@@ -568,7 +568,7 @@ func repoLifecycleOperationRecoveryCandidatesSQL() string {
 	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
 	invalidLeasePair := "((lease_owner IS NULL AND lease_expires_at IS NOT NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) = '') OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NULL))"
 	return operationSelectSQL() + " WHERE " +
-		"operation_type IN ('repo_archive', 'repo_restore_archived') AND phase = 'validate_repo_lifecycle' AND (" +
+		"operation_type IN (" + repoLifecycleOperationTypeSQLList() + ") AND phase = 'validate_repo_lifecycle' AND (" +
 		"(operation_state = 'queued') OR " +
 		"(operation_state = 'running' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
 		"(operation_state = 'cancel_requested' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
@@ -699,7 +699,7 @@ func repoLifecycleOperationAcquireLeaseSQL() string {
 	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
 	return "WITH eligible_operation AS (" +
 		"SELECT operation_id, repo_id, operation_state FROM operations WHERE operation_id = $1 " +
-		"AND operation_type IN ('repo_archive', 'repo_restore_archived') " +
+		"AND operation_type IN (" + repoLifecycleOperationTypeSQLList() + ") " +
 		"AND phase = 'validate_repo_lifecycle' " +
 		"AND (" +
 		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
