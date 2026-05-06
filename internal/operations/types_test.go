@@ -21,6 +21,7 @@ func TestOperationTypesAreStableAndComplete(t *testing.T) {
 		"repo_purge",
 		"save_point_create",
 		"restore_preview",
+		"restore_preview_discard",
 		"restore_run",
 		"template_create",
 		"template_clone",

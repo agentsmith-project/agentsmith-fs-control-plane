@@ -60,7 +60,7 @@ func TestRepoHasNonTerminalJVSMutationScopesRepoTypeAndNonTerminalState(t *testi
 		"SELECT EXISTS",
 		"FROM operations",
 		"repo_id = $1",
-		"operation_type IN ('save_point_create', 'restore_run', 'template_create', 'template_clone')",
+		"operation_type IN ('save_point_create', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
 		"operation_state NOT IN ('succeeded','failed','cancelled')",
 	)
 	for _, forbidden := range []string{"UPDATE ", "INSERT ", "DELETE ", "FOR UPDATE", "lease_owner", "repo_fences"} {

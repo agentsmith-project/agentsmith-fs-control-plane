@@ -901,7 +901,7 @@ func savePointCreateOperationAcquireLeaseSQL() string {
 }
 
 func repoJVSMutationOperationTypeSQLList() string {
-	return "'save_point_create', 'restore_run', 'template_create', 'template_clone'"
+	return "'save_point_create', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone'"
 }
 
 func repoHasNonTerminalJVSMutationSQL() string {

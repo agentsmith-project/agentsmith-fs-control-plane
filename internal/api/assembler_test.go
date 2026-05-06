@@ -129,6 +129,7 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 		path   string
 	}{
 		{name: "restore preview", method: http.MethodPost, path: "/internal/v1/repos/repo_123/restore-preview"},
+		{name: "restore preview discard", method: http.MethodPost, path: "/internal/v1/repos/repo_123/restore-preview:discard"},
 	}
 
 	for _, tt := range tests {

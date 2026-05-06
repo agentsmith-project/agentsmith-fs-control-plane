@@ -20,6 +20,7 @@ const (
 	OperationRepoPurge                 OperationType = "repo_purge"
 	OperationSavePointCreate           OperationType = "save_point_create"
 	OperationRestorePreview            OperationType = "restore_preview"
+	OperationRestorePreviewDiscard     OperationType = "restore_preview_discard"
 	OperationRestoreRun                OperationType = "restore_run"
 	OperationTemplateCreate            OperationType = "template_create"
 	OperationTemplateClone             OperationType = "template_clone"
@@ -68,6 +69,7 @@ var operationTypes = []OperationType{
 	OperationRepoPurge,
 	OperationSavePointCreate,
 	OperationRestorePreview,
+	OperationRestorePreviewDiscard,
 	OperationRestoreRun,
 	OperationTemplateCreate,
 	OperationTemplateClone,
@@ -95,6 +97,7 @@ var routeOperationTypes = map[string]OperationType{
 	"purgeRepo":                        OperationRepoPurge,
 	"createSavePoint":                  OperationSavePointCreate,
 	"restorePreview":                   OperationRestorePreview,
+	"restorePreviewDiscard":            OperationRestorePreviewDiscard,
 	"restoreRun":                       OperationRestoreRun,
 	"createRepoTemplate":               OperationTemplateCreate,
 	"cloneRepoTemplate":                OperationTemplateClone,

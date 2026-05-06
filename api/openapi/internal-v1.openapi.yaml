@@ -85,6 +85,8 @@ components:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateSavePointRequest
     RestorePreviewRequest:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestorePreviewRequest
+    RestorePreviewDiscardRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestorePreviewDiscardRequest
     RestoreRunRequest:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestoreRunRequest
     CreateRepoTemplateRequest:
@@ -630,6 +632,39 @@ paths:
           $ref: "#/components/responses/Error"
         "202":
           description: Restore preview operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}/restore-preview:discard:
+    post:
+      operationId: restorePreviewDiscard
+      summary: Discard a restore preview.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestorePreviewDiscardRequest"
+      responses:
+        "400":
+          $ref: "#/components/responses/Error"
+        "202":
+          description: Restore preview discard operation.
           content:
             application/json:
               schema:

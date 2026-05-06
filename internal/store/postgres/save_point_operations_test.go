@@ -29,7 +29,7 @@ func TestAcquireSavePointCreateOperationLeaseSerializesEarlierLifecycleAndJVSMut
 		"phase IN ('validate_save_point_create','save_point_create_prepared')",
 		"earlier_jvs_mutation AS",
 		"o.operation_id <> e.operation_id",
-		"o.operation_type IN ('save_point_create', 'restore_run', 'template_create', 'template_clone')",
+		"o.operation_type IN ('save_point_create', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
 		"earlier_repo_lifecycle AS",
 		"o.operation_id <> e.operation_id",
 		"o.operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned', 'repo_purge')",

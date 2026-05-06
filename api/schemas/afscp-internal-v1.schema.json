@@ -189,6 +189,7 @@
         "repo_purge",
         "save_point_create",
         "restore_preview",
+        "restore_preview_discard",
         "restore_run",
         "template_create",
         "template_clone",
@@ -616,6 +617,14 @@
       }
     },
     "RestoreRunRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preview_operation_id"],
+      "properties": {
+        "preview_operation_id": { "$ref": "#/$defs/OperationId" }
+      }
+    },
+    "RestorePreviewDiscardRequest": {
       "type": "object",
       "additionalProperties": false,
       "required": ["preview_operation_id"],

@@ -50,7 +50,7 @@ func TestAcquireRepoPurgeOperationLeaseScopesBeforeMutationAndRejectsCancelFinal
 		"AND $5 = ''",
 		"earlier_jvs_mutation AS",
 		"o.operation_id <> e.operation_id",
-		"o.operation_type IN ('save_point_create', 'restore_run', 'template_create', 'template_clone')",
+		"o.operation_type IN ('save_point_create', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
 		"o.operation_state NOT IN ('succeeded','failed','cancelled')",
 		"updated_operation AS",
 		"UPDATE operations SET",

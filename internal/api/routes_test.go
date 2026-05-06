@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 )
 
 func TestRoutePathParamsExtractsOrdinaryAndSuffixParams(t *testing.T) {
@@ -90,6 +92,37 @@ func TestRouteMetadataForRequestMethodMismatchAndUnknownRoute(t *testing.T) {
 				t.Fatalf("RouteMetadataForRequest matched %#v, want not matched", metadata)
 			}
 		})
+	}
+}
+
+func TestRestorePreviewDiscardRouteMetadata(t *testing.T) {
+	route, ok := RouteMetadataByOperationID("restorePreviewDiscard")
+	if !ok {
+		t.Fatal("restorePreviewDiscard route metadata missing")
+	}
+	if route.Method != http.MethodPost {
+		t.Fatalf("method = %s, want POST", route.Method)
+	}
+	if route.Path != "/internal/v1/repos/{repoId}/restore-preview:discard" {
+		t.Fatalf("path = %q, want discard endpoint", route.Path)
+	}
+	if route.Class != auth.RouteClassNamespaceBound {
+		t.Fatalf("class = %q, want namespace-bound", route.Class)
+	}
+	if !route.Mutating {
+		t.Fatal("mutating = false, want true")
+	}
+	if route.RequiredRole != auth.RoleRestoreAdmin {
+		t.Fatalf("required role = %q, want restore_admin", route.RequiredRole)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/repos/repo_123/restore-preview:discard", nil)
+	got, ok := RouteMetadataForRequest(req)
+	if !ok {
+		t.Fatal("RouteMetadataForRequest did not match restore-preview:discard")
+	}
+	if got.OperationID != "restorePreviewDiscard" {
+		t.Fatalf("operation id = %q, want restorePreviewDiscard", got.OperationID)
 	}
 }
 
