@@ -67,6 +67,62 @@ type DoctorSummary struct {
 	Workspace string
 }
 
+type SaveSummary struct {
+	SavePointID       string
+	NewestSavePointID string
+	Workspace         string
+	UnsavedChanges    bool
+	CreatedAt         string
+}
+
+type SavePointSummary struct {
+	SavePointID string
+}
+
+type HistorySummary struct {
+	Workspace         string
+	NewestSavePointID string
+	SavePoints        []SavePointSummary
+}
+
+type RestorePreviewSummary struct {
+	PlanID            string
+	SourceSavePointID string
+	Workspace         string
+	RunCommandPresent bool
+}
+
+type RestoreRunSummary struct {
+	PlanID              string
+	SourceSavePointID   string
+	RestoredSavePointID string
+	Workspace           string
+}
+
+type RestoreDiscardSummary struct {
+	PlanID        string
+	PlanDiscarded bool
+	Workspace     string
+}
+
+type RecoveryStatusSummary struct {
+	RestoreState         string
+	ActivePlanID         string
+	ActiveRecoveryPlanID string
+	Blocking             bool
+	Message              string
+	Workspace            string
+}
+
+type RepoCloneSummary struct {
+	SourceRepoID          string
+	TargetRepoID          string
+	SavePointsMode        string
+	SavePointsCopiedCount int
+	RuntimeStateCopied    bool
+	Workspace             string
+}
+
 func New(config Config) (*Runner, error) {
 	if err := validateCleanAbsolute(config.BinaryPath, true); err != nil {
 		return nil, fmt.Errorf("%w: binary path", ErrInvalidConfig)
@@ -187,6 +243,237 @@ func (runner *Runner) DoctorStrict(ctx context.Context, controlRoot string) (Doc
 	return DoctorSummary{RepoID: repoID, Healthy: true, Workspace: workspace}, nil
 }
 
+func (runner *Runner) Save(ctx context.Context, controlRoot, message string) (SaveSummary, error) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return SaveSummary{}, fmt.Errorf("%w: save message", ErrInvalidArgument)
+	}
+	envelope, err := runner.runControlJSON(ctx, "save", controlRoot, []string{"save", "--message", message, "--json"})
+	if err != nil {
+		return SaveSummary{}, err
+	}
+	savePointID, ok := dataSafeID(envelope, "save_point_id")
+	workspace, _ := envelope.Data["workspace"].(string)
+	newest, newestOK := dataSafeID(envelope, "newest_save_point")
+	unsavedChanges, unsavedOK := envelope.Data["unsaved_changes"].(bool)
+	if !ok || !newestOK || newest != savePointID || workspace != workspaceMain || !unsavedOK {
+		return SaveSummary{}, fmt.Errorf("%w: save", ErrInvalidEnvelope)
+	}
+	createdAt, _ := envelope.Data["created_at"].(string)
+	return SaveSummary{SavePointID: savePointID, NewestSavePointID: newest, Workspace: workspace, UnsavedChanges: unsavedChanges, CreatedAt: safeSummaryText(createdAt)}, nil
+}
+
+func (runner *Runner) History(ctx context.Context, controlRoot string) (HistorySummary, error) {
+	envelope, err := runner.runControlJSON(ctx, "history", controlRoot, []string{"history", "--json"})
+	if err != nil {
+		return HistorySummary{}, err
+	}
+	workspace, _ := envelope.Data["workspace"].(string)
+	truncated, truncatedOK := envelope.Data["truncated"].(bool)
+	if workspace != workspaceMain || !truncatedOK || truncated {
+		return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
+	}
+	rawSavePoints, ok := envelope.Data["save_points"].([]any)
+	if !ok {
+		return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
+	}
+	savePoints := make([]SavePointSummary, 0, len(rawSavePoints))
+	for _, raw := range rawSavePoints {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
+		}
+		id, _ := item["save_point_id"].(string)
+		if !safeOpaqueID(id) {
+			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
+		}
+		savePoints = append(savePoints, SavePointSummary{SavePointID: id})
+	}
+	newest := ""
+	if len(savePoints) > 0 {
+		var newestOK bool
+		newest, newestOK = dataSafeID(envelope, "newest_save_point")
+		if !newestOK {
+			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
+		}
+	} else if _, exists := envelope.Data["newest_save_point"]; exists {
+		var newestOK bool
+		newest, newestOK = optionalDataSafeID(envelope, "newest_save_point")
+		if !newestOK {
+			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
+		}
+	}
+	return HistorySummary{Workspace: workspace, NewestSavePointID: newest, SavePoints: savePoints}, nil
+}
+
+func (runner *Runner) RestorePreview(ctx context.Context, controlRoot, savePointID string) (RestorePreviewSummary, error) {
+	if !safeOpaqueID(strings.TrimSpace(savePointID)) {
+		return RestorePreviewSummary{}, fmt.Errorf("%w: save point id", ErrInvalidArgument)
+	}
+	envelope, err := runner.runControlJSON(ctx, "restore", controlRoot, []string{"restore", strings.TrimSpace(savePointID), "--json"})
+	if err != nil {
+		return RestorePreviewSummary{}, err
+	}
+	planID, okPlan := dataSafeID(envelope, "plan_id")
+	source, okSource := dataSafeID(envelope, "source_save_point")
+	workspace, _ := envelope.Data["workspace"].(string)
+	runCommand, _ := envelope.Data["run_command"].(string)
+	filesChanged, filesOK := envelope.Data["files_changed"].(bool)
+	historyChanged, historyOK := envelope.Data["history_changed"].(bool)
+	if envelope.Data["mode"] != "preview" || workspace != workspaceMain || !okPlan || !okSource || strings.TrimSpace(runCommand) == "" || !filesOK || filesChanged || !historyOK || historyChanged {
+		return RestorePreviewSummary{}, fmt.Errorf("%w: restore preview", ErrInvalidEnvelope)
+	}
+	return RestorePreviewSummary{PlanID: planID, SourceSavePointID: source, Workspace: workspace, RunCommandPresent: true}, nil
+}
+
+func (runner *Runner) RestoreRun(ctx context.Context, controlRoot, planID string) (RestoreRunSummary, error) {
+	planID = strings.TrimSpace(planID)
+	if !safeOpaqueID(planID) {
+		return RestoreRunSummary{}, fmt.Errorf("%w: plan id", ErrInvalidArgument)
+	}
+	envelope, err := runner.runControlJSON(ctx, "restore", controlRoot, []string{"restore", "--run", planID, "--json"})
+	if err != nil {
+		return RestoreRunSummary{}, err
+	}
+	outPlanID, okPlan := dataSafeID(envelope, "plan_id")
+	source, okSource, hasSource := optionalDataSafeIDPresence(envelope, "source_save_point")
+	restored, okRestored, hasRestored := optionalDataSafeIDPresence(envelope, "restored_save_point")
+	workspace, _ := envelope.Data["workspace"].(string)
+	_, filesOK := envelope.Data["files_changed"].(bool)
+	historyChanged, historyOK := envelope.Data["history_changed"].(bool)
+	unsavedChanges, unsavedOK := envelope.Data["unsaved_changes"].(bool)
+	if envelope.Data["mode"] != "run" || workspace != workspaceMain || !okPlan || outPlanID != planID || !okSource || !okRestored || (!hasSource && !hasRestored) || !filesOK || !historyOK || historyChanged || !unsavedOK || unsavedChanges {
+		return RestoreRunSummary{}, fmt.Errorf("%w: restore run", ErrInvalidEnvelope)
+	}
+	return RestoreRunSummary{PlanID: outPlanID, SourceSavePointID: source, RestoredSavePointID: restored, Workspace: workspace}, nil
+}
+
+func (runner *Runner) RestoreDiscard(ctx context.Context, controlRoot, planID string) (RestoreDiscardSummary, error) {
+	planID = strings.TrimSpace(planID)
+	if !safeOpaqueID(planID) {
+		return RestoreDiscardSummary{}, fmt.Errorf("%w: plan id", ErrInvalidArgument)
+	}
+	envelope, err := runner.runControlJSON(ctx, "restore", controlRoot, []string{"restore", "discard", planID, "--json"})
+	if err != nil {
+		return RestoreDiscardSummary{}, err
+	}
+	outPlanID, okPlan := dataSafeID(envelope, "plan_id")
+	workspace, _ := envelope.Data["workspace"].(string)
+	discarded, discardedOK := envelope.Data["plan_discarded"].(bool)
+	filesChanged, filesOK := envelope.Data["files_changed"].(bool)
+	historyChanged, historyOK := envelope.Data["history_changed"].(bool)
+	if envelope.Data["mode"] != "discard" || workspace != workspaceMain || !okPlan || outPlanID != planID || !discardedOK || !discarded || !filesOK || filesChanged || !historyOK || historyChanged {
+		return RestoreDiscardSummary{}, fmt.Errorf("%w: restore discard", ErrInvalidEnvelope)
+	}
+	return RestoreDiscardSummary{PlanID: outPlanID, PlanDiscarded: true, Workspace: workspace}, nil
+}
+
+func (runner *Runner) RecoveryStatus(ctx context.Context, controlRoot string) (RecoveryStatusSummary, error) {
+	envelope, err := runner.runControlJSON(ctx, "recovery status", controlRoot, []string{"recovery", "status", "--json"})
+	if err != nil {
+		return RecoveryStatusSummary{}, err
+	}
+	workspace, _ := envelope.Data["workspace"].(string)
+	if workspace != workspaceMain {
+		return RecoveryStatusSummary{}, fmt.Errorf("%w: recovery status", ErrInvalidEnvelope)
+	}
+	rawPlans, plansOK := envelope.Data["plans"].([]any)
+	if !plansOK {
+		return RecoveryStatusSummary{}, fmt.Errorf("%w: recovery status", ErrInvalidEnvelope)
+	}
+	if rawState, exists := envelope.Data["restore_state"]; exists && rawState != nil {
+		state, err := parseRestoreStateObject(rawState)
+		if err != nil {
+			return RecoveryStatusSummary{}, fmt.Errorf("%w: recovery status", ErrInvalidEnvelope)
+		}
+		state.Workspace = workspace
+		if err := validateRecoveryPlans(rawPlans); err != nil {
+			return RecoveryStatusSummary{}, fmt.Errorf("%w: recovery status", ErrInvalidEnvelope)
+		}
+		return state, nil
+	}
+	if len(rawPlans) == 0 {
+		return RecoveryStatusSummary{RestoreState: "idle", Workspace: workspace}, nil
+	}
+	state, err := parseActiveRecoveryPlans(rawPlans)
+	if err != nil {
+		return RecoveryStatusSummary{}, fmt.Errorf("%w: recovery status", ErrInvalidEnvelope)
+	}
+	state.Workspace = workspace
+	return state, nil
+}
+
+func (runner *Runner) RepoClone(ctx context.Context, sourceControlRoot, targetPayloadRoot, targetControlRoot string) (RepoCloneSummary, error) {
+	if runner == nil {
+		return RepoCloneSummary{}, ErrInvalidConfig
+	}
+	for _, item := range []struct {
+		name string
+		path string
+	}{
+		{name: "source control root", path: sourceControlRoot},
+		{name: "target payload root", path: targetPayloadRoot},
+		{name: "target control root", path: targetControlRoot},
+	} {
+		if err := validateCleanAbsolute(item.path, true); err != nil {
+			return RepoCloneSummary{}, fmt.Errorf("%w: %s", ErrInvalidArgument, item.name)
+		}
+	}
+	if rootsOverlap(sourceControlRoot, targetPayloadRoot) || rootsOverlap(sourceControlRoot, targetControlRoot) || rootsOverlap(targetPayloadRoot, targetControlRoot) {
+		return RepoCloneSummary{}, fmt.Errorf("%w: repo roots overlap", ErrInvalidArgument)
+	}
+	envelope, err := runner.runControlJSONExpectRoot(ctx, "repo clone", sourceControlRoot, targetControlRoot, []string{"repo", "clone", targetPayloadRoot, "--target-control-root", targetControlRoot, "--save-points", "main", "--json"})
+	if err != nil {
+		return RepoCloneSummary{}, err
+	}
+	sourceRepoID, okSource := dataSafeID(envelope, "source_repo_id")
+	targetRepoID, okTarget := dataSafeID(envelope, "target_repo_id")
+	workspace, _ := envelope.Data["workspace"].(string)
+	savePointsMode, _ := envelope.Data["save_points_mode"].(string)
+	targetFolder, _ := envelope.Data["target_folder"].(string)
+	outTargetControl, _ := envelope.Data["target_control_root"].(string)
+	copiedCount, countOK := intData(envelope.Data["save_points_copied_count"])
+	runtimeCopied, runtimeOK := envelope.Data["runtime_state_copied"].(bool)
+	if workspace != workspaceMain || !okSource || !okTarget || savePointsMode != "main" || targetFolder != targetPayloadRoot || outTargetControl != targetControlRoot || !countOK || copiedCount < 0 || !runtimeOK || runtimeCopied {
+		return RepoCloneSummary{}, fmt.Errorf("%w: repo clone", ErrInvalidEnvelope)
+	}
+	return RepoCloneSummary{SourceRepoID: sourceRepoID, TargetRepoID: targetRepoID, SavePointsMode: savePointsMode, SavePointsCopiedCount: copiedCount, RuntimeStateCopied: runtimeCopied, Workspace: workspace}, nil
+}
+
+func (runner *Runner) runControlJSON(ctx context.Context, command, controlRoot string, commandArgs []string) (envelope, error) {
+	return runner.runControlJSONExpectRoot(ctx, command, controlRoot, controlRoot, commandArgs)
+}
+
+func (runner *Runner) runControlJSONExpectRoot(ctx context.Context, command, selectorControlRoot, envelopeRepoRoot string, commandArgs []string) (envelope, error) {
+	if runner == nil {
+		return envelope{}, ErrInvalidConfig
+	}
+	if err := validateCleanAbsolute(selectorControlRoot, true); err != nil {
+		return envelope{}, fmt.Errorf("%w: control root", ErrInvalidArgument)
+	}
+	if err := validateCleanAbsolute(envelopeRepoRoot, true); err != nil {
+		return envelope{}, fmt.Errorf("%w: envelope repo root", ErrInvalidArgument)
+	}
+	args := []string{"--control-root", selectorControlRoot, "--workspace", workspaceMain}
+	args = append(args, commandArgs...)
+	result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{Path: runner.binaryPath, Args: args, Dir: runner.cwd})
+	if err != nil {
+		return envelope{}, fmt.Errorf("%w: %s", ErrCommandFailed, command)
+	}
+	result = runner.capResult(result)
+	if result.ExitCode != 0 {
+		return envelope{}, fmt.Errorf("%w: %s", ErrCommandFailed, command)
+	}
+	parsed, err := decodeEnvelope(result.Stdout)
+	if err != nil {
+		return envelope{}, fmt.Errorf("%w: %s", ErrInvalidEnvelope, command)
+	}
+	if !parsed.validFor(command, envelopeRepoRoot) {
+		return envelope{}, fmt.Errorf("%w: %s", ErrInvalidEnvelope, command)
+	}
+	return parsed, nil
+}
+
 func (runner *Runner) capResult(result CommandResult) CommandResult {
 	result.Stdout = capBytes(result.Stdout, runner.maxOutputBytes)
 	result.Stderr = capBytes(result.Stderr, runner.maxOutputBytes)
@@ -224,6 +511,191 @@ func (parsed envelope) validFor(command, controlRoot string) bool {
 		parsed.Workspace == workspaceMain &&
 		parsed.RepoRoot == controlRoot &&
 		parsed.OK
+}
+
+func (parsed envelope) boolData(key string) bool {
+	value, _ := parsed.Data[key].(bool)
+	return value
+}
+
+func dataSafeID(parsed envelope, key string) (string, bool) {
+	value, _ := parsed.Data[key].(string)
+	if !safeOpaqueID(value) {
+		return "", false
+	}
+	return value, true
+}
+
+func optionalDataSafeID(parsed envelope, key string) (string, bool) {
+	value, ok := parsed.Data[key]
+	if !ok || value == nil || value == "" {
+		return "", true
+	}
+	text, _ := value.(string)
+	if !safeOpaqueID(text) {
+		return "", false
+	}
+	return text, true
+}
+
+func optionalDataSafeIDPresence(parsed envelope, key string) (string, bool, bool) {
+	value, ok := parsed.Data[key]
+	if !ok || value == nil || value == "" {
+		return "", true, false
+	}
+	text, _ := value.(string)
+	if !safeOpaqueID(text) {
+		return "", false, true
+	}
+	return text, true, true
+}
+
+func stringData(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func intData(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case float64:
+		if v != float64(int(v)) {
+			return 0, false
+		}
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+func knownRestoreState(state string) bool {
+	switch state {
+	case "idle", "none", "pending_restore_preview", "stale_restore_preview":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseRestoreStateObject(raw any) (RecoveryStatusSummary, error) {
+	object, ok := raw.(map[string]any)
+	if !ok {
+		return RecoveryStatusSummary{}, ErrInvalidEnvelope
+	}
+	state, _ := object["state"].(string)
+	if !knownRestoreState(state) || state == "idle" || state == "none" {
+		return RecoveryStatusSummary{}, ErrInvalidEnvelope
+	}
+	blocking, blockingOK := object["blocking"].(bool)
+	if !blockingOK {
+		return RecoveryStatusSummary{}, ErrInvalidEnvelope
+	}
+	planID, okPlan := safeRequiredIDFromMap(object, "plan_id")
+	recoveryPlanID, okRecovery := safeOptionalIDFromMap(object, "recovery_plan_id")
+	if !okPlan || !okRecovery {
+		return RecoveryStatusSummary{}, ErrInvalidEnvelope
+	}
+	return RecoveryStatusSummary{
+		RestoreState:         state,
+		ActivePlanID:         planID,
+		ActiveRecoveryPlanID: recoveryPlanID,
+		Blocking:             blocking,
+		Message:              safeSummaryText(stringData(object["message"])),
+	}, nil
+}
+
+func parseActiveRecoveryPlans(rawPlans []any) (RecoveryStatusSummary, error) {
+	var active RecoveryStatusSummary
+	activeCount := 0
+	for _, raw := range rawPlans {
+		plan, ok := raw.(map[string]any)
+		if !ok {
+			return RecoveryStatusSummary{}, ErrInvalidEnvelope
+		}
+		status := strings.ToLower(stringData(plan["status"]))
+		if status != "active" {
+			continue
+		}
+		activeCount++
+		if activeCount > 1 {
+			return RecoveryStatusSummary{}, ErrInvalidEnvelope
+		}
+		recoveryPlanID, okPlan := safeRequiredIDFromMap(plan, "plan_id")
+		restorePlanID, okRestore := safeOptionalIDFromMap(plan, "restore_plan_id")
+		if !okPlan || !okRestore {
+			return RecoveryStatusSummary{}, ErrInvalidEnvelope
+		}
+		active = RecoveryStatusSummary{
+			RestoreState:         "active_recovery",
+			ActiveRecoveryPlanID: recoveryPlanID,
+			ActivePlanID:         restorePlanID,
+			Blocking:             true,
+		}
+	}
+	if activeCount != 1 {
+		return RecoveryStatusSummary{}, ErrInvalidEnvelope
+	}
+	return active, nil
+}
+
+func validateRecoveryPlans(rawPlans []any) error {
+	for _, raw := range rawPlans {
+		plan, ok := raw.(map[string]any)
+		if !ok {
+			return ErrInvalidEnvelope
+		}
+		if _, ok := safeOptionalIDFromMap(plan, "plan_id"); !ok {
+			return ErrInvalidEnvelope
+		}
+		state, _ := plan["state"].(string)
+		if state != "" && !knownRestoreState(state) {
+			return ErrInvalidEnvelope
+		}
+	}
+	return nil
+}
+
+func safeRequiredIDFromMap(object map[string]any, key string) (string, bool) {
+	value, ok := object[key]
+	if !ok || value == nil || value == "" {
+		return "", false
+	}
+	text, _ := value.(string)
+	if !safeOpaqueID(text) {
+		return "", false
+	}
+	return text, true
+}
+
+func safeOptionalIDFromMap(object map[string]any, key string) (string, bool) {
+	value, ok := object[key]
+	if !ok || value == nil || value == "" {
+		return "", true
+	}
+	text, _ := value.(string)
+	if !safeOpaqueID(text) {
+		return "", false
+	}
+	return text, true
+}
+
+func safeSummaryText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if len(value) > 128 {
+		return "redacted"
+	}
+	for i := 0; i < len(value); i++ {
+		b := value[i]
+		if asciiAlphaNum(b) || b == '_' || b == '-' || b == '.' || b == ':' {
+			continue
+		}
+		return "redacted"
+	}
+	return value
 }
 
 func validateCleanAbsolute(path string, rejectRoot bool) error {
