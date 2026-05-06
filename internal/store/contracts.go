@@ -208,6 +208,25 @@ type RepoLifecycleOperationRecoveryStore interface {
 	RepoLifecycleOperationMetadataReader
 }
 
+type RepoPurgeOperationCommitStore interface {
+	CommitRepoPurgeSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error)
+	CommitRepoPurgeFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error)
+}
+
+// RepoPurgeOperationRecoveryStore owns destructive repo_purge recovery. It is
+// intentionally separate from the metadata lifecycle recovery store. Durable
+// list/acquire predicates must scope to repo_purge + validate_repo_lifecycle
+// only, must not finalize cancel_requested purge operations automatically, and
+// terminal writes must atomically update purged repo lifecycle metadata,
+// operation state, audit outbox, and lifecycle fence release when applicable.
+type RepoPurgeOperationRecoveryStore interface {
+	ListRepoPurgeOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireRepoPurgeOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	ListEarlierNonTerminalRepoLifecycleOperations(ctx context.Context, repoID, operationID string, createdAt time.Time) ([]operations.OperationRecord, error)
+	RepoPurgeOperationCommitStore
+	RepoLifecycleOperationMetadataReader
+}
+
 // AuditSink accepts audit events for append-only or outbox-backed delivery.
 type AuditSink interface {
 	AppendAuditEvent(ctx context.Context, event audit.Event) error

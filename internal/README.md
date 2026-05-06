@@ -61,8 +61,9 @@ needed before real handlers and storage mutation work:
   metadata, terminal operation, audit, and fence release through dedicated store
   boundaries. The repo lifecycle executor currently covers `repo_archive`,
   `repo_restore_archived`, `repo_delete`, and `repo_restore_tombstoned` behind
-  an explicit worker gate with dedicated lifecycle store boundaries; `repo_purge`
-  is excluded.
+  an explicit worker gate with dedicated lifecycle store boundaries. `repo_purge`
+  uses a separate explicit worker gate, dedicated store boundary, and storage
+  purger for destructive AFSCP-managed retained storage removal.
 - `workerapp`: production `afscp-worker --run-once` bootstrap for the
   opt-in metadata operation recovery runner.
 - `pathresolver`: path safety helpers, denial tests, shared resolver corpus, and
@@ -71,17 +72,16 @@ needed before real handlers and storage mutation work:
 
 Repo create intake, repo lifecycle operation intake/admission, namespace-bound
 repo read handlers, and operation inspection exist. Still intentionally absent:
-repo lifecycle purge worker, JVS save/restore/template execution,
-WebDAV/mount/save/restore/template endpoint handlers beyond intake/admission,
-real external audit delivery worker/sink integration, WebDAV export serving,
-workload mount issuance, repo/template lifecycle mutation, storage mutation
-implementations beyond JVS repo init and repo
-archive/restore-archived/delete/restore-tombstoned metadata transitions, and
-fence enforcement beyond the minimal repo fence adapter slice.
+JVS save/restore/template execution, WebDAV/mount/save/restore/template endpoint
+handlers beyond intake/admission, real external audit delivery worker/sink
+integration, WebDAV export serving, workload mount issuance, repo/template
+lifecycle mutation beyond the implemented lifecycle workers, and fence
+enforcement beyond the minimal repo fence adapter slice.
 The worker app currently wires
 `volume_ensure`, `namespace_upsert`, `namespace_volume_binding_put`, and opt-in
 `repo_create` plus `repo_archive`/`repo_restore_archived`/`repo_delete`/
-`repo_restore_tombstoned` operation recovery when explicitly enabled.
+`repo_restore_tombstoned`, plus separately gated `repo_purge` operation recovery
+when explicitly enabled.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

@@ -321,19 +321,20 @@ func newFakeStore() *fakeRepoCreateStore {
 }
 
 type fakeRepoCreateStore struct {
-	namespace        resources.Namespace
-	binding          resources.NamespaceVolumeBinding
-	volume           resources.Volume
-	volumeRoots      map[string]string
-	fences           []fences.Fence
-	repo             resources.Repo
-	operation        operations.OperationRecord
-	auditEvents      []audit.Event
-	exports          []sessionstate.ExportSession
-	mounts           []sessionstate.WorkloadMountBinding
-	createFenceCalls int
-	releasedFenceID  string
-	successErr       error
+	namespace         resources.Namespace
+	binding           resources.NamespaceVolumeBinding
+	volume            resources.Volume
+	volumeRoots       map[string]string
+	fences            []fences.Fence
+	repo              resources.Repo
+	operation         operations.OperationRecord
+	auditEvents       []audit.Event
+	exports           []sessionstate.ExportSession
+	mounts            []sessionstate.WorkloadMountBinding
+	createFenceCalls  int
+	releasedFenceID   string
+	successErr        error
+	blockingLifecycle []operations.OperationRecord
 }
 
 func (store *fakeRepoCreateStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
@@ -379,6 +380,9 @@ func (store *fakeRepoCreateStore) ListExportSessionsByRepo(context.Context, stri
 func (store *fakeRepoCreateStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
 	return append([]sessionstate.WorkloadMountBinding(nil), store.mounts...), nil
 }
+func (store *fakeRepoCreateStore) ListEarlierNonTerminalRepoLifecycleOperations(context.Context, string, string, time.Time) ([]operations.OperationRecord, error) {
+	return append([]operations.OperationRecord(nil), store.blockingLifecycle...), nil
+}
 func (store *fakeRepoCreateStore) CommitRepoLifecycleSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
 	store.repo = repo
 	store.operation = record.Record()
@@ -387,6 +391,19 @@ func (store *fakeRepoCreateStore) CommitRepoLifecycleSucceededWithLease(_ contex
 	return repo, store.operation, nil
 }
 func (store *fakeRepoCreateStore) CommitRepoLifecycleFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	store.releasedFenceID = releaseFenceID
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+func (store *fakeRepoCreateStore) CommitRepoPurgeSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+	store.repo = repo
+	store.operation = record.Record()
+	store.releasedFenceID = fenceID
+	store.auditEvents = append(store.auditEvents, event)
+	return repo, store.operation, nil
+}
+func (store *fakeRepoCreateStore) CommitRepoPurgeFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
 	store.operation = record.Record()
 	store.releasedFenceID = releaseFenceID
 	store.auditEvents = append(store.auditEvents, event)

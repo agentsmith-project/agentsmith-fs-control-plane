@@ -189,7 +189,8 @@ func TestRunOnceRepoLifecycleDisabledDoesNotListLifecycle(t *testing.T) {
 	archiveRecord := workerAppRepoLifecycleOperationRecord("op_archive", operations.OperationRepoArchive, now)
 	deleteRecord := workerAppRepoLifecycleOperationRecord("op_delete", operations.OperationRepoDelete, now)
 	restoreRecord := workerAppRepoLifecycleOperationRecord("op_restore_tombstoned", operations.OperationRepoRestoreTombstoned, now)
-	store := newWorkerAppStore(archiveRecord, deleteRecord, restoreRecord)
+	purgeRecord := workerAppRepoPurgeOperationRecord("op_purge", now)
+	store := newWorkerAppStore(archiveRecord, deleteRecord, restoreRecord, purgeRecord)
 	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
 	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
 
@@ -393,6 +394,135 @@ func TestRunOnceRepoLifecycleDoesNotClaimPurge(t *testing.T) {
 	summary := result.Summary().Operation
 	if summary.Scanned != 0 || summary.Claimed != 0 || len(store.acquireIDs) != 0 {
 		t.Fatalf("summary/acquire = %#v/%#v, want purge ignored by lifecycle runner", summary, store.acquireIDs)
+	}
+}
+
+func TestRunOnceRepoPurgeRequiresIndependentGate(t *testing.T) {
+	now := workerAppNow()
+	purgeRecord := workerAppRepoPurgeOperationRecord("op_purge", now)
+	store := newWorkerAppStore(purgeRecord)
+	store.repo = workerAppRepoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(-2*time.Hour))
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoLifecycleConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}, nil
+		},
+		StoragePurgerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error) {
+			return &workerAppFakeStoragePurger{state: repoexec.RepoStoragePresent}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_purge" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if summary := result.Summary().Operation; summary.Scanned != 0 || summary.Claimed != 0 || len(store.acquireIDs) != 0 {
+		t.Fatalf("summary/acquire = %#v/%#v, want purge ignored by lifecycle-only gate", summary, store.acquireIDs)
+	}
+}
+
+func TestRunOnceRepoPurgeEnabledProcessesPurge(t *testing.T) {
+	now := workerAppNow()
+	purgeRecord := workerAppRepoPurgeOperationRecord("op_purge", now)
+	store := newWorkerAppStore(purgeRecord)
+	store.repo = workerAppRepoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(-2*time.Hour))
+	purger := &workerAppFakeStoragePurger{state: repoexec.RepoStoragePresent}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoPurgeConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}, nil
+		},
+		StoragePurgerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error) {
+			return purger, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_purge" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Manual != 0 || purger.purgeCalls != 1 || store.repo.Status != resources.RepoStatusPurged {
+		t.Fatalf("summary/purge/repo = %#v/%d/%#v, want purge success", summary, purger.purgeCalls, store.repo)
+	}
+}
+
+func TestRunOnceRepoPurgeEnabledWithRepoCreateButLifecycleDisabledStillClaimsPurge(t *testing.T) {
+	now := workerAppNow()
+	purgeRecord := workerAppRepoPurgeOperationRecord("op_purge", now)
+	store := newWorkerAppStore(purgeRecord)
+	store.repo = workerAppRepoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(-2*time.Hour))
+	purger := &workerAppFakeStoragePurger{state: repoexec.RepoStoragePresent}
+	source := workerAppRepoPurgeConfigSource(config.MapSource{"AFSCP_REPO_CREATE_RECOVERY_ENABLED": "true"})
+	runner, err := NewRunOnceRunner(Options{
+		Source: source,
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}, nil
+		},
+		StoragePurgerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error) {
+			return purger, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_purge" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if summary := result.Summary().Operation; summary.Claimed != 1 || purger.purgeCalls != 1 || store.repo.Status != resources.RepoStatusPurged {
+		t.Fatalf("summary/purge/repo = %#v/%d/%#v, want purge claimed", summary, purger.purgeCalls, store.repo)
+	}
+}
+
+func TestRunOnceRepoPurgeCancelRequestedIsNotFinalized(t *testing.T) {
+	now := workerAppNow()
+	purgeRecord := workerAppRepoPurgeOperationRecord("op_purge", now)
+	purgeRecord.State = operations.OperationStateCancelRequested
+	store := newWorkerAppStore(purgeRecord)
+	store.repo = workerAppRepoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(-2*time.Hour))
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoPurgeConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}, nil
+		},
+		StoragePurgerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error) {
+			return &workerAppFakeStoragePurger{state: repoexec.RepoStoragePresent}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_purge" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if summary := result.Summary().Operation; summary.Finalized != 0 || summary.Claimed != 0 || len(store.acquireIDs) != 0 {
+		t.Fatalf("summary/acquire = %#v/%#v, want cancel_requested purge not finalized", summary, store.acquireIDs)
 	}
 }
 
@@ -903,6 +1033,13 @@ func workerAppRepoLifecycleConfigSource(overrides config.MapSource) config.MapSo
 	return source
 }
 
+func workerAppRepoPurgeConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppRepoLifecycleConfigSource(overrides)
+	source["AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED"] = "false"
+	source["AFSCP_REPO_PURGE_RECOVERY_ENABLED"] = "true"
+	return source
+}
+
 func workerAppOperationRecord(now time.Time) operations.OperationRecord {
 	return operations.OperationRecord{
 		ID:               "op_namespace",
@@ -971,6 +1108,23 @@ func workerAppRepoLifecycleOperationRecord(operationID string, typ operations.Op
 		},
 		CreatedAt: now.Add(-time.Hour),
 	}
+}
+
+func workerAppRepoPurgeOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	record := workerAppRepoLifecycleOperationRecord(operationID, operations.OperationRepoPurge, now)
+	record.InputSummary = map[string]any{
+		"repo_id":                      "repo_alpha01",
+		"reason_present":               true,
+		"product_confirmation_present": true,
+		"lifecycle_policy_snapshot": map[string]any{
+			"product_confirmation_present": true,
+			"retention_override_requested": false,
+			"operator_approval_present":    false,
+			"break_glass_enabled":          false,
+			"break_glass_authorized":       false,
+		},
+	}
+	return record
 }
 
 func workerAppRepoLifecycleResource(now time.Time, status resources.RepoStatus) resources.Repo {
@@ -1281,6 +1435,28 @@ func (store *fakeWorkerAppStore) ListRepoLifecycleOperationsForRecovery(ctx cont
 	return out, nil
 }
 
+func (store *fakeWorkerAppStore) ListRepoPurgeOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if record.Type != operations.OperationRepoPurge || record.Phase != operations.OperationPhaseRepoLifecycleValidate {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+		case operations.OperationStateRunning:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (store *fakeWorkerAppStore) AcquireRepoCreateOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	record, ok := store.records[operationID]
 	if !ok {
@@ -1338,6 +1514,24 @@ func (store *fakeWorkerAppStore) AcquireRepoLifecycleOperationLease(_ context.Co
 			}
 		}
 	}
+	return decision.Record, nil
+}
+
+func (store *fakeWorkerAppStore) AcquireRepoPurgeOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if record.Type != operations.OperationRepoPurge || record.Phase != operations.OperationPhaseRepoLifecycleValidate || request.CancelPolicy != operations.LeaseCancelPolicyNone {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
 	return decision.Record, nil
 }
 
@@ -1429,6 +1623,29 @@ func (store *fakeWorkerAppStore) CommitRepoLifecycleFailedWithLease(_ context.Co
 	return operation, nil
 }
 
+func (store *fakeWorkerAppStore) CommitRepoPurgeSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.repo = repo
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	store.releasedFenceID = fenceID
+	return repo, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitRepoPurgeFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	store.releasedFenceID = releaseFenceID
+	return operation, nil
+}
+
 func (store *fakeWorkerAppStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
 	if store.repo.ID == "" {
 		return resources.Repo{}, errors.New("repo not found")
@@ -1477,6 +1694,10 @@ func (store *fakeWorkerAppStore) ListWorkloadMountBindingsByRepo(context.Context
 	return store.mounts, nil
 }
 
+func (store *fakeWorkerAppStore) ListEarlierNonTerminalRepoLifecycleOperations(context.Context, string, string, time.Time) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 type fakeOperationRecoveryRunner struct {
 	result recovery.OperationBatchResult
 	err    error
@@ -1490,6 +1711,21 @@ type workerAppFakeJVSRunner struct {
 	calls         []string
 	initSummary   jvsrunner.InitSummary
 	doctorSummary jvsrunner.DoctorSummary
+}
+
+type workerAppFakeStoragePurger struct {
+	state      repoexec.RepoStorageState
+	purgeCalls int
+}
+
+func (purger *workerAppFakeStoragePurger) InspectRepoStorage(context.Context, repoexec.RepoStoragePaths) (repoexec.RepoStorageState, error) {
+	return purger.state, nil
+}
+
+func (purger *workerAppFakeStoragePurger) PurgeRepoStorage(context.Context, repoexec.RepoStoragePaths) error {
+	purger.purgeCalls++
+	purger.state = repoexec.RepoStorageAbsent
+	return nil
 }
 
 func (runner *workerAppFakeJVSRunner) Init(context.Context, string, string) (jvsrunner.InitSummary, error) {

@@ -38,10 +38,12 @@ type OperationRecoveryStore interface {
 	store.NamespaceVolumeBindingOperationRecoveryStore
 	store.RepoCreateOperationRecoveryStore
 	store.RepoLifecycleOperationRecoveryStore
+	store.RepoPurgeOperationRecoveryStore
 }
 
 type StoreFactory func(context.Context, string) (StoreHandle, error)
 type JVSRunnerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error)
+type StoragePurgerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error)
 
 type StoreHandle struct {
 	Store OperationRecoveryStore
@@ -49,11 +51,12 @@ type StoreHandle struct {
 }
 
 type Options struct {
-	Source           config.Source
-	StoreFactory     StoreFactory
-	JVSRunnerFactory JVSRunnerFactory
-	Clock            func() time.Time
-	AuditEventID     namespaceexec.AuditEventIDGenerator
+	Source               config.Source
+	StoreFactory         StoreFactory
+	JVSRunnerFactory     JVSRunnerFactory
+	StoragePurgerFactory StoragePurgerFactory
+	Clock                func() time.Time
+	AuditEventID         namespaceexec.AuditEventIDGenerator
 }
 
 type RunOnceRunner struct {
@@ -201,6 +204,47 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		executors = append(executors, lifecycleExecutor)
 		scopedStore.repoLifecycleEnabled = true
 	}
+	if opConfig.RepoPurge.Enabled {
+		jvsFactory := options.JVSRunnerFactory
+		if jvsFactory == nil {
+			jvsFactory = NewJVSRunnerFromConfig
+		}
+		jvs, err := jvsFactory(opConfig.RepoPurge)
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		purgerFactory := options.StoragePurgerFactory
+		if purgerFactory == nil {
+			purgerFactory = NewStoragePurgerFromConfig
+		}
+		purger, err := purgerFactory(opConfig.RepoPurge)
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		purgeExecutor, err := repoexec.NewPurgeExecutor(repoexec.PurgeConfig{
+			Store:         scopedStore,
+			JVSRunner:     jvs,
+			StoragePurger: purger,
+			Owner:         opConfig.Owner,
+			Clock:         now,
+			AuditEventID:  func() string { return eventID() },
+			VolumeRoots:   opConfig.RepoPurge.VolumeRoots,
+		})
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		executors = append(executors, purgeExecutor)
+		scopedStore.repoPurgeEnabled = true
+	}
 	operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
 		Reader:        scopedStore,
 		LeaseStore:    scopedStore,
@@ -222,6 +266,10 @@ func NewJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (repoexec
 		return nil, err
 	}
 	return jvsrunner.New(jvsrunner.Config{BinaryPath: cfg.JVSBinaryPath, CWD: cfg.JVSCWD})
+}
+
+func NewStoragePurgerFromConfig(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error) {
+	return repoexec.FilesystemStoragePurger{}, nil
 }
 
 func verifyFileSHA256(path, want string) error {
@@ -295,6 +343,7 @@ type operationRecoveryStore struct {
 	store                OperationRecoveryStore
 	repoCreateEnabled    bool
 	repoLifecycleEnabled bool
+	repoPurgeEnabled     bool
 }
 
 func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
@@ -326,6 +375,13 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 		}
 		records = append(records, lifecycleRecords...)
 	}
+	if scoped.repoPurgeEnabled {
+		purgeRecords, err := scoped.store.ListRepoPurgeOperationsForRecovery(ctx, now, limit)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, purgeRecords...)
+	}
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
 			return records[i].ID < records[j].ID
@@ -353,12 +409,18 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 	}
 	if scoped.repoCreateEnabled {
 		record, err = scoped.store.AcquireRepoCreateOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || !scoped.repoLifecycleEnabled {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoLifecycleEnabled && !scoped.repoPurgeEnabled) {
 			return record, err
 		}
 	}
 	if scoped.repoLifecycleEnabled {
-		return scoped.store.AcquireRepoLifecycleOperationLease(ctx, operationID, request)
+		record, err = scoped.store.AcquireRepoLifecycleOperationLease(ctx, operationID, request)
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || !scoped.repoPurgeEnabled {
+			return record, err
+		}
+	}
+	if scoped.repoPurgeEnabled {
+		return scoped.store.AcquireRepoPurgeOperationLease(ctx, operationID, request)
 	}
 	return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 }
@@ -399,6 +461,14 @@ func (scoped operationRecoveryStore) CommitRepoLifecycleFailedWithLease(ctx cont
 	return scoped.store.CommitRepoLifecycleFailedWithLease(ctx, record, owner, now, event, releaseFenceID)
 }
 
+func (scoped operationRecoveryStore) CommitRepoPurgeSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+	return scoped.store.CommitRepoPurgeSucceededWithLease(ctx, repo, record, owner, now, event, fenceID)
+}
+
+func (scoped operationRecoveryStore) CommitRepoPurgeFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
+	return scoped.store.CommitRepoPurgeFailedWithLease(ctx, record, owner, now, event, releaseFenceID)
+}
+
 func (scoped operationRecoveryStore) GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error) {
 	return scoped.store.GetRepoInNamespace(ctx, namespaceID, repoID)
 }
@@ -429,6 +499,10 @@ func (scoped operationRecoveryStore) ListExportSessionsByRepo(ctx context.Contex
 
 func (scoped operationRecoveryStore) ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error) {
 	return scoped.store.ListWorkloadMountBindingsByRepo(ctx, repoID)
+}
+
+func (scoped operationRecoveryStore) ListEarlierNonTerminalRepoLifecycleOperations(ctx context.Context, repoID, operationID string, createdAt time.Time) ([]operations.OperationRecord, error) {
+	return scoped.store.ListEarlierNonTerminalRepoLifecycleOperations(ctx, repoID, operationID, createdAt)
 }
 
 func operationRecoveryCountError(result recovery.OperationBatchResult) error {
@@ -483,5 +557,6 @@ var (
 	_ store.NamespaceVolumeBindingOperationCommitStore = operationRecoveryStore{}
 	_ store.RepoCreateOperationCommitStore             = operationRecoveryStore{}
 	_ store.RepoLifecycleOperationCommitStore          = operationRecoveryStore{}
+	_ store.RepoPurgeOperationCommitStore              = operationRecoveryStore{}
 	_ recovery.OperationExecutor                       = multiExecutor{}
 )

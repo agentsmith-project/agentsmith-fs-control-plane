@@ -14,9 +14,10 @@ The repo now has neutral Go command entrypoints:
   enabled it wires PostgreSQL operation recovery for the minimal
   `volume_ensure`, `namespace_upsert`, `namespace_volume_binding_put`, and
   explicit-gated `repo_create` plus `repo_archive`/`repo_restore_archived`/
-  `repo_delete`/`repo_restore_tombstoned` executors. `repo_purge` remains
-  excluded. A run-once pass emits its summary, then exits nonzero if operation
-  recovery reports unsupported, manual, or failed records.
+  `repo_delete`/`repo_restore_tombstoned` executors, plus separately gated
+  `repo_purge` recovery for destructive AFSCP-managed retained storage removal.
+  A run-once pass emits its summary, then exits nonzero if operation recovery
+  reports unsupported, manual, or failed records.
 - `afscp-export-gateway`: versioned placeholder entrypoint for the WebDAV
   gateway. It has no WebDAV file access or export-session enforcement yet.
 - `afscp-contract-verify`: verifies selected OpenAPI, schema, docs, and Go DTO

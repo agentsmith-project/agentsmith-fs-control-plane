@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 )
 
 var operationColumns = []string{
@@ -174,6 +175,20 @@ func (store *Store) ListRepoLifecycleOperationsForRecovery(ctx context.Context, 
 	return scanOperations(rows)
 }
 
+func (store *Store) ListRepoPurgeOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("list repo purge operations for recovery: now must be set")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list repo purge operations for recovery: limit must be positive")
+	}
+	rows, err := store.exec.QueryContext(ctx, repoPurgeOperationRecoveryCandidatesSQL(), now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanOperations(rows)
+}
+
 func (store *Store) AcquireOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	args, err := operationLeaseRequestArgs(operationID, request)
 	if err != nil {
@@ -302,6 +317,39 @@ func (store *Store) AcquireRepoLifecycleOperationLease(ctx context.Context, oper
 		return operations.OperationRecord{}, err
 	}
 	return record, nil
+}
+
+func (store *Store) AcquireRepoPurgeOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	args, err := operationLeaseRequestArgs(operationID, request)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	if args.recoveryMode != "" {
+		return operations.OperationRecord{}, operationLeaseInvalidRequest("recovery_mode", "repo purge recovery does not perform explicit recovery actions")
+	}
+	row := store.exec.QueryRowContext(ctx, repoPurgeOperationAcquireLeaseSQL(), args.operationID, args.owner, args.expiresAt, args.now, args.cancelPolicy)
+	record, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("repo purge acquire lease", operationID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) ListEarlierNonTerminalRepoLifecycleOperations(ctx context.Context, repoID, operationID string, createdAt time.Time) ([]operations.OperationRecord, error) {
+	if err := pathresolver.ValidateID(pathresolver.RepoID, repoID); err != nil {
+		return nil, err
+	}
+	if err := pathresolver.ValidateID(pathresolver.OperationID, operationID); err != nil {
+		return nil, err
+	}
+	rows, err := store.exec.QueryContext(ctx, earlierNonTerminalRepoLifecycleOperationsSQL(), repoID, operationID, createdAt.UTC())
+	if err != nil {
+		return nil, err
+	}
+	return scanOperations(rows)
 }
 
 func (store *Store) RenewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
@@ -576,6 +624,18 @@ func repoLifecycleOperationRecoveryCandidatesSQL() string {
 		") ORDER BY created_at, operation_id LIMIT $2"
 }
 
+func repoPurgeOperationRecoveryCandidatesSQL() string {
+	noLeasePair := "(lease_owner IS NULL AND lease_expires_at IS NULL)"
+	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
+	invalidLeasePair := "((lease_owner IS NULL AND lease_expires_at IS NOT NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) = '') OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NULL))"
+	return operationSelectSQL() + " WHERE " +
+		"operation_type = 'repo_purge' AND phase = 'validate_repo_lifecycle' AND (" +
+		"(operation_state = 'queued') OR " +
+		"(operation_state = 'running' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'operator_intervention_required')" +
+		") ORDER BY created_at, operation_id LIMIT $2"
+}
+
 func operationUpdateSQL() string {
 	return "UPDATE operations SET " +
 		"operation_state = $1, " +
@@ -720,6 +780,28 @@ func repoLifecycleOperationAcquireLeaseSQL() string {
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($5 <> 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM held_fence) OR EXISTS (SELECT 1 FROM released_fence)) RETURNING " + strings.Join(operationSelectColumns, ", ") +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
+}
+
+func repoPurgeOperationAcquireLeaseSQL() string {
+	return "UPDATE operations SET " +
+		"operation_state = 'running', " +
+		"attempt = attempt + 1, " +
+		"lease_owner = $2, " +
+		"lease_expires_at = $3, " +
+		"started_at = COALESCE(started_at, $4), " +
+		"updated_at = $4 " +
+		"WHERE operation_id = $1 " +
+		"AND operation_type = 'repo_purge' " +
+		"AND phase = 'validate_repo_lifecycle' " +
+		"AND $5 = '' " +
+		"AND (" +
+		"(operation_state = 'queued' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
+		"(operation_state = 'running' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4)" +
+		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+}
+
+func earlierNonTerminalRepoLifecycleOperationsSQL() string {
+	return operationSelectSQL() + " WHERE repo_id = $1 AND (created_at < $3 OR (created_at = $3 AND operation_id < $2)) AND operation_type IN ('repo_archive','repo_restore_archived','repo_delete','repo_restore_tombstoned','repo_purge') AND operation_state NOT IN ('succeeded','failed','cancelled') ORDER BY created_at, operation_id"
 }
 
 func operationRenewLeaseSQL() string {

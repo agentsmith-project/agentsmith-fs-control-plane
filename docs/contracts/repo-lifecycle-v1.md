@@ -129,7 +129,7 @@ Purge:
 - is irreversible
 - is allowed only for `tombstoned` repos after retention policy permits it, or with an approved operator break-glass purge
 - requires a dedicated lifecycle/purge authorization policy rather than ordinary repo metadata permission alone
-- permanently removes payload and control metadata
+- permanently removes AFSCP-managed retained payload and control storage
 - must not run while any active or uncertain export or mount session remains
 - ends in `purged`
 

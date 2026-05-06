@@ -3,8 +3,9 @@
 Status: neutral Go skeleton, contract guardrails, resource metadata
 persistence, metadata recovery workers, opt-in `repo_create` JVS execution, and
 explicit-gated repo lifecycle recovery for archive, restore-archived, delete,
-and restore-tombstoned are in place; purge, WebDAV, mount, save/restore,
-template, and audit delivery workers remain unimplemented.
+restore-tombstoned, plus separately gated `repo_purge` recovery are in place;
+WebDAV, mount, save/restore, template, and audit delivery workers remain
+unimplemented.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -128,6 +129,11 @@ Completed:
   archive/delete, JVS `doctor --strict` verification for restore operations,
   metadata tombstone for delete, and restore-tombstoned recovery to recorded
   `pre_delete_status` when the explicit repo lifecycle recovery gate is enabled
+- separately gated `repo_purge` recovery through `afscp-worker --run-once`,
+  `repoexec`, a dedicated PostgreSQL purge list/acquire/commit boundary, session
+  drain checks, destructive removal of AFSCP-managed retained storage, terminal
+  `purged` metadata, audit, and lifecycle fence release when the explicit repo
+  purge recovery gate is enabled
 - namespace-bound repo read handlers for `GET /internal/v1/repos/{repoId}` and
   `GET /internal/v1/repos?namespace_id=&lifecycle_status=`, exposed through
   `InternalAPIShell` as repo storage projections without product catalog fields
@@ -163,9 +169,10 @@ Partially completed:
   metadata-only namespace upsert and namespace volume binding intake/read
   handlers implemented, plus repo create intake, repo lifecycle operation
   intake/admission, namespace-bound repo read storage projections, and operation
-  inspection. The explicit-gated repo lifecycle worker covers
-  archive/restore-archived/delete/restore-tombstoned; purge workers, WebDAV,
-  mount, save/restore, template, broader session drain execution, and
+  inspection. The explicit-gated repo lifecycle workers cover
+  archive/restore-archived/delete/restore-tombstoned and separately gated
+  purge recovery; WebDAV, mount, save/restore, template, broader session drain
+  execution, and
   storage-backed handlers beyond the listed intake/read surfaces remain
   unimplemented.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
@@ -181,28 +188,29 @@ Partially completed:
   record values into high-level actions. `afscp-worker --run-once` now has an
   opt-in production bootstrap for the minimal `volume_ensure`,
   `namespace_upsert`, `namespace_volume_binding_put`, explicit-gated
-  `repo_create`, and explicit-gated `repo_archive`/`repo_restore_archived`/
-  `repo_delete`/`repo_restore_tombstoned` recovery executors. With the repo
-  create gate enabled, `repo_create` runs JVS
+  `repo_create`, explicit-gated `repo_archive`/`repo_restore_archived`/
+  `repo_delete`/`repo_restore_tombstoned`, and separately gated `repo_purge`
+  recovery executors. With the repo create gate enabled, `repo_create` runs JVS
   `init` plus `doctor --strict` and commits through the dedicated PostgreSQL
   repo-create boundary with fence release. With the repo lifecycle recovery gate
   enabled, archive, restore-archived, delete, and restore-tombstoned commit
   through dedicated PostgreSQL repo lifecycle boundaries with fence release.
   Delete is a metadata tombstone, not physical deletion. Restore-tombstoned uses
   the accepted operation time with exclusive retention expiry and restores to
-  recorded `pre_delete_status`. It does not implement repo purge, save/restore,
-  template, WebDAV, mount, or external audit delivery.
+  recorded `pre_delete_status`. With the repo purge gate enabled, purge removes
+  AFSCP-managed retained storage and commits `purged` metadata through a
+  dedicated purge boundary. It does not implement save/restore, template,
+  WebDAV, mount, or external audit delivery.
 - Path resolver guardrails exist and are used by repo create recovery; broader
   WebDAV, mount, file API, and remaining lifecycle integration remains absent.
 
 Not implemented:
 
-- real repo lifecycle purge worker or physical delete storage transition
 - real template, export, mount, save, or restore handlers
-- repo lifecycle purge worker, session drain execution beyond lifecycle worker
-  checks, and JVS save/restore/template/export/mount handlers; repo lifecycle
-  intake/admission handlers and
-  archive/restore-archived/delete/restore-tombstoned recovery already exist
+- session drain execution beyond lifecycle worker checks, and JVS
+  save/restore/template/export/mount handlers; repo lifecycle intake/admission
+  handlers and archive/restore-archived/delete/restore-tombstoned/purge recovery
+  already exist
 - concrete handler wiring for the session admission model beyond lifecycle
   intake checks; repo access admission is already wired for lifecycle
   intake/admission
@@ -256,8 +264,8 @@ Repo lifecycle GA target contract rules cover:
 - `purge`
 
 Current implementation includes opt-in worker execution for `archive`,
-`restore-archived`, `delete`, and `restore-tombstoned`. `purge` remains an
-unimplemented worker path.
+`restore-archived`, `delete`, `restore-tombstoned`, and separately gated
+`purge`.
 
 Important behavior:
 

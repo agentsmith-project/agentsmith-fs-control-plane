@@ -190,6 +190,26 @@ func TestLoadRepoLifecycleRecoveryParsesValidConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRepoPurgeRecoveryParsesIndependentExplicitGate(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
+		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
+		"AFSCP_WORKER_OWNER":                      "worker-a",
+		"AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED":   "true",
+		"AFSCP_REPO_PURGE_RECOVERY_ENABLED":       "true",
+		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":                 strings.Repeat("c", 64),
+		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Worker.OperationRecovery.RepoLifecycle.Enabled || !cfg.Worker.OperationRecovery.RepoPurge.Enabled {
+		t.Fatalf("repo lifecycle/purge gates = %#v/%#v", cfg.Worker.OperationRecovery.RepoLifecycle, cfg.Worker.OperationRecovery.RepoPurge)
+	}
+}
+
 func TestLoadRejectsInvalidCapabilityBool(t *testing.T) {
 	_, err := Load(MapSource{"AFSCP_STORAGE_ENABLED": "maybe"})
 	if err == nil {

@@ -356,6 +356,10 @@ func (store *cmdWorkerAppStore) ListRepoLifecycleOperationsForRecovery(context.C
 	return nil, nil
 }
 
+func (store *cmdWorkerAppStore) ListRepoPurgeOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 func (store *cmdWorkerAppStore) AcquireNamespaceUpsertOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
@@ -373,6 +377,10 @@ func (store *cmdWorkerAppStore) AcquireRepoCreateOperationLease(context.Context,
 }
 
 func (store *cmdWorkerAppStore) AcquireRepoLifecycleOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) AcquireRepoPurgeOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
 
@@ -401,6 +409,14 @@ func (store *cmdWorkerAppStore) CommitRepoLifecycleSucceededWithLease(context.Co
 }
 
 func (store *cmdWorkerAppStore) CommitRepoLifecycleFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event, string) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitRepoPurgeSucceededWithLease(context.Context, resources.Repo, operations.SanitizedOperationRecord, string, time.Time, audit.Event, string) (resources.Repo, operations.OperationRecord, error) {
+	return resources.Repo{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitRepoPurgeFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event, string) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
@@ -434,6 +450,10 @@ func (store *cmdWorkerAppStore) ListExportSessionsByRepo(context.Context, string
 
 func (store *cmdWorkerAppStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
 	return nil, errors.New("unexpected session read")
+}
+
+func (store *cmdWorkerAppStore) ListEarlierNonTerminalRepoLifecycleOperations(context.Context, string, string, time.Time) ([]operations.OperationRecord, error) {
+	return nil, errors.New("unexpected lifecycle read")
 }
 
 func (runner *fakeRunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error) {
