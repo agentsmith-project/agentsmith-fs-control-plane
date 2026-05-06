@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportreconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 )
 
@@ -26,22 +27,23 @@ func TestRunOnceRejectsEmptyConfigBeforeRunnerCalls(t *testing.T) {
 func TestRunOnceExecutesConfiguredRunnersInFixedOrderWithContext(t *testing.T) {
 	ctx := context.WithValue(context.Background(), workerContextKey("test"), "ctx")
 	order := []string{}
+	export := &fakeExportReconcileRunner{name: "export", order: &order, result: exportreconcile.Result{Scanned: 2, Terminalized: 1}}
 	op := &fakeOperationRunner{name: "operation", order: &order, result: recovery.OperationBatchResult{Scanned: 3, Claimed: 1}}
 	stale := &fakeStaleRunner{name: "stale", order: &order, result: auditdelivery.StaleRecoveryResult{Recovered: 2, RetryWait: 1}}
 	delivery := &fakeDeliveryRunner{name: "delivery", order: &order, result: auditdelivery.BatchResult{Claimed: 4, Delivered: 3}}
 
-	result, err := New(Config{OperationRecovery: op, AuditStaleRecovery: stale, AuditDelivery: delivery}).RunOnce(ctx)
+	result, err := New(Config{ExportSessionReconcile: export, OperationRecovery: op, AuditStaleRecovery: stale, AuditDelivery: delivery}).RunOnce(ctx)
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if strings.Join(order, ",") != "operation,stale,delivery" {
-		t.Fatalf("order = %#v, want operation stale delivery", order)
+	if strings.Join(order, ",") != "export,operation,stale,delivery" {
+		t.Fatalf("order = %#v, want export operation stale delivery", order)
 	}
-	if op.ctx != ctx || stale.ctx != ctx || delivery.ctx != ctx {
+	if export.ctx != ctx || op.ctx != ctx || stale.ctx != ctx || delivery.ctx != ctx {
 		t.Fatal("runner did not receive request context")
 	}
 	summary := result.Summary()
-	if summary.Operation.Scanned != 3 || summary.Operation.Claimed != 1 || summary.AuditStale.Recovered != 2 || summary.AuditDelivery.Delivered != 3 {
+	if summary.ExportSessionReconcile.Scanned != 2 || summary.ExportSessionReconcile.Terminalized != 1 || summary.Operation.Scanned != 3 || summary.Operation.Claimed != 1 || summary.AuditStale.Recovered != 2 || summary.AuditDelivery.Delivered != 3 {
 		t.Fatalf("summary = %#v, want aggregate counts", summary)
 	}
 }
@@ -62,6 +64,25 @@ func TestRunOnceAllowsNilComponentRunners(t *testing.T) {
 	}
 	if summary := result.Summary(); summary.AuditDelivery.Claimed != 1 || summary.AuditDelivery.Delivered != 1 {
 		t.Fatalf("summary = %#v, want delivery counts", summary)
+	}
+}
+
+func TestRunOnceAllowsOnlyExportSessionReconcileRunner(t *testing.T) {
+	order := []string{}
+	export := &fakeExportReconcileRunner{name: "export", order: &order, result: exportreconcile.Result{Scanned: 1, Reused: 1}}
+
+	result, err := New(Config{ExportSessionReconcile: export}).RunOnce(nil)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if strings.Join(order, ",") != "export" {
+		t.Fatalf("order = %#v, want only export", order)
+	}
+	if export.ctx == nil {
+		t.Fatal("nil ctx did not fall back to context.Background")
+	}
+	if summary := result.Summary(); summary.ExportSessionReconcile.Scanned != 1 || summary.ExportSessionReconcile.Reused != 1 {
+		t.Fatalf("summary = %#v, want export reconcile counts", summary)
 	}
 }
 
@@ -165,6 +186,24 @@ func TestWorkerPackageDoesNotImportIntegrationPackages(t *testing.T) {
 }
 
 type workerContextKey string
+
+type fakeExportReconcileRunner struct {
+	name   string
+	order  *[]string
+	ctx    context.Context
+	result exportreconcile.Result
+	err    error
+	after  func()
+}
+
+func (runner *fakeExportReconcileRunner) RunOnce(ctx context.Context) (exportreconcile.Result, error) {
+	*runner.order = append(*runner.order, runner.name)
+	runner.ctx = ctx
+	if runner.after != nil {
+		runner.after()
+	}
+	return runner.result, runner.err
+}
 
 type fakeOperationRunner struct {
 	name   string

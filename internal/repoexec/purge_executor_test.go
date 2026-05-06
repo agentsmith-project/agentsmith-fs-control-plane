@@ -213,7 +213,7 @@ func TestPurgeExecutorActiveSessionWaitsWithoutMutation(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(-2*time.Hour))
-	store.exports = []sessionstate.ExportSession{{ID: "export_active", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}}
+	store.exports = []sessionstate.ExportSession{freshExportSession(now, "export_active", sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive, now.Add(time.Hour))}
 	purger := &fakeStoragePurger{state: RepoStoragePresent}
 	executor := newTestPurgeExecutor(t, store, &fakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}, purger, now)
 

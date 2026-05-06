@@ -56,9 +56,10 @@ The repo access admission pure model exists in code for shared pre-handler
 decisions across future lifecycle, save/restore, export, mount, and template
 handlers. It is not yet wired to those concrete endpoint handlers.
 The session substrate pure model also exists for restore-run writer gating and
-lifecycle drain gating over export and workload-mount sessions. It is not yet
-wired to the WebDAV gateway, workload-mount plan, lifecycle handlers, or
-storage adapters.
+lifecycle drain gating over export and workload-mount sessions. Export sessions
+are wired to the API create/get/revoke boundary, WebDAV gateway admission and
+runtime observation, terminal reconcile, and repo lifecycle worker drain checks.
+Workload-mount plan issuance and restore-run execution remain separate.
 
 ## Lifecycle Fence
 
@@ -88,7 +89,11 @@ context so an operation retry is not denied by its own held fence.
 Archive, delete, and purge must wait for all non-terminal exports and workload
 mount bindings, read-only or read-write, to reach a confirmed terminal non-accessing
 state. Uncertain sessions fail closed or move the operation to
-`operator_intervention_required`.
+`operator_intervention_required`. For export sessions, the current terminal
+reconcile runner can prove zero-count `revoking -> revoked` and zero-count
+expired `active -> expired` without a fresh gateway heartbeat; nonzero counts
+or stale/uncertain runtime state remain blocking until operator/runbook repair
+or later recovery.
 
 ## Operation Semantics
 

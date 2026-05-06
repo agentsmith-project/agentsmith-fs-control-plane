@@ -19,8 +19,8 @@ func TestListExportSessionsByRepoReadsSafeSessionFields(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	exec := &fakeExecutor{
 		rows: fakeRows{rows: []fakeRow{
-			{values: []any{"export_alpha", "ns_123", "repo_123", "read_write", "active", now.Add(time.Hour), now, now.Add(time.Minute)}},
-			{values: []any{"export_beta", "ns_123", "repo_123", "read_only", "revoked", now.Add(-time.Hour), now.Add(time.Minute), now.Add(2 * time.Minute)}},
+			{values: []any{"export_alpha", "ns_123", "repo_123", "read_write", "active", now.Add(time.Hour), 3, 1, now, now, now.Add(time.Minute), nil, nil, "active writers", now, now.Add(time.Minute)}},
+			{values: []any{"export_beta", "ns_123", "repo_123", "read_only", "revoked", now.Add(-time.Hour), 0, 0, now, now, now.Add(time.Minute), now, now, "terminal", now.Add(time.Minute), now.Add(2 * time.Minute)}},
 		}},
 	}
 	st := &Store{exec: exec}
@@ -31,7 +31,7 @@ func TestListExportSessionsByRepoReadsSafeSessionFields(t *testing.T) {
 	}
 
 	assertSQLContainsInOrder(t, exec.query,
-		"SELECT export_id, namespace_id, repo_id, access_mode, status, expires_at, created_at, updated_at FROM export_sessions",
+		"SELECT export_id, namespace_id, repo_id, access_mode, status, expires_at, active_request_count, active_write_count, last_observed_at, last_gateway_heartbeat_at, gateway_heartbeat_expires_at, write_drained_at, terminal_observed_at, status_reason, created_at, updated_at FROM export_sessions",
 		"WHERE repo_id = $1",
 		"ORDER BY created_at, export_id",
 	)
@@ -44,10 +44,12 @@ func TestListExportSessionsByRepoReadsSafeSessionFields(t *testing.T) {
 	}
 	if got[0].ID != "export_alpha" || got[0].NamespaceID != "ns_123" || got[0].RepoID != "repo_123" ||
 		got[0].Mode != sessionstate.AccessModeReadWrite || got[0].Status != sessionstate.ExportStatusActive ||
-		!got[0].ExpiresAt.Equal(now.Add(time.Hour)) {
+		!got[0].ExpiresAt.Equal(now.Add(time.Hour)) || got[0].ActiveRequestCount != 3 || got[0].ActiveWriteCount != 1 ||
+		got[0].LastObservedAt == nil || !got[0].LastObservedAt.Equal(now) || got[0].StatusReason != "active writers" {
 		t.Fatalf("first export session = %#v", got[0])
 	}
-	if got[1].Mode != sessionstate.AccessModeReadOnly || got[1].Status != sessionstate.ExportStatusRevoked {
+	if got[1].Mode != sessionstate.AccessModeReadOnly || got[1].Status != sessionstate.ExportStatusRevoked ||
+		got[1].TerminalObservedAt == nil || !got[1].TerminalObservedAt.Equal(now) {
 		t.Fatalf("second export session = %#v", got[1])
 	}
 }

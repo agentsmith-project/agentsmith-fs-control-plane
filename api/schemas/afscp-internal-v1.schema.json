@@ -681,9 +681,18 @@
         "created_by_caller_service",
         "created_by_actor",
         "created_at",
+        "updated_at",
         "expires_at",
         "revoked_at",
-        "last_accessed_at"
+        "last_accessed_at",
+        "active_request_count",
+        "active_write_count",
+        "last_observed_at",
+        "last_gateway_heartbeat_at",
+        "gateway_heartbeat_expires_at",
+        "write_drained_at",
+        "terminal_observed_at",
+        "status_reason"
       ],
       "properties": {
         "export_id": { "$ref": "#/$defs/ExportId" },
@@ -695,15 +704,24 @@
         "created_by_caller_service": { "type": "string", "minLength": 1, "maxLength": 256 },
         "created_by_actor": { "$ref": "#/$defs/Actor" },
         "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
         "expires_at": { "type": "string", "format": "date-time" },
         "revoked_at": { "type": ["string", "null"], "format": "date-time" },
-        "last_accessed_at": { "type": ["string", "null"], "format": "date-time" }
+        "last_accessed_at": { "type": ["string", "null"], "format": "date-time" },
+        "active_request_count": { "type": "integer", "minimum": 0 },
+        "active_write_count": { "type": "integer", "minimum": 0 },
+        "last_observed_at": { "type": ["string", "null"], "format": "date-time" },
+        "last_gateway_heartbeat_at": { "type": ["string", "null"], "format": "date-time" },
+        "gateway_heartbeat_expires_at": { "type": ["string", "null"], "format": "date-time" },
+        "write_drained_at": { "type": ["string", "null"], "format": "date-time" },
+        "terminal_observed_at": { "type": ["string", "null"], "format": "date-time" },
+        "status_reason": { "type": "string", "maxLength": 1024 }
       }
     },
     "ExportAccessCredential": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "auth"],
+      "required": ["url", "auth", "mode", "expires_at"],
       "properties": {
         "url": { "type": "string", "format": "uri" },
         "auth": {
@@ -715,13 +733,15 @@
             "username": { "type": "string", "minLength": 1, "maxLength": 256 },
             "password": { "type": "string", "minLength": 1, "maxLength": 512 }
           }
-        }
+        },
+        "mode": { "type": "string", "enum": ["read_only", "read_write"] },
+        "expires_at": { "type": "string", "format": "date-time" }
       }
     },
     "ExportCreateResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["export", "access"],
+      "required": ["export"],
       "properties": {
         "export": { "$ref": "#/$defs/ExportSession" },
         "access": { "$ref": "#/$defs/ExportAccessCredential" }
@@ -747,7 +767,7 @@
     "CreateExportRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "ttl_seconds"],
+      "required": ["mode"],
       "properties": {
         "mode": { "type": "string", "enum": ["read_only", "read_write"] },
         "ttl_seconds": { "type": "integer", "minimum": 60 }

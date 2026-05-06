@@ -57,6 +57,9 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	if cfg.Worker.AuditDelivery.Enabled {
 		t.Fatal("audit delivery enabled by default, want disabled")
 	}
+	if cfg.Worker.ExportSessionReconcile.Enabled {
+		t.Fatal("export session reconcile enabled by default, want disabled")
+	}
 	if cfg.Worker.AuditDelivery.Limit != 10 {
 		t.Fatalf("audit delivery limit = %d, want 10", cfg.Worker.AuditDelivery.Limit)
 	}
@@ -77,6 +80,18 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	}
 	if cfg.API.PostgresDSN != "" {
 		t.Fatalf("api postgres dsn = %q, want empty", cfg.API.PostgresDSN)
+	}
+	if cfg.ExportGateway.ListenAddr != "127.0.0.1:8080" {
+		t.Fatalf("export gateway listen addr = %q, want default", cfg.ExportGateway.ListenAddr)
+	}
+	if cfg.ExportGateway.PostgresDSN != "" {
+		t.Fatalf("export gateway postgres dsn = %q, want empty", cfg.ExportGateway.PostgresDSN)
+	}
+	if cfg.ExportGateway.Prefix != "/e/" {
+		t.Fatalf("export gateway prefix = %q, want /e/", cfg.ExportGateway.Prefix)
+	}
+	if len(cfg.ExportGateway.VolumeRoots) != 0 {
+		t.Fatalf("export gateway volume roots = %#v, want empty", cfg.ExportGateway.VolumeRoots)
 	}
 }
 
@@ -153,6 +168,77 @@ func TestLoadAPIInternalRuntimeDSNFallsBackToSharedPostgres(t *testing.T) {
 	}
 	if cfg.API.PostgresDSN != "postgres://shared:secret@db/afscp" {
 		t.Fatalf("api postgres dsn = %q, want shared postgres fallback", cfg.API.PostgresDSN)
+	}
+}
+
+func TestLoadExportGatewayConfig(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_EXPORT_GATEWAY_LISTEN_ADDR":  "127.0.0.1:9090",
+		"AFSCP_EXPORT_GATEWAY_POSTGRES_DSN": "postgres://gateway:secret@db/afscp",
+		"AFSCP_EXPORT_GATEWAY_PREFIX":       "/exports/",
+		"AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS": "vol_123=/srv/afscp/volumes/vol_123, vol_other=/srv/afscp/volumes/vol_other",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ExportGateway.ListenAddr != "127.0.0.1:9090" {
+		t.Fatalf("listen addr = %q", cfg.ExportGateway.ListenAddr)
+	}
+	if cfg.ExportGateway.PostgresDSN != "postgres://gateway:secret@db/afscp" {
+		t.Fatalf("postgres dsn = %q", cfg.ExportGateway.PostgresDSN)
+	}
+	if cfg.ExportGateway.Prefix != "/exports/" {
+		t.Fatalf("prefix = %q", cfg.ExportGateway.Prefix)
+	}
+	if cfg.ExportGateway.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" || cfg.ExportGateway.VolumeRoots["vol_other"] != "/srv/afscp/volumes/vol_other" {
+		t.Fatalf("volume roots = %#v", cfg.ExportGateway.VolumeRoots)
+	}
+}
+
+func TestLoadExportGatewayConfigFallsBackToSharedDSNAndRoots(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_POSTGRES_DSN": "postgres://shared:secret@db/afscp",
+		"AFSCP_VOLUME_ROOTS": "vol_123=/srv/afscp/volumes/vol_123",
+		"AFSCP_LISTEN_ADDR":  "127.0.0.1:8181",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ExportGateway.PostgresDSN != "postgres://shared:secret@db/afscp" {
+		t.Fatalf("postgres dsn = %q, want shared fallback", cfg.ExportGateway.PostgresDSN)
+	}
+	if cfg.ExportGateway.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
+		t.Fatalf("volume roots = %#v", cfg.ExportGateway.VolumeRoots)
+	}
+	if cfg.ExportGateway.ListenAddr != "127.0.0.1:8181" {
+		t.Fatalf("listen addr = %q, want shared listen fallback", cfg.ExportGateway.ListenAddr)
+	}
+}
+
+func TestValidateExportGatewayConfigFailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  ExportGatewayConfig
+		want string
+	}{
+		{name: "missing dsn", cfg: ExportGatewayConfig{ListenAddr: "127.0.0.1:9090", Prefix: "/e/", VolumeRoots: map[string]string{"vol_123": "/srv/vol"}}, want: "AFSCP_EXPORT_GATEWAY_POSTGRES_DSN"},
+		{name: "missing roots", cfg: ExportGatewayConfig{ListenAddr: "127.0.0.1:9090", Prefix: "/e/", PostgresDSN: "postgres://gateway:secret@db/afscp"}, want: "AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS"},
+		{name: "bad prefix", cfg: ExportGatewayConfig{ListenAddr: "127.0.0.1:9090", Prefix: "e", PostgresDSN: "postgres://gateway:secret@db/afscp", VolumeRoots: map[string]string{"vol_123": "/srv/vol"}}, want: "AFSCP_EXPORT_GATEWAY_PREFIX"},
+		{name: "bad root", cfg: ExportGatewayConfig{ListenAddr: "127.0.0.1:9090", Prefix: "/e/", PostgresDSN: "postgres://gateway:secret@db/afscp", VolumeRoots: map[string]string{"vol_123": "relative"}}, want: "AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateExportGatewayConfig(tt.cfg)
+			if err == nil {
+				t.Fatal("ValidateExportGatewayConfig succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want %s", err, tt.want)
+			}
+			if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "/srv/vol") {
+				t.Fatalf("error leaked sensitive config: %v", err)
+			}
+		})
 	}
 }
 
@@ -573,6 +659,72 @@ func TestLoadWorkerAuditDeliveryParsesDefaultsOverridesAndFallbackDSN(t *testing
 	auditDelivery = cfg.Worker.AuditDelivery
 	if auditDelivery.PostgresDSN != "postgres://primary:password@db/afscp" || auditDelivery.Owner != "audit-worker-b" || auditDelivery.Limit != 25 || auditDelivery.MaxAttempts != 8 || auditDelivery.RetryBackoff != 3*time.Minute || auditDelivery.StaleThreshold != 9*time.Minute || auditDelivery.Endpoint != "http://127.0.0.1:8080/sink" || auditDelivery.BearerToken != "audit-secret-token" || auditDelivery.Timeout != 2*time.Second {
 		t.Fatalf("audit delivery overrides = %#v", auditDelivery)
+	}
+}
+
+func TestLoadWorkerExportSessionReconcileRequiresDSNAndOwnerWhenEnabled(t *testing.T) {
+	base := MapSource{"AFSCP_EXPORT_SESSION_RECONCILE_ENABLED": "true"}
+	tests := []struct {
+		name     string
+		override MapSource
+		want     string
+	}{
+		{name: "missing dsn", want: "AFSCP_POSTGRES_DSN"},
+		{name: "missing owner", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://worker:password@db/afscp"}, want: "AFSCP_EXPORT_SESSION_RECONCILE_OWNER"},
+		{name: "invalid limit", override: MapSource{"AFSCP_POSTGRES_DSN": "postgres://worker:password@db/afscp", "AFSCP_EXPORT_SESSION_RECONCILE_OWNER": "export-worker", "AFSCP_EXPORT_SESSION_RECONCILE_LIMIT": "0"}, want: "AFSCP_EXPORT_SESSION_RECONCILE_LIMIT"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := MapSource{}
+			for key, value := range base {
+				source[key] = value
+			}
+			for key, value := range tt.override {
+				source[key] = value
+			}
+
+			_, err := Load(source)
+			if err == nil {
+				t.Fatal("Load succeeded, want config error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want key %s", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadWorkerExportSessionReconcileParsesDefaultsOverridesAndFallbackDSN(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_EXPORT_SESSION_RECONCILE_ENABLED": "true",
+		"AFSCP_DATABASE_URL":                     "postgres://fallback:password@db/afscp",
+		"AFSCP_EXPORT_SESSION_RECONCILE_OWNER":   " export-worker ",
+	})
+	if err != nil {
+		t.Fatalf("Load defaults: %v", err)
+	}
+	reconcile := cfg.Worker.ExportSessionReconcile
+	if !reconcile.Enabled {
+		t.Fatal("export session reconcile disabled, want enabled")
+	}
+	if reconcile.PostgresDSN != "postgres://fallback:password@db/afscp" || reconcile.Owner != "export-worker" || reconcile.Limit != 10 {
+		t.Fatalf("export reconcile config = %#v", reconcile)
+	}
+
+	cfg, err = Load(MapSource{
+		"AFSCP_EXPORT_SESSION_RECONCILE_ENABLED": "true",
+		"AFSCP_DATABASE_URL":                     "postgres://fallback:password@db/afscp",
+		"AFSCP_POSTGRES_DSN":                     "postgres://primary:password@db/afscp",
+		"AFSCP_EXPORT_SESSION_RECONCILE_OWNER":   "export-worker-b",
+		"AFSCP_EXPORT_SESSION_RECONCILE_LIMIT":   "25",
+		"AFSCP_WORKER_RUN_ONCE_TIMEOUT":          "45s",
+	})
+	if err != nil {
+		t.Fatalf("Load overrides: %v", err)
+	}
+	reconcile = cfg.Worker.ExportSessionReconcile
+	if reconcile.PostgresDSN != "postgres://primary:password@db/afscp" || reconcile.Owner != "export-worker-b" || reconcile.Limit != 25 || cfg.Worker.RunOnceTimeout != 45*time.Second {
+		t.Fatalf("export reconcile overrides = %#v", cfg.Worker)
 	}
 }
 

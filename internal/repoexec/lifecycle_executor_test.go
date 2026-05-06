@@ -237,7 +237,7 @@ func TestLifecycleExecutorRestoreTombstonedValidationAndSessionFailuresRequireMa
 		}},
 		{name: "nonterminal session before doctor", edit: func(store *fakeRepoCreateStore, _ *fakeJVSRunner) {
 			store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(time.Hour))
-			store.exports = []sessionstate.ExportSession{{ID: "export_alpha", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}}
+			store.exports = []sessionstate.ExportSession{freshExportSession(now, "export_alpha", sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive, now.Add(time.Hour))}
 		}},
 	}
 	for _, tt := range tests {
@@ -274,7 +274,7 @@ func TestLifecycleExecutorDeleteSessionHandling(t *testing.T) {
 		wantWait  bool
 		wantState operations.OperationState
 	}{
-		{name: "active session waits", wantWait: true, session: sessionstate.ExportSession{ID: "export_active", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}},
+		{name: "active session waits", wantWait: true, session: freshExportSession(now, "export_active", sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive, now.Add(time.Hour))},
 		{name: "stale session manual", wantState: operations.OperationStateOperatorInterventionRequired, session: sessionstate.ExportSession{ID: "export_stale", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now}},
 	}
 	for _, tt := range tests {
@@ -397,7 +397,7 @@ func TestLifecycleExecutorActiveSessionWaitsWithoutMutation(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = repoLifecycleResource(now, resources.RepoStatusActive)
-	store.exports = []sessionstate.ExportSession{{ID: "export_alpha", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}}
+	store.exports = []sessionstate.ExportSession{freshExportSession(now, "export_alpha", sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive, now.Add(time.Hour))}
 	executor := newTestLifecycleExecutor(t, store, &fakeJVSRunner{}, now)
 
 	if err := executor.ExecuteOperationRecovery(context.Background(), repoLifecycleLeasedRecord(now, operations.OperationRepoArchive, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
@@ -412,7 +412,7 @@ func TestLifecycleExecutorRestoreArchivedWithNonTerminalSessionRequiresIntervent
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = repoLifecycleResource(now, resources.RepoStatusArchived)
-	store.exports = []sessionstate.ExportSession{{ID: "export_alpha", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}}
+	store.exports = []sessionstate.ExportSession{freshExportSession(now, "export_alpha", sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive, now.Add(time.Hour))}
 	runner := &fakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}
 	executor := newTestLifecycleExecutor(t, store, runner, now)
 
@@ -485,6 +485,30 @@ func newTestLifecycleExecutor(t *testing.T, store *fakeRepoCreateStore, runner *
 		t.Fatalf("NewLifecycleExecutor: %v", err)
 	}
 	return executor
+}
+
+func freshExportSession(now time.Time, exportID string, mode sessionstate.AccessMode, status sessionstate.ExportStatus, expiresAt time.Time) sessionstate.ExportSession {
+	observedAt := now.Add(-time.Second)
+	heartbeatExpiresAt := now.Add(time.Minute)
+	activeWriteCount := 0
+	if mode == sessionstate.AccessModeReadWrite {
+		activeWriteCount = 1
+	}
+	return sessionstate.ExportSession{
+		ID:                        exportID,
+		NamespaceID:               "ns_alpha01",
+		RepoID:                    "repo_alpha01",
+		Mode:                      mode,
+		Status:                    status,
+		ExpiresAt:                 expiresAt,
+		ActiveRequestCount:        1,
+		ActiveWriteCount:          activeWriteCount,
+		LastObservedAt:            &observedAt,
+		LastGatewayHeartbeatAt:    &observedAt,
+		GatewayHeartbeatExpiresAt: &heartbeatExpiresAt,
+		CreatedAt:                 now,
+		UpdatedAt:                 now,
+	}
 }
 
 func repoLifecycleLeasedRecord(now time.Time, typ operations.OperationType, attempt int) operations.OperationRecord {

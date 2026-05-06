@@ -312,8 +312,12 @@ AFSCP owns template repo storage and clone execution. Calling products own templ
 ### ExportSession And Access Credential
 
 AFSCP stores an `ExportSession` and returns a short-lived secret-bearing
-credential view only in the create operation result. The create result nests the
-redacted session under `export` and the one-time credential under `access`.
+credential view only in the first successful `export_create` response for an
+idempotency key. `POST /internal/v1/repos/{repoId}/exports` is a synchronous
+durable boundary that returns `202` with a flat `OperationEnvelope`; its
+`result` nests the redacted session under `export` and, only for a newly created
+session, the one-time credential under `access`. Replaying the same idempotency
+key returns the redacted session without `access`.
 
 ```json
 {
@@ -330,9 +334,18 @@ redacted session under `export` and the one-time credential under `access`.
       "id": "user_123"
     },
     "created_at": "2026-05-03T11:55:00Z",
+    "updated_at": "2026-05-03T11:55:00Z",
     "expires_at": "2026-05-03T12:00:00Z",
     "revoked_at": null,
-    "last_accessed_at": null
+    "last_accessed_at": null,
+    "active_request_count": 0,
+    "active_write_count": 0,
+    "last_observed_at": null,
+    "last_gateway_heartbeat_at": null,
+    "gateway_heartbeat_expires_at": null,
+    "write_drained_at": null,
+    "terminal_observed_at": null,
+    "status_reason": ""
   },
   "access": {
     "url": "https://files.example.com/e/export_123/",
@@ -340,7 +353,43 @@ redacted session under `export` and the one-time credential under `access`.
       "type": "basic",
       "username": "export_123",
       "password": "short-lived-secret"
-    }
+    },
+    "mode": "read_write",
+    "expires_at": "2026-05-03T12:00:00Z"
+  }
+}
+```
+
+Idempotent replay of the same create request returns the same operation/session
+shape but omits `access`:
+
+```json
+{
+  "export": {
+    "export_id": "export_123",
+    "namespace_id": "ns_123",
+    "repo_id": "repo_123",
+    "protocol": "webdav",
+    "mode": "read_write",
+    "status": "active",
+    "created_by_caller_service": "example-product-api",
+    "created_by_actor": {
+      "type": "user",
+      "id": "user_123"
+    },
+    "created_at": "2026-05-03T11:55:00Z",
+    "updated_at": "2026-05-03T11:55:00Z",
+    "expires_at": "2026-05-03T12:00:00Z",
+    "revoked_at": null,
+    "last_accessed_at": null,
+    "active_request_count": 0,
+    "active_write_count": 0,
+    "last_observed_at": null,
+    "last_gateway_heartbeat_at": null,
+    "gateway_heartbeat_expires_at": null,
+    "write_drained_at": null,
+    "terminal_observed_at": null,
+    "status_reason": ""
   }
 }
 ```
@@ -362,11 +411,25 @@ redacted session under `export` and the one-time credential under `access`.
     "id": "user_123"
   },
   "created_at": "2026-05-03T11:55:00Z",
+  "updated_at": "2026-05-03T11:55:00Z",
   "expires_at": "2026-05-03T12:00:00Z",
   "revoked_at": null,
-  "last_accessed_at": null
+  "last_accessed_at": null,
+  "active_request_count": 0,
+  "active_write_count": 0,
+  "last_observed_at": null,
+  "last_gateway_heartbeat_at": null,
+  "gateway_heartbeat_expires_at": null,
+  "write_drained_at": null,
+  "terminal_observed_at": null,
+  "status_reason": ""
 }
 ```
+
+`DELETE /internal/v1/exports/{exportId}` is also a synchronous durable boundary
+that returns `202` with a flat `OperationEnvelope`. It records the request and
+moves the session to `revoking` so the gateway can drain active requests.
+Terminal `revoked` is set only after gateway or reconcile confirmation.
 
 Do not include `metadata_url`, bucket URL, access key, secret key, raw mount command, or JuiceFS root credential references.
 
@@ -644,21 +707,21 @@ GET    /internal/v1/exports/{exportId}
 DELETE /internal/v1/exports/{exportId}
 ```
 
-Export create must define:
+Export create defines:
 
-- default and maximum TTL
-- whether credentials can be reissued after create
-- one-time secret-bearing response behavior, if selected
-- revoke behavior for new and active requests
+- default TTL of 3600 seconds, minimum TTL of 60 seconds, and namespace policy maximum TTL
+- credentials are not reissued after create; idempotent replay omits `access`
+- one-time secret-bearing response behavior for first successful create only
+- revoke moves the session to `revoking` for gateway drain; terminal `revoked` requires gateway or reconcile confirmation
 - whether read-write exports count as active writer sessions until revoked, expired, or reconciled terminal
 - credential hashing or encryption at rest
 - access log and audit redaction fields
 
 The machine contract uses `ExportCreateOperationEnvelope` for create responses.
 Its `result` contains `ExportCreateResult`, which includes the redacted
-`ExportSession` plus the one-time `ExportAccessCredential`. `GET
-/internal/v1/exports/{exportId}` returns only `ExportSession` and must not return
-the WebDAV password again.
+`ExportSession` plus the one-time `ExportAccessCredential` only on first create.
+`GET /internal/v1/exports/{exportId}` returns only `ExportSession` directly and
+must not return the WebDAV password again.
 
 ### Workload Mounts
 

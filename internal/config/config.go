@@ -21,6 +21,7 @@ const (
 	defaultOperationRecoveryLimit         = 10
 	defaultOperationRecoveryLeaseDuration = 5 * time.Minute
 	defaultWorkerRunOnceTimeout           = 30 * time.Second
+	defaultExportSessionReconcileLimit    = 10
 	defaultAuditDeliveryLimit             = 10
 	defaultAuditDeliveryMaxAttempts       = 5
 	defaultAuditDeliveryRetryBackoff      = time.Minute
@@ -52,12 +53,13 @@ func (EnvSource) Lookup(key string) (string, bool) {
 }
 
 type Config struct {
-	ServiceName  string
-	ListenAddr   string
-	Environment  string
-	Capabilities Capabilities
-	Worker       WorkerConfig
-	API          APIConfig
+	ServiceName   string
+	ListenAddr    string
+	Environment   string
+	Capabilities  Capabilities
+	Worker        WorkerConfig
+	API           APIConfig
+	ExportGateway ExportGatewayConfig
 }
 
 type Capabilities struct {
@@ -80,10 +82,18 @@ type APIConfig struct {
 	DeploymentNamespaceAllowedCallers string
 }
 
+type ExportGatewayConfig struct {
+	ListenAddr  string
+	PostgresDSN string
+	VolumeRoots map[string]string
+	Prefix      string
+}
+
 type WorkerConfig struct {
-	RunOnceTimeout    time.Duration
-	OperationRecovery WorkerOperationRecoveryConfig
-	AuditDelivery     WorkerAuditDeliveryConfig
+	RunOnceTimeout         time.Duration
+	OperationRecovery      WorkerOperationRecoveryConfig
+	ExportSessionReconcile WorkerExportSessionReconcileConfig
+	AuditDelivery          WorkerAuditDeliveryConfig
 }
 
 type WorkerOperationRecoveryConfig struct {
@@ -107,6 +117,13 @@ type WorkerRepoCreateRecoveryConfig struct {
 	JVSBinarySHA256 string
 	JVSCWD          string
 	VolumeRoots     map[string]string
+}
+
+type WorkerExportSessionReconcileConfig struct {
+	Enabled     bool
+	PostgresDSN string
+	Owner       string
+	Limit       int
 }
 
 type WorkerAuditDeliveryConfig struct {
@@ -139,11 +156,18 @@ func Load(source Source) (Config, error) {
 		API: APIConfig{
 			Mode: "neutral",
 		},
+		ExportGateway: ExportGatewayConfig{
+			Prefix:      "/e/",
+			VolumeRoots: map[string]string{},
+		},
 		Worker: WorkerConfig{
 			RunOnceTimeout: defaultWorkerRunOnceTimeout,
 			OperationRecovery: WorkerOperationRecoveryConfig{
 				Limit:         defaultOperationRecoveryLimit,
 				LeaseDuration: defaultOperationRecoveryLeaseDuration,
+			},
+			ExportSessionReconcile: WorkerExportSessionReconcileConfig{
+				Limit: defaultExportSessionReconcileLimit,
 			},
 			AuditDelivery: WorkerAuditDeliveryConfig{
 				Limit:          defaultAuditDeliveryLimit,
@@ -176,6 +200,9 @@ func Load(source Source) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.API, err = loadAPIConfig(source, cfg.API); err != nil {
+		return Config{}, err
+	}
+	if cfg.ExportGateway, err = loadExportGatewayConfig(source, cfg.ExportGateway, cfg.ListenAddr); err != nil {
 		return Config{}, err
 	}
 
@@ -295,6 +322,11 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 			return WorkerConfig{}, fmt.Errorf("AFSCP_WORKER_OWNER is required when AFSCP_WORKER_OPERATION_RECOVERY_ENABLED is true")
 		}
 	}
+	exportReconcile, err := loadWorkerExportSessionReconcileConfig(source, worker.ExportSessionReconcile)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.ExportSessionReconcile = exportReconcile
 	auditDelivery, err := loadWorkerAuditDeliveryConfig(source, worker.AuditDelivery)
 	if err != nil {
 		return WorkerConfig{}, err
@@ -302,6 +334,39 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 	worker.AuditDelivery = auditDelivery
 
 	return worker, nil
+}
+
+func loadWorkerExportSessionReconcileConfig(source Source, defaults WorkerExportSessionReconcileConfig) (WorkerExportSessionReconcileConfig, error) {
+	cfg := defaults
+	enabled, err := boolValue(source, "AFSCP_EXPORT_SESSION_RECONCILE_ENABLED")
+	if err != nil {
+		return WorkerExportSessionReconcileConfig{}, err
+	}
+	cfg.Enabled = enabled
+	cfg.PostgresDSN = valueOrDefault(source, "AFSCP_EXPORT_SESSION_RECONCILE_POSTGRES_DSN", "")
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_POSTGRES_DSN", "")
+	}
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_DATABASE_URL", "")
+	}
+	cfg.Owner = strings.TrimSpace(valueOrDefault(source, "AFSCP_EXPORT_SESSION_RECONCILE_OWNER", cfg.Owner))
+	if cfg.Limit, err = intValue(source, "AFSCP_EXPORT_SESSION_RECONCILE_LIMIT", cfg.Limit); err != nil {
+		return WorkerExportSessionReconcileConfig{}, err
+	}
+	if cfg.Limit <= 0 {
+		return WorkerExportSessionReconcileConfig{}, fmt.Errorf("AFSCP_EXPORT_SESSION_RECONCILE_LIMIT must be positive")
+	}
+	if !cfg.Enabled {
+		return cfg, nil
+	}
+	if cfg.PostgresDSN == "" {
+		return WorkerExportSessionReconcileConfig{}, fmt.Errorf("AFSCP_POSTGRES_DSN is required when AFSCP_EXPORT_SESSION_RECONCILE_ENABLED is true")
+	}
+	if cfg.Owner == "" {
+		return WorkerExportSessionReconcileConfig{}, fmt.Errorf("AFSCP_EXPORT_SESSION_RECONCILE_OWNER is required when AFSCP_EXPORT_SESSION_RECONCILE_ENABLED is true")
+	}
+	return cfg, nil
 }
 
 func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
@@ -324,6 +389,68 @@ func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
 	cfg.DeploymentGlobalAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS", "")
 	cfg.DeploymentNamespaceAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS", "")
 	return cfg, nil
+}
+
+func loadExportGatewayConfig(source Source, defaults ExportGatewayConfig, listenFallback string) (ExportGatewayConfig, error) {
+	cfg := defaults
+	cfg.ListenAddr = valueOrDefault(source, "AFSCP_EXPORT_GATEWAY_LISTEN_ADDR", "")
+	if cfg.ListenAddr == "" {
+		cfg.ListenAddr = listenFallback
+	}
+	cfg.PostgresDSN = valueOrDefault(source, "AFSCP_EXPORT_GATEWAY_POSTGRES_DSN", "")
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_POSTGRES_DSN", "")
+	}
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_DATABASE_URL", "")
+	}
+	cfg.Prefix = valueOrDefault(source, "AFSCP_EXPORT_GATEWAY_PREFIX", cfg.Prefix)
+	if cfg.Prefix == "" {
+		cfg.Prefix = "/e/"
+	}
+	rootsRaw := valueOrDefault(source, "AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS", "")
+	if rootsRaw == "" {
+		rootsRaw = valueOrDefault(source, "AFSCP_VOLUME_ROOTS", "")
+	}
+	if rootsRaw == "" {
+		cfg.VolumeRoots = map[string]string{}
+		return cfg, nil
+	}
+	roots, err := parseVolumeRoots(rootsRaw, "AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS")
+	if err != nil {
+		return ExportGatewayConfig{}, err
+	}
+	cfg.VolumeRoots = roots
+	return cfg, nil
+}
+
+func ValidateExportGatewayConfig(cfg ExportGatewayConfig) error {
+	if strings.TrimSpace(cfg.ListenAddr) == "" {
+		return fmt.Errorf("AFSCP_EXPORT_GATEWAY_LISTEN_ADDR is required")
+	}
+	if strings.TrimSpace(cfg.PostgresDSN) == "" {
+		return fmt.Errorf("AFSCP_EXPORT_GATEWAY_POSTGRES_DSN is required")
+	}
+	if !validGatewayPrefix(cfg.Prefix) {
+		return fmt.Errorf("AFSCP_EXPORT_GATEWAY_PREFIX must start and end with / and contain no escapes")
+	}
+	if len(cfg.VolumeRoots) == 0 {
+		return fmt.Errorf("AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS is required")
+	}
+	if err := validateVolumeRoots(cfg.VolumeRoots, "AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validGatewayPrefix(prefix string) bool {
+	return strings.HasPrefix(prefix, "/") && strings.HasSuffix(prefix, "/") &&
+		!strings.Contains(prefix, "%") && !strings.Contains(prefix, "\\") &&
+		!strings.Contains(prefix, "//") && prefix != "/"
+}
+
+func ParseExportGatewayVolumeRoots(raw string) (map[string]string, error) {
+	return parseVolumeRoots(raw, "AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS")
 }
 
 func loadWorkerAuditDeliveryConfig(source Source, defaults WorkerAuditDeliveryConfig) (WorkerAuditDeliveryConfig, error) {
@@ -522,17 +649,34 @@ func parseVolumeRoots(raw, gateKey string) (map[string]string, error) {
 		if _, exists := roots[volumeID]; exists {
 			return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must contain unique volume ids and non-overlapping roots")
 		}
-		for _, existingRoot := range roots {
-			if root == existingRoot || configPathContains(root, existingRoot) || configPathContains(existingRoot, root) {
-				return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must contain unique volume ids and non-overlapping roots")
-			}
-		}
 		roots[volumeID] = root
 	}
 	if len(roots) == 0 {
 		return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS is required when %s is true", gateKey)
 	}
+	if err := validateVolumeRoots(roots, "AFSCP_VOLUME_ROOTS"); err != nil {
+		return nil, err
+	}
 	return roots, nil
+}
+
+func validateVolumeRoots(roots map[string]string, key string) error {
+	seenRoots := map[string]string{}
+	for volumeID, root := range roots {
+		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
+			return fmt.Errorf("%s must contain valid volume ids and absolute clean roots", key)
+		}
+		if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == string(filepath.Separator) {
+			return fmt.Errorf("%s must contain valid volume ids and absolute clean roots", key)
+		}
+		for _, existingRoot := range seenRoots {
+			if root == existingRoot || configPathContains(root, existingRoot) || configPathContains(existingRoot, root) {
+				return fmt.Errorf("%s must contain unique volume ids and non-overlapping roots", key)
+			}
+		}
+		seenRoots[volumeID] = root
+	}
+	return nil
 }
 
 func configPathContains(parent, child string) bool {

@@ -16,6 +16,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportreconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/mountbindingexec"
@@ -55,16 +56,21 @@ type WorkerStore interface {
 	store.AuditOutboxDeliveryStore
 }
 
+type ExportReconcileStore interface {
+	store.ExportSessionReconcileStore
+}
+
 type StoreFactory func(context.Context, string) (StoreHandle, error)
 type JVSRunnerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error)
 type StoragePurgerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error)
 type AuditDelivererFactory func(config.WorkerAuditDeliveryConfig) (auditdelivery.Deliverer, error)
 
 type StoreHandle struct {
-	Store          WorkerStore
-	OperationStore OperationRecoveryStore
-	AuditStore     store.AuditOutboxDeliveryStore
-	Close          func() error
+	Store                WorkerStore
+	OperationStore       OperationRecoveryStore
+	AuditStore           store.AuditOutboxDeliveryStore
+	ExportReconcileStore ExportReconcileStore
+	Close                func() error
 }
 
 type Options struct {
@@ -99,9 +105,10 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		return nil, err
 	}
 	opConfig := cfg.Worker.OperationRecovery
+	exportConfig := cfg.Worker.ExportSessionReconcile
 	auditConfig := cfg.Worker.AuditDelivery
-	if !opConfig.Enabled && !auditConfig.Enabled {
-		return nil, errors.New("worker run-once requires operation recovery or audit delivery to be enabled")
+	if !exportConfig.Enabled && !opConfig.Enabled && !auditConfig.Enabled {
+		return nil, errors.New("worker run-once requires export session reconcile, operation recovery, or audit delivery to be enabled")
 	}
 
 	now := nowFunc(options.Clock)
@@ -111,7 +118,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}
 	openCtx, cancel := context.WithTimeout(context.Background(), cfg.Worker.RunOnceTimeout)
 	defer cancel()
-	dsn, err := workerStoreDSN(opConfig, auditConfig)
+	dsn, err := workerStoreDSN(exportConfig, opConfig, auditConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +128,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}
 	operationStore := handle.OperationStore
 	auditStore := handle.AuditStore
+	exportStore := handle.ExportReconcileStore
 	if handle.Store != nil {
 		if operationStore == nil {
 			operationStore = handle.Store
@@ -128,6 +136,18 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		if auditStore == nil {
 			auditStore = handle.Store
 		}
+		if exportStore == nil {
+			if candidate, ok := any(handle.Store).(ExportReconcileStore); ok {
+				exportStore = candidate
+			}
+		}
+	}
+	if exportConfig.Enabled && exportStore == nil {
+		err := errors.New("worker export session reconcile store is required")
+		if handle.Close != nil {
+			err = errors.Join(err, handle.Close())
+		}
+		return nil, err
 	}
 	if opConfig.Enabled && operationStore == nil {
 		err := errors.New("worker operation recovery store is required")
@@ -145,12 +165,22 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}
 	scopedStore := operationRecoveryStore{store: operationStore}
 	workerConfig := worker.Config{}
+	eventID := options.AuditEventID
+	if eventID == nil {
+		eventID = NewAuditEventID
+	}
+
+	if exportConfig.Enabled {
+		workerConfig.ExportSessionReconcile = exportreconcile.New(exportreconcile.Config{
+			Store:        exportStore,
+			Owner:        exportConfig.Owner,
+			Limit:        exportConfig.Limit,
+			Clock:        now,
+			AuditEventID: func() string { return eventID() },
+		})
+	}
 
 	if opConfig.Enabled {
-		eventID := options.AuditEventID
-		if eventID == nil {
-			eventID = NewAuditEventID
-		}
 		namespaceExecutor, err := namespaceexec.NewExecutor(namespaceexec.Config{
 			CommitStore:  scopedStore,
 			Owner:        opConfig.Owner,
@@ -492,9 +522,18 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}, nil
 }
 
-func workerStoreDSN(opConfig config.WorkerOperationRecoveryConfig, auditConfig config.WorkerAuditDeliveryConfig) (string, error) {
+func workerStoreDSN(exportConfig config.WorkerExportSessionReconcileConfig, opConfig config.WorkerOperationRecoveryConfig, auditConfig config.WorkerAuditDeliveryConfig) (string, error) {
 	if opConfig.Enabled && auditConfig.Enabled && opConfig.PostgresDSN != auditConfig.PostgresDSN {
 		return "", errors.New("worker operation recovery and audit delivery must use the same postgres dsn")
+	}
+	if exportConfig.Enabled && opConfig.Enabled && exportConfig.PostgresDSN != opConfig.PostgresDSN {
+		return "", errors.New("worker export session reconcile and operation recovery must use the same postgres dsn")
+	}
+	if exportConfig.Enabled && auditConfig.Enabled && exportConfig.PostgresDSN != auditConfig.PostgresDSN {
+		return "", errors.New("worker export session reconcile and audit delivery must use the same postgres dsn")
+	}
+	if exportConfig.Enabled {
+		return exportConfig.PostgresDSN, nil
 	}
 	if opConfig.Enabled {
 		return opConfig.PostgresDSN, nil
@@ -553,7 +592,7 @@ func (runner *RunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error)
 
 	result, err := runner.runner.RunOnce(runCtx)
 	if err == nil {
-		err = errors.Join(operationRecoveryCountError(result.OperationRecovery), auditDeliveryCountError(result.AuditStaleRecovery, result.AuditDelivery))
+		err = errors.Join(exportSessionReconcileCountError(result.ExportSessionReconcile), operationRecoveryCountError(result.OperationRecovery), auditDeliveryCountError(result.AuditStaleRecovery, result.AuditDelivery))
 	}
 	if runner.close != nil {
 		err = errors.Join(err, runner.close())
@@ -572,10 +611,11 @@ func OpenPostgresOperationRecoveryStore(ctx context.Context, dsn string) (StoreH
 	}
 	st := postgres.New(db)
 	return StoreHandle{
-		Store:          st,
-		OperationStore: st,
-		AuditStore:     st,
-		Close:          db.Close,
+		Store:                st,
+		OperationStore:       st,
+		AuditStore:           st,
+		ExportReconcileStore: st,
+		Close:                db.Close,
 	}, nil
 }
 
@@ -911,6 +951,13 @@ func operationRecoveryCountError(result recovery.OperationBatchResult) error {
 		return nil
 	}
 	return fmt.Errorf("operation recovery incomplete: unsupported=%d manual=%d failed=%d", result.Unsupported, result.Manual, result.Failed)
+}
+
+func exportSessionReconcileCountError(result exportreconcile.Result) error {
+	if result.Failed == 0 {
+		return nil
+	}
+	return fmt.Errorf("export session reconcile incomplete: failed=%d", result.Failed)
 }
 
 func auditDeliveryCountError(stale auditdelivery.StaleRecoveryResult, delivery auditdelivery.BatchResult) error {

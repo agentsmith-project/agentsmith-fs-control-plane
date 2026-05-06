@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
@@ -444,6 +445,37 @@ type RepoRecoveryInspectionReader interface {
 type RepoSessionStateReader interface {
 	ListExportSessionsByRepo(ctx context.Context, repoID string) ([]sessionstate.ExportSession, error)
 	ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error)
+}
+
+// ExportStore is the synchronous control-plane boundary for WebDAV export
+// create/get/revoke. It stores only redacted sessions plus verifier material;
+// create callers receive the one-time secret from the API layer, not from this
+// store interface.
+type ExportStore interface {
+	CreateOrReuseExport(ctx context.Context, request exportaccess.CreateRequest) (exportaccess.CreateResult, error)
+	GetExportSession(ctx context.Context, exportID string) (exportaccess.Session, error)
+	RevokeExport(ctx context.Context, request exportaccess.RevokeRequest) (exportaccess.RevokeResult, error)
+}
+
+// ExportAccessStore extends the control-plane export boundary with gateway and
+// reconcile helpers. The API runtime needs only ExportStore; gateway servers may
+// use these helpers later without changing the control-plane contract.
+type ExportAccessStore interface {
+	ExportStore
+	GetExportGatewayCredential(ctx context.Context, exportID string) (exportaccess.GatewayCredential, error)
+	RecordExportAccess(ctx context.Context, exportID string, accessedAt time.Time) error
+	RecordExportRuntimeObservation(ctx context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error)
+	ListExportSessionsForTerminalReconcile(ctx context.Context, now time.Time, limit int) ([]exportaccess.Session, error)
+	ReconcileExportSessionTerminal(ctx context.Context, request exportaccess.ReconcileRequest) (exportaccess.ReconcileResult, error)
+	// MarkExportTerminal is a legacy helper for pre-GA tests and must not be
+	// used as the GA terminal boundary because it does not commit an operation
+	// and audit event with the session update.
+	MarkExportTerminal(ctx context.Context, exportID string, status sessionstate.ExportStatus, observedAt time.Time) (exportaccess.Session, error)
+}
+
+type ExportSessionReconcileStore interface {
+	ListExportSessionsForTerminalReconcile(ctx context.Context, now time.Time, limit int) ([]exportaccess.Session, error)
+	ReconcileExportSessionTerminal(ctx context.Context, request exportaccess.ReconcileRequest) (exportaccess.ReconcileResult, error)
 }
 
 type WorkloadMountBindingReader interface {

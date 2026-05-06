@@ -15,6 +15,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
@@ -103,11 +104,11 @@ func TestInternalRuntimeServesStorageBackedImplementedSubsetAndFailsClosedForMis
 		t.Fatalf("binding response = %#v", binding)
 	}
 
-	exportReq := internalRequest(http.MethodPost, "/internal/v1/repos/repo_alpha/exports", "svc_api", "token-api")
+	exportReq := internalRequest(http.MethodPost, "/internal/v1/repo-templates/tpl_alpha:clone", "svc_api", "token-api")
 	rec = httptest.NewRecorder()
 	runtime.Handler.ServeHTTP(rec, exportReq)
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("export status = %d, want %d: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+		t.Fatalf("unimplemented status = %d, want %d: %s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "requested internal API capability is not enabled") {
@@ -181,12 +182,25 @@ func TestInternalRuntimeReadinessIsNotNeutralAndDoesNotAdvertiseUnimplementedHan
 		t.Fatalf("storage gate = %#v, want ready storage", storage)
 	}
 	webdav := body.Capabilities[api.CapabilityWebDAVExport]
-	if !webdav.Enabled || webdav.Ready || !webdav.Gated || webdav.Reason != "handler_not_implemented" {
-		t.Fatalf("webdav gate = %#v, want enabled but gated not implemented", webdav)
+	if !webdav.Enabled || !webdav.Ready || webdav.Gated || webdav.Reason != "" {
+		t.Fatalf("webdav gate = %#v, want enabled and ready", webdav)
 	}
 	mount := body.Capabilities[api.CapabilityWorkloadMount]
 	if !mount.Enabled || !mount.Ready || mount.Gated || mount.Reason != "" {
 		t.Fatalf("mount gate = %#v, want enabled and ready", mount)
+	}
+}
+
+func TestInternalRuntimeReadinessGatesUnconfiguredWebDAVButDoesNotRequireIt(t *testing.T) {
+	readiness := internalReadiness(config.Config{})
+	gate := readiness.Capabilities[api.CapabilityWebDAVExport]
+	if gate.Enabled || gate.Ready || !gate.Gated || gate.Reason != "webdav_not_configured" {
+		t.Fatalf("webdav gate = %#v, want unconfigured gate", gate)
+	}
+	for _, required := range readiness.RequiredCapabilities {
+		if required == api.CapabilityWebDAVExport {
+			t.Fatalf("required capabilities = %#v, want webdav omitted when disabled", readiness.RequiredCapabilities)
+		}
 	}
 }
 
@@ -366,6 +380,18 @@ func (*fakeRuntimeStore) GetWorkloadMountBinding(context.Context, string) (workl
 
 func (*fakeRuntimeStore) GetOrchestratorMountPlan(context.Context, string, string) (workloadmount.Plan, error) {
 	return workloadmount.Plan{}, sql.ErrNoRows
+}
+
+func (*fakeRuntimeStore) CreateOrReuseExport(context.Context, exportaccess.CreateRequest) (exportaccess.CreateResult, error) {
+	return exportaccess.CreateResult{}, errors.New("not implemented")
+}
+
+func (*fakeRuntimeStore) GetExportSession(context.Context, string) (exportaccess.Session, error) {
+	return exportaccess.Session{}, sql.ErrNoRows
+}
+
+func (*fakeRuntimeStore) RevokeExport(context.Context, exportaccess.RevokeRequest) (exportaccess.RevokeResult, error) {
+	return exportaccess.RevokeResult{}, errors.New("not implemented")
 }
 
 func (*fakeRuntimeStore) ListHeldRepoFences(context.Context, string) ([]fences.Fence, error) {

@@ -18,6 +18,8 @@ func TestRestoreRunWriterGateExportSemantics(t *testing.T) {
 		{name: "read write revoking live", session: exportFixture(AccessModeReadWrite, ExportStatusRevoking, now.Add(time.Hour)), wantFamily: ErrorFamilyActiveWriterSessions},
 		{name: "read write active expired", session: exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(-time.Minute)), wantFamily: ErrorFamilyStaleWriterSessionUncertain},
 		{name: "read only active ignored", session: exportFixture(AccessModeReadOnly, ExportStatusActive, now.Add(time.Hour)), wantAllowed: true},
+		{name: "read write revoking drained allows restore", session: exportDrainedFixture(now, ExportStatusRevoking), wantAllowed: true},
+		{name: "read write expired drained allows restore", session: exportDrainedFixture(now, ExportStatusActive), wantAllowed: true},
 		{name: "terminal revoked ignored", session: exportFixture(AccessModeReadWrite, ExportStatusRevoked, now.Add(-time.Hour)), wantAllowed: true},
 		{name: "terminal expired ignored", session: exportFixture(AccessModeReadWrite, ExportStatusExpired, now.Add(-time.Hour)), wantAllowed: true},
 		{name: "terminal failed ignored", session: exportFixture(AccessModeReadWrite, ExportStatusFailed, now.Add(time.Hour)), wantAllowed: true},
@@ -32,6 +34,24 @@ func TestRestoreRunWriterGateExportSemantics(t *testing.T) {
 			})
 			assertDecision(t, decision, tt.wantAllowed, tt.wantFamily)
 		})
+	}
+}
+
+func TestRestoreRunWriterGateStaleExportObservationFailsClosed(t *testing.T) {
+	now := testNow()
+	staleHeartbeat := exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(time.Hour))
+	staleHeartbeat.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Second))
+	staleObservation := exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(time.Hour))
+	staleObservation.LastObservedAt = nil
+
+	for _, session := range []ExportSession{staleHeartbeat, staleObservation} {
+		decision := RestoreRunWriterGate(GateRequest{
+			NamespaceID:    "ns_123",
+			RepoID:         "repo_123",
+			Now:            now,
+			ExportSessions: []ExportSession{session},
+		})
+		assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
 	}
 }
 
@@ -73,7 +93,9 @@ func TestLifecycleDrainGateBlocksAnyNonTerminalAccess(t *testing.T) {
 		wantFamily ErrorFamily
 	}{
 		{name: "read only export live", exports: []ExportSession{exportFixture(AccessModeReadOnly, ExportStatusActive, now.Add(time.Hour))}, wantFamily: ErrorFamilyActiveSessionsBlockLifecycle},
-		{name: "read write export stale", exports: []ExportSession{exportFixture(AccessModeReadWrite, ExportStatusRevoking, now.Add(-time.Minute))}, wantFamily: ErrorFamilyStaleSessionsBlockLifecycle},
+		{name: "read write export expired but freshly observed", exports: []ExportSession{exportFixture(AccessModeReadWrite, ExportStatusRevoking, now.Add(-time.Minute))}, wantFamily: ErrorFamilyActiveSessionsBlockLifecycle},
+		{name: "read write export drained still blocks lifecycle", exports: []ExportSession{exportDrainedFixture(now, ExportStatusRevoking)}, wantFamily: ErrorFamilyActiveSessionsBlockLifecycle},
+		{name: "read only export stale observation", exports: []ExportSession{exportStaleObservationFixture(now, AccessModeReadOnly)}, wantFamily: ErrorFamilyStaleSessionsBlockLifecycle},
 		{name: "read only mount live", mounts: []WorkloadMountBinding{mountFixture(true, MountStatusPending, now.Add(time.Hour))}, wantFamily: ErrorFamilyActiveSessionsBlockLifecycle},
 		{name: "read write mount stale", mounts: []WorkloadMountBinding{mountFixture(false, MountStatusReleasing, now.Add(-time.Minute))}, wantFamily: ErrorFamilyStaleSessionsBlockLifecycle},
 	}
@@ -224,14 +246,35 @@ func assertDecision(t *testing.T, decision Decision, wantAllowed bool, wantFamil
 }
 
 func exportFixture(mode AccessMode, status ExportStatus, expiresAt time.Time) ExportSession {
+	now := testNow()
 	return ExportSession{
-		ID:          "export_123",
-		NamespaceID: "ns_123",
-		RepoID:      "repo_123",
-		Mode:        mode,
-		Status:      status,
-		ExpiresAt:   expiresAt,
+		ID:                        "export_123",
+		NamespaceID:               "ns_123",
+		RepoID:                    "repo_123",
+		Mode:                      mode,
+		Status:                    status,
+		ExpiresAt:                 expiresAt,
+		ActiveRequestCount:        1,
+		ActiveWriteCount:          1,
+		LastObservedAt:            timePtr(now.Add(-time.Second)),
+		LastGatewayHeartbeatAt:    timePtr(now.Add(-time.Second)),
+		GatewayHeartbeatExpiresAt: timePtr(now.Add(time.Minute)),
 	}
+}
+
+func exportDrainedFixture(now time.Time, status ExportStatus) ExportSession {
+	session := exportFixture(AccessModeReadWrite, status, now.Add(-time.Minute))
+	session.ActiveRequestCount = 0
+	session.ActiveWriteCount = 0
+	session.WriteDrainedAt = timePtr(now.Add(-time.Second))
+	return session
+}
+
+func exportStaleObservationFixture(now time.Time, mode AccessMode) ExportSession {
+	session := exportFixture(mode, ExportStatusActive, now.Add(time.Hour))
+	session.LastObservedAt = timePtr(now.Add(-10 * time.Minute))
+	session.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Minute))
+	return session
 }
 
 func mountFixture(readOnly bool, status MountStatus, leaseExpiresAt time.Time) WorkloadMountBinding {
@@ -247,4 +290,8 @@ func mountFixture(readOnly bool, status MountStatus, leaseExpiresAt time.Time) W
 
 func testNow() time.Time {
 	return time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
 }

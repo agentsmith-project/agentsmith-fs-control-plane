@@ -75,7 +75,7 @@ func TestRestoreRunExecutorPreJVSWriterSessionDenialReleasesFenceAndKeepsPlanPen
 		{
 			name: "active rw export",
 			edit: func(store *fakeRepoCreateStore) {
-				store.exports = []sessionstate.ExportSession{{ID: "export_alpha", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadWrite, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
+				store.exports = []sessionstate.ExportSession{freshExportSession(now, "export_alpha", sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(time.Hour))}
 			},
 			wantState: operations.OperationStateFailed,
 		},
@@ -89,7 +89,9 @@ func TestRestoreRunExecutorPreJVSWriterSessionDenialReleasesFenceAndKeepsPlanPen
 		{
 			name: "invalid same repo session state",
 			edit: func(store *fakeRepoCreateStore) {
-				store.exports = []sessionstate.ExportSession{{ID: "export_alpha", NamespaceID: "ns_other01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadWrite, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
+				session := freshExportSession(now, "export_alpha", sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(time.Hour))
+				session.NamespaceID = "ns_other01"
+				store.exports = []sessionstate.ExportSession{session}
 			},
 			wantState: operations.OperationStateFailed,
 		},

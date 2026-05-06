@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
@@ -15,6 +16,14 @@ var exportSessionColumns = []string{
 	"access_mode",
 	"status",
 	"expires_at",
+	"active_request_count",
+	"active_write_count",
+	"last_observed_at",
+	"last_gateway_heartbeat_at",
+	"gateway_heartbeat_expires_at",
+	"write_drained_at",
+	"terminal_observed_at",
+	"status_reason",
 	"created_at",
 	"updated_at",
 }
@@ -93,6 +102,7 @@ func workloadMountBindingSelectSQL() string {
 func scanExportSession(row rowScanner) (sessionstate.ExportSession, error) {
 	var session sessionstate.ExportSession
 	var mode, status string
+	var lastObservedAt, lastGatewayHeartbeatAt, gatewayHeartbeatExpiresAt, writeDrainedAt, terminalObservedAt sql.NullTime
 	if err := row.Scan(
 		&session.ID,
 		&session.NamespaceID,
@@ -100,6 +110,14 @@ func scanExportSession(row rowScanner) (sessionstate.ExportSession, error) {
 		&mode,
 		&status,
 		&session.ExpiresAt,
+		&session.ActiveRequestCount,
+		&session.ActiveWriteCount,
+		&lastObservedAt,
+		&lastGatewayHeartbeatAt,
+		&gatewayHeartbeatExpiresAt,
+		&writeDrainedAt,
+		&terminalObservedAt,
+		&session.StatusReason,
 		&session.CreatedAt,
 		&session.UpdatedAt,
 	); err != nil {
@@ -107,6 +125,11 @@ func scanExportSession(row rowScanner) (sessionstate.ExportSession, error) {
 	}
 	session.Mode = sessionstate.AccessMode(mode)
 	session.Status = sessionstate.ExportStatus(status)
+	session.LastObservedAt = nullTimePtr(lastObservedAt)
+	session.LastGatewayHeartbeatAt = nullTimePtr(lastGatewayHeartbeatAt)
+	session.GatewayHeartbeatExpiresAt = nullTimePtr(gatewayHeartbeatExpiresAt)
+	session.WriteDrainedAt = nullTimePtr(writeDrainedAt)
+	session.TerminalObservedAt = nullTimePtr(terminalObservedAt)
 	return session, nil
 }
 

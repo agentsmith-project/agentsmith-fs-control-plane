@@ -5,8 +5,10 @@ persistence, metadata recovery workers, opt-in `repo_create` JVS execution, and
 explicit-gated repo lifecycle recovery for archive, restore-archived, delete,
 restore-tombstoned, plus separately gated `repo_purge` recovery are in place;
 the audit outbox stale-recovery and HTTP JSON delivery worker is wired behind an
-explicit gate. WebDAV, mount, save/restore, template, and non-HTTP audit sink
-integrations remain unimplemented.
+explicit gate. WebDAV export create/get/revoke, the WebDAV policy gateway, DB
+runtime delta observation, and explicit-gated terminal export reconcile are now
+implemented. Mount, save/restore, template, and non-HTTP audit sink integrations
+remain unimplemented.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -66,6 +68,9 @@ internal/resources
 internal/operations
 internal/audit
 internal/pathresolver
+internal/exportaccess
+internal/exportgateway
+internal/exportreconcile
 internal/contractcheck
 internal/inspection
 internal/observability
@@ -113,6 +118,9 @@ Completed:
   bindings, and repo/repo lifecycle metadata, with focused tests
 - read-only PostgreSQL session-state readers for export sessions and workload
   mount bindings, limited to safe admission/drain fields
+- WebDAV export create/get/revoke handler and PostgreSQL store boundary that
+  atomically commit the create operation, export session, and audit event while
+  returning credential secrets only on the first successful create response
 - repo and template storage identities are recorded as control-plane metadata;
   RepoTemplate publication lifecycle and handlers remain unimplemented
 - minimal PostgreSQL repo fence adapter for held fence read, create, and active
@@ -146,9 +154,31 @@ Completed:
   status, namespace/binding status, writer-session fences, lifecycle fences,
   and lifecycle source-status rules; it is wired to lifecycle intake/admission
 - session substrate pure model for export and workload-mount session state,
-  restore-run writer gating, and repo lifecycle drain gating; it is wired into
-  repo archive/delete recovery drain checks, but not yet to WebDAV gateway,
-  mount plan, restore-run execution, or storage-backed session handlers
+  restore-run writer gating, and repo lifecycle drain gating; export sessions
+  are wired into API create/get/revoke, WebDAV gateway admission and runtime
+  observation, terminal reconcile, and repo archive/delete recovery drain
+  checks. Workload mount plans and restore-run execution are still separate.
+- WebDAV export gateway serving through `afscp-export-gateway --serve`, with
+  Basic auth, active/unexpired WebDAV session admission, mode/method policy,
+  source and `Destination` path policy, payload no-follow filesystem access,
+  and DB-backed runtime observation
+- durable export runtime observation uses DB atomic deltas: request start
+  records `+1` active request and mutating start also records `+1` active
+  write; request end records matching `-1` deltas; heartbeat records `0/0`
+  without changing active counts. Positive start deltas are admitted only while
+  the session is still `active` and unexpired at the DB boundary, closing the
+  revoke/expiry TOCTOU window.
+- explicit-gated terminal export session reconcile through `afscp-worker
+  --run-once` before operation recovery. It is enabled by
+  `AFSCP_EXPORT_SESSION_RECONCILE_ENABLED=true`, uses
+  `AFSCP_EXPORT_SESSION_RECONCILE_POSTGRES_DSN` with fallback to
+  `AFSCP_POSTGRES_DSN` and `AFSCP_DATABASE_URL`, and requires
+  `AFSCP_EXPORT_SESSION_RECONCILE_OWNER`; batch size is controlled by
+  `AFSCP_EXPORT_SESSION_RECONCILE_LIMIT`.
+- terminal export reconcile covers zero-count `revoking -> revoked` and
+  zero-count expired `active -> expired` without requiring a fresh gateway
+  heartbeat. Nonzero counts and stale/uncertain states still fail closed and
+  require operator/runbook follow-up.
 - audit outbox pure model and tests
 - pure recovery planner/classification for operation, fence, audit outbox, and
   repo recovery inspection durable records
@@ -172,9 +202,9 @@ Partially completed:
   intake/admission, namespace-bound repo read storage projections, and operation
   inspection. The explicit-gated repo lifecycle workers cover
   archive/restore-archived/delete/restore-tombstoned and separately gated
-  purge recovery; WebDAV, mount, save/restore, template, broader session drain
-  execution, and
-  storage-backed handlers beyond the listed intake/read surfaces remain
+  purge recovery; mount, save/restore, template, broader session drain
+  execution beyond export terminal reconcile, and storage-backed handlers
+  beyond the listed intake/read/export surfaces remain
   unimplemented.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
@@ -200,29 +230,36 @@ Partially completed:
   the accepted operation time with exclusive retention expiry and restores to
   recorded `pre_delete_status`. With the repo purge gate enabled, purge removes
   AFSCP-managed retained storage and commits `purged` metadata through a
-  dedicated purge boundary. It does not implement save/restore, template,
-  WebDAV, mount, or audit sinks beyond the explicitly configured HTTP JSON
-  outbox delivery worker.
-- Path resolver guardrails exist and are used by repo create recovery; broader
-  WebDAV, mount, file API, and remaining lifecycle integration remains absent.
+  dedicated purge boundary. Export session reconcile runs before operation
+  recovery when enabled. It does not implement save/restore, template, workload
+  mount, or audit sinks beyond the explicitly configured HTTP JSON outbox
+  delivery worker.
+- Path resolver guardrails exist and are used by repo create recovery and the
+  WebDAV export gateway; broader mount, file API, and remaining lifecycle
+  integration remains absent.
 
 Not implemented:
 
-- real template, export, mount, save, or restore handlers
-- session drain execution beyond lifecycle worker checks, and JVS
-  save/restore/template/export/mount handlers; repo lifecycle intake/admission
-  handlers and archive/restore-archived/delete/restore-tombstoned/purge recovery
-  already exist
-- concrete handler wiring for the session admission model beyond lifecycle
-  intake checks; repo access admission is already wired for lifecycle
+- real template, mount, save, or restore handlers
+- JVS save/restore/template/mount handlers; repo lifecycle intake/admission
+  handlers, export create/get/revoke handlers, WebDAV gateway serving, export
+  terminal reconcile, and archive/restore-archived/delete/restore-tombstoned/
+  purge recovery already exist
+- complex gateway crash recovery or per-request WebDAV operation records. If a
+  gateway process crashes after a positive start delta commits and before the
+  matching end delta, active request/write counts may conservatively remain
+  positive until an operator/runbook repair or future recovery path resolves
+  the session.
+- concrete workload-mount handler wiring for the session admission model beyond
+  lifecycle intake checks; repo access admission is already wired for lifecycle
   intake/admission
 - audit delivery sinks beyond the minimal HTTP JSON at-least-once worker; the
   external sink must dedupe by `audit_event_id`
 - JVS execution beyond repo create `init`/`doctor --strict` and repo lifecycle
   restore `doctor --strict`
-- WebDAV export gateway file serving
 - workload mount issuance or orchestrator mount plans
-- session drain, broader fence enforcement, or lifecycle mutation
+- broader fence enforcement beyond the implemented repo fence/lifecycle worker
+  paths
 
 ## Contract Implementation Order
 

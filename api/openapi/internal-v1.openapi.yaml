@@ -791,7 +791,7 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "202":
-          description: Export create operation.
+          description: Synchronous export create durable boundary. The one-time WebDAV password appears only when a new export is created; idempotent replay returns the redacted export session without access.
           content:
             application/json:
               schema:
@@ -815,7 +815,7 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "200":
-          description: Export session without secret-bearing credential unless create response policy permits it.
+          description: Redacted export session returned directly; never wrapped and never secret-bearing.
           content:
             application/json:
               schema:
@@ -841,7 +841,7 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
         "202":
-          description: Export revoke operation.
+          description: Synchronous export revoke durable boundary. The session enters revoking/drain; terminal revoked is confirmed only by gateway or reconcile.
           content:
             application/json:
               schema:

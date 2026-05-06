@@ -68,6 +68,10 @@ const (
 	OperationPhaseRestoreRunConsuming    = "restore_run_consuming"
 	OperationPhaseRestoreRunCommitted    = "restore_run_committed"
 
+	OperationPhaseExportCreateCommitted           = "export_create_committed"
+	OperationPhaseExportRevokeCommitted           = "export_revoke_committed"
+	OperationPhaseExportSessionReconcileCommitted = "export_session_reconcile_committed"
+
 	OperationPhaseMountBindingCreateValidate     = "validate_mount_binding_create"
 	OperationPhaseMountBindingCreateCommitted    = "mount_binding_create_committed"
 	OperationPhaseMountBindingStatusValidate     = "validate_mount_binding_status_update"

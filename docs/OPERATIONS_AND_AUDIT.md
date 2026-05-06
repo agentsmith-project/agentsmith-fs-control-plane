@@ -156,8 +156,8 @@ Recovery behavior must be explicit per operation type:
 | restore_run | inspect restore state, hold writer-session fence, block new read-write sessions, verify no active read-write sessions, run doctor |
 | template_create | inspect source save point, clone history mode, and target template path |
 | template_clone | inspect target repo path and JVS identity |
-| export_create | inspect session and credential state; revoke partial credential on failure |
-| export_revoke | idempotently mark revoked and invalidate credential |
+| export_create | synchronous durable boundary commits operation, export session, and succeeded audit event; replay returns the existing session without reissuing credential secret |
+| export_revoke | idempotently move session to `revoking`/drain; terminal revoke depends on gateway or reconcile confirmation |
 | export_session_reconcile | inspect gateway state; terminal only after no future access for lifecycle and no future writes for restore-run |
 | mount_binding_create | inspect binding state and issued orchestrator plan state |
 | mount_binding_status_update | inspect orchestrator-reported terminal state and runtime access guarantee |

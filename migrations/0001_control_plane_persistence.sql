@@ -407,18 +407,48 @@ CREATE TABLE IF NOT EXISTS export_sessions (
     export_id text PRIMARY KEY,
     namespace_id text NOT NULL,
     repo_id text NOT NULL,
+    protocol text NOT NULL,
     access_mode text NOT NULL,
     status text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
+    created_by_caller_service text NOT NULL,
+    created_by_actor_type text NOT NULL,
+    created_by_actor_id text NOT NULL,
+    revoked_at timestamp with time zone,
+    last_accessed_at timestamp with time zone,
+    active_request_count integer NOT NULL DEFAULT 0,
+    active_write_count integer NOT NULL DEFAULT 0,
+    last_observed_at timestamp with time zone,
+    last_gateway_heartbeat_at timestamp with time zone,
+    gateway_heartbeat_expires_at timestamp with time zone,
+    write_drained_at timestamp with time zone,
+    terminal_observed_at timestamp with time zone,
+    status_reason text NOT NULL DEFAULT '',
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
+    verifier_algorithm text NOT NULL,
+    verifier_hash text NOT NULL,
+    verifier_salt text NOT NULL,
     CONSTRAINT export_sessions_repo_fk FOREIGN KEY (namespace_id, repo_id)
         REFERENCES repos (namespace_id, repo_id),
+    CONSTRAINT export_sessions_protocol_check CHECK (
+        protocol IN ('webdav')
+    ),
     CONSTRAINT export_sessions_access_mode_check CHECK (
         access_mode IN ('read_only', 'read_write')
     ),
     CONSTRAINT export_sessions_status_check CHECK (
         status IN ('active', 'revoking', 'revoked', 'expired', 'failed')
+    ),
+    CONSTRAINT export_sessions_runtime_counts_check CHECK (
+        active_request_count >= 0
+        AND active_write_count >= 0
+        AND active_write_count <= active_request_count
+    ),
+    CONSTRAINT export_sessions_verifier_check CHECK (
+        btrim(verifier_algorithm) <> ''
+        AND btrim(verifier_hash) <> ''
+        AND btrim(verifier_salt) <> ''
     )
 );
 

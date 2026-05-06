@@ -15,8 +15,11 @@ Client -> Calling Product -> AFSCP -> WebDAV export runtime
 1. Client requests access through a calling product.
 2. Calling product checks product authorization.
 3. Calling product asks AFSCP to create an export for a repo.
-4. AFSCP creates an `ExportSession` and returns short-lived access credentials.
-5. Calling product returns the credential view to the client.
+4. AFSCP atomically commits the succeeded operation, `ExportSession`, and audit
+   event, then returns short-lived access credentials only for the first
+   successful create for that idempotency key.
+5. Calling product returns the one-time credential view to the client. A replay
+   returns the existing redacted session without `access`.
 
 ## Export Session And Access Credential
 
@@ -40,7 +43,9 @@ Client -> Calling Product -> AFSCP -> WebDAV export runtime
 }
 ```
 
-Do not return JuiceFS metadata URL, bucket URL, access key, or secret key.
+`GET /internal/v1/exports/{exportId}` returns only the redacted
+`ExportSession`; it does not include `access` or the WebDAV password. Do not
+return JuiceFS metadata URL, bucket URL, access key, or secret key.
 
 ## GA Requirements
 
@@ -58,7 +63,10 @@ Do not return JuiceFS metadata URL, bucket URL, access key, or secret key.
 - Any export, read-only or read-write, blocks repo archive/delete/purge lifecycle drain until the gateway confirms no future access is possible and active requests are closed, expired and reconciled, or terminal.
 - Redact credentials from logs.
 - Audit export create, credential issuance, revoke, expiry, and denied path attempts.
-- Define default TTL, maximum TTL, credential reissue behavior, and one-time secret-bearing response behavior.
+- Default TTL is 3600 seconds, minimum TTL is 60 seconds, and maximum TTL is the
+  namespace export policy `max_session_seconds`.
+- Credential secrets are returned only in the first successful create response;
+  there is no reissue endpoint and idempotent replay omits `access`.
 - Define when read-write exports count as active writer sessions for restore-run.
 - Store credential material hashed or encrypted according to the accepted security contract.
 
@@ -67,6 +75,13 @@ Do not return JuiceFS metadata URL, bucket URL, access key, or secret key.
 GA WebDAV export must be served by an AFSCP-controlled policy gateway. Stock `juicefs webdav` can be a reference or backend capability, but it is not enough by itself because AFSCP must apply the canonical path resolver, payload-root chroot, and method policy across every method, including `MOVE` and `COPY` destination paths.
 
 Do not rely on a directory listing deny list, a reverse proxy path prefix check, or a method allowlist as the complete policy boundary.
+
+Current implementation: `afscp-export-gateway --serve` serves the WebDAV policy
+gateway. It enforces Basic auth against durable export credential verifier
+material, admits only active and unexpired WebDAV sessions, applies read-only
+or read-write mode policy per method, validates both source paths and
+`Destination` paths for `MOVE`/`COPY`, serves only the payload root through a
+no-follow filesystem boundary, and records runtime observations durably.
 
 ## Method Policy
 
@@ -91,14 +106,45 @@ Denied mutating method attempts on read-only exports must be audited with export
 
 ## Credential And Session Semantics
 
-- Credentials are short-lived. Deployment policy must set default and maximum TTL before GA.
-- Secret-bearing credentials are returned at create time. Any reissue endpoint or repeat display behavior must be explicitly represented in the API contract.
+- Credentials are short-lived. Default TTL is 3600 seconds, minimum TTL is 60
+  seconds, and maximum TTL is the namespace export policy
+  `max_session_seconds`; policy values below 60 seconds are invalid.
+- Secret-bearing credentials are returned only at first create. Idempotent
+  replay and `GET /internal/v1/exports/{exportId}` return only the redacted
+  `ExportSession`.
+- Credential reissue is not supported for GA.
 - Revoked or expired credentials fail new requests.
+- Revoke moves the session to `revoking` for gateway drain; terminal `revoked`,
+  `expired`, or `failed` requires gateway or reconcile confirmation.
+- New request admission is guarded at the DB runtime-observation boundary:
+  positive start deltas are accepted only while the session is still `active`
+  and `expires_at` is in the future. This prevents revoke/expiry TOCTOU between
+  gateway credential lookup and active-count accounting.
 - Active write-capable requests after revoke must be closed or allowed to reach a terminal state before the export stops counting as an active or uncertain writer.
 - Read-write exports count as active or uncertain writer sessions until the gateway confirms no future writes are possible and any active write-capable requests are closed, expired and reconciled, or terminal.
 - A control-plane revoke record alone does not unblock restore-run.
 - Read-only exports do not block restore-run, but namespace disable and credential revoke/expiry still apply.
 - Read-only exports do block repo archive/delete/purge lifecycle drain until gateway reconciliation confirms there is no ongoing or future access through that export.
+- Gateway runtime state is stored as aggregate active request/write counts plus
+  observation and heartbeat timestamps. Runtime accounting uses DB atomic
+  deltas, not gateway process-local absolute counts: request start records
+  `+1` active request and mutating start also records `+1` active write;
+  request end records matching `-1` deltas; heartbeat records `0/0`. GA does
+  not persist per-file locks, per-request operation rows, or WebDAV operation
+  records.
+- Terminal export reconcile is the GA terminal boundary: it commits the
+  `export_session_reconcile` operation, terminal session update, and audit
+  outbox event atomically. The current reconcile runner terminalizes zero-count
+  `revoking -> revoked` and zero-count expired `active -> expired` sessions and
+  does not require a fresh gateway heartbeat for those zero-count cases.
+  Nonzero counts and stale/uncertain runtime state still fail closed and require
+  operator/runbook follow-up. Bare status updates are not the GA terminal
+  boundary.
+- Residual crash edge: if the gateway commits a positive start delta and then
+  crashes before the matching end delta, active request/write counts can remain
+  conservatively positive. The current implementation does not add per-request
+  operations or complex crash recovery for this; operators must use a runbook or
+  future recovery path to resolve the session.
 - Access logs must include export ID, correlation ID when available, method, normalized path, result, and denial reason without credential material.
 
 ## Future Options

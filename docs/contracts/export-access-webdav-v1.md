@@ -4,6 +4,10 @@ Status: GA pre-dev review draft
 
 `ExportAccessCredential` replaces ordinary direct JuiceFS mount access for clients. AFSCP also stores a durable `ExportSession` for revocation, TTL, and audit.
 
+`POST /internal/v1/repos/{repoId}/exports` is a synchronous durable boundary:
+the operation row, export session row, and succeeded audit event are committed
+together before the response is returned.
+
 ## ExportSession Fields
 
 - `export_id`
@@ -18,10 +22,25 @@ Status: GA pre-dev review draft
 - `expires_at`
 - `revoked_at`
 - `last_accessed_at`
+- `active_request_count`
+- `active_write_count`
+- `last_observed_at`
+- `last_gateway_heartbeat_at`
+- `gateway_heartbeat_expires_at`
+- `write_drained_at`
+- `terminal_observed_at`
+- `status_reason`
 
 `created_by_actor` uses the common `Actor` object. `revoked_at` and
 `last_accessed_at` are durable fields that are present on every `ExportSession`
 and may be `null` until revocation or first observed gateway access.
+The runtime accounting fields are gateway aggregate observations only; they do
+not create per-request or per-file operation records. Runtime accounting uses
+DB atomic deltas rather than gateway process-local absolute counts: request
+start records `+1` active request and, for mutating methods, `+1` active write;
+request end records matching `-1` deltas; gateway heartbeat records `0/0`.
+Positive start deltas are admitted only when the session is still `active` and
+unexpired at the DB boundary.
 
 ## Credential View
 
@@ -34,11 +53,18 @@ and may be `null` until revocation or first observed gateway access.
 - `mode`
 - `expires_at`
 
+The credential view is returned only on the first successful create for an
+idempotency key. Idempotent replay returns the existing operation/session
+without `access`. `GET /internal/v1/exports/{exportId}` returns only the
+redacted `ExportSession` and never returns the WebDAV password again.
+
 ## Rules
 
 - `protocol` is `webdav` for GA.
 - `mode` is `read_only` or `read_write`.
-- Credentials are short-lived and revocable.
+- Credentials are short-lived and revocable. The default TTL is 3600 seconds,
+  the minimum accepted TTL is 60 seconds, and the maximum TTL comes from
+  namespace export policy (`max_session_seconds`).
 - Expired or revoked credentials must fail future requests. Read-write exports remain active or uncertain writer sessions until the gateway confirms no future writes are possible and any active write-capable requests are closed, expired and reconciled, or terminal.
 - Any export, read-only or read-write, blocks repo archive/delete/purge lifecycle drain until the gateway confirms no future access is possible and active requests are closed, expired and reconciled, or terminal.
 - Exports are rooted at the repo payload root and never expose the JVS control root.
@@ -46,18 +72,38 @@ and may be `null` until revocation or first observed gateway access.
 - Read-only exports allow `OPTIONS`, `HEAD`, `GET`, and `PROPFIND` only, with root-level `.jvs` still denied.
 - Read-only exports deny `PUT`, `DELETE`, `MKCOL`, `MOVE`, `COPY`, `PROPPATCH`, `LOCK`, and `UNLOCK` unless the gateway implements a no-op lock required for read-only client compatibility.
 - AFSCP must enforce this through its own WebDAV policy gateway or an equivalent wrapper. Stock `juicefs webdav` alone is not the GA policy boundary.
+- The current `afscp-export-gateway --serve` path enforces Basic auth, active
+  and unexpired session admission, mode/method policy, source path and
+  `Destination` policy for `MOVE`/`COPY`, payload no-follow filesystem access,
+  and durable runtime observation.
 - No JuiceFS metadata URL, bucket URL, object store credential, raw mount command, or Secret reference appears in the response.
 - Export create, credential issuance, revoke, expiry, and denied path attempts are audited.
 
 ## Credential Lifecycle
 
-GA must freeze:
+GA freezes:
 
-- default TTL and maximum TTL
-- whether credential secrets are returned only at create time or can be reissued
-- hashing or encryption at rest for stored credential material
-- revoke behavior for future requests and active requests
-- when a read-write export counts as an active writer session
+- default TTL: 3600 seconds
+- minimum TTL: 60 seconds
+- maximum TTL: namespace export policy `max_session_seconds`; policy values
+  below 60 seconds are invalid
+- no credential reissue endpoint and no repeat display behavior
+- credential secrets are returned only in the first successful create response
+- idempotent create replay omits `access`
+- stored credential material is persisted only as verifier material, not as the
+  raw WebDAV password
+- revoke moves the session into `revoking` for gateway drain; terminal
+  `revoked`, `expired`, or `failed` requires gateway/reconcile confirmation
+- terminal reconcile atomically commits `export_session_reconcile`, the terminal
+  session update, and the audit outbox event. The current reconcile runner
+  terminalizes zero-count `revoking -> revoked` and zero-count expired
+  `active -> expired` sessions without requiring a fresh gateway heartbeat;
+  nonzero counts and stale/uncertain runtime state fail closed and require
+  operator/runbook follow-up
+- no per-request WebDAV operation rows or complex gateway crash recovery. If a
+  gateway commits a positive start delta and crashes before the matching end
+  delta, active request/write counts can remain conservatively positive until an
+  operator/runbook repair or future recovery path resolves the session
 - expiration reconciliation behavior
 - access log fields and redaction rules
 

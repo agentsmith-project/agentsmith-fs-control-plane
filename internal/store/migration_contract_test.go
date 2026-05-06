@@ -238,15 +238,39 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		table.requireColumn(t, "export_id", "text", "primary key")
 		table.requireColumn(t, "namespace_id", "text", "not null")
 		table.requireColumn(t, "repo_id", "text", "not null")
+		table.requireColumn(t, "protocol", "text", "not null")
 		table.requireColumn(t, "access_mode", "text", "not null")
 		table.requireColumn(t, "status", "text", "not null")
 		table.requireColumn(t, "expires_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "created_by_caller_service", "text", "not null")
+		table.requireColumn(t, "created_by_actor_type", "text", "not null")
+		table.requireColumn(t, "created_by_actor_id", "text", "not null")
+		table.requireColumn(t, "revoked_at", "timestamp with time zone")
+		table.requireColumn(t, "last_accessed_at", "timestamp with time zone")
+		table.requireColumn(t, "active_request_count", "integer", "not null")
+		table.requireColumn(t, "active_write_count", "integer", "not null")
+		table.requireColumn(t, "last_observed_at", "timestamp with time zone")
+		table.requireColumn(t, "last_gateway_heartbeat_at", "timestamp with time zone")
+		table.requireColumn(t, "gateway_heartbeat_expires_at", "timestamp with time zone")
+		table.requireColumn(t, "write_drained_at", "timestamp with time zone")
+		table.requireColumn(t, "terminal_observed_at", "timestamp with time zone")
+		table.requireColumn(t, "status_reason", "text", "not null")
 		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
 		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "verifier_algorithm", "text", "not null")
+		table.requireColumn(t, "verifier_hash", "text", "not null")
+		table.requireColumn(t, "verifier_salt", "text", "not null")
+		table.requireCheckMentions(t, "protocol", "webdav")
 		table.requireCheckMentions(t, "access_mode", "read_only", "read_write")
 		table.requireCheckMentions(t, "status", "active", "revoking", "revoked", "expired", "failed")
 		table.requireBodyFragments(t,
 			"foreign key (namespace_id, repo_id) references repos (namespace_id, repo_id)",
+			"active_request_count >= 0",
+			"active_write_count >= 0",
+			"active_write_count <= active_request_count",
+			"btrim(verifier_algorithm) <> ''",
+			"btrim(verifier_hash) <> ''",
+			"btrim(verifier_salt) <> ''",
 		)
 		table.requireNoSensitiveColumns(t)
 		contract.requireIndex(t, "export_sessions", []string{"repo_id", "created_at", "export_id"})
@@ -281,8 +305,10 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 func TestPostgreSQLMigrationsDoNotEncodeStorageMutationMaterial(t *testing.T) {
 	contract := loadMigrationContract(t)
 
+	// Protocol names and one-way verifier/hash/salt columns are safe schema
+	// vocabulary. The migration must still never encode plaintext credentials,
+	// reversible secrets, raw storage paths, or executable mutation material.
 	forbidden := []string{
-		"webdav",
 		"host_path",
 		"credential",
 		"secret",

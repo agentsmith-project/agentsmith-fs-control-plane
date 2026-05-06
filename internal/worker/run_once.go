@@ -6,8 +6,13 @@ import (
 	"fmt"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportreconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 )
+
+type ExportSessionReconcileRunner interface {
+	RunOnce(context.Context) (exportreconcile.Result, error)
+}
 
 type OperationRecoveryRunner interface {
 	RunOnce(context.Context) (recovery.OperationBatchResult, error)
@@ -22,9 +27,10 @@ type AuditDeliveryRunner interface {
 }
 
 type Config struct {
-	OperationRecovery  OperationRecoveryRunner
-	AuditStaleRecovery AuditStaleRecoveryRunner
-	AuditDelivery      AuditDeliveryRunner
+	ExportSessionReconcile ExportSessionReconcileRunner
+	OperationRecovery      OperationRecoveryRunner
+	AuditStaleRecovery     AuditStaleRecoveryRunner
+	AuditDelivery          AuditDeliveryRunner
 }
 
 type Runner struct {
@@ -32,15 +38,26 @@ type Runner struct {
 }
 
 type Result struct {
-	OperationRecovery  recovery.OperationBatchResult
-	AuditStaleRecovery auditdelivery.StaleRecoveryResult
-	AuditDelivery      auditdelivery.BatchResult
+	ExportSessionReconcile exportreconcile.Result
+	OperationRecovery      recovery.OperationBatchResult
+	AuditStaleRecovery     auditdelivery.StaleRecoveryResult
+	AuditDelivery          auditdelivery.BatchResult
 }
 
 type Summary struct {
-	Operation     OperationSummary     `json:"operation_recovery"`
-	AuditStale    AuditStaleSummary    `json:"audit_stale_recovery"`
-	AuditDelivery AuditDeliverySummary `json:"audit_delivery"`
+	ExportSessionReconcile ExportSessionReconcileSummary `json:"export_session_reconcile"`
+	Operation              OperationSummary              `json:"operation_recovery"`
+	AuditStale             AuditStaleSummary             `json:"audit_stale_recovery"`
+	AuditDelivery          AuditDeliverySummary          `json:"audit_delivery"`
+}
+
+type ExportSessionReconcileSummary struct {
+	Scanned      int `json:"scanned"`
+	Terminalized int `json:"terminalized"`
+	Reused       int `json:"reused"`
+	Skipped      int `json:"skipped"`
+	RaceLost     int `json:"race_lost"`
+	Failed       int `json:"failed"`
 }
 
 type OperationSummary struct {
@@ -77,12 +94,30 @@ func (runner Runner) RunOnce(ctx context.Context) (Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if runner.config.OperationRecovery == nil && runner.config.AuditStaleRecovery == nil && runner.config.AuditDelivery == nil {
+	if runner.config.ExportSessionReconcile == nil && runner.config.OperationRecovery == nil && runner.config.AuditStaleRecovery == nil && runner.config.AuditDelivery == nil {
 		return Result{}, errors.New("worker run-once requires at least one runner")
 	}
 
 	var result Result
 	var errs []error
+
+	if runner.config.ExportSessionReconcile != nil {
+		if err := ctx.Err(); err != nil {
+			return result, errors.Join(append(errs, err)...)
+		}
+		exportResult, err := runner.config.ExportSessionReconcile.RunOnce(ctx)
+		result.ExportSessionReconcile = exportResult
+		if err != nil {
+			errs = append(errs, fmt.Errorf("export session reconcile: %w", err))
+			if isContextError(err) {
+				return result, errors.Join(errs...)
+			}
+		}
+		if ctx.Err() != nil {
+			errs = append(errs, ctx.Err())
+			return result, errors.Join(errs...)
+		}
+	}
 
 	if runner.config.OperationRecovery != nil {
 		if err := ctx.Err(); err != nil {
@@ -145,6 +180,14 @@ func isContextError(err error) bool {
 
 func (result Result) Summary() Summary {
 	return Summary{
+		ExportSessionReconcile: ExportSessionReconcileSummary{
+			Scanned:      result.ExportSessionReconcile.Scanned,
+			Terminalized: result.ExportSessionReconcile.Terminalized,
+			Reused:       result.ExportSessionReconcile.Reused,
+			Skipped:      result.ExportSessionReconcile.Skipped,
+			RaceLost:     result.ExportSessionReconcile.RaceLost,
+			Failed:       result.ExportSessionReconcile.Failed,
+		},
 		Operation: OperationSummary{
 			Scanned:     result.OperationRecovery.Scanned,
 			Claimed:     result.OperationRecovery.Claimed,

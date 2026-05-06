@@ -41,6 +41,7 @@ type InternalStore interface {
 	api.RestoreRunIntakeGateReader
 	api.WorkloadMountBindingReader
 	api.WorkloadMountPlanReader
+	api.ExportStore
 	auditAppendStore
 }
 
@@ -141,6 +142,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		VolumeReader:               handle.Store,
 		WorkloadMountBindingReader: handle.Store,
 		WorkloadMountPlanReader:    handle.Store,
+		ExportStore:                handle.Store,
 		RepoFenceReader:            handle.Store,
 		SavePointMutationGate:      handle.Store,
 		OperationInspectionReader:  handle.Store,
@@ -324,13 +326,8 @@ func internalReadiness(cfg config.Config) api.ReadinessResponse {
 				Gated:   false,
 				Reason:  "",
 			},
-			api.CapabilityJVS: capabilityReadiness(cfg.Capabilities.JVS, "jvs_not_configured", "jvs_not_ready"),
-			api.CapabilityWebDAVExport: {
-				Enabled: cfg.Capabilities.WebDAV.Enabled,
-				Ready:   false,
-				Gated:   true,
-				Reason:  "handler_not_implemented",
-			},
+			api.CapabilityJVS:          capabilityReadiness(cfg.Capabilities.JVS, "jvs_not_configured", "jvs_not_ready"),
+			api.CapabilityWebDAVExport: capabilityReadiness(cfg.Capabilities.WebDAV, "webdav_not_configured", "webdav_not_ready"),
 			api.CapabilityWorkloadMount: {
 				Enabled: cfg.Capabilities.Mount.Enabled,
 				Ready:   cfg.Capabilities.Mount.Ready,
@@ -372,6 +369,9 @@ func internalRequiredReadinessCapabilities(cfg config.Config) []string {
 	}
 	if cfg.Capabilities.Mount.Enabled {
 		required = append(required, api.CapabilityWorkloadMount)
+	}
+	if cfg.Capabilities.WebDAV.Enabled {
+		required = append(required, api.CapabilityWebDAVExport)
 	}
 	return required
 }

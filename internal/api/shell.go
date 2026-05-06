@@ -41,6 +41,7 @@ type InternalAPIShellConfig struct {
 	VolumeReader                VolumeReader
 	WorkloadMountBindingReader  WorkloadMountBindingReader
 	WorkloadMountPlanReader     WorkloadMountPlanReader
+	ExportStore                 ExportStore
 	RepoFenceReader             RepoFenceReader
 	SavePointHistoryReader      SavePointHistoryReader
 	SavePointMutationGate       RepoJVSMutationGateReader
@@ -168,6 +169,12 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	var operationLookupStore OperationIdempotencyLookupStore
 	if typed, ok := config.OperationIntakeStore.(OperationIdempotencyLookupStore); ok {
 		operationLookupStore = typed
+	}
+	exportStore := config.ExportStore
+	if exportStore == nil {
+		if typed, ok := config.OperationIntakeStore.(ExportStore); ok {
+			exportStore = typed
+		}
 	}
 	var restorePreviewPlanReader RestorePreviewPlanGateReader
 	if typed, ok := config.OperationIntakeStore.(RestorePreviewPlanGateReader); ok {
@@ -350,10 +357,31 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	releaseWorkloadMountHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/workload-mount-bindings/{mountBindingId}:release", "releaseWorkloadMountBinding")
 	revokeWorkloadMountHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/workload-mount-bindings/{mountBindingId}:revoke", "revokeWorkloadMountBinding")
 
+	exportHandler := ExportHandler(ExportHandlerConfig{
+		RepoReader:        config.RepoReader,
+		NamespaceReader:   config.NamespaceReader,
+		BindingReader:     config.NamespaceBindingReader,
+		VolumeReader:      config.VolumeReader,
+		FenceReader:       config.RepoFenceReader,
+		Store:             exportStore,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
+	})
+	createExportHandler := requestLogHandler(exportHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/exports", "createExport")
+	getExportHandler := requestLogHandler(exportHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/exports/{exportId}", "getExport")
+	revokeExportHandler := requestLogHandler(exportHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/exports/{exportId}", "revokeExport")
+
 	// This shell enables only the implemented internal API subset. Known contract
 	// routes without handlers remain fail-closed instead of being silently absent.
 	fallback := internalAPIFallbackHandler(config.Logger, config.AuditSink)
-	mux.Handle("/", routeDispatchHandler(map[string]http.Handler{
+	implemented := map[string]http.Handler{
 		"createRepo":                       createRepoHandler,
 		"createSavePoint":                  createSavePointHandler,
 		"createWorkloadMountBinding":       createWorkloadMountHandler,
@@ -361,9 +389,9 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"restoreArchivedRepo":              restoreArchivedRepoHandler,
 		"deleteRepo":                       deleteRepoHandler,
 		"ensureVolume":                     volumeHandler,
-		"getRepo":                          getRepoHandler,
 		"getNamespaceVolumeBinding":        getBindingHandler,
 		"getOrchestratorMountPlan":         getOrchestratorMountPlanHandler,
+		"getRepo":                          getRepoHandler,
 		"getWorkloadMountBinding":          getWorkloadMountHandler,
 		"heartbeatWorkloadMountBinding":    heartbeatWorkloadMountHandler,
 		"listRepos":                        listReposHandler,
@@ -379,7 +407,13 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"putNamespaceVolumeBinding":        putBindingHandler,
 		"upsertNamespace":                  upsertNamespaceHandler,
 		"updateWorkloadMountBindingStatus": updateWorkloadMountStatusHandler,
-	}, fallback))
+	}
+	if exportStore != nil && config.RepoReader != nil && config.NamespaceReader != nil && config.NamespaceBindingReader != nil && config.VolumeReader != nil && config.RepoFenceReader != nil {
+		implemented["createExport"] = createExportHandler
+		implemented["getExport"] = getExportHandler
+		implemented["revokeExport"] = revokeExportHandler
+	}
+	mux.Handle("/", routeDispatchHandler(implemented, fallback))
 	return mux
 }
 

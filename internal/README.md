@@ -14,7 +14,8 @@ needed before real handlers and storage mutation work:
 - `resources`: pure control-plane metadata models and validation for volumes,
   namespaces, namespace volume bindings, and repo/repo lifecycle metadata.
 - `store`: interfaces for durable operation records, idempotency, and audit
-  sinks, resource metadata store contracts, and read-only repo recovery
+  sinks, resource metadata store contracts, WebDAV export create/get/revoke,
+  gateway runtime observation, terminal reconcile, and read-only repo recovery
   inspection contracts. PostgreSQL schema migration exists; the first
   PostgreSQL adapter slice
   covers operation reader/writer, DB-only operation lease
@@ -24,8 +25,10 @@ needed before real handlers and storage mutation work:
   fence held read/create/active release. The PostgreSQL resource metadata adapter
   covers volumes, namespaces, namespace volume bindings, repo/repo lifecycle
   metadata, lifecycle candidate repo reads, all-held repo fence reads, and
-  read-only export session/workload mount binding state as control-plane records
-  only, including internal template storage identity.
+  read-only export session/workload mount binding state as control-plane
+  records, WebDAV export session create/get/revoke, gateway credential lookup,
+  atomic runtime delta accounting, and terminal reconcile, including internal
+  template storage identity.
   RepoTemplate publication lifecycle and handlers remain unimplemented.
 - `audit`: audit event typing, redaction expectations, and pure outbox state
   transitions.
@@ -36,9 +39,18 @@ needed before real handlers and storage mutation work:
   and template handlers. It validates stored repo/binding/fence invariants and
   returns stable error-family decisions.
 - `sessionstate`: pure export and workload-mount session substrate for
-  restore-run writer gating and repo lifecycle drain gating. It is wired into
-  the opt-in repo archive/delete recovery path for drain checks, but not yet to
-  WebDAV, mount, restore-run, or storage-backed session handlers.
+  restore-run writer gating and repo lifecycle drain gating. Export session
+  state is now used by API export create/get/revoke, WebDAV gateway admission
+  and runtime observation, terminal reconcile, and opt-in repo archive/delete
+  recovery drain checks. Workload mount issuance remains separate.
+- `exportaccess`: WebDAV export session, credential, runtime observation, and
+  terminal reconcile request/result models.
+- `exportgateway`: WebDAV policy gateway handler and no-follow payload
+  filesystem boundary. It enforces Basic auth, active/unexpired WebDAV session
+  admission, mode/method policy, source and `Destination` path policy, payload
+  no-follow traversal, and DB-backed runtime delta observations.
+- `exportreconcile`: terminal export session reconcile runner for zero-count
+  `revoking -> revoked` and zero-count expired `active -> expired` updates.
 - `operationinspect`: operation-only inspection authorization service used by
   the API without importing repo recovery/fence inspection code.
 - `inspection`: recovery classification and read-only repo recovery inspection
@@ -65,22 +77,26 @@ needed before real handlers and storage mutation work:
   an explicit worker gate with dedicated lifecycle store boundaries. `repo_purge`
   uses a separate explicit worker gate, dedicated store boundary, and storage
   purger for destructive AFSCP-managed retained storage removal.
-- `workerapp`: production `afscp-worker --run-once` bootstrap for the
-  opt-in metadata operation recovery runner and the independent audit outbox
-  stale-recovery plus HTTP JSON delivery runner.
+- `workerapp`: production `afscp-worker --run-once` bootstrap for explicitly
+  gated export session terminal reconcile, the opt-in metadata operation
+  recovery runner, and the independent audit outbox stale-recovery plus HTTP
+  JSON delivery runner. Export session reconcile runs before operation recovery
+  when both are enabled.
 - `pathresolver`: path safety helpers, denial tests, shared resolver corpus, and
   canonical internal repo root resolution from trusted volume roots plus repo
   IDs.
 
-Repo create intake, repo lifecycle operation intake/admission, namespace-bound
-repo read handlers, and operation inspection exist. Still intentionally absent:
-JVS save/restore/template execution, WebDAV/mount/save/restore/template endpoint
-handlers beyond intake/admission, real external audit delivery worker/sink
-integration beyond the HTTP JSON at-least-once sink, WebDAV export serving,
-workload mount issuance, repo/template lifecycle mutation beyond the
-implemented lifecycle workers, and fence enforcement beyond the minimal repo
-fence adapter slice.
-The worker app currently wires
+Repo create intake, repo lifecycle operation intake/admission, export
+create/get/revoke handlers, namespace-bound repo read handlers, operation
+inspection, and the WebDAV export gateway exist. Still intentionally absent:
+JVS save/restore/template execution, workload mount issuance, save/restore and
+template endpoint handlers beyond intake/admission, real external audit
+delivery integration beyond the HTTP JSON at-least-once sink, repo/template
+lifecycle mutation beyond the implemented lifecycle workers, per-request WebDAV
+operation records or complex crash recovery for gateway runtime counts, and
+fence enforcement beyond the minimal repo fence adapter slice.
+The worker app currently wires export session terminal reconcile when
+`AFSCP_EXPORT_SESSION_RECONCILE_ENABLED=true`, then
 `volume_ensure`, `namespace_upsert`, `namespace_volume_binding_put`, and opt-in
 `repo_create` plus `repo_archive`/`repo_restore_archived`/`repo_delete`/
 `repo_restore_tombstoned`, plus separately gated `repo_purge` operation recovery

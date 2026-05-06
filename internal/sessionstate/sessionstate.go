@@ -58,14 +58,22 @@ const (
 )
 
 type ExportSession struct {
-	ID          string
-	NamespaceID string
-	RepoID      string
-	Mode        AccessMode
-	Status      ExportStatus
-	ExpiresAt   time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                        string
+	NamespaceID               string
+	RepoID                    string
+	Mode                      AccessMode
+	Status                    ExportStatus
+	ExpiresAt                 time.Time
+	ActiveRequestCount        int
+	ActiveWriteCount          int
+	LastObservedAt            *time.Time
+	LastGatewayHeartbeatAt    *time.Time
+	GatewayHeartbeatExpiresAt *time.Time
+	WriteDrainedAt            *time.Time
+	TerminalObservedAt        *time.Time
+	StatusReason              string
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
 }
 
 type WorkloadMountBinding struct {
@@ -212,6 +220,9 @@ func validateExport(session ExportSession) error {
 	if !session.Mode.valid() || !session.Status.valid() || session.ExpiresAt.IsZero() {
 		return errInvalidSession
 	}
+	if session.ActiveRequestCount < 0 || session.ActiveWriteCount < 0 || session.ActiveWriteCount > session.ActiveRequestCount {
+		return errInvalidSession
+	}
 	return nil
 }
 
@@ -249,10 +260,39 @@ func exportBlocker(kind gateKind, session ExportSession, now time.Time) blockerC
 	if kind == gateRestoreRunWriter && session.Mode != AccessModeReadWrite {
 		return blockerNone
 	}
+	if exportObservationStale(session, now) {
+		return blockerStale
+	}
+	if kind == gateLifecycleDrain {
+		return blockerActive
+	}
+	if kind == gateRestoreRunWriter && exportWriterDrained(session, now) {
+		return blockerNone
+	}
 	if session.ExpiresAt.After(now) {
 		return blockerActive
 	}
 	return blockerStale
+}
+
+func exportObservationStale(session ExportSession, now time.Time) bool {
+	if session.LastObservedAt == nil || session.GatewayHeartbeatExpiresAt == nil {
+		return true
+	}
+	return !session.GatewayHeartbeatExpiresAt.After(now)
+}
+
+func exportWriterDrained(session ExportSession, now time.Time) bool {
+	if session.Mode != AccessModeReadWrite || session.ActiveWriteCount != 0 || session.WriteDrainedAt == nil {
+		return false
+	}
+	if session.ActiveRequestCount < 0 || session.ActiveWriteCount < 0 {
+		return false
+	}
+	if session.Status == ExportStatusRevoking || !session.ExpiresAt.After(now) {
+		return true
+	}
+	return false
 }
 
 func mountBlocker(kind gateKind, mount WorkloadMountBinding, now time.Time) blockerClass {

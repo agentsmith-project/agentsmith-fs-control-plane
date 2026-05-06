@@ -103,9 +103,9 @@ Minimum GA matrix:
 | restore_run | repo JVS exclusive matching active plan plus writer-session fence | validate preview plan, preflight matching pending JVS plan, gate writer sessions, run doctor, verify recovery idle, and retain fence on ambiguity |
 | template_create | source repo exclusive during save phase, then source read gate plus target template exclusive create | inspect source save point, clone history mode, and target template path |
 | template_clone | template read gate plus target repo exclusive create | inspect target repo path and JVS identity |
-| export_create | export session lock | inspect credential/session record, revoke partial credential on failure |
-| export_revoke | export session lock | idempotently mark revoked and invalidate credential |
-| export_session_reconcile | export session lock | inspect gateway state; terminal only after no future access for lifecycle and no future writes for restore-run |
+| export_create | export session lock | synchronous durable boundary commits operation, export session, and succeeded audit event; replay returns the existing session without reissuing credential secret |
+| export_revoke | export session lock | idempotently move session to `revoking`/drain; terminal revoke depends on gateway or reconcile confirmation |
+| export_session_reconcile | export session lock | terminalize zero-count `revoking -> revoked` and zero-count expired `active -> expired` sessions by atomically committing the operation, session update, and audit event; nonzero or uncertain gateway state fails closed |
 | mount_binding_create | repo mount lock | inspect binding record and orchestrator issuance state |
 | mount_binding_status_update | mount binding lock | inspect orchestrator-reported terminal state and runtime access guarantee |
 | mount_binding_heartbeat | mount binding lock | extend only non-terminal live bindings |
@@ -235,12 +235,21 @@ read-write export creation, and read-write workload mount binding creation.
 Required GA behavior:
 
 - the session substrate pure model exists for restore-run writer gating and
-  lifecycle drain decisions, but is not yet wired to WebDAV gateway, workload
-  mount, lifecycle handlers, or storage adapters
+  lifecycle drain decisions. Export sessions are wired to API create/get/revoke,
+  WebDAV gateway admission and DB-backed runtime observation, terminal
+  reconcile, and repo lifecycle worker drain checks; workload mount issuance and
+  restore-run execution remain separate.
 - restore-run acquires the fence before checking active writer sessions
 - while the fence is held, new read-write exports and workload mount bindings are rejected with `WRITER_SESSION_FENCE_HELD`
 - read-only exports and read-only mount bindings do not count as writer sessions, but still respect namespace status and capability policy
 - read-write exports count as active until revoked, expired and reconciled, or terminal
+- export runtime accounting is aggregate DB delta accounting. Request start is
+  `+1` active request and mutating start is also `+1` active write; request end
+  is `-1`; heartbeat is `0/0`. Positive start deltas require the session to
+  still be `active` and unexpired at the DB admission boundary.
+- if a gateway crashes after a positive start delta commits and before its
+  matching end delta, active counts may remain conservatively positive; current
+  GA docs do not claim per-request operation recovery for that edge.
 - read-write mount bindings in `issued`, `pending`, `active`, or `releasing` count as active when their lease is live
 - expired read-write mount bindings still count as uncertain writers until reconciliation marks a terminal non-writing state
 - restore-run with active or uncertain writers fails closed with `ACTIVE_WRITER_SESSIONS` or `STALE_WRITER_SESSION_UNCERTAIN`

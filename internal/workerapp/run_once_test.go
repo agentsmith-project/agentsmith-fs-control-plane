@@ -10,6 +10,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
@@ -108,6 +109,74 @@ func TestRunOnceOperationAndAuditCanRunTogether(t *testing.T) {
 	}
 	if result.OperationRecovery.Claimed != 1 || result.AuditDelivery.Delivered != 1 {
 		t.Fatalf("result = %#v, want operation and audit work", result)
+	}
+}
+
+func TestRunOnceExportSessionReconcileOnlyRunsWhenExplicitlyEnabled(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore()
+	store.exportReconcileCandidates = []exportaccess.Session{workerAppExportAccessSession(now, "export_drain01", sessionstate.ExportStatusRevoking, now.Add(time.Hour))}
+	runner, err := NewRunOnceRunner(Options{
+		Source: config.MapSource{
+			"AFSCP_EXPORT_SESSION_RECONCILE_ENABLED": "true",
+			"AFSCP_POSTGRES_DSN":                     "postgres://worker:password@db/afscp",
+			"AFSCP_EXPORT_SESSION_RECONCILE_OWNER":   "export-worker",
+		},
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{ExportReconcileStore: store}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_export_reconcile" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary()
+	if summary.ExportSessionReconcile.Scanned != 1 || summary.ExportSessionReconcile.Terminalized != 1 || summary.Operation.Scanned != 0 {
+		t.Fatalf("summary = %#v, want export-only terminalize", summary)
+	}
+	if len(store.exportReconciles) != 1 || store.exportReconciles[0].Operation.CallerService != "export-worker" {
+		t.Fatalf("export reconciles = %#v, want owner-built request", store.exportReconciles)
+	}
+}
+
+func TestRunOnceExportSessionReconcileRunsBeforeOperationRecovery(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore(workerAppOperationRecord(now))
+	store.exportReconcileCandidates = []exportaccess.Session{workerAppExportAccessSession(now, "export_drain01", sessionstate.ExportStatusRevoking, now.Add(time.Hour))}
+	runner := newWorkerAppRunner(t, store, workerAppExportReconcileConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.ExportSessionReconcile.Terminalized != 1 || result.OperationRecovery.Claimed != 1 {
+		t.Fatalf("result = %#v, want export reconcile and operation recovery", result)
+	}
+	if got := strings.Join(store.workerCallOrder[:2], ","); got != "export_reconcile,operation_recovery" {
+		t.Fatalf("worker call order = %#v, want export reconcile before operation recovery", store.workerCallOrder)
+	}
+}
+
+func TestRunOnceExportSessionReconcileRequiresStoreWhenEnabled(t *testing.T) {
+	_, err := NewRunOnceRunner(Options{
+		Source: config.MapSource{
+			"AFSCP_EXPORT_SESSION_RECONCILE_ENABLED": "true",
+			"AFSCP_POSTGRES_DSN":                     "postgres://worker:password@db/afscp",
+			"AFSCP_EXPORT_SESSION_RECONCILE_OWNER":   "export-worker",
+		},
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{}, nil
+		},
+		Clock: func() time.Time { return workerAppNow() },
+	})
+	if err == nil || !strings.Contains(err.Error(), "export session reconcile store") {
+		t.Fatalf("NewRunOnceRunner error = %v, want missing export store", err)
 	}
 }
 
@@ -434,7 +503,7 @@ func TestRunOnceRepoLifecycleActiveSessionWaitExitsZeroWithoutClaimedSuccess(t *
 	lifecycleRecord := workerAppRepoLifecycleOperationRecord("op_delete", operations.OperationRepoDelete, now)
 	store := newWorkerAppStore(lifecycleRecord)
 	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
-	store.exports = []sessionstate.ExportSession{{ID: "export_active", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}}
+	store.exports = []sessionstate.ExportSession{workerAppFreshExportSession(now, "export_active", sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive, now.Add(time.Hour))}
 	runner, err := NewRunOnceRunner(Options{
 		Source: workerAppRepoLifecycleConfigSource(nil),
 		StoreFactory: func(context.Context, string) (StoreHandle, error) {
@@ -460,6 +529,43 @@ func TestRunOnceRepoLifecycleActiveSessionWaitExitsZeroWithoutClaimedSuccess(t *
 	}
 	if store.operation.ID != "" || store.releasedFenceID != "" {
 		t.Fatalf("operation/release = %#v/%q, want no mutation while session active", store.operation, store.releasedFenceID)
+	}
+}
+
+func TestRunOnceRepoLifecycleStaleSessionReturnsManualError(t *testing.T) {
+	now := workerAppNow()
+	lifecycleRecord := workerAppRepoLifecycleOperationRecord("op_delete", operations.OperationRepoDelete, now)
+	store := newWorkerAppStore(lifecycleRecord)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	store.exports = []sessionstate.ExportSession{{ID: "export_stale", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoLifecycleConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return &workerAppFakeJVSRunner{doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_lifecycle" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want manual intervention error")
+	}
+	summary := result.Summary().Operation
+	if summary.Manual != 1 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want manual=1 failed=0 unsupported=0", summary)
+	}
+	if !strings.Contains(err.Error(), "manual=1") {
+		t.Fatalf("error = %v, want manual count", err)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.releasedFenceID != "" {
+		t.Fatalf("operation/release = %#v/%q, want operator intervention and retained fence", store.operation, store.releasedFenceID)
 	}
 }
 
@@ -1377,6 +1483,17 @@ func workerAppAuditConfigSource(overrides config.MapSource) config.MapSource {
 	return source
 }
 
+func workerAppExportReconcileConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppConfigSource(config.MapSource{
+		"AFSCP_EXPORT_SESSION_RECONCILE_ENABLED": "true",
+		"AFSCP_EXPORT_SESSION_RECONCILE_OWNER":   "export-worker",
+	})
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return source
+}
+
 func workerAppRepoConfigSource(overrides config.MapSource) config.MapSource {
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_REPO_CREATE_RECOVERY_ENABLED": "true",
@@ -1656,6 +1773,46 @@ func workerAppRepoLifecycleTombstonedResource(now time.Time, preDelete resources
 	return repo
 }
 
+func workerAppFreshExportSession(now time.Time, exportID string, mode sessionstate.AccessMode, status sessionstate.ExportStatus, expiresAt time.Time) sessionstate.ExportSession {
+	observedAt := now.Add(-time.Second)
+	heartbeatExpiresAt := now.Add(time.Minute)
+	activeWriteCount := 0
+	if mode == sessionstate.AccessModeReadWrite {
+		activeWriteCount = 1
+	}
+	return sessionstate.ExportSession{
+		ID:                        exportID,
+		NamespaceID:               "ns_alpha01",
+		RepoID:                    "repo_alpha01",
+		Mode:                      mode,
+		Status:                    status,
+		ExpiresAt:                 expiresAt,
+		ActiveRequestCount:        1,
+		ActiveWriteCount:          activeWriteCount,
+		LastObservedAt:            &observedAt,
+		LastGatewayHeartbeatAt:    &observedAt,
+		GatewayHeartbeatExpiresAt: &heartbeatExpiresAt,
+		CreatedAt:                 now,
+		UpdatedAt:                 now,
+	}
+}
+
+func workerAppExportAccessSession(now time.Time, exportID string, status sessionstate.ExportStatus, expiresAt time.Time) exportaccess.Session {
+	return exportaccess.Session{
+		ID:                     exportID,
+		NamespaceID:            "ns_alpha01",
+		RepoID:                 "repo_alpha01",
+		Protocol:               exportaccess.ProtocolWebDAV,
+		Mode:                   sessionstate.AccessModeReadWrite,
+		Status:                 status,
+		ExpiresAt:              expiresAt,
+		CreatedByCallerService: "agentsmith-api",
+		CreatedByActor:         exportaccess.Actor{Type: "user", ID: "user_alpha"},
+		CreatedAt:              now.Add(-time.Hour),
+		UpdatedAt:              now.Add(-time.Minute),
+	}
+}
+
 func workerAppVolumeOperationRecord(operationID string, now time.Time) operations.OperationRecord {
 	return operations.OperationRecord{
 		ID:               operationID,
@@ -1750,6 +1907,9 @@ type fakeWorkerAppStore struct {
 	auditDelivered                 []string
 	auditFailed                    []workerAppAuditFailedCall
 	auditDeliverErr                error
+	workerCallOrder                []string
+	exportReconcileCandidates      []exportaccess.Session
+	exportReconciles               []exportaccess.ReconcileRequest
 }
 
 type workerAppAuditFailedCall struct {
@@ -1827,6 +1987,7 @@ func (store *fakeWorkerAppStore) ListNamespaceUpsertOperationsForRecovery(ctx co
 }
 
 func (store *fakeWorkerAppStore) ListVolumeEnsureOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	store.workerCallOrder = append(store.workerCallOrder, "operation_recovery")
 	if deadline, ok := ctx.Deadline(); ok {
 		store.listDeadline = deadline
 	}
@@ -1849,6 +2010,36 @@ func (store *fakeWorkerAppStore) ListVolumeEnsureOperationsForRecovery(ctx conte
 		}
 	}
 	return out, nil
+}
+
+func (store *fakeWorkerAppStore) ListExportSessionsForTerminalReconcile(context.Context, time.Time, int) ([]exportaccess.Session, error) {
+	store.workerCallOrder = append(store.workerCallOrder, "export_reconcile")
+	out := make([]exportaccess.Session, len(store.exportReconcileCandidates))
+	copy(out, store.exportReconcileCandidates)
+	return out, nil
+}
+
+func (store *fakeWorkerAppStore) ReconcileExportSessionTerminal(_ context.Context, request exportaccess.ReconcileRequest) (exportaccess.ReconcileResult, error) {
+	store.exportReconciles = append(store.exportReconciles, request)
+	session := exportaccess.Session{
+		ID:                 request.ExportID,
+		NamespaceID:        request.NamespaceID,
+		Status:             request.TargetStatus,
+		TerminalObservedAt: &request.ObservedAt,
+		UpdatedAt:          request.ObservedAt,
+	}
+	for _, candidate := range store.exportReconcileCandidates {
+		if candidate.ID == request.ExportID {
+			session = candidate
+			session.Status = request.TargetStatus
+			session.TerminalObservedAt = &request.ObservedAt
+			session.ActiveRequestCount = 0
+			session.ActiveWriteCount = 0
+			session.UpdatedAt = request.ObservedAt
+			break
+		}
+	}
+	return exportaccess.ReconcileResult{Session: session, Operation: request.Operation}, nil
 }
 
 func (store *fakeWorkerAppStore) ListNamespaceVolumeBindingPutOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
