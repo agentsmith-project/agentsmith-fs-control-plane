@@ -173,6 +173,44 @@ func TestReadinessHandlerDerivesReadyWhenAllRequiredCapabilitiesAreEffectiveRead
 	}
 }
 
+func TestReadinessHandlerUsesInjectedRequiredCapabilities(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	readiness := ReadinessResponse{
+		Status:               "not_ready",
+		Ready:                false,
+		RequiredCapabilities: []string{CapabilityStorage, CapabilityJVS},
+		Capabilities: map[string]CapabilityGate{
+			CapabilityStorage:      {Enabled: true, Ready: true, Gated: false},
+			CapabilityJVS:          {Enabled: true, Ready: true, Gated: false},
+			CapabilityWebDAVExport: {Enabled: true, Ready: false, Gated: true, Reason: "handler_not_implemented"},
+			CapabilityWorkloadMount: {
+				Enabled: true,
+				Ready:   false,
+				Gated:   true,
+				Reason:  "handler_not_implemented",
+			},
+		},
+	}
+
+	ReadinessHandler(readiness).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var body ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness response did not decode: %v", err)
+	}
+	if !body.Ready {
+		t.Fatalf("readiness must be true when only non-required capabilities are gated")
+	}
+	if gate := body.Capabilities[CapabilityWebDAVExport]; !gate.Enabled || gate.Ready || !gate.Gated || gate.Reason != "handler_not_implemented" {
+		t.Fatalf("webdav gate = %#v, want gated not implemented", gate)
+	}
+}
+
 func readyCapabilities() map[string]CapabilityGate {
 	ready := CapabilityGate{Enabled: true, Ready: true, Gated: false}
 	return map[string]CapabilityGate{

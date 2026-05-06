@@ -57,6 +57,7 @@ type Config struct {
 	Environment  string
 	Capabilities Capabilities
 	Worker       WorkerConfig
+	API          APIConfig
 }
 
 type Capabilities struct {
@@ -69,6 +70,14 @@ type Capabilities struct {
 type Capability struct {
 	Enabled bool
 	Ready   bool
+}
+
+type APIConfig struct {
+	Mode                              string
+	PostgresDSN                       string
+	ServiceTokens                     string
+	DeploymentGlobalAllowedCallers    string
+	DeploymentNamespaceAllowedCallers string
 }
 
 type WorkerConfig struct {
@@ -127,6 +136,9 @@ func Load(source Source) (Config, error) {
 		ServiceName: defaultServiceName,
 		ListenAddr:  defaultListenAddr,
 		Environment: defaultEnvironment,
+		API: APIConfig{
+			Mode: "neutral",
+		},
 		Worker: WorkerConfig{
 			RunOnceTimeout: defaultWorkerRunOnceTimeout,
 			OperationRecovery: WorkerOperationRecoveryConfig{
@@ -161,6 +173,9 @@ func Load(source Source) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Worker, err = loadWorkerConfig(source, cfg.Worker); err != nil {
+		return Config{}, err
+	}
+	if cfg.API, err = loadAPIConfig(source, cfg.API); err != nil {
 		return Config{}, err
 	}
 
@@ -287,6 +302,28 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 	worker.AuditDelivery = auditDelivery
 
 	return worker, nil
+}
+
+func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
+	cfg := defaults
+	cfg.Mode = strings.ToLower(valueOrDefault(source, "AFSCP_API_MODE", cfg.Mode))
+	switch cfg.Mode {
+	case "neutral", "internal":
+	default:
+		return APIConfig{}, fmt.Errorf("AFSCP_API_MODE must be neutral or internal")
+	}
+
+	cfg.PostgresDSN = valueOrDefault(source, "AFSCP_API_POSTGRES_DSN", "")
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_POSTGRES_DSN", "")
+	}
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_DATABASE_URL", "")
+	}
+	cfg.ServiceTokens = valueOrDefault(source, "AFSCP_API_SERVICE_TOKENS", "")
+	cfg.DeploymentGlobalAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS", "")
+	cfg.DeploymentNamespaceAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS", "")
+	return cfg, nil
 }
 
 func loadWorkerAuditDeliveryConfig(source Source, defaults WorkerAuditDeliveryConfig) (WorkerAuditDeliveryConfig, error) {

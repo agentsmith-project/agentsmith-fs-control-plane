@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -52,12 +53,22 @@ type InternalAPIShellConfig struct {
 	OperationIntakeStore        OperationIntakeStore
 	GenerateOperationID         OperationIDGenerator
 	Now                         func() time.Time
+	Readiness                   ReadinessResponse
+	ReadinessProvider           func(context.Context) ReadinessResponse
 }
 
 func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", requestLogHandler(HealthHandler(), config.Logger, slog.LevelInfo, "afscp.health", "health request", "/healthz", ""))
-	mux.Handle("/readyz", requestLogHandler(ReadinessHandler(NeutralReadiness()), config.Logger, slog.LevelInfo, "afscp.readiness", "readiness request", "/readyz", ""))
+	readiness := config.Readiness
+	if len(readiness.Capabilities) == 0 {
+		readiness = NeutralReadiness()
+	}
+	readinessHandler := ReadinessHandler(readiness)
+	if config.ReadinessProvider != nil {
+		readinessHandler = ReadinessHandlerFunc(config.ReadinessProvider)
+	}
+	mux.Handle("/readyz", requestLogHandler(readinessHandler, config.Logger, slog.LevelInfo, "afscp.readiness", "readiness request", "/readyz", ""))
 
 	volumeHandler := EnsureVolumeHandler(EnsureVolumeHandlerConfig{
 		IntakeStore:       config.OperationIntakeStore,

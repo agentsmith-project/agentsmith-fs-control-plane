@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 )
@@ -24,9 +25,10 @@ type HealthResponse struct {
 }
 
 type ReadinessResponse struct {
-	Status       string                    `json:"status"`
-	Ready        bool                      `json:"ready"`
-	Capabilities map[string]CapabilityGate `json:"capabilities"`
+	Status               string                    `json:"status"`
+	Ready                bool                      `json:"ready"`
+	Capabilities         map[string]CapabilityGate `json:"capabilities"`
+	RequiredCapabilities []string                  `json:"-"`
 }
 
 type CapabilityGate struct {
@@ -63,8 +65,19 @@ func NeutralReadiness() ReadinessResponse {
 }
 
 func ReadinessHandler(readiness ReadinessResponse) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		readiness := effectiveReadiness(readiness)
+	return ReadinessHandlerFunc(func(context.Context) ReadinessResponse {
+		return readiness
+	})
+}
+
+func ReadinessHandlerFunc(provider func(context.Context) ReadinessResponse) http.Handler {
+	if provider == nil {
+		provider = func(context.Context) ReadinessResponse {
+			return NeutralReadiness()
+		}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		readiness := effectiveReadiness(provider(r.Context()))
 		status := http.StatusOK
 		if !readiness.Ready {
 			status = http.StatusServiceUnavailable
@@ -75,13 +88,14 @@ func ReadinessHandler(readiness ReadinessResponse) http.Handler {
 }
 
 func effectiveReadiness(readiness ReadinessResponse) ReadinessResponse {
-	capabilities := make(map[string]CapabilityGate, len(readiness.Capabilities)+len(requiredReadinessCapabilities))
+	requiredCapabilities := readinessRequiredCapabilities(readiness)
+	capabilities := make(map[string]CapabilityGate, len(readiness.Capabilities)+len(requiredCapabilities))
 	for capability, gate := range readiness.Capabilities {
 		capabilities[capability] = gate
 	}
 
 	ready := true
-	for _, capability := range requiredReadinessCapabilities {
+	for _, capability := range requiredCapabilities {
 		gate, ok := capabilities[capability]
 		if !ok {
 			capabilities[capability] = CapabilityGate{
@@ -106,6 +120,13 @@ func effectiveReadiness(readiness ReadinessResponse) ReadinessResponse {
 		readiness.Status = "not_ready"
 	}
 	return readiness
+}
+
+func readinessRequiredCapabilities(readiness ReadinessResponse) []string {
+	if readiness.RequiredCapabilities != nil {
+		return readiness.RequiredCapabilities
+	}
+	return requiredReadinessCapabilities
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) error {

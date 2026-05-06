@@ -72,6 +72,12 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	if cfg.Worker.AuditDelivery.Timeout != 10*time.Second {
 		t.Fatalf("audit delivery timeout = %v, want 10s", cfg.Worker.AuditDelivery.Timeout)
 	}
+	if cfg.API.Mode != "neutral" {
+		t.Fatalf("api mode = %q, want neutral", cfg.API.Mode)
+	}
+	if cfg.API.PostgresDSN != "" {
+		t.Fatalf("api postgres dsn = %q, want empty", cfg.API.PostgresDSN)
+	}
 }
 
 func TestLoadNormalizesFieldsAndCapabilities(t *testing.T) {
@@ -106,6 +112,58 @@ func TestLoadNormalizesFieldsAndCapabilities(t *testing.T) {
 	assertCapability(t, "jvs", cfg.Capabilities.JVS, true, false)
 	assertCapability(t, "webdav", cfg.Capabilities.WebDAV, true, true)
 	assertCapability(t, "mount", cfg.Capabilities.Mount, false, false)
+}
+
+func TestLoadAPIInternalRuntimeConfig(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_API_MODE":                                 " internal ",
+		"AFSCP_API_POSTGRES_DSN":                         "postgres://api:secret@db/afscp",
+		"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-a",
+		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_ops:operator:operation_inspector|operator_admin",
+		"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.API.Mode != "internal" {
+		t.Fatalf("api mode = %q, want internal", cfg.API.Mode)
+	}
+	if cfg.API.PostgresDSN != "postgres://api:secret@db/afscp" {
+		t.Fatalf("api postgres dsn = %q", cfg.API.PostgresDSN)
+	}
+	if cfg.API.ServiceTokens != "svc_api=token-a" {
+		t.Fatalf("api service tokens = %q", cfg.API.ServiceTokens)
+	}
+	if cfg.API.DeploymentGlobalAllowedCallers != "svc_ops:operator:operation_inspector|operator_admin" {
+		t.Fatalf("api global callers = %q", cfg.API.DeploymentGlobalAllowedCallers)
+	}
+	if cfg.API.DeploymentNamespaceAllowedCallers != "svc_api:product:namespace_admin" {
+		t.Fatalf("api namespace callers = %q", cfg.API.DeploymentNamespaceAllowedCallers)
+	}
+}
+
+func TestLoadAPIInternalRuntimeDSNFallsBackToSharedPostgres(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_API_MODE":     "internal",
+		"AFSCP_POSTGRES_DSN": "postgres://shared:secret@db/afscp",
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.API.PostgresDSN != "postgres://shared:secret@db/afscp" {
+		t.Fatalf("api postgres dsn = %q, want shared postgres fallback", cfg.API.PostgresDSN)
+	}
+}
+
+func TestLoadRejectsUnknownAPIMode(t *testing.T) {
+	_, err := Load(MapSource{"AFSCP_API_MODE": "storage"})
+	if err == nil {
+		t.Fatal("Load succeeded, want invalid API mode error")
+	}
+	if !strings.Contains(err.Error(), "AFSCP_API_MODE") {
+		t.Fatalf("error = %q, want API mode context", err)
+	}
 }
 
 func TestLoadRepoCreateRecoveryRequiresExplicitConfigWhenEnabled(t *testing.T) {
