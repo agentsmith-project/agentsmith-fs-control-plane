@@ -396,6 +396,19 @@ func (store *fakeOperationIntakeStore) CreateOrReuseRepoCreateOperation(ctx cont
 	return store.CreateOrReuseOperation(ctx, spec)
 }
 
+func (store *fakeOperationIntakeStore) CreateOrReuseTemplateCreateOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	return store.CreateOrReuseOperation(ctx, spec)
+}
+
+func (store *fakeOperationIntakeStore) CreateOrReuseTemplateCloneOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	if store.repoAlreadyExists && !store.reused && store.reusedRecord == nil {
+		store.calls++
+		store.spec = spec
+		return operations.IdempotencyResolution{}, operations.ErrRepoAlreadyExists
+	}
+	return store.CreateOrReuseOperation(ctx, spec)
+}
+
 func (store *fakeOperationIntakeStore) RepoHasNonTerminalJVSMutation(context.Context, string) (bool, error) {
 	store.jvsMutationCalls++
 	if store.jvsMutationErr != nil {

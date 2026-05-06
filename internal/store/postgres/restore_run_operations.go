@@ -256,12 +256,14 @@ func restoreRunWriterFencedMarkWithLeaseSQL() string {
 		"AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
 		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 " +
 		"AND input_summary->>'preview_operation_id' = $20 FOR UPDATE" +
+		"), locked_repo AS (" +
+		"SELECT repo_id FROM repos, eligible_operation WHERE repos.namespace_id = $14 AND repos.repo_id = $15 FOR UPDATE" +
 		"), held_lifecycle_fence AS (" +
-		"SELECT fence_id FROM repo_fences, eligible_operation WHERE repo_fences.repo_id = $15 AND repo_fences.fence_kind = 'lifecycle' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL FOR UPDATE" +
+		"SELECT fence_id FROM repo_fences, locked_repo WHERE repo_fences.repo_id = locked_repo.repo_id AND repo_fences.fence_kind = 'lifecycle' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL FOR UPDATE" +
 		"), active_writer_fence AS (" +
-		"SELECT " + prefixedColumns("repo_fences", repoFenceColumns) + " FROM repo_fences, eligible_operation WHERE repo_fences.repo_id = $15 AND repo_fences.fence_id = $21 AND repo_fences.fence_kind = 'writer_session' AND repo_fences.holder_operation_id = $12 AND repo_fences.status = 'active' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL FOR UPDATE" +
+		"SELECT " + prefixedColumns("repo_fences", repoFenceColumns) + " FROM repo_fences, locked_repo WHERE repo_fences.repo_id = locked_repo.repo_id AND repo_fences.fence_id = $21 AND repo_fences.fence_kind = 'writer_session' AND repo_fences.holder_operation_id = $12 AND repo_fences.status = 'active' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL FOR UPDATE" +
 		"), inserted_writer_fence AS (" +
-		"INSERT INTO repo_fences (" + strings.Join(repoFenceColumns, ", ") + ") SELECT " + placeholders(22, len(repoFenceColumns)) + " FROM eligible_operation WHERE NOT EXISTS (SELECT 1 FROM active_writer_fence) AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) ON CONFLICT (repo_id, fence_kind) WHERE released_at IS NULL DO NOTHING RETURNING " + strings.Join(repoFenceColumns, ", ") +
+		"INSERT INTO repo_fences (" + strings.Join(repoFenceColumns, ", ") + ") SELECT " + placeholders(22, len(repoFenceColumns)) + " FROM eligible_operation, locked_repo WHERE NOT EXISTS (SELECT 1 FROM active_writer_fence) AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) ON CONFLICT (repo_id, fence_kind) WHERE released_at IS NULL DO NOTHING RETURNING " + strings.Join(repoFenceColumns, ", ") +
 		"), confirmed_writer_fence AS (" +
 		"SELECT " + strings.Join(repoFenceColumns, ", ") + " FROM active_writer_fence UNION ALL SELECT " + strings.Join(repoFenceColumns, ", ") + " FROM inserted_writer_fence LIMIT 1" +
 		"), updated_operation AS (" +

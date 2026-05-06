@@ -443,16 +443,15 @@ func (runner *Runner) RepoClone(ctx context.Context, sourceControlRoot, targetPa
 	}
 	sourceRepoID, okSource := dataSafeID(envelope, "source_repo_id")
 	targetRepoID, okTarget := dataSafeID(envelope, "target_repo_id")
-	workspace, _ := envelope.Data["workspace"].(string)
 	savePointsMode, _ := envelope.Data["save_points_mode"].(string)
 	targetFolder, _ := envelope.Data["target_folder"].(string)
 	outTargetControl, _ := envelope.Data["target_control_root"].(string)
 	copiedCount, countOK := intData(envelope.Data["save_points_copied_count"])
 	runtimeCopied, runtimeOK := envelope.Data["runtime_state_copied"].(bool)
-	if workspace != workspaceMain || !okSource || !okTarget || savePointsMode != "main" || targetFolder != targetPayloadRoot || outTargetControl != targetControlRoot || !countOK || copiedCount < 0 || !runtimeOK || runtimeCopied {
+	if !okSource || !okTarget || savePointsMode != "main" || targetFolder != targetPayloadRoot || outTargetControl != targetControlRoot || !countOK || copiedCount < 0 || !runtimeOK || runtimeCopied {
 		return RepoCloneSummary{}, fmt.Errorf("%w: repo clone", ErrInvalidEnvelope)
 	}
-	return RepoCloneSummary{SourceRepoID: sourceRepoID, TargetRepoID: targetRepoID, SavePointsMode: savePointsMode, SavePointsCopiedCount: copiedCount, RuntimeStateCopied: runtimeCopied, Workspace: workspace}, nil
+	return RepoCloneSummary{SourceRepoID: sourceRepoID, TargetRepoID: targetRepoID, SavePointsMode: savePointsMode, SavePointsCopiedCount: copiedCount, RuntimeStateCopied: runtimeCopied, Workspace: workspaceMain}, nil
 }
 
 func (runner *Runner) runControlJSON(ctx context.Context, command, controlRoot string, commandArgs []string) (envelope, error) {

@@ -18,20 +18,23 @@ const (
 )
 
 type Binding struct {
-	ID              string
-	NamespaceID     string
-	RepoID          string
-	VolumeID        string
-	MountPath       string
-	ReadOnly        bool
-	Status          sessionstate.MountStatus
-	LeaseSeconds    int
-	LeaseExpiresAt  time.Time
-	LastHeartbeatAt *time.Time
-	LastObservedAt  *time.Time
-	StatusReason    string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                   string
+	NamespaceID          string
+	RepoID               string
+	VolumeID             string
+	MountPath            string
+	ReadOnly             bool
+	Status               sessionstate.MountStatus
+	LeaseSeconds         int
+	LeaseExpiresAt       time.Time
+	LastHeartbeatAt      *time.Time
+	LastObservedAt       *time.Time
+	ConfirmedUnmountedAt *time.Time
+	UnableToWriteAt      *time.Time
+	TerminalObservedAt   *time.Time
+	StatusReason         string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type Plan struct {

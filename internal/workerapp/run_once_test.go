@@ -163,6 +163,54 @@ func TestRunOnceExportSessionReconcileRunsBeforeOperationRecovery(t *testing.T) 
 	}
 }
 
+func TestRunOnceWorkloadMountStaleLeaseScanRunsAndReportsKeptBlocked(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore()
+	store.staleWorkloadMountBindings = []workloadmount.Binding{{ID: "wmb_stale01"}}
+	runner, err := NewRunOnceRunner(Options{
+		Source: config.MapSource{
+			"AFSCP_WORKLOAD_MOUNT_STALE_LEASE_RECONCILE_ENABLED": "true",
+			"AFSCP_POSTGRES_DSN": "postgres://worker:password@db/afscp",
+			"AFSCP_WORKLOAD_MOUNT_STALE_LEASE_RECONCILE_LIMIT": "7",
+		},
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{WorkloadMountStale: store}, nil
+		},
+		Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().WorkloadMountStale
+	if summary.Scanned != 1 || summary.KeptBlocked != 1 || summary.Failed != 0 {
+		t.Fatalf("summary = %#v, want scan-only kept-blocked signal", summary)
+	}
+	if store.workloadMountStaleLimit != 7 || !store.workloadMountStaleNow.Equal(now) {
+		t.Fatalf("scan args now/limit = %v/%d, want %v/7", store.workloadMountStaleNow, store.workloadMountStaleLimit, now)
+	}
+}
+
+func TestRunOnceWorkloadMountStaleLeaseScanRequiresStoreWhenEnabled(t *testing.T) {
+	_, err := NewRunOnceRunner(Options{
+		Source: config.MapSource{
+			"AFSCP_WORKLOAD_MOUNT_STALE_LEASE_RECONCILE_ENABLED": "true",
+			"AFSCP_POSTGRES_DSN": "postgres://worker:password@db/afscp",
+		},
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{}, nil
+		},
+		Clock: func() time.Time { return workerAppNow() },
+	})
+	if err == nil || !strings.Contains(err.Error(), "workload mount stale lease store") {
+		t.Fatalf("NewRunOnceRunner error = %v, want missing workload mount stale lease store", err)
+	}
+}
+
 func TestRunOnceExportSessionReconcileRequiresStoreWhenEnabled(t *testing.T) {
 	_, err := NewRunOnceRunner(Options{
 		Source: config.MapSource{
@@ -1910,6 +1958,9 @@ type fakeWorkerAppStore struct {
 	workerCallOrder                []string
 	exportReconcileCandidates      []exportaccess.Session
 	exportReconciles               []exportaccess.ReconcileRequest
+	staleWorkloadMountBindings     []workloadmount.Binding
+	workloadMountStaleNow          time.Time
+	workloadMountStaleLimit        int
 }
 
 type workerAppAuditFailedCall struct {
@@ -1986,6 +2037,32 @@ func (store *fakeWorkerAppStore) ListNamespaceUpsertOperationsForRecovery(ctx co
 	return out, nil
 }
 
+func (store *fakeWorkerAppStore) ListNamespaceDisableOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		store.listDeadline = deadline
+	}
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if record.Type != operations.OperationNamespaceDisable || record.Phase != operations.OperationPhaseNamespaceDisableValidate {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+			continue
+		case operations.OperationStateRunning, operations.OperationStateCancelRequested:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (store *fakeWorkerAppStore) ListVolumeEnsureOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
 	store.workerCallOrder = append(store.workerCallOrder, "operation_recovery")
 	if deadline, ok := ctx.Deadline(); ok {
@@ -2040,6 +2117,15 @@ func (store *fakeWorkerAppStore) ReconcileExportSessionTerminal(_ context.Contex
 		}
 	}
 	return exportaccess.ReconcileResult{Session: session, Operation: request.Operation}, nil
+}
+
+func (store *fakeWorkerAppStore) ListStaleNonTerminalWorkloadMountBindings(_ context.Context, now time.Time, limit int) ([]workloadmount.Binding, error) {
+	store.workerCallOrder = append(store.workerCallOrder, "workload_mount_stale")
+	store.workloadMountStaleNow = now
+	store.workloadMountStaleLimit = limit
+	out := make([]workloadmount.Binding, len(store.staleWorkloadMountBindings))
+	copy(out, store.staleWorkloadMountBindings)
+	return out, nil
 }
 
 func (store *fakeWorkerAppStore) ListNamespaceVolumeBindingPutOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
@@ -2112,6 +2198,24 @@ func (store *fakeWorkerAppStore) AcquireNamespaceUpsertOperationLease(_ context.
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	if record.Type != operations.OperationNamespaceUpsert || record.Phase != operations.OperationPhaseNamespaceUpsertValidate {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
+func (store *fakeWorkerAppStore) AcquireNamespaceDisableOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if record.Type != operations.OperationNamespaceDisable || record.Phase != operations.OperationPhaseNamespaceDisableValidate {
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	store.acquireIDs = append(store.acquireIDs, operationID)
@@ -2259,6 +2363,36 @@ func (store *fakeWorkerAppStore) ListSavePointCreateOperationsForRecovery(ctx co
 			break
 		}
 		if record.Type != operations.OperationSavePointCreate || (record.Phase != operations.OperationPhaseSavePointCreateValidate && record.Phase != operations.OperationPhaseSavePointCreatePrepared) {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+		case operations.OperationStateRunning:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (store *fakeWorkerAppStore) ListTemplateCreateOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	return store.listTemplateOperationsForRecovery(now, limit, operations.OperationTemplateCreate, operations.OperationPhaseTemplateCreateValidate)
+}
+
+func (store *fakeWorkerAppStore) ListTemplateCloneOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	return store.listTemplateOperationsForRecovery(now, limit, operations.OperationTemplateClone, operations.OperationPhaseTemplateCloneValidate)
+}
+
+func (store *fakeWorkerAppStore) listTemplateOperationsForRecovery(now time.Time, limit int, typ operations.OperationType, phase string) ([]operations.OperationRecord, error) {
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if record.Type != typ || record.Phase != phase {
 			continue
 		}
 		switch record.State {
@@ -2450,6 +2584,32 @@ func (store *fakeWorkerAppStore) AcquireSavePointCreateOperationLease(_ context.
 	return decision.Record, nil
 }
 
+func (store *fakeWorkerAppStore) AcquireTemplateCreateOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	return store.acquireTemplateOperationLease(operationID, request, operations.OperationTemplateCreate, operations.OperationPhaseTemplateCreateValidate)
+}
+
+func (store *fakeWorkerAppStore) AcquireTemplateCloneOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	return store.acquireTemplateOperationLease(operationID, request, operations.OperationTemplateClone, operations.OperationPhaseTemplateCloneValidate)
+}
+
+func (store *fakeWorkerAppStore) acquireTemplateOperationLease(operationID string, request operations.LeaseRequest, typ operations.OperationType, phase string) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if record.Type != typ || record.Phase != phase {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
 func (store *fakeWorkerAppStore) AcquireRestorePreviewOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	record, ok := store.records[operationID]
 	if !ok {
@@ -2539,6 +2699,17 @@ func workerAppCommittedOperation(record operations.SanitizedOperationRecord) ope
 }
 
 func (store *fakeWorkerAppStore) CommitNamespaceUpsertWithLease(_ context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.namespace = namespace
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return namespace, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitNamespaceDisableWithLease(_ context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
 	operation := record.Record()
 	operation.LeaseOwner = ""
 	operation.LeaseExpiresAt = nil
@@ -2698,6 +2869,54 @@ func (store *fakeWorkerAppStore) CommitSavePointCreateSucceededWithLease(_ conte
 }
 
 func (store *fakeWorkerAppStore) CommitSavePointCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitTemplateCreateSucceededWithLease(_ context.Context, template resources.Repo, _ string, _ string, _ string, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.repo = template
+	store.auditEvents = append(store.auditEvents, event)
+	return template, operation, nil
+}
+
+func (store *fakeWorkerAppStore) MarkTemplateCreateWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
+	operation := record.Record()
+	store.fences = append(store.fences, fence)
+	store.records[operation.ID] = operation
+	store.operation = operation
+	return fence, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitTemplateCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return store.commitTemplateFailed(record, event)
+}
+
+func (store *fakeWorkerAppStore) CommitTemplateCloneSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.repo = repo
+	store.auditEvents = append(store.auditEvents, event)
+	return repo, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitTemplateCloneFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return store.commitTemplateFailed(record, event)
+}
+
+func (store *fakeWorkerAppStore) commitTemplateFailed(record operations.SanitizedOperationRecord, event audit.Event) (operations.OperationRecord, error) {
 	operation := record.Record()
 	operation.LeaseOwner = ""
 	operation.LeaseExpiresAt = nil

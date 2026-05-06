@@ -42,6 +42,9 @@ const (
 	OperationPhaseNamespaceUpsertValidate  = "validate_namespace_upsert"
 	OperationPhaseNamespaceUpsertCommitted = "namespace_upsert_committed"
 
+	OperationPhaseNamespaceDisableValidate  = "validate_namespace_disable"
+	OperationPhaseNamespaceDisableCommitted = "namespace_disable_committed"
+
 	OperationPhaseNamespaceVolumeBindingPutValidate  = "validate_namespace_volume_binding_put"
 	OperationPhaseNamespaceVolumeBindingPutCommitted = "namespace_volume_binding_put_committed"
 
@@ -67,6 +70,12 @@ const (
 	OperationPhaseRestoreRunWriterFenced = "restore_run_writer_fenced"
 	OperationPhaseRestoreRunConsuming    = "restore_run_consuming"
 	OperationPhaseRestoreRunCommitted    = "restore_run_committed"
+
+	OperationPhaseTemplateCreateValidate     = "validate_template_create"
+	OperationPhaseTemplateCreateWriterFenced = "template_create_writer_fenced"
+	OperationPhaseTemplateCreateCommitted    = "template_create_committed"
+	OperationPhaseTemplateCloneValidate      = "validate_template_clone"
+	OperationPhaseTemplateCloneCommitted     = "template_clone_committed"
 
 	OperationPhaseExportCreateCommitted           = "export_create_committed"
 	OperationPhaseExportRevokeCommitted           = "export_revoke_committed"

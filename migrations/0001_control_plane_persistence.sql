@@ -287,6 +287,9 @@ CREATE TABLE IF NOT EXISTS repos (
     status text NOT NULL,
     control_volume_subdir text NOT NULL,
     payload_volume_subdir text NOT NULL,
+    source_repo_id text,
+    source_save_point_id text,
+    clone_history_mode text,
     lifecycle_status text NOT NULL,
     retention_expires_at timestamp with time zone,
     last_lifecycle_operation_id text REFERENCES operations (operation_id),
@@ -333,6 +336,20 @@ CREATE TABLE IF NOT EXISTS repos (
         )
     ),
     CONSTRAINT repos_status_lifecycle_match CHECK (status = lifecycle_status),
+    CONSTRAINT repos_template_provenance_check CHECK (
+        (
+            repo_kind = 'repo'
+            AND source_repo_id IS NULL
+            AND source_save_point_id IS NULL
+            AND clone_history_mode IS NULL
+        )
+        OR (
+            repo_kind = 'template'
+            AND source_repo_id IS NOT NULL
+            AND source_save_point_id IS NOT NULL
+            AND clone_history_mode = 'main'
+        )
+    ),
     CONSTRAINT repos_canonical_subdir_check CHECK (
         (
             repo_kind = 'repo'
@@ -467,6 +484,9 @@ CREATE TABLE IF NOT EXISTS workload_mount_bindings (
     lease_expires_at timestamp with time zone NOT NULL,
     last_heartbeat_at timestamp with time zone,
     last_observed_at timestamp with time zone,
+    confirmed_unmounted_at timestamp with time zone,
+    unable_to_write_at timestamp with time zone,
+    terminal_observed_at timestamp with time zone,
     status_reason text NOT NULL DEFAULT '',
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,

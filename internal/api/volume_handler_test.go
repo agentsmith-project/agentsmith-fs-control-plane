@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 )
 
 func TestEnsureVolumeHandlerCreatesOperationIntake(t *testing.T) {
@@ -147,6 +149,57 @@ func TestEnsureVolumeHandlerMapsIntakeErrorsWithoutLeakingStoreDetail(t *testing
 	if strings.Contains(rec.Body.String(), "secret") || strings.Contains(rec.Body.String(), "postgres") {
 		t.Fatalf("error leaked raw detail: %s", rec.Body.String())
 	}
+}
+
+func TestVolumeHealthHandlerReturnsMetadataBasedNonSensitiveHealth(t *testing.T) {
+	now := fixedNamespaceNow()
+	reader := fakeVolumeHealthReader{volume: resources.Volume{
+		ID:             "vol_123",
+		Backend:        resources.VolumeBackendJuiceFS,
+		IsolationClass: resources.VolumeIsolationShared,
+		Status:         resources.VolumeStatusActive,
+		Capabilities:   map[string]any{"webdav_export": true, "workload_mount": false, "jvs_external_control_root": true, "directory_quota": false},
+		CreatedAt:      now.Add(-time.Hour),
+		UpdatedAt:      now,
+	}}
+	handler := VolumeHealthHandler(VolumeHealthHandlerConfig{
+		Reader:            reader,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		DeploymentPolicy:  volumeAdminAllowedPolicy(),
+		Now:               func() time.Time { return now },
+	})
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/volumes/vol_123/health", nil)
+	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
+	req.Header.Set(HeaderCorrelationID, "corr_volume")
+	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"status":"degraded"`) || !strings.Contains(body, `"volume_id":"vol_123"`) {
+		t.Fatalf("body = %s, want degraded volume health", body)
+	}
+	for _, forbidden := range []string{"metadata_url", "password", "secret", "/srv/"} {
+		if strings.Contains(strings.ToLower(body), forbidden) {
+			t.Fatalf("volume health leaked %q in %s", forbidden, body)
+		}
+	}
+}
+
+type fakeVolumeHealthReader struct {
+	volume resources.Volume
+	err    error
+}
+
+func (reader fakeVolumeHealthReader) GetVolume(_ context.Context, _ string) (resources.Volume, error) {
+	if reader.err != nil {
+		return resources.Volume{}, reader.err
+	}
+	return reader.volume, nil
 }
 
 func ensureVolumeHandlerForTest(store OperationIntakeStore, generate OperationIDGenerator, now func() time.Time, policy AllowedCallerPolicy) http.Handler {

@@ -2,12 +2,16 @@ package apiapp
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -16,6 +20,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store/postgres"
 
 	_ "github.com/lib/pq"
@@ -31,6 +36,7 @@ type InternalStore interface {
 	api.OperationInspectionStoreReader
 	api.OperationIntakeStore
 	api.RepoCreateOperationIntakeStore
+	api.TemplateOperationIntakeStore
 	api.RestorePreviewOperationIntakeStore
 	api.RestorePreviewDiscardOperationIntakeStore
 	api.RestoreRunOperationIntakeStore
@@ -131,31 +137,67 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	var savePointHistoryJVSRunner api.JVSHistoryRunner
+	if cfg.API.SavePointHistory.Enabled {
+		if err := verifyFileSHA256(cfg.API.SavePointHistory.JVSBinaryPath, cfg.API.SavePointHistory.JVSBinarySHA256); err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		runner, err := jvsrunner.New(jvsrunner.Config{BinaryPath: cfg.API.SavePointHistory.JVSBinaryPath, CWD: cfg.API.SavePointHistory.JVSCWD})
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		savePointHistoryJVSRunner = runner
+	}
 
 	handler := api.NewInternalAPIShell(api.InternalAPIShellConfig{
-		Logger:                     options.Logger,
-		AuditSink:                  auditOutboxSink{store: handle.Store},
-		PrincipalResolver:          resolver,
-		NamespaceBindingReader:     handle.Store,
-		NamespaceReader:            handle.Store,
-		RepoReader:                 handle.Store,
-		VolumeReader:               handle.Store,
-		WorkloadMountBindingReader: handle.Store,
-		WorkloadMountPlanReader:    handle.Store,
-		ExportStore:                handle.Store,
-		RepoFenceReader:            handle.Store,
-		SavePointMutationGate:      handle.Store,
-		OperationInspectionReader:  handle.Store,
-		RepoCreateIntakeStore:      handle.Store,
-		DeploymentGlobalCallers:    globalCallers,
-		DeploymentNamespaceCallers: namespaceCallers,
-		OperationIntakeStore:       handle.Store,
-		GenerateOperationID:        operationID,
-		Now:                        func() time.Time { return now().UTC() },
-		ReadinessProvider:          internalReadinessProvider(cfg, handle.Ping),
+		Logger:                         options.Logger,
+		AuditSink:                      auditOutboxSink{store: handle.Store},
+		PrincipalResolver:              resolver,
+		NamespaceBindingReader:         handle.Store,
+		NamespaceReader:                handle.Store,
+		RepoReader:                     handle.Store,
+		VolumeReader:                   handle.Store,
+		WorkloadMountBindingReader:     handle.Store,
+		WorkloadMountPlanReader:        handle.Store,
+		ExportStore:                    handle.Store,
+		RepoFenceReader:                handle.Store,
+		SavePointMutationGate:          handle.Store,
+		SavePointHistoryJVSRunner:      savePointHistoryJVSRunner,
+		SavePointHistoryVolumeRoots:    cfg.API.SavePointHistory.VolumeRoots,
+		OperationInspectionReader:      handle.Store,
+		RepoCreateIntakeStore:          handle.Store,
+		DeploymentGlobalCallers:        globalCallers,
+		DeploymentNamespaceCallers:     namespaceCallers,
+		OperationIntakeStore:           handle.Store,
+		GenerateOperationID:            operationID,
+		Now:                            func() time.Time { return now().UTC() },
+		ReadinessProvider:              internalReadinessProvider(cfg, handle.Ping),
+		WorkloadMountAdmissionDisabled: !cfg.Capabilities.Mount.Available(),
 	})
 
 	return &Runtime{Handler: handler, close: handle.Close}, nil
+}
+
+func verifyFileSHA256(path, want string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return errors.New("jvs binary verification failed")
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return errors.New("jvs binary verification failed")
+	}
+	if got := hex.EncodeToString(hash.Sum(nil)); got != want {
+		return errors.New("jvs binary checksum mismatch")
+	}
+	return nil
 }
 
 func (runtime *Runtime) Close() error {

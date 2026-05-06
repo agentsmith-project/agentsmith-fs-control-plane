@@ -36,6 +36,20 @@ type Config struct {
 	AuditEventID AuditEventIDGenerator
 }
 
+type DisableConfig struct {
+	CommitStore  store.NamespaceDisableOperationCommitStore
+	Owner        string
+	Clock        func() time.Time
+	AuditEventID AuditEventIDGenerator
+}
+
+type DisableExecutor struct {
+	commitStore  store.NamespaceDisableOperationCommitStore
+	owner        string
+	clock        func() time.Time
+	auditEventID AuditEventIDGenerator
+}
+
 type Executor struct {
 	commitStore  store.NamespaceUpsertOperationCommitStore
 	owner        string
@@ -45,6 +59,7 @@ type Executor struct {
 }
 
 var _ recovery.OperationExecutor = (*Executor)(nil)
+var _ recovery.OperationExecutor = (*DisableExecutor)(nil)
 
 func NewExecutor(config Config) (*Executor, error) {
 	if config.CommitStore == nil {
@@ -67,6 +82,92 @@ func NewExecutor(config Config) (*Executor, error) {
 		clock:        config.Clock,
 		auditEventID: config.AuditEventID,
 	}, nil
+}
+
+func NewDisableExecutor(config DisableConfig) (*DisableExecutor, error) {
+	if config.CommitStore == nil {
+		return nil, errors.New("namespace disable recovery commit store is required")
+	}
+	config.Owner = strings.TrimSpace(config.Owner)
+	if config.Owner == "" {
+		return nil, errors.New("namespace disable recovery owner is required")
+	}
+	if config.Clock == nil {
+		return nil, errors.New("namespace disable recovery clock is required")
+	}
+	if config.AuditEventID == nil {
+		return nil, errors.New("namespace disable recovery audit event id generator is required")
+	}
+	return &DisableExecutor{commitStore: config.CommitStore, owner: config.Owner, clock: config.Clock, auditEventID: config.AuditEventID}, nil
+}
+
+func (executor *DisableExecutor) SupportsOperationRecovery(_ context.Context, record operations.OperationRecord, plan recovery.RecoveryPlan) recovery.OperationSupport {
+	if executor == nil || record.Type != operations.OperationNamespaceDisable {
+		return recovery.OperationSupport{Reason: "unsupported_namespace_disable_operation"}
+	}
+	if strings.TrimSpace(record.Phase) != operations.OperationPhaseNamespaceDisableValidate {
+		return recovery.OperationSupport{Reason: "unsupported_namespace_disable_phase"}
+	}
+	if !supportedPlanAction(plan.Action) {
+		return recovery.OperationSupport{Reason: "unsupported_namespace_disable_recovery_action"}
+	}
+	return recovery.OperationSupport{Supported: true}
+}
+
+func (executor *DisableExecutor) ExecuteOperationRecovery(ctx context.Context, record operations.OperationRecord, plan recovery.RecoveryPlan) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if executor == nil {
+		return ErrUnsupportedOperationRecovery
+	}
+	if support := executor.SupportsOperationRecovery(ctx, record, plan); !support.Supported {
+		return fmt.Errorf("%w: %s", ErrUnsupportedOperationRecovery, support.Reason)
+	}
+	if err := validateLeasedRunningRecord(record, executor.owner); err != nil {
+		return err
+	}
+	now := executor.clock().UTC()
+	if now.IsZero() {
+		return errors.New("namespace disable recovery time must be set")
+	}
+	reason := strings.TrimSpace(stringFromSummary(record.InputSummary, "reason"))
+	if reason == "" {
+		return fmt.Errorf("%w: missing disable reason", ErrInvalidRecoveryRecord)
+	}
+	createdAt := record.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	disabledAt := now
+	namespace := resources.Namespace{ID: record.NamespaceID, Status: resources.NamespaceStatusDisabled, DisabledReason: reason, DisabledAt: &disabledAt, CreatedAt: createdAt, UpdatedAt: now}
+	if err := namespace.Validate(); err != nil {
+		return err
+	}
+	operation := record
+	operation.State = operations.OperationStateSucceeded
+	operation.Phase = operations.OperationPhaseNamespaceDisableCommitted
+	operation.Error = nil
+	operation.FinishedAt = &now
+	eventID := strings.TrimSpace(executor.auditEventID())
+	if eventID == "" {
+		return errors.New("namespace disable recovery audit event id must be set")
+	}
+	event := audit.NewEvent(audit.Event{
+		EventID:         eventID,
+		Type:            audit.EventTypeNamespaceDisable,
+		Time:            now,
+		CallerService:   operation.CallerService,
+		AuthorizedActor: audit.Actor{Type: operation.AuthorizedActor.Type, ID: operation.AuthorizedActor.ID},
+		CorrelationID:   operation.CorrelationID,
+		OperationID:     operation.ID,
+		Resource:        audit.Resource{Type: "namespace", ID: operation.NamespaceID, NamespaceID: operation.NamespaceID},
+		Outcome:         audit.OutcomeSucceeded,
+		Reason:          "namespace_disable_committed",
+		Details:         map[string]any{"namespace_id": operation.NamespaceID, "reason": reason},
+	})
+	_, _, err := executor.commitStore.CommitNamespaceDisableWithLease(ctx, namespace, operation.SanitizedForPersistence(), executor.owner, now, event)
+	return err
 }
 
 func (executor *Executor) SupportsOperationRecovery(_ context.Context, record operations.OperationRecord, plan recovery.RecoveryPlan) recovery.OperationSupport {
@@ -132,6 +233,11 @@ func supportedPlanAction(action recovery.RecoveryAction) bool {
 	default:
 		return false
 	}
+}
+
+func stringFromSummary(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func validateLeasedRunningRecord(record operations.OperationRecord, owner string) error {

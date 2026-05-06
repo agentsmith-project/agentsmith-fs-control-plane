@@ -32,32 +32,34 @@ func NewNeutralShellWithLoggerAndAuditSink(logger *slog.Logger, sink audit.Sink)
 }
 
 type InternalAPIShellConfig struct {
-	Logger                      *slog.Logger
-	AuditSink                   audit.Sink
-	PrincipalResolver           PrincipalResolver
-	NamespaceBindingReader      NamespaceVolumeBindingReader
-	NamespaceReader             NamespaceReader
-	RepoReader                  RepoReader
-	VolumeReader                VolumeReader
-	WorkloadMountBindingReader  WorkloadMountBindingReader
-	WorkloadMountPlanReader     WorkloadMountPlanReader
-	ExportStore                 ExportStore
-	RepoFenceReader             RepoFenceReader
-	SavePointHistoryReader      SavePointHistoryReader
-	SavePointMutationGate       RepoJVSMutationGateReader
-	SavePointHistoryJVSRunner   JVSHistoryRunner
-	SavePointHistoryVolumeRoots map[string]string
-	OperationInspectionReader   OperationInspectionStoreReader
-	RepoCreateIntakeStore       RepoCreateOperationIntakeStore
-	DeploymentGlobalPolicy      AllowedCallerPolicy
-	DeploymentNamespacePolicy   AllowedCallerPolicy
-	DeploymentGlobalCallers     []auth.AllowedCaller
-	DeploymentNamespaceCallers  []auth.AllowedCaller
-	OperationIntakeStore        OperationIntakeStore
-	GenerateOperationID         OperationIDGenerator
-	Now                         func() time.Time
-	Readiness                   ReadinessResponse
-	ReadinessProvider           func(context.Context) ReadinessResponse
+	Logger                         *slog.Logger
+	AuditSink                      audit.Sink
+	PrincipalResolver              PrincipalResolver
+	NamespaceBindingReader         NamespaceVolumeBindingReader
+	NamespaceReader                NamespaceReader
+	RepoReader                     RepoReader
+	VolumeReader                   VolumeReader
+	WorkloadMountBindingReader     WorkloadMountBindingReader
+	WorkloadMountPlanReader        WorkloadMountPlanReader
+	ExportStore                    ExportStore
+	RepoFenceReader                RepoFenceReader
+	SavePointHistoryReader         SavePointHistoryReader
+	SavePointMutationGate          RepoJVSMutationGateReader
+	SavePointHistoryJVSRunner      JVSHistoryRunner
+	SavePointHistoryVolumeRoots    map[string]string
+	OperationInspectionReader      OperationInspectionStoreReader
+	RepoCreateIntakeStore          RepoCreateOperationIntakeStore
+	TemplateIntakeStore            TemplateOperationIntakeStore
+	DeploymentGlobalPolicy         AllowedCallerPolicy
+	DeploymentNamespacePolicy      AllowedCallerPolicy
+	DeploymentGlobalCallers        []auth.AllowedCaller
+	DeploymentNamespaceCallers     []auth.AllowedCaller
+	OperationIntakeStore           OperationIntakeStore
+	GenerateOperationID            OperationIDGenerator
+	Now                            func() time.Time
+	Readiness                      ReadinessResponse
+	ReadinessProvider              func(context.Context) ReadinessResponse
+	WorkloadMountAdmissionDisabled bool
 }
 
 func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
@@ -86,6 +88,18 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		AuditSink:   config.AuditSink,
 	})
 	volumeHandler = requestLogHandler(volumeHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/volumes/{volumeId}:ensure", "ensureVolume")
+	volumeHealthHandler := VolumeHealthHandler(VolumeHealthHandlerConfig{
+		Reader:            config.VolumeReader,
+		PrincipalResolver: config.PrincipalResolver,
+		DeploymentPolicy: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		Now:       config.Now,
+		AuditSink: config.AuditSink,
+	})
+	volumeHealthHandler = requestLogHandler(volumeHealthHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/volumes/{volumeId}/health", "getVolumeHealth")
 
 	createRepoHandler := CreateRepoHandler(CreateRepoHandlerConfig{
 		IntakeStore:       config.RepoCreateIntakeStore,
@@ -191,6 +205,12 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	var restoreRunGate RestoreRunIntakeGateReader
 	if typed, ok := config.OperationIntakeStore.(RestoreRunIntakeGateReader); ok {
 		restoreRunGate = typed
+	}
+	templateIntakeStore := config.TemplateIntakeStore
+	if templateIntakeStore == nil {
+		if typed, ok := config.OperationIntakeStore.(TemplateOperationIntakeStore); ok {
+			templateIntakeStore = typed
+		}
 	}
 	mountReader := config.WorkloadMountBindingReader
 	if mountReader == nil {
@@ -301,6 +321,27 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	})
 	restoreRunHandler = requestLogHandler(restoreRunHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/restore-run", "restoreRun")
 
+	repoTemplateHandler := RepoTemplateHandler(RepoTemplateHandlerConfig{
+		RepoReader:        config.RepoReader,
+		NamespaceReader:   config.NamespaceReader,
+		BindingReader:     config.NamespaceBindingReader,
+		FenceReader:       config.RepoFenceReader,
+		MutationGate:      savePointMutationGate,
+		IntakeStore:       templateIntakeStore,
+		IntakeLookupStore: operationLookupStore,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
+	})
+	createRepoTemplateHandler := requestLogHandler(repoTemplateHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repo-templates", "createRepoTemplate")
+	cloneRepoTemplateHandler := requestLogHandler(repoTemplateHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repo-templates/{templateId}:clone", "cloneRepoTemplate")
+
 	bindingHandler := NamespaceVolumeBindingHandler(NamespaceVolumeBindingHandlerConfig{
 		Reader:            config.NamespaceBindingReader,
 		IntakeStore:       config.OperationIntakeStore,
@@ -329,6 +370,19 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		AuditSink:   config.AuditSink,
 	})
 	upsertNamespaceHandler = requestLogHandler(upsertNamespaceHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/namespaces/{namespaceId}", "upsertNamespace")
+	disableNamespaceHandler := DisableNamespaceHandler(DisableNamespaceHandlerConfig{
+		IntakeStore:       config.OperationIntakeStore,
+		PrincipalResolver: config.PrincipalResolver,
+		DeploymentPolicy: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
+	})
+	disableNamespaceHandler = requestLogHandler(disableNamespaceHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/namespaces/{namespaceId}:disable", "disableNamespace")
 
 	workloadMountHandler := WorkloadMountHandler(WorkloadMountHandlerConfig{
 		RepoReader:        config.RepoReader,
@@ -384,13 +438,12 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	implemented := map[string]http.Handler{
 		"createRepo":                       createRepoHandler,
 		"createSavePoint":                  createSavePointHandler,
-		"createWorkloadMountBinding":       createWorkloadMountHandler,
 		"archiveRepo":                      archiveRepoHandler,
 		"restoreArchivedRepo":              restoreArchivedRepoHandler,
 		"deleteRepo":                       deleteRepoHandler,
+		"disableNamespace":                 disableNamespaceHandler,
 		"ensureVolume":                     volumeHandler,
 		"getNamespaceVolumeBinding":        getBindingHandler,
-		"getOrchestratorMountPlan":         getOrchestratorMountPlanHandler,
 		"getRepo":                          getRepoHandler,
 		"getWorkloadMountBinding":          getWorkloadMountHandler,
 		"heartbeatWorkloadMountBinding":    heartbeatWorkloadMountHandler,
@@ -399,6 +452,8 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"restorePreview":                   restorePreviewHandler,
 		"restorePreviewDiscard":            restorePreviewDiscardHandler,
 		"restoreRun":                       restoreRunHandler,
+		"createRepoTemplate":               createRepoTemplateHandler,
+		"cloneRepoTemplate":                cloneRepoTemplateHandler,
 		"restoreTombstonedRepo":            restoreTombstonedRepoHandler,
 		"releaseWorkloadMountBinding":      releaseWorkloadMountHandler,
 		"revokeWorkloadMountBinding":       revokeWorkloadMountHandler,
@@ -407,6 +462,13 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"putNamespaceVolumeBinding":        putBindingHandler,
 		"upsertNamespace":                  upsertNamespaceHandler,
 		"updateWorkloadMountBindingStatus": updateWorkloadMountStatusHandler,
+	}
+	if !config.WorkloadMountAdmissionDisabled {
+		implemented["createWorkloadMountBinding"] = createWorkloadMountHandler
+		implemented["getOrchestratorMountPlan"] = getOrchestratorMountPlanHandler
+	}
+	if config.VolumeReader != nil {
+		implemented["getVolumeHealth"] = volumeHealthHandler
 	}
 	if exportStore != nil && config.RepoReader != nil && config.NamespaceReader != nil && config.NamespaceBindingReader != nil && config.VolumeReader != nil && config.RepoFenceReader != nil {
 		implemented["createExport"] = createExportHandler

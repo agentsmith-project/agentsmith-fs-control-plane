@@ -342,6 +342,10 @@ func (store *cmdWorkerAppStore) ListNamespaceUpsertOperationsForRecovery(context
 	return nil, nil
 }
 
+func (store *cmdWorkerAppStore) ListNamespaceDisableOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 func (store *cmdWorkerAppStore) ListVolumeEnsureOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
 	return nil, nil
 }
@@ -370,6 +374,14 @@ func (store *cmdWorkerAppStore) ListSavePointCreateOperationsForRecovery(context
 	return nil, nil
 }
 
+func (store *cmdWorkerAppStore) ListTemplateCreateOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
+func (store *cmdWorkerAppStore) ListTemplateCloneOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 func (store *cmdWorkerAppStore) ListRestorePreviewOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
 	return nil, nil
 }
@@ -383,6 +395,10 @@ func (store *cmdWorkerAppStore) ListRestoreRunOperationsForRecovery(context.Cont
 }
 
 func (store *cmdWorkerAppStore) AcquireNamespaceUpsertOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) AcquireNamespaceDisableOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
 
@@ -414,6 +430,14 @@ func (store *cmdWorkerAppStore) AcquireSavePointCreateOperationLease(context.Con
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
 
+func (store *cmdWorkerAppStore) AcquireTemplateCreateOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) AcquireTemplateCloneOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
 func (store *cmdWorkerAppStore) AcquireRestorePreviewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
@@ -427,6 +451,10 @@ func (store *cmdWorkerAppStore) AcquireRestoreRunOperationLease(context.Context,
 }
 
 func (store *cmdWorkerAppStore) CommitNamespaceUpsertWithLease(context.Context, resources.Namespace, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (resources.Namespace, operations.OperationRecord, error) {
+	return resources.Namespace{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitNamespaceDisableWithLease(context.Context, resources.Namespace, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (resources.Namespace, operations.OperationRecord, error) {
 	return resources.Namespace{}, operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
@@ -491,6 +519,26 @@ func (store *cmdWorkerAppStore) CommitSavePointCreateSucceededWithLease(context.
 }
 
 func (store *cmdWorkerAppStore) CommitSavePointCreateFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitTemplateCreateSucceededWithLease(context.Context, resources.Repo, string, string, string, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (resources.Repo, operations.OperationRecord, error) {
+	return resources.Repo{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) MarkTemplateCreateWriterFencedWithLease(context.Context, fences.Fence, operations.SanitizedOperationRecord, string, time.Time) (fences.Fence, operations.OperationRecord, error) {
+	return fences.Fence{}, operations.OperationRecord{}, errors.New("unexpected mark")
+}
+
+func (store *cmdWorkerAppStore) CommitTemplateCreateFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitTemplateCloneSucceededWithLease(context.Context, resources.Repo, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (resources.Repo, operations.OperationRecord, error) {
+	return resources.Repo{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitTemplateCloneFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }
 

@@ -66,6 +66,54 @@ func (store *Store) CommitNamespaceUpsertWithLease(ctx context.Context, namespac
 	return gotNamespace, gotOperation, nil
 }
 
+func (store *Store) CommitNamespaceDisableWithLease(ctx context.Context, namespace resources.Namespace, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
+	if err := namespace.Validate(); err != nil {
+		return resources.Namespace{}, operations.OperationRecord{}, err
+	}
+	if namespace.Status != resources.NamespaceStatusDisabled {
+		return resources.Namespace{}, operations.OperationRecord{}, operationLeaseInvalidRequest("namespace_status", "namespace disable commit requires disabled namespace metadata")
+	}
+	record := sanitized.Record()
+	if record.Type != operations.OperationNamespaceDisable {
+		return resources.Namespace{}, operations.OperationRecord{}, operationLeaseInvalidRequest("operation_type", "operation record must be namespace_disable")
+	}
+	if record.State != operations.OperationStateSucceeded || record.Phase != operations.OperationPhaseNamespaceDisableCommitted {
+		return resources.Namespace{}, operations.OperationRecord{}, operationLeaseInvalidRequest("operation_state", "namespace disable commit requires succeeded committed operation update")
+	}
+	if strings.TrimSpace(record.NamespaceID) == "" || record.NamespaceID != namespace.ID || record.Resource.Type != "namespace" || record.Resource.ID != namespace.ID {
+		return resources.Namespace{}, operations.OperationRecord{}, operationLeaseInvalidRequest("namespace_id", "operation namespace resource must match namespace metadata")
+	}
+	if strings.TrimSpace(event.OperationID) == "" || event.OperationID != record.ID {
+		return resources.Namespace{}, operations.OperationRecord{}, auditOutboxInvalidRequest("operation_id", "audit operation id must match operation update")
+	}
+	if event.Type != audit.EventTypeNamespaceDisable || event.Outcome != audit.OutcomeSucceeded {
+		return resources.Namespace{}, operations.OperationRecord{}, auditOutboxInvalidRequest("event_type", "namespace disable audit event must be succeeded namespace_disable")
+	}
+	if err := validateNamespaceUpsertAuditEvent(namespace, record, event); err != nil {
+		return resources.Namespace{}, operations.OperationRecord{}, err
+	}
+	operationArgs, err := operationLeaseFencedUpdateArgs(record, owner, now)
+	if err != nil {
+		return resources.Namespace{}, operations.OperationRecord{}, err
+	}
+	outboxRecord, err := audit.NewOutboxRecord(event, now)
+	if err != nil {
+		return resources.Namespace{}, operations.OperationRecord{}, err
+	}
+	args := append(operationArgs, namespaceUpsertStoredPredicateArgs(record)...)
+	args = append(args, namespaceArgs(namespace)...)
+	args = append(args, auditOutboxInsertArgs(outboxRecord)...)
+	row := store.exec.QueryRowContext(ctx, namespaceDisableOperationCommitWithLeaseSQL(), args...)
+	gotNamespace, gotOperation, err := scanNamespaceAndOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return resources.Namespace{}, operations.OperationRecord{}, operationLeaseUnavailable("namespace disable commit", record.ID, err)
+		}
+		return resources.Namespace{}, operations.OperationRecord{}, err
+	}
+	return gotNamespace, gotOperation, nil
+}
+
 func validateNamespaceUpsertOperationRecord(namespace resources.Namespace, record operations.OperationRecord) error {
 	if record.Type != operations.OperationNamespaceUpsert {
 		return operationLeaseInvalidRequest("operation_type", "operation record must be namespace_upsert")
@@ -129,6 +177,35 @@ func namespaceUpsertOperationCommitWithLeaseSQL() string {
 		"RETURNING audit_event_id" +
 		") SELECT " + prefixedColumns("upserted_namespace", namespaceColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) +
 		" FROM upserted_namespace, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
+}
+
+func namespaceDisableOperationCommitWithLeaseSQL() string {
+	return "WITH updated_operation AS (" +
+		namespaceDisableOperationLeaseFencedUpdateBaseSQL() +
+		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"), disabled_namespace AS (" +
+		"UPDATE namespaces SET status = $20, disabled_reason = $21, disabled_at = $22, updated_at = $24 " +
+		"FROM updated_operation WHERE namespaces.namespace_id = $19 AND namespaces.status = 'active' " +
+		"RETURNING " + prefixedColumns("namespaces", namespaceColumns) +
+		"), inserted_audit AS (" +
+		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") " +
+		"SELECT " + placeholders(25, len(auditOutboxColumns)) + " FROM updated_operation, disabled_namespace " +
+		"RETURNING audit_event_id" +
+		") SELECT " + prefixedColumns("disabled_namespace", namespaceColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) +
+		" FROM disabled_namespace, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
+}
+
+func namespaceDisableOperationLeaseFencedUpdateBaseSQL() string {
+	return operationLeaseFencedUpdateBaseSQL() +
+		"AND operation_type = 'namespace_disable' " +
+		"AND phase = 'validate_namespace_disable' " +
+		"AND namespace_id = $14 " +
+		"AND resource_type = 'namespace' " +
+		"AND resource_id = $14 " +
+		"AND caller_service = $15 " +
+		"AND correlation_id = $16 " +
+		"AND authorized_actor_type = $17 " +
+		"AND authorized_actor_id = $18 "
 }
 
 func namespaceUpsertOperationLeaseFencedUpdateBaseSQL() string {

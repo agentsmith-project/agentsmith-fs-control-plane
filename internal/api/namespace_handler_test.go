@@ -73,6 +73,46 @@ func TestUpsertNamespaceHandlerCreatesOperationIntake(t *testing.T) {
 	assertOperationEnvelopeDoesNotLeakInternalFields(t, env)
 }
 
+func TestDisableNamespaceHandlerCreatesOperationIntake(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	store := &fakeOperationIntakeStore{}
+	handler := DisableNamespaceHandler(DisableNamespaceHandlerConfig{
+		IntakeStore:       store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		OperationID:       func() string { return "op_ns_disable" },
+		Now:               func() time.Time { return now },
+		DeploymentPolicy:  namespaceBindingAllowedPolicy(auth.RoleNamespaceAdmin),
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, disableNamespaceRequest("/internal/v1/namespaces/ns_123:disable", "ns_123", `{"reason":"security hold"}`))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+	}
+	if store.calls != 1 {
+		t.Fatalf("intake calls = %d, want 1", store.calls)
+	}
+	spec := store.spec
+	wantScope := operations.NewIdempotencyScope("agentsmith-api", "ns_123", operations.OperationNamespaceDisable, "idem_namespace")
+	if spec.OperationID != "op_ns_disable" || spec.Scope != wantScope {
+		t.Fatalf("spec op/scope = %q/%#v, want op_ns_disable/%#v", spec.OperationID, spec.Scope, wantScope)
+	}
+	if spec.Phase != operations.OperationPhaseNamespaceDisableValidate {
+		t.Fatalf("phase = %q, want %s", spec.Phase, operations.OperationPhaseNamespaceDisableValidate)
+	}
+	if spec.NamespaceID != "ns_123" || spec.Resource.Type != "namespace" || spec.Resource.ID != "ns_123" {
+		t.Fatalf("namespace/resource = %q/%#v", spec.NamespaceID, spec.Resource)
+	}
+	if spec.InputSummary["reason"] != "security hold" {
+		t.Fatalf("input summary = %#v, want disable reason", spec.InputSummary)
+	}
+	env := decodeOperationEnvelope(t, rec.Body.Bytes())
+	if env.OperationID != "op_ns_disable" || env.OperationState != OperationStateQueued {
+		t.Fatalf("envelope = %#v, want queued namespace disable op", env)
+	}
+}
+
 func TestUpsertNamespaceHandlerMapsIntakeErrors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -258,6 +298,12 @@ func upsertNamespaceRequest(path string, namespaceID string, body string) *http.
 	if namespaceID != "" {
 		req.Header.Set(auth.HeaderNamespaceID, namespaceID)
 	}
+	return req
+}
+
+func disableNamespaceRequest(path string, namespaceID string, body string) *http.Request {
+	req := upsertNamespaceRequest(path, namespaceID, body)
+	req.Method = http.MethodPost
 	return req
 }
 

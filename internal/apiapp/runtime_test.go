@@ -104,15 +104,15 @@ func TestInternalRuntimeServesStorageBackedImplementedSubsetAndFailsClosedForMis
 		t.Fatalf("binding response = %#v", binding)
 	}
 
-	exportReq := internalRequest(http.MethodPost, "/internal/v1/repo-templates/tpl_alpha:clone", "svc_api", "token-api")
+	exportReq := internalRequest(http.MethodPost, "/internal/v1/repo-templates/tmpl_alpha:clone", "svc_api", "token-api")
 	rec = httptest.NewRecorder()
 	runtime.Handler.ServeHTTP(rec, exportReq)
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("unimplemented status = %d, want %d: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+		t.Fatalf("template route status = %d, want %d: %s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "requested internal API capability is not enabled") {
-		t.Fatalf("unimplemented route body = %s, want internal capability denial", body)
+	if !strings.Contains(body, "caller role is not allowed") {
+		t.Fatalf("template route body = %s, want implemented route role denial", body)
 	}
 	if strings.Contains(body, "neutral shell") {
 		t.Fatalf("unimplemented route returned neutral shell text: %s", body)
@@ -415,6 +415,14 @@ func (*fakeRuntimeStore) CreateOrReuseOperation(context.Context, operations.Queu
 }
 
 func (*fakeRuntimeStore) CreateOrReuseRepoCreateOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	return operations.IdempotencyResolution{}, errors.New("not implemented")
+}
+
+func (*fakeRuntimeStore) CreateOrReuseTemplateCreateOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	return operations.IdempotencyResolution{}, errors.New("not implemented")
+}
+
+func (*fakeRuntimeStore) CreateOrReuseTemplateCloneOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
 	return operations.IdempotencyResolution{}, errors.New("not implemented")
 }
 

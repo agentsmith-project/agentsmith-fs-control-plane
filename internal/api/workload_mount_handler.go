@@ -45,6 +45,7 @@ type WorkloadMountHandlerConfig struct {
 	AllowedCallers    AllowedCallerPolicy
 	OperationID       OperationIDGenerator
 	MountBindingID    func() string
+	EventID           func() string
 	Now               func() time.Time
 	AuditSink         audit.Sink
 }
@@ -81,7 +82,7 @@ func WorkloadMountHandler(config WorkloadMountHandlerConfig) http.Handler {
 			lookup = typed
 		}
 	}
-	leaf := workloadMountLeafHandler{routes: routes, repoReader: config.RepoReader, namespaceReader: config.NamespaceReader, bindingReader: config.BindingReader, volumeReader: config.VolumeReader, fenceReader: config.FenceReader, mountReader: config.MountReader, planReader: config.PlanReader, intakeStore: config.IntakeStore, lookupStore: lookup, operationID: config.OperationID, mountBindingID: config.MountBindingID, now: config.Now, sink: config.AuditSink}
+	leaf := workloadMountLeafHandler{routes: routes, repoReader: config.RepoReader, namespaceReader: config.NamespaceReader, bindingReader: config.BindingReader, volumeReader: config.VolumeReader, fenceReader: config.FenceReader, mountReader: config.MountReader, planReader: config.PlanReader, intakeStore: config.IntakeStore, lookupStore: lookup, operationID: config.OperationID, mountBindingID: config.MountBindingID, eventID: config.EventID, now: config.Now, sink: config.AuditSink}
 	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, workloadMountRouteResolver{routes: routes}, config.AllowedCallers, config.AuditSink)
 }
 
@@ -126,6 +127,7 @@ type workloadMountLeafHandler struct {
 	lookupStore     OperationIdempotencyLookupStore
 	operationID     OperationIDGenerator
 	mountBindingID  func() string
+	eventID         func() string
 	now             func() time.Time
 	sink            audit.Sink
 }
@@ -274,6 +276,7 @@ func (handler workloadMountLeafHandler) plan(w http.ResponseWriter, r *http.Requ
 		handler.writeReadError(w, r, err)
 		return
 	}
+	handler.emitMountPlanAudit(r.Context(), requestContext, route, binding, plan)
 	_ = writeJSON(w, http.StatusOK, plan)
 }
 
@@ -483,6 +486,45 @@ func (handler workloadMountLeafHandler) newMountBindingID() string {
 		return ""
 	}
 	return "wmb_" + hex.EncodeToString(b[:])
+}
+
+func (handler workloadMountLeafHandler) newEventID() string {
+	if handler.eventID != nil {
+		return strings.TrimSpace(handler.eventID())
+	}
+	var b [10]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return "evt_" + hex.EncodeToString(b[:])
+}
+
+func (handler workloadMountLeafHandler) emitMountPlanAudit(ctx context.Context, requestContext auth.RequestContext, route RouteMetadata, binding workloadmount.Binding, plan workloadmount.Plan) {
+	if handler.sink == nil {
+		return
+	}
+	eventID := handler.newEventID()
+	if eventID == "" {
+		return
+	}
+	event := audit.NewEvent(audit.Event{
+		EventID:         eventID,
+		Type:            audit.EventTypeMountPlanIssued,
+		Time:            handler.currentTime(),
+		CallerService:   requestContext.CallerService,
+		AuthorizedActor: audit.Actor{Type: requestContext.Actor.Type, ID: requestContext.Actor.ID},
+		CorrelationID:   requestContext.CorrelationID,
+		Resource:        audit.Resource{Type: "workload_mount_binding", ID: binding.ID, NamespaceID: binding.NamespaceID},
+		Outcome:         audit.OutcomeSucceeded,
+		Reason:          route.OperationID,
+		Details: map[string]any{
+			"mount_binding_id": binding.ID,
+			"namespace_id":     binding.NamespaceID,
+			"repo_id":          binding.RepoID,
+			"read_only":        plan.ReadOnly,
+		},
+	})
+	_ = handler.sink.Emit(ctx, event)
 }
 
 func requestNamespace(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, sink audit.Sink) (string, bool) {

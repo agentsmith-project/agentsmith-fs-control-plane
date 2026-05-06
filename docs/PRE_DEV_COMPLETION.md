@@ -85,24 +85,26 @@ Neutral service skeleton and control-plane primitives now exist:
 - test harness
 
 The recovery planner and repo recovery inspection are read-only classifiers for
-later recovery worker/runbook decisions. `afscp-worker --run-once` now has an
-opt-in production bootstrap for the minimal `namespace_upsert` and
-`namespace_volume_binding_put` recovery executors plus metadata-only
-`volume_ensure`; it does not touch JVS/WebDAV/mount/storage mutation. The first
-PostgreSQL adapter slice now implements operation reader/writer, DB-only
-operation lease claim/reclaim/recover/finalize/renew plus lease-fenced worker
-progress/terminal update primitive, idempotency create-or-reuse, audit outbox
-append plus DB-only at-least-once delivery primitive, minimal repo fence held
-read/create/active release, and SELECT-only repo recovery inspection readers.
+worker/runbook decisions. `afscp-worker --run-once` now has explicit-gated
+production bootstraps for metadata recovery, repo create, repo lifecycle and
+purge recovery, save/restore flows, template create/clone, export terminal
+reconcile, workload mount stale-lease scanning, and audit outbox HTTP JSON
+delivery. The PostgreSQL adapter slice implements operation reader/writer,
+DB-only operation lease claim/reclaim/recover/finalize/renew plus lease-fenced
+worker progress/terminal update primitives, idempotency create-or-reuse, audit
+outbox append plus at-least-once delivery primitives, repo fence held/read/create
+and active release, and SELECT-only repo recovery inspection readers.
 Worker-owned progress/terminal writes must use the lease-fenced update
 primitive, not unguarded `UpdateOperation`. Resource metadata persistence for
-volumes, namespaces, namespace volume bindings, and repo/repo lifecycle metadata
-also exists as control-plane state only. Real external audit delivery
-worker/sink integration, repo lifecycle workers, repo/JVS/WebDAV/mount endpoint
-handlers, JVS execution, WebDAV serving, workload mount issuance, and storage
-mutation are not implemented. Continue directly toward GA by finishing guardrail review,
-reviewing the read-only repo recovery inspection, then adding remaining recovery
-loop behavior and handlers only after their dependency gates are accepted.
+volumes, namespaces, namespace volume bindings, repo/repo lifecycle metadata,
+exports, workload mounts, restore plans, and repo templates exists as
+control-plane state. API/runtime implementation now includes repo/JVS lifecycle,
+save/restore, namespace-scoped template create/clone, WebDAV export
+create/get/revoke plus gateway serving, workload mount issuance and
+orchestrator plans, writer fences, and durable operation-backed storage
+mutation. Continue directly toward GA by finishing guardrail review, external
+owner acceptance, generated-client review, security review, runbook drills, and
+human acceptance for the remaining open readiness gates.
 
 G-005 is closed by JVS v0.4.8 evidence in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`. This only closes the JVS gate.

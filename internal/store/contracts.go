@@ -102,6 +102,16 @@ type NamespaceUpsertOperationRecoveryStore interface {
 	NamespaceUpsertOperationCommitStore
 }
 
+type NamespaceDisableOperationCommitStore interface {
+	CommitNamespaceDisableWithLease(ctx context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error)
+}
+
+type NamespaceDisableOperationRecoveryStore interface {
+	ListNamespaceDisableOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireNamespaceDisableOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	NamespaceDisableOperationCommitStore
+}
+
 // NamespaceVolumeBindingOperationCommitStore atomically commits namespace
 // volume binding metadata, a lease-fenced operation update, and its audit
 // outbox event. Implementations must perform all writes in the same durable
@@ -178,6 +188,11 @@ type RepoCreateOperationIntakeStore interface {
 	CreateOrReuseRepoCreateOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
+type TemplateOperationIntakeStore interface {
+	CreateOrReuseTemplateCreateOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+	CreateOrReuseTemplateCloneOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+}
+
 // RepoCreateOperationCommitStore atomically commits repo metadata, a
 // lease-fenced repo_create operation update, audit outbox append, and the
 // target create fence release. Failure/intervention updates must also be
@@ -206,6 +221,33 @@ type RepoCreateOperationRecoveryStore interface {
 	AcquireRepoCreateOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
 	RepoCreateOperationCommitStore
 	RepoCreateOperationMetadataReader
+}
+
+type TemplateOperationCommitStore interface {
+	MarkTemplateCreateWriterFencedWithLease(ctx context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error)
+	CommitTemplateCreateSucceededWithLease(ctx context.Context, template resources.Repo, sourceRepoID, sourceSavePointID, cloneHistoryMode string, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error)
+	CommitTemplateCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+	CommitTemplateCloneSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error)
+	CommitTemplateCloneFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+}
+
+type TemplateOperationMetadataReader interface {
+	GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error)
+	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
+	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
+	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
+	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
+	ListExportSessionsByRepo(ctx context.Context, repoID string) ([]sessionstate.ExportSession, error)
+	ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error)
+}
+
+type TemplateOperationRecoveryStore interface {
+	ListTemplateCreateOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireTemplateCreateOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	ListTemplateCloneOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireTemplateCloneOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	TemplateOperationCommitStore
+	TemplateOperationMetadataReader
 }
 
 type RepoLifecycleOperationCommitStore interface {
@@ -480,6 +522,10 @@ type ExportSessionReconcileStore interface {
 
 type WorkloadMountBindingReader interface {
 	GetWorkloadMountBinding(ctx context.Context, mountBindingID string) (workloadmount.Binding, error)
+}
+
+type WorkloadMountStaleLeaseReader interface {
+	ListStaleNonTerminalWorkloadMountBindings(ctx context.Context, now time.Time, limit int) ([]workloadmount.Binding, error)
 }
 
 type WorkloadMountPlanReader interface {

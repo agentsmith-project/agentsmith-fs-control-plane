@@ -117,6 +117,20 @@ func (store *Store) ListNamespaceUpsertOperationsForRecovery(ctx context.Context
 	return scanOperations(rows)
 }
 
+func (store *Store) ListNamespaceDisableOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("list namespace disable operations for recovery: now must be set")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list namespace disable operations for recovery: limit must be positive")
+	}
+	rows, err := store.exec.QueryContext(ctx, namespaceDisableOperationRecoveryCandidatesSQL(), now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanOperations(rows)
+}
+
 func (store *Store) ListVolumeEnsureOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
 	if now.IsZero() {
 		return nil, fmt.Errorf("list volume ensure operations for recovery: now must be set")
@@ -246,6 +260,34 @@ func (store *Store) ListRestoreRunOperationsForRecovery(ctx context.Context, now
 	return scanOperations(rows)
 }
 
+func (store *Store) ListTemplateCreateOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("list template create operations for recovery: now must be set")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list template create operations for recovery: limit must be positive")
+	}
+	rows, err := store.exec.QueryContext(ctx, templateCreateOperationRecoveryCandidatesSQL(), now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanOperations(rows)
+}
+
+func (store *Store) ListTemplateCloneOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("list template clone operations for recovery: now must be set")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list template clone operations for recovery: limit must be positive")
+	}
+	rows, err := store.exec.QueryContext(ctx, templateCloneOperationRecoveryCandidatesSQL(), now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanOperations(rows)
+}
+
 func (store *Store) ListWorkloadMountBindingOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
 	if now.IsZero() {
 		return nil, fmt.Errorf("list workload mount binding operations for recovery: now must be set")
@@ -335,6 +377,25 @@ func (store *Store) AcquireNamespaceUpsertOperationLease(ctx context.Context, op
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return operations.OperationRecord{}, operationLeaseUnavailable("acquire namespace upsert", args.operationID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) AcquireNamespaceDisableOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	args, err := operationLeaseRequestArgs(operationID, request)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	if args.recoveryMode != "" {
+		return operations.OperationRecord{}, operationLeaseInvalidRequest("recovery_mode", "namespace disable recovery does not perform explicit recovery actions")
+	}
+	row := store.exec.QueryRowContext(ctx, namespaceDisableOperationAcquireLeaseSQL(), args.operationID, args.owner, args.expiresAt, args.now, args.cancelPolicy)
+	record, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("acquire namespace disable", args.operationID, err)
 		}
 		return operations.OperationRecord{}, err
 	}
@@ -512,6 +573,44 @@ func (store *Store) AcquireRestoreRunOperationLease(ctx context.Context, operati
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return operations.OperationRecord{}, operationLeaseUnavailable("acquire restore run", args.operationID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) AcquireTemplateCreateOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	args, err := operationLeaseRequestArgs(operationID, request)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	if args.recoveryMode != "" {
+		return operations.OperationRecord{}, operationLeaseInvalidRequest("recovery_mode", "template create recovery does not perform explicit recovery actions")
+	}
+	row := store.exec.QueryRowContext(ctx, templateCreateOperationAcquireLeaseSQL(), args.operationID, args.owner, args.expiresAt, args.now, args.cancelPolicy)
+	record, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("acquire template create", args.operationID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *Store) AcquireTemplateCloneOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	args, err := operationLeaseRequestArgs(operationID, request)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	if args.recoveryMode != "" {
+		return operations.OperationRecord{}, operationLeaseInvalidRequest("recovery_mode", "template clone recovery does not perform explicit recovery actions")
+	}
+	row := store.exec.QueryRowContext(ctx, templateCloneOperationAcquireLeaseSQL(), args.operationID, args.owner, args.expiresAt, args.now, args.cancelPolicy)
+	record, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("acquire template clone", args.operationID, err)
 		}
 		return operations.OperationRecord{}, err
 	}
@@ -798,6 +897,68 @@ func (store *Store) CreateOrReuseRestoreRunOperation(ctx context.Context, spec o
 	return operations.IdempotencyResolution{Operation: got.Sanitized(), Existing: !inserted, Reused: !inserted}, nil
 }
 
+func (store *Store) CreateOrReuseTemplateCreateOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	if err := validateTemplateCreateOperationSpec(record); err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	record = record.SanitizedForPersistence().Record()
+	args, err := operationInsertArgs(record)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	var inserted bool
+	row := store.exec.QueryRowContext(ctx, templateCreateOperationCreateOrReuseSQL(), args...)
+	got, err := scanOperationWithInserted(row, &inserted)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.IdempotencyResolution{}, fmt.Errorf("%w: template %q already exists", operations.ErrRepoAlreadyExists, record.TemplateID)
+		}
+		if mapped := mapOperationUniqueViolation(err, record.RepoID); mapped != nil {
+			return operations.IdempotencyResolution{}, mapped
+		}
+		return operations.IdempotencyResolution{}, err
+	}
+	if !inserted && got.RequestHash != spec.RequestHash {
+		return operations.IdempotencyResolution{}, fmt.Errorf("%w: scope %q already exists with a different request hash", operations.ErrIdempotencyConflict, spec.Scope.String())
+	}
+	return operations.IdempotencyResolution{Operation: got.Sanitized(), Existing: !inserted, Reused: !inserted}, nil
+}
+
+func (store *Store) CreateOrReuseTemplateCloneOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	if err := validateTemplateCloneOperationSpec(record); err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	record = record.SanitizedForPersistence().Record()
+	args, err := operationInsertArgs(record)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	var inserted bool
+	row := store.exec.QueryRowContext(ctx, templateCloneOperationCreateOrReuseSQL(), args...)
+	got, err := scanOperationWithInserted(row, &inserted)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.IdempotencyResolution{}, fmt.Errorf("%w: repo %q already exists", operations.ErrRepoAlreadyExists, record.RepoID)
+		}
+		if mapped := mapOperationUniqueViolation(err, record.RepoID); mapped != nil {
+			return operations.IdempotencyResolution{}, mapped
+		}
+		return operations.IdempotencyResolution{}, err
+	}
+	if !inserted && got.RequestHash != spec.RequestHash {
+		return operations.IdempotencyResolution{}, fmt.Errorf("%w: scope %q already exists with a different request hash", operations.ErrIdempotencyConflict, spec.Scope.String())
+	}
+	return operations.IdempotencyResolution{Operation: got.Sanitized(), Existing: !inserted, Reused: !inserted}, nil
+}
+
 func validateRepoCreateOperationSpec(record operations.OperationRecord) error {
 	if record.Type != operations.OperationRepoCreate {
 		return operationLeaseInvalidRequest("operation_type", "operation record must be repo_create")
@@ -886,6 +1047,50 @@ func validateRestorePreviewDiscardOperationSpec(record operations.OperationRecor
 	return nil
 }
 
+func validateTemplateCreateOperationSpec(record operations.OperationRecord) error {
+	if record.Type != operations.OperationTemplateCreate {
+		return operationLeaseInvalidRequest("operation_type", "operation record must be template_create")
+	}
+	if record.State != operations.OperationStateQueued || record.Phase != operations.OperationPhaseTemplateCreateValidate {
+		return operationLeaseInvalidRequest("phase", "template_create intake requires queued validate phase")
+	}
+	if strings.TrimSpace(record.NamespaceID) == "" || strings.TrimSpace(record.RepoID) == "" || strings.TrimSpace(record.TemplateID) == "" {
+		return operationLeaseInvalidRequest("resource", "template_create intake requires namespace, source repo, and template ids")
+	}
+	if record.Resource.Type != "repo_template" || record.Resource.ID != record.TemplateID {
+		return operationLeaseInvalidRequest("resource", "template_create resource must match target template")
+	}
+	if err := pathresolver.ValidateID(pathresolver.RepoID, record.RepoID); err != nil {
+		return operationLeaseInvalidRequest("repo_id", "template_create requires safe source repo id")
+	}
+	if err := pathresolver.ValidateID(pathresolver.TemplateID, record.TemplateID); err != nil {
+		return operationLeaseInvalidRequest("template_id", "template_create requires safe target template id")
+	}
+	return nil
+}
+
+func validateTemplateCloneOperationSpec(record operations.OperationRecord) error {
+	if record.Type != operations.OperationTemplateClone {
+		return operationLeaseInvalidRequest("operation_type", "operation record must be template_clone")
+	}
+	if record.State != operations.OperationStateQueued || record.Phase != operations.OperationPhaseTemplateCloneValidate {
+		return operationLeaseInvalidRequest("phase", "template_clone intake requires queued validate phase")
+	}
+	if strings.TrimSpace(record.NamespaceID) == "" || strings.TrimSpace(record.RepoID) == "" || strings.TrimSpace(record.TemplateID) == "" {
+		return operationLeaseInvalidRequest("resource", "template_clone intake requires namespace, target repo, and template ids")
+	}
+	if record.Resource.Type != "repo" || record.Resource.ID != record.RepoID {
+		return operationLeaseInvalidRequest("resource", "template_clone resource must match target repo")
+	}
+	if err := pathresolver.ValidateID(pathresolver.RepoID, record.RepoID); err != nil {
+		return operationLeaseInvalidRequest("repo_id", "template_clone requires safe target repo id")
+	}
+	if err := pathresolver.ValidateID(pathresolver.TemplateID, record.TemplateID); err != nil {
+		return operationLeaseInvalidRequest("template_id", "template_clone requires safe template id")
+	}
+	return nil
+}
+
 func restorePreviewIntakeGateError(gateCode, repoID string) error {
 	switch gateCode {
 	case "active_restore_plan":
@@ -959,6 +1164,36 @@ func repoCreateOperationCreateOrReuseSQL() string {
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM existing_operation " +
 		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM inserted_operation " +
 		"LIMIT 1"
+}
+
+func templateCreateOperationCreateOrReuseSQL() string {
+	return "WITH existing_operation AS (" +
+		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", false AS inserted FROM operations " +
+		"WHERE caller_service = $12 AND namespace_id = $17 AND operation_type = 'template_create' AND idempotency_key = $9" +
+		"), inserted_operation AS (" +
+		"INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") " +
+		"SELECT " + placeholders(1, len(operationColumns)) + " " +
+		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
+		"AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = $19) " +
+		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
+		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted" +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM existing_operation " +
+		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM inserted_operation LIMIT 1"
+}
+
+func templateCloneOperationCreateOrReuseSQL() string {
+	return "WITH existing_operation AS (" +
+		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", false AS inserted FROM operations " +
+		"WHERE caller_service = $12 AND namespace_id = $17 AND operation_type = 'template_clone' AND idempotency_key = $9" +
+		"), inserted_operation AS (" +
+		"INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") " +
+		"SELECT " + placeholders(1, len(operationColumns)) + " " +
+		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
+		"AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = $18) " +
+		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
+		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted" +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM existing_operation " +
+		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM inserted_operation LIMIT 1"
 }
 
 func restorePreviewOperationCreateOrReuseSQL() string {
@@ -1095,6 +1330,27 @@ func namespaceUpsertOperationRecoveryCandidatesSQL() string {
 		") ORDER BY created_at, operation_id LIMIT $2"
 }
 
+func namespaceDisableOperationRecoveryCandidatesSQL() string {
+	return scopedOperationRecoveryCandidatesSQL("namespace_disable", "validate_namespace_disable", false)
+}
+
+func scopedOperationRecoveryCandidatesSQL(operationType, phase string, requireGlobal bool) string {
+	noLeasePair := "(lease_owner IS NULL AND lease_expires_at IS NULL)"
+	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
+	invalidLeasePair := "((lease_owner IS NULL AND lease_expires_at IS NOT NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) = '') OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NULL))"
+	global := ""
+	if requireGlobal {
+		global = " AND namespace_id = ''"
+	}
+	return operationSelectSQL() + " WHERE " +
+		"operation_type = '" + operationType + "' AND phase = '" + phase + "'" + global + " AND (" +
+		"(operation_state = 'queued') OR " +
+		"(operation_state = 'running' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'cancel_requested' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'operator_intervention_required')" +
+		") ORDER BY created_at, operation_id LIMIT $2"
+}
+
 func volumeEnsureOperationRecoveryCandidatesSQL() string {
 	noLeasePair := "(lease_owner IS NULL AND lease_expires_at IS NULL)"
 	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
@@ -1211,6 +1467,23 @@ func restoreRunOperationRecoveryCandidatesSQL() string {
 		") ORDER BY created_at, operation_id LIMIT $2"
 }
 
+func templateCreateOperationRecoveryCandidatesSQL() string {
+	noLeasePair := "(lease_owner IS NULL AND lease_expires_at IS NULL)"
+	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
+	invalidLeasePair := "((lease_owner IS NULL AND lease_expires_at IS NOT NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) = '') OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NULL))"
+	return operationSelectSQL() + " WHERE " +
+		"operation_type = 'template_create' AND phase IN ('validate_template_create','template_create_writer_fenced') AND (" +
+		"(operation_state = 'queued') OR " +
+		"(operation_state = 'running' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'cancel_requested' AND phase = 'validate_template_create' AND (" + noLeasePair + " OR " + invalidLeasePair + " OR (" + completeLeasePair + " AND lease_expires_at <= $1))) OR " +
+		"(operation_state = 'operator_intervention_required')" +
+		") ORDER BY created_at, operation_id LIMIT $2"
+}
+
+func templateCloneOperationRecoveryCandidatesSQL() string {
+	return scopedOperationRecoveryCandidatesSQL("template_clone", operations.OperationPhaseTemplateCloneValidate, false)
+}
+
 func workloadMountBindingOperationRecoveryCandidatesSQL() string {
 	noLeasePair := "(lease_owner IS NULL AND lease_expires_at IS NULL)"
 	completeLeasePair := "(lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL)"
@@ -1276,6 +1549,46 @@ func namespaceUpsertOperationAcquireLeaseSQL() string {
 		"WHERE operation_id = $1 " +
 		"AND operation_type = 'namespace_upsert' " +
 		"AND phase = 'validate_namespace_upsert' " +
+		"AND (" +
+		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
+		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
+		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
+		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+}
+
+func namespaceDisableOperationAcquireLeaseSQL() string {
+	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
+	return "UPDATE operations SET " +
+		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
+		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
+		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
+		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
+		"updated_at = $4 " +
+		"WHERE operation_id = $1 " +
+		"AND operation_type = 'namespace_disable' " +
+		"AND phase = 'validate_namespace_disable' " +
+		"AND (" +
+		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
+		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
+		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
+		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+}
+
+func scopedOperationAcquireLeaseSQL(operationType, phase string) string {
+	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
+	return "UPDATE operations SET " +
+		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
+		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
+		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
+		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
+		"updated_at = $4 " +
+		"WHERE operation_id = $1 " +
+		"AND operation_type = '" + operationType + "' " +
+		"AND phase = '" + phase + "' " +
 		"AND (" +
 		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
@@ -1559,6 +1872,30 @@ func restoreRunOperationAcquireLeaseSQL() string {
 		"AND ($5 <> 'finalize_cancellation' OR eligible_operation.phase = 'validate_restore_run') " +
 		"AND ($5 = 'finalize_cancellation' OR (EXISTS (SELECT 1 FROM matching_restore_plan) AND NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM unrelated_active_restore_plan))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
+}
+
+func templateCreateOperationAcquireLeaseSQL() string {
+	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
+	return "UPDATE operations SET " +
+		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
+		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
+		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
+		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
+		"updated_at = $4 " +
+		"WHERE operation_id = $1 " +
+		"AND operation_type = 'template_create' " +
+		"AND phase IN ('validate_template_create','template_create_writer_fenced') " +
+		"AND (" +
+		"(operation_state = 'queued' AND phase = 'validate_template_create' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
+		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
+		"(operation_state = 'cancel_requested' AND phase = 'validate_template_create' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
+		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+}
+
+func templateCloneOperationAcquireLeaseSQL() string {
+	return scopedOperationAcquireLeaseSQL("template_clone", operations.OperationPhaseTemplateCloneValidate)
 }
 
 func workloadMountBindingOperationAcquireLeaseSQL() string {

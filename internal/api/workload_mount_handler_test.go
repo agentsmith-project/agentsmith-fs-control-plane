@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
@@ -177,6 +178,51 @@ func TestWorkloadMountGetAndPlanDenyNamespaceMismatchWithoutPlanLeak(t *testing.
 		t.Fatalf("plan status = %d body = %s, want namespace mismatch", rec.Code, rec.Body.String())
 	}
 	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+}
+
+func TestWorkloadMountPlanAuditUsesMinimalDetails(t *testing.T) {
+	sink := &fakeAuditSink{}
+	config := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "sandbox-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
+		config.AuditSink = sink
+		config.EventID = func() string { return "evt_mount_plan" }
+	})
+	config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:sandbox-orchestrator", CanonicalCallerService: "sandbox-orchestrator"}}
+	rec := httptest.NewRecorder()
+
+	WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "sandbox-orchestrator"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plan status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("audit events = %#v, want one mount plan audit", sink.events)
+	}
+	event := sink.events[0]
+	if event.Type != audit.EventTypeMountPlanIssued || event.Resource.Type != "workload_mount_binding" || event.Resource.ID != "wmb_123" || event.Resource.NamespaceID != "ns_123" {
+		t.Fatalf("audit event identity = %#v", event)
+	}
+	details := event.Details
+	for key, want := range map[string]any{
+		"mount_binding_id": "wmb_123",
+		"namespace_id":     "ns_123",
+		"repo_id":          "repo_123",
+		"read_only":        true,
+	} {
+		if got := details[key]; got != want {
+			t.Fatalf("audit detail %s = %#v, want %#v; details=%#v", key, got, want, details)
+		}
+	}
+	for _, forbidden := range []string{"secret_ref", "secret_ref_namespace", "secret_ref_name", "secret_ref_name_present", "payload_volume_subdir", "mount_path", "volume_id", "control", "root_path"} {
+		for key := range details {
+			if strings.Contains(key, forbidden) {
+				t.Fatalf("audit details leaked key %q matching forbidden %q: %#v", key, forbidden, details)
+			}
+		}
+		rendered := strings.ToLower(auditEventString(t, event))
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("audit event leaked forbidden token %q: %s", forbidden, rendered)
+		}
+	}
 }
 
 func TestWorkloadMountAdmissionBlocksWriterFenceOnlyForReadWrite(t *testing.T) {

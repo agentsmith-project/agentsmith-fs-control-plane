@@ -28,6 +28,9 @@ var workloadMountFullColumns = []string{
 	"lease_expires_at",
 	"last_heartbeat_at",
 	"last_observed_at",
+	"confirmed_unmounted_at",
+	"unable_to_write_at",
+	"terminal_observed_at",
 	"status_reason",
 	"created_at",
 	"updated_at",
@@ -39,6 +42,32 @@ func (store *Store) GetWorkloadMountBinding(ctx context.Context, mountBindingID 
 	}
 	row := store.exec.QueryRowContext(ctx, workloadMountBindingFullSelectSQL()+" WHERE mount_binding_id = $1", mountBindingID)
 	return scanWorkloadMountBindingFull(row)
+}
+
+func (store *Store) ListStaleNonTerminalWorkloadMountBindings(ctx context.Context, now time.Time, limit int) ([]workloadmount.Binding, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("list stale workload mount bindings: now must be set")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("list stale workload mount bindings: limit must be positive")
+	}
+	rows, err := store.exec.QueryContext(ctx, workloadMountStaleNonTerminalSelectSQL(), now.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var bindings []workloadmount.Binding
+	for rows.Next() {
+		binding, err := scanWorkloadMountBindingFull(rows)
+		if err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, binding)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return bindings, nil
 }
 
 func (store *Store) GetOrchestratorMountPlan(ctx context.Context, namespaceID, mountBindingID string) (workloadmount.Plan, error) {
@@ -247,6 +276,9 @@ func workloadMountBindingArgs(binding workloadmount.Binding) []any {
 		binding.LeaseExpiresAt,
 		timePtrArg(binding.LastHeartbeatAt),
 		timePtrArg(binding.LastObservedAt),
+		timePtrArg(binding.ConfirmedUnmountedAt),
+		timePtrArg(binding.UnableToWriteAt),
+		timePtrArg(binding.TerminalObservedAt),
 		binding.StatusReason,
 		binding.CreatedAt,
 		binding.UpdatedAt,
@@ -257,11 +289,16 @@ func workloadMountBindingFullSelectSQL() string {
 	return "SELECT " + strings.Join(workloadMountFullColumns, ", ") + " FROM workload_mount_bindings"
 }
 
+func workloadMountStaleNonTerminalSelectSQL() string {
+	return workloadMountBindingFullSelectSQL() + " WHERE lease_expires_at <= $1 AND status IN ('issued','pending','active','releasing') ORDER BY lease_expires_at, mount_binding_id LIMIT $2"
+}
+
 func workloadMountPlanSelectSQL() string {
 	return "SELECT b.mount_binding_id, b.volume_id, r.payload_volume_subdir, b.mount_path, b.read_only, COALESCE((nvb.mount_policy->>'allow_privileged_workload')::boolean, false) " +
 		"FROM workload_mount_bindings b JOIN repos r ON r.namespace_id = b.namespace_id AND r.repo_id = b.repo_id " +
 		"JOIN namespace_volume_bindings nvb ON nvb.namespace_id = b.namespace_id " +
-		"WHERE b.namespace_id = $1 AND b.mount_binding_id = $2 AND b.status IN ('issued','pending','active','releasing')"
+		"JOIN namespaces ns ON ns.namespace_id = b.namespace_id " +
+		"WHERE b.namespace_id = $1 AND b.mount_binding_id = $2 AND ns.status = 'active' AND nvb.status = 'active' AND b.status IN ('issued','pending','active','releasing')"
 }
 
 func workloadMountBindingCreateCommitSQL() string {
@@ -272,15 +309,15 @@ func workloadMountBindingCreateCommitSQL() string {
 		"AND COALESCE((mount_policy->>'workload_mount_enabled')::boolean, false) = true " +
 		"AND COALESCE((mount_policy->>'workload_mount_requires_jvs_external_control_root')::boolean, false) = true FOR SHARE" +
 		"), active_repo AS (" +
-		"SELECT repo_id FROM repos WHERE namespace_id = $15 AND repo_id = $16 AND volume_id = $17 AND repo_kind = 'repo' AND status = 'active' AND lifecycle_status = 'active' FOR SHARE" +
+		"SELECT repo_id FROM repos WHERE namespace_id = $15 AND repo_id = $16 AND volume_id = $17 AND repo_kind = 'repo' AND status = 'active' AND lifecycle_status = 'active' FOR UPDATE" +
 		"), active_volume AS (" +
 		"SELECT volume_id FROM volumes WHERE volume_id = $17 AND status = 'active' " +
 		"AND COALESCE((capabilities->>'workload_mount')::boolean, false) = true " +
 		"AND COALESCE((capabilities->>'jvs_external_control_root')::boolean, false) = true FOR SHARE" +
 		"), held_lifecycle_fence AS (" +
-		"SELECT fence_id FROM repo_fences WHERE repo_id = $16 AND fence_kind = 'lifecycle' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
+		"SELECT fence_id FROM repo_fences, active_repo WHERE repo_fences.repo_id = active_repo.repo_id AND repo_fences.fence_kind = 'lifecycle' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
 		"), held_writer_fence AS (" +
-		"SELECT fence_id FROM repo_fences WHERE repo_id = $16 AND fence_kind = 'writer_session' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
+		"SELECT fence_id FROM repo_fences, active_repo WHERE repo_fences.repo_id = active_repo.repo_id AND repo_fences.fence_kind = 'writer_session' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
 		"), updated_operation AS (" + operationLeaseFencedUpdateBaseSQL() +
 		"AND operation_type = 'mount_binding_create' AND phase = 'validate_mount_binding_create' AND mount_binding_id = $14 " +
 		"AND namespace_id = $15 AND repo_id = $16 AND resource_type = 'workload_mount_binding' AND resource_id = $14 " +
@@ -291,7 +328,7 @@ func workloadMountBindingCreateCommitSQL() string {
 		"), inserted_binding AS (" +
 		"INSERT INTO workload_mount_bindings (" + strings.Join(workloadMountFullColumns, ", ") + ") SELECT " + placeholders(14, len(workloadMountFullColumns)) + " FROM updated_operation RETURNING " + strings.Join(workloadMountFullColumns, ", ") +
 		"), inserted_audit AS (" +
-		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(28, len(auditOutboxColumns)) + " FROM updated_operation, inserted_binding RETURNING audit_event_id" +
+		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(31, len(auditOutboxColumns)) + " FROM updated_operation, inserted_binding RETURNING audit_event_id" +
 		") SELECT " + prefixedColumns("inserted_binding", workloadMountFullColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) +
 		" FROM inserted_binding, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
 }
@@ -311,6 +348,9 @@ func workloadMountBindingStatusCommitSQL() string {
 			"WHEN status = 'releasing' AND $15 IN ('pending','active') THEN lease_expires_at "+
 			"WHEN $18::timestamptz IS NOT NULL THEN $18::timestamptz "+
 			"ELSE lease_expires_at END, "+
+			"terminal_observed_at = CASE WHEN $15 IN ('released','revoked','expired','failed') AND status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE terminal_observed_at END, "+
+			"confirmed_unmounted_at = CASE WHEN $15 IN ('released','revoked') AND status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE confirmed_unmounted_at END, "+
+			"unable_to_write_at = CASE WHEN $15 IN ('released','revoked','expired','failed') AND status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE unable_to_write_at END, "+
 			"status_reason = CASE "+
 			"WHEN status IN ('released','revoked','expired','failed') THEN status_reason "+
 			"WHEN status = 'releasing' AND $15 IN ('pending','active') THEN status_reason "+
@@ -325,8 +365,8 @@ func workloadMountBindingHeartbeatCommitSQL() string {
 
 func workloadMountBindingReleaseCommitSQL() string {
 	return workloadMountBindingUpdateCommitSQL("mount_binding_release", "validate_mount_binding_release",
-		"status = CASE WHEN status IN ('revoked','expired','failed') THEN status ELSE 'released' END, "+
-			"last_observed_at = $17, status_reason = CASE WHEN status IN ('revoked','expired','failed') THEN status_reason ELSE $16 END, ")
+		"status = CASE WHEN status IN ('released','revoked','expired','failed') THEN status ELSE 'releasing' END, "+
+			"last_observed_at = $17, status_reason = CASE WHEN status IN ('released','revoked','expired','failed') THEN status_reason ELSE $16 END, ")
 }
 
 func workloadMountBindingRevokeCommitSQL() string {
@@ -351,7 +391,7 @@ func workloadMountBindingUpdateCommitSQL(operationType, phase, setClause string)
 func scanWorkloadMountBindingFull(row rowScanner) (workloadmount.Binding, error) {
 	var binding workloadmount.Binding
 	var status string
-	var lastHeartbeatAt, lastObservedAt sql.NullTime
+	var lastHeartbeatAt, lastObservedAt, confirmedUnmountedAt, unableToWriteAt, terminalObservedAt sql.NullTime
 	if err := row.Scan(
 		&binding.ID,
 		&binding.NamespaceID,
@@ -364,6 +404,9 @@ func scanWorkloadMountBindingFull(row rowScanner) (workloadmount.Binding, error)
 		&binding.LeaseExpiresAt,
 		&lastHeartbeatAt,
 		&lastObservedAt,
+		&confirmedUnmountedAt,
+		&unableToWriteAt,
+		&terminalObservedAt,
 		&binding.StatusReason,
 		&binding.CreatedAt,
 		&binding.UpdatedAt,
@@ -373,13 +416,16 @@ func scanWorkloadMountBindingFull(row rowScanner) (workloadmount.Binding, error)
 	binding.Status = sessionstate.MountStatus(status)
 	binding.LastHeartbeatAt = nullTimePtr(lastHeartbeatAt)
 	binding.LastObservedAt = nullTimePtr(lastObservedAt)
+	binding.ConfirmedUnmountedAt = nullTimePtr(confirmedUnmountedAt)
+	binding.UnableToWriteAt = nullTimePtr(unableToWriteAt)
+	binding.TerminalObservedAt = nullTimePtr(terminalObservedAt)
 	return binding, nil
 }
 
 func scanWorkloadMountBindingAndOperation(row rowScanner) (workloadmount.Binding, operations.OperationRecord, error) {
 	var binding workloadmount.Binding
 	var status string
-	var lastHeartbeatAt, lastObservedAt sql.NullTime
+	var lastHeartbeatAt, lastObservedAt, confirmedUnmountedAt, unableToWriteAt, terminalObservedAt sql.NullTime
 	var record operations.OperationRecord
 	var operationType, operationState, requestHash string
 	var leaseOwner, repoID, templateID, exportID, mountBindingID, sessionFenceID, compensationStatus sql.NullString
@@ -387,7 +433,7 @@ func scanWorkloadMountBindingAndOperation(row rowScanner) (workloadmount.Binding
 	var externalResourceIDsJSON, inputSummaryJSON, jvsJSONOutputJSON, verificationResultJSON, errorJSON []byte
 	dest := []any{
 		&binding.ID, &binding.NamespaceID, &binding.RepoID, &binding.VolumeID, &binding.MountPath, &binding.ReadOnly,
-		&status, &binding.LeaseSeconds, &binding.LeaseExpiresAt, &lastHeartbeatAt, &lastObservedAt, &binding.StatusReason, &binding.CreatedAt, &binding.UpdatedAt,
+		&status, &binding.LeaseSeconds, &binding.LeaseExpiresAt, &lastHeartbeatAt, &lastObservedAt, &confirmedUnmountedAt, &unableToWriteAt, &terminalObservedAt, &binding.StatusReason, &binding.CreatedAt, &binding.UpdatedAt,
 		&record.ID, &operationType, &operationState, &record.Phase, &record.Attempt, &leaseOwner, &leaseExpiresAt,
 		&record.IdempotencyScope, &record.IdempotencyKey, &requestHash, &record.CorrelationID, &record.CallerService,
 		&record.AuthorizedActor.Type, &record.AuthorizedActor.ID, &record.Resource.Type, &record.Resource.ID, &record.NamespaceID,
@@ -400,6 +446,9 @@ func scanWorkloadMountBindingAndOperation(row rowScanner) (workloadmount.Binding
 	binding.Status = sessionstate.MountStatus(status)
 	binding.LastHeartbeatAt = nullTimePtr(lastHeartbeatAt)
 	binding.LastObservedAt = nullTimePtr(lastObservedAt)
+	binding.ConfirmedUnmountedAt = nullTimePtr(confirmedUnmountedAt)
+	binding.UnableToWriteAt = nullTimePtr(unableToWriteAt)
+	binding.TerminalObservedAt = nullTimePtr(terminalObservedAt)
 	if err := binding.Validate(); err != nil {
 		return workloadmount.Binding{}, operations.OperationRecord{}, err
 	}

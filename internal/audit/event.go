@@ -37,6 +37,7 @@ const (
 	EventTypeMountBindingCreate              EventType = "mount_binding_create"
 	EventTypeMountBindingStatusUpdate        EventType = "mount_binding_status_update"
 	EventTypeMountBindingHeartbeat           EventType = "mount_binding_heartbeat"
+	EventTypeMountPlanIssued                 EventType = "mount_plan_issued"
 	EventTypeMountBindingRelease             EventType = "mount_binding_release"
 	EventTypeMountBindingRevoke              EventType = "mount_binding_revoke"
 	EventTypeMigrationCutover                EventType = "migration_cutover"
@@ -69,6 +70,7 @@ var eventTypes = []EventType{
 	EventTypeMountBindingCreate,
 	EventTypeMountBindingStatusUpdate,
 	EventTypeMountBindingHeartbeat,
+	EventTypeMountPlanIssued,
 	EventTypeMountBindingRelease,
 	EventTypeMountBindingRevoke,
 	EventTypeMigrationCutover,

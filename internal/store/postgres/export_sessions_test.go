@@ -35,6 +35,7 @@ func TestCreateOrReuseExportSQLCommitsSessionOperationAndAuditInOneBoundary(t *t
 		"active_repo AS (",
 		"repo_kind = 'repo'",
 		"lifecycle_status = 'active'",
+		"FOR UPDATE",
 		"active_volume AS (",
 		"webdav_export",
 		"held_lifecycle_fence AS (",
@@ -85,8 +86,8 @@ func TestCreateOrReuseExportSQLPredicatesMatchOperationAndSessionArgs(t *testing
 		"WHERE namespace_id = "+operationPlaceholder("namespace_id")+" AND status = 'active'",
 		"namespace_id = "+operationPlaceholder("namespace_id")+" AND status = 'active' AND COALESCE((export_policy->>'webdav_enabled')::boolean, false) = true",
 		"repos.namespace_id = "+operationPlaceholder("namespace_id")+" AND repos.repo_id = "+operationPlaceholder("repo_id"),
-		"repo_id = "+operationPlaceholder("repo_id")+" AND fence_kind = 'lifecycle'",
-		"repo_id = "+operationPlaceholder("repo_id")+" AND fence_kind = 'writer_session'",
+		"repo_fences.repo_id = active_repo.repo_id AND repo_fences.fence_kind = 'lifecycle'",
+		"repo_fences.repo_id = active_repo.repo_id AND repo_fences.fence_kind = 'writer_session'",
 		"("+sessionPlaceholder("access_mode")+" = 'read_only' OR NOT EXISTS (SELECT 1 FROM held_writer_fence))",
 	)
 

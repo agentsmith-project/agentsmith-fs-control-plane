@@ -487,6 +487,151 @@ func newTestSavePointExecutor(t *testing.T, store *fakeRepoCreateStore, runner *
 	return executor
 }
 
+func TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		saveSummary:      jvsrunner.SaveSummary{SavePointID: "sp_template01", NewestSavePointID: "sp_template01", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
+		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_template_alpha", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_template_alpha", Healthy: true, Workspace: "main"},
+	}
+	executor, err := NewTemplateCreateExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_create" }, VolumeRoots: store.volumeRoots})
+	if err != nil {
+		t.Fatalf("NewTemplateCreateExecutor: %v", err)
+	}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if store.templateCreateWriterFenceMarks != 1 {
+		t.Fatalf("writer fence marks = %d, want 1 before JVS", store.templateCreateWriterFenceMarks)
+	}
+	if got := strings.Join(runner.calls, ","); got != "save,repo_clone,doctor" {
+		t.Fatalf("jvs calls = %s, want save,repo_clone,doctor", got)
+	}
+	verification := asStringAnyMap(store.operation.VerificationResult)
+	if store.repo.ID != "tmpl_base01" || store.repo.Kind != resources.RepoKindTemplate || verification["source_save_point_id"] != "sp_template01" {
+		t.Fatalf("committed template/operation = %#v %#v", store.repo, store.operation)
+	}
+	if store.releasedFenceID != "fence_op_template_create" || activeWriterFenceCount(store.fences, "op_template_create") != 0 {
+		t.Fatalf("released/active writer fence = %q/%#v, want released source writer fence", store.releasedFenceID, store.fences)
+	}
+}
+
+func TestTemplateCreateExecutorPreJVSWriterSessionDenialReleasesFence(t *testing.T) {
+	now := repoExecNow()
+	tests := []struct {
+		name string
+		edit func(*fakeRepoCreateStore)
+	}{
+		{
+			name: "active rw export",
+			edit: func(store *fakeRepoCreateStore) {
+				store.exports = []sessionstate.ExportSession{freshExportSession(now, "export_alpha", sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(time.Hour))}
+			},
+		},
+		{
+			name: "stale rw export",
+			edit: func(store *fakeRepoCreateStore) {
+				session := freshExportSession(now, "export_alpha", sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(time.Hour))
+				staleHeartbeat := now.Add(-time.Minute)
+				session.GatewayHeartbeatExpiresAt = &staleHeartbeat
+				store.exports = []sessionstate.ExportSession{session}
+			},
+		},
+		{
+			name: "active rw workload mount",
+			edit: func(store *fakeRepoCreateStore) {
+				store.mounts = []sessionstate.WorkloadMountBinding{{ID: "wmb_alpha", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", ReadOnly: false, Status: sessionstate.MountStatusActive, LeaseExpiresAt: now.Add(time.Hour), CreatedAt: now.Add(-time.Hour), UpdatedAt: now}}
+			},
+		},
+		{
+			name: "stale rw workload mount",
+			edit: func(store *fakeRepoCreateStore) {
+				store.mounts = []sessionstate.WorkloadMountBinding{{ID: "wmb_alpha", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", ReadOnly: false, Status: sessionstate.MountStatusActive, LeaseExpiresAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Hour), UpdatedAt: now}}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.repo = activeRepoResource(now)
+			tt.edit(store)
+			runner := &fakeJVSRunner{}
+			executor, err := NewTemplateCreateExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_create" }, VolumeRoots: store.volumeRoots})
+			if err != nil {
+				t.Fatalf("NewTemplateCreateExecutor: %v", err)
+			}
+
+			err = executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+			if err != nil {
+				t.Fatalf("ExecuteOperationRecovery: %v", err)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("jvs calls = %#v, want none", runner.calls)
+			}
+			if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE" {
+				t.Fatalf("operation = %#v, want fail-closed dirty source", store.operation)
+			}
+			if store.releasedFenceID != "fence_op_template_create" || activeWriterFenceCount(store.fences, "op_template_create") != 0 {
+				t.Fatalf("released/active writer fence = %q/%#v, want released pre-JVS writer fence", store.releasedFenceID, store.fences)
+			}
+		})
+	}
+}
+
+func TestTemplateCreateExecutorJVSFailureAfterSaveRetainsWriterFence(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		saveSummary:  jvsrunner.SaveSummary{SavePointID: "sp_template01", NewestSavePointID: "sp_template01", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
+		repoCloneErr: errors.New("clone failed"),
+	}
+	executor, err := NewTemplateCreateExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_create" }, VolumeRoots: store.volumeRoots})
+	if err != nil {
+		t.Fatalf("NewTemplateCreateExecutor: %v", err)
+	}
+
+	err = executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+	}
+	if strings.Join(runner.calls, ",") != "save,repo_clone" {
+		t.Fatalf("jvs calls = %#v, want save,repo_clone", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.releasedFenceID != "" || activeWriterFenceCount(store.fences, "op_template_create") != 1 {
+		t.Fatalf("operation/release/fences = %#v/%q/%#v, want retained writer fence after uncertain JVS side effect", store.operation, store.releasedFenceID, store.fences)
+	}
+}
+
+func TestTemplateCloneExecutorClonesTemplateToRepoWithoutSave(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = templateResource(now)
+	runner := &fakeJVSRunner{
+		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_template_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_repo_clone", Healthy: true, Workspace: "main"},
+	}
+	executor, err := NewTemplateCloneExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_clone" }, VolumeRoots: store.volumeRoots})
+	if err != nil {
+		t.Fatalf("NewTemplateCloneExecutor: %v", err)
+	}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), templateCloneLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if got := strings.Join(runner.calls, ","); got != "repo_clone,doctor" {
+		t.Fatalf("jvs calls = %s, want repo_clone,doctor", got)
+	}
+	if store.repo.ID != "repo_clone01" || store.repo.Kind != resources.RepoKindRepo || store.operation.Phase != operations.OperationPhaseTemplateCloneCommitted {
+		t.Fatalf("committed repo/operation = %#v %#v", store.repo, store.operation)
+	}
+}
+
 func repoCreateLeasedRecord(now time.Time, attempt int) operations.OperationRecord {
 	leaseExpiresAt := now.Add(time.Minute)
 	startedAt := now.Add(-time.Minute)
@@ -526,6 +671,36 @@ func savePointLeasedRecord(now time.Time, phase string) operations.OperationReco
 	return record
 }
 
+func templateCreateLeasedRecord(now time.Time) operations.OperationRecord {
+	record := repoCreateLeasedRecord(now, 1)
+	record.ID = "op_template_create"
+	record.Type = operations.OperationTemplateCreate
+	record.Phase = operations.OperationPhaseTemplateCreateValidate
+	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationTemplateCreate, "idem_template").String()
+	record.IdempotencyKey = "idem_template"
+	record.RequestHash = "sha256:template-create"
+	record.Resource = operations.ResourceRef{Type: "repo_template", ID: "tmpl_base01"}
+	record.RepoID = "repo_alpha01"
+	record.TemplateID = "tmpl_base01"
+	record.InputSummary = map[string]any{"source_repo_id": "repo_alpha01", "target_template_id": "tmpl_base01", "clone_history_mode": "main"}
+	return record
+}
+
+func templateCloneLeasedRecord(now time.Time) operations.OperationRecord {
+	record := repoCreateLeasedRecord(now, 1)
+	record.ID = "op_template_clone"
+	record.Type = operations.OperationTemplateClone
+	record.Phase = operations.OperationPhaseTemplateCloneValidate
+	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationTemplateClone, "idem_template_clone").String()
+	record.IdempotencyKey = "idem_template_clone"
+	record.RequestHash = "sha256:template-clone"
+	record.Resource = operations.ResourceRef{Type: "repo", ID: "repo_clone01"}
+	record.RepoID = "repo_clone01"
+	record.TemplateID = "tmpl_base01"
+	record.InputSummary = map[string]any{"template_id": "tmpl_base01", "target_repo_id": "repo_clone01", "clone_history_mode": "main"}
+	return record
+}
+
 func activeRepoResource(now time.Time) resources.Repo {
 	return resources.Repo{
 		ID:                  "repo_alpha01",
@@ -537,6 +712,22 @@ func activeRepoResource(now time.Time) resources.Repo {
 		ControlVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/control",
 		PayloadVolumeSubdir: "afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload",
 		Lifecycle:           resources.RepoLifecycle{Status: resources.RepoStatusActive, LastLifecycleOperationID: "op_repo"},
+		CreatedAt:           now.Add(-time.Hour),
+		UpdatedAt:           now,
+	}
+}
+
+func templateResource(now time.Time) resources.Repo {
+	return resources.Repo{
+		ID:                  "tmpl_base01",
+		NamespaceID:         "ns_alpha01",
+		VolumeID:            "vol_123",
+		JVSRepoID:           "jvs_template_alpha",
+		Kind:                resources.RepoKindTemplate,
+		Status:              resources.RepoStatusActive,
+		ControlVolumeSubdir: "afscp/namespaces/ns_alpha01/templates/tmpl_base01/control",
+		PayloadVolumeSubdir: "afscp/namespaces/ns_alpha01/templates/tmpl_base01/payload",
+		Lifecycle:           resources.RepoLifecycle{Status: resources.RepoStatusActive},
 		CreatedAt:           now.Add(-time.Hour),
 		UpdatedAt:           now,
 	}
@@ -595,6 +786,7 @@ type fakeRepoCreateStore struct {
 	restorePreviewDiscardProgressUpdates int
 	restoreRunWriterFenceMarks           int
 	restoreRunConsumingMarks             int
+	templateCreateWriterFenceMarks       int
 	releasedFenceID                      string
 	successErr                           error
 	blockingLifecycle                    []operations.OperationRecord
@@ -693,6 +885,48 @@ func (store *fakeRepoCreateStore) CommitSavePointCreateSucceededWithLease(_ cont
 }
 
 func (store *fakeRepoCreateStore) CommitSavePointCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitTemplateCreateSucceededWithLease(_ context.Context, template resources.Repo, _ string, _ string, _ string, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {
+	store.repo = template
+	store.operation = record.Record()
+	store.releaseWriterFence(store.operation.SessionFenceID, now)
+	store.auditEvents = append(store.auditEvents, event)
+	return template, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) MarkTemplateCreateWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
+	store.templateCreateWriterFenceMarks++
+	store.operation = record.Record()
+	for _, existing := range store.fences {
+		if existing.ID == fence.ID && existing.Kind == fences.KindWriterSession && existing.HolderOperationID == store.operation.ID && existing.Status == fences.StatusActive && existing.ReleasedAt == nil && existing.RecoveredAt == nil {
+			return existing, store.operation, nil
+		}
+	}
+	store.fences = append(store.fences, fence)
+	return fence, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitTemplateCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	if store.operation.Phase == operations.OperationPhaseTemplateCreateWriterFenced && store.operation.State == operations.OperationStateFailed {
+		store.releaseWriterFence(store.operation.SessionFenceID, now)
+	}
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitTemplateCloneSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {
+	store.repo = repo
+	store.operation = record.Record()
+	store.auditEvents = append(store.auditEvents, event)
+	return repo, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitTemplateCloneFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
 	store.operation = record.Record()
 	store.auditEvents = append(store.auditEvents, event)
 	return store.operation, nil
@@ -842,6 +1076,7 @@ type fakeJVSRunner struct {
 	restorePreviewSummary   jvsrunner.RestorePreviewSummary
 	restoreRunSummary       jvsrunner.RestoreRunSummary
 	restoreDiscardSummary   jvsrunner.RestoreDiscardSummary
+	repoCloneSummary        jvsrunner.RepoCloneSummary
 	beforeRestorePreview    func()
 	beforeRestoreRun        func()
 	beforeRestoreDiscard    func()
@@ -853,6 +1088,7 @@ type fakeJVSRunner struct {
 	restorePreviewErr       error
 	restoreRunErr           error
 	restoreDiscardErr       error
+	repoCloneErr            error
 }
 
 func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot string) (jvsrunner.InitSummary, error) {
@@ -878,6 +1114,17 @@ func (runner *fakeJVSRunner) History(_ context.Context, controlRoot string) (jvs
 	runner.calls = append(runner.calls, "history")
 	runner.controlRoot = controlRoot
 	return runner.historySummary, runner.historyErr
+}
+
+func (runner *fakeJVSRunner) RepoClone(_ context.Context, sourceControlRoot, targetPayloadRoot, targetControlRoot string) (jvsrunner.RepoCloneSummary, error) {
+	runner.calls = append(runner.calls, "repo_clone")
+	runner.controlRoot = targetControlRoot
+	runner.payloadRoot = targetPayloadRoot
+	if runner.repoCloneSummary.SourceRepoID == "" {
+		runner.repoCloneSummary.SourceRepoID = "jvs_repo_alpha"
+	}
+	_ = sourceControlRoot
+	return runner.repoCloneSummary, runner.repoCloneErr
 }
 
 func (runner *fakeJVSRunner) RecoveryStatus(_ context.Context, controlRoot string) (jvsrunner.RecoveryStatusSummary, error) {

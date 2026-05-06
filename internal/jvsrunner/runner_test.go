@@ -454,6 +454,9 @@ func TestRepoCloneUsesFixedCommandAndParsesEnvelope(t *testing.T) {
 	if summary.SourceRepoID != "jvs_repo_alpha" || summary.TargetRepoID != "jvs_repo_clone" || summary.SavePointsMode != "main" || summary.SavePointsCopiedCount != 2 || summary.RuntimeStateCopied {
 		t.Fatalf("summary = %#v", summary)
 	}
+	if summary.Workspace != "main" {
+		t.Fatalf("summary workspace = %q, want fixed main workspace from argv", summary.Workspace)
+	}
 	want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: []string{"--control-root", testControlRoot, "--workspace", "main", "repo", "clone", testTargetPayloadRoot, "--target-control-root", testTargetControlRoot, "--save-points", "main", "--json"}, Dir: "/var/lib/afscp/jvs-cwd"}
 	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
 		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
@@ -1273,7 +1276,7 @@ func repoCloneStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	env := baseEnvelope("repo clone")
 	env["repo_root"] = testTargetControlRoot
 	data := env["data"].(map[string]any)
-	data["workspace"] = "main"
+	delete(data, "workspace")
 	data["source_repo_id"] = "jvs_repo_alpha"
 	data["target_repo_id"] = "jvs_repo_clone"
 	data["target_folder"] = testTargetPayloadRoot

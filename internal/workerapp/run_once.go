@@ -40,11 +40,13 @@ import (
 type OperationRecoveryStore interface {
 	store.VolumeEnsureOperationRecoveryStore
 	store.NamespaceUpsertOperationRecoveryStore
+	store.NamespaceDisableOperationRecoveryStore
 	store.NamespaceVolumeBindingOperationRecoveryStore
 	store.RepoCreateOperationRecoveryStore
 	store.RepoLifecycleOperationRecoveryStore
 	store.RepoPurgeOperationRecoveryStore
 	store.SavePointCreateOperationRecoveryStore
+	store.TemplateOperationRecoveryStore
 	store.RestorePreviewOperationRecoveryStore
 	store.RestorePreviewDiscardOperationRecoveryStore
 	store.RestoreRunOperationRecoveryStore
@@ -60,6 +62,10 @@ type ExportReconcileStore interface {
 	store.ExportSessionReconcileStore
 }
 
+type WorkloadMountStaleLeaseStore interface {
+	store.WorkloadMountStaleLeaseReader
+}
+
 type StoreFactory func(context.Context, string) (StoreHandle, error)
 type JVSRunnerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error)
 type StoragePurgerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error)
@@ -70,6 +76,7 @@ type StoreHandle struct {
 	OperationStore       OperationRecoveryStore
 	AuditStore           store.AuditOutboxDeliveryStore
 	ExportReconcileStore ExportReconcileStore
+	WorkloadMountStale   WorkloadMountStaleLeaseStore
 	Close                func() error
 }
 
@@ -106,9 +113,10 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}
 	opConfig := cfg.Worker.OperationRecovery
 	exportConfig := cfg.Worker.ExportSessionReconcile
+	workloadMountStaleConfig := cfg.Worker.WorkloadMountStale
 	auditConfig := cfg.Worker.AuditDelivery
-	if !exportConfig.Enabled && !opConfig.Enabled && !auditConfig.Enabled {
-		return nil, errors.New("worker run-once requires export session reconcile, operation recovery, or audit delivery to be enabled")
+	if !exportConfig.Enabled && !opConfig.Enabled && !workloadMountStaleConfig.Enabled && !auditConfig.Enabled {
+		return nil, errors.New("worker run-once requires export session reconcile, workload mount stale lease scan, operation recovery, or audit delivery to be enabled")
 	}
 
 	now := nowFunc(options.Clock)
@@ -118,7 +126,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}
 	openCtx, cancel := context.WithTimeout(context.Background(), cfg.Worker.RunOnceTimeout)
 	defer cancel()
-	dsn, err := workerStoreDSN(exportConfig, opConfig, auditConfig)
+	dsn, err := workerStoreDSN(exportConfig, opConfig, workloadMountStaleConfig, auditConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -129,6 +137,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	operationStore := handle.OperationStore
 	auditStore := handle.AuditStore
 	exportStore := handle.ExportReconcileStore
+	workloadMountStaleStore := handle.WorkloadMountStale
 	if handle.Store != nil {
 		if operationStore == nil {
 			operationStore = handle.Store
@@ -139,6 +148,11 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		if exportStore == nil {
 			if candidate, ok := any(handle.Store).(ExportReconcileStore); ok {
 				exportStore = candidate
+			}
+		}
+		if workloadMountStaleStore == nil {
+			if candidate, ok := any(handle.Store).(WorkloadMountStaleLeaseStore); ok {
+				workloadMountStaleStore = candidate
 			}
 		}
 	}
@@ -163,6 +177,13 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		}
 		return nil, err
 	}
+	if workloadMountStaleConfig.Enabled && workloadMountStaleStore == nil {
+		err := errors.New("worker workload mount stale lease store is required")
+		if handle.Close != nil {
+			err = errors.Join(err, handle.Close())
+		}
+		return nil, err
+	}
 	scopedStore := operationRecoveryStore{store: operationStore}
 	workerConfig := worker.Config{}
 	eventID := options.AuditEventID
@@ -180,6 +201,21 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		})
 	}
 
+	if workloadMountStaleConfig.Enabled {
+		reconciler, err := workloadmount.NewStaleLeaseReconciler(workloadmount.StaleLeaseReconcilerConfig{
+			Store: workloadMountStaleStore,
+			Clock: now,
+			Limit: workloadMountStaleConfig.Limit,
+		})
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		workerConfig.WorkloadMountStale = reconciler
+	}
+
 	if opConfig.Enabled {
 		namespaceExecutor, err := namespaceexec.NewExecutor(namespaceexec.Config{
 			CommitStore:  scopedStore,
@@ -194,6 +230,18 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			return nil, err
 		}
 		bindingExecutor, err := namespacebindingexec.NewExecutor(namespacebindingexec.Config{
+			CommitStore:  scopedStore,
+			Owner:        opConfig.Owner,
+			Clock:        now,
+			AuditEventID: func() string { return eventID() },
+		})
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		disableExecutor, err := namespaceexec.NewDisableExecutor(namespaceexec.DisableConfig{
 			CommitStore:  scopedStore,
 			Owner:        opConfig.Owner,
 			Clock:        now,
@@ -229,7 +277,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			}
 			return nil, err
 		}
-		executors := []recovery.OperationExecutor{volumeExecutor, namespaceExecutor, bindingExecutor, mountExecutor}
+		executors := []recovery.OperationExecutor{volumeExecutor, namespaceExecutor, disableExecutor, bindingExecutor, mountExecutor}
 		if opConfig.RepoCreate.Enabled {
 			jvsFactory := options.JVSRunnerFactory
 			if jvsFactory == nil {
@@ -357,6 +405,80 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			}
 			executors = append(executors, savePointExecutor)
 			scopedStore.savePointEnabled = true
+		}
+		if opConfig.TemplateCreate.Enabled {
+			jvsFactory := options.JVSRunnerFactory
+			if jvsFactory == nil {
+				jvsFactory = NewJVSRunnerFromConfig
+			}
+			jvs, err := jvsFactory(opConfig.TemplateCreate)
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			templateJVS, ok := jvs.(repoexec.TemplateJVSRunner)
+			if !ok {
+				err = errors.New("template create jvs runner does not support repo clone")
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			templateCreateExecutor, err := repoexec.NewTemplateCreateExecutor(repoexec.TemplateConfig{
+				Store:        scopedStore,
+				JVSRunner:    templateJVS,
+				Owner:        opConfig.Owner,
+				Clock:        now,
+				AuditEventID: func() string { return eventID() },
+				VolumeRoots:  opConfig.TemplateCreate.VolumeRoots,
+			})
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			executors = append(executors, templateCreateExecutor)
+			scopedStore.templateCreateEnabled = true
+		}
+		if opConfig.TemplateClone.Enabled {
+			jvsFactory := options.JVSRunnerFactory
+			if jvsFactory == nil {
+				jvsFactory = NewJVSRunnerFromConfig
+			}
+			jvs, err := jvsFactory(opConfig.TemplateClone)
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			templateJVS, ok := jvs.(repoexec.TemplateJVSRunner)
+			if !ok {
+				err = errors.New("template clone jvs runner does not support repo clone")
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			templateCloneExecutor, err := repoexec.NewTemplateCloneExecutor(repoexec.TemplateConfig{
+				Store:        scopedStore,
+				JVSRunner:    templateJVS,
+				Owner:        opConfig.Owner,
+				Clock:        now,
+				AuditEventID: func() string { return eventID() },
+				VolumeRoots:  opConfig.TemplateClone.VolumeRoots,
+			})
+			if err != nil {
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
+				}
+				return nil, err
+			}
+			executors = append(executors, templateCloneExecutor)
+			scopedStore.templateCloneEnabled = true
 		}
 		if opConfig.RestorePreview.Enabled {
 			jvsFactory := options.JVSRunnerFactory
@@ -522,7 +644,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}, nil
 }
 
-func workerStoreDSN(exportConfig config.WorkerExportSessionReconcileConfig, opConfig config.WorkerOperationRecoveryConfig, auditConfig config.WorkerAuditDeliveryConfig) (string, error) {
+func workerStoreDSN(exportConfig config.WorkerExportSessionReconcileConfig, opConfig config.WorkerOperationRecoveryConfig, workloadMountStaleConfig config.WorkerWorkloadMountStaleLeaseConfig, auditConfig config.WorkerAuditDeliveryConfig) (string, error) {
 	if opConfig.Enabled && auditConfig.Enabled && opConfig.PostgresDSN != auditConfig.PostgresDSN {
 		return "", errors.New("worker operation recovery and audit delivery must use the same postgres dsn")
 	}
@@ -532,11 +654,23 @@ func workerStoreDSN(exportConfig config.WorkerExportSessionReconcileConfig, opCo
 	if exportConfig.Enabled && auditConfig.Enabled && exportConfig.PostgresDSN != auditConfig.PostgresDSN {
 		return "", errors.New("worker export session reconcile and audit delivery must use the same postgres dsn")
 	}
+	if workloadMountStaleConfig.Enabled && opConfig.Enabled && workloadMountStaleConfig.PostgresDSN != opConfig.PostgresDSN {
+		return "", errors.New("worker workload mount stale lease scan and operation recovery must use the same postgres dsn")
+	}
+	if workloadMountStaleConfig.Enabled && exportConfig.Enabled && workloadMountStaleConfig.PostgresDSN != exportConfig.PostgresDSN {
+		return "", errors.New("worker workload mount stale lease scan and export session reconcile must use the same postgres dsn")
+	}
+	if workloadMountStaleConfig.Enabled && auditConfig.Enabled && workloadMountStaleConfig.PostgresDSN != auditConfig.PostgresDSN {
+		return "", errors.New("worker workload mount stale lease scan and audit delivery must use the same postgres dsn")
+	}
 	if exportConfig.Enabled {
 		return exportConfig.PostgresDSN, nil
 	}
 	if opConfig.Enabled {
 		return opConfig.PostgresDSN, nil
+	}
+	if workloadMountStaleConfig.Enabled {
+		return workloadMountStaleConfig.PostgresDSN, nil
 	}
 	return auditConfig.PostgresDSN, nil
 }
@@ -592,7 +726,7 @@ func (runner *RunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error)
 
 	result, err := runner.runner.RunOnce(runCtx)
 	if err == nil {
-		err = errors.Join(exportSessionReconcileCountError(result.ExportSessionReconcile), operationRecoveryCountError(result.OperationRecovery), auditDeliveryCountError(result.AuditStaleRecovery, result.AuditDelivery))
+		err = errors.Join(exportSessionReconcileCountError(result.ExportSessionReconcile), workloadMountStaleLeaseCountError(result.WorkloadMountStale), operationRecoveryCountError(result.OperationRecovery), auditDeliveryCountError(result.AuditStaleRecovery, result.AuditDelivery))
 	}
 	if runner.close != nil {
 		err = errors.Join(err, runner.close())
@@ -615,6 +749,7 @@ func OpenPostgresOperationRecoveryStore(ctx context.Context, dsn string) (StoreH
 		OperationStore:       st,
 		AuditStore:           st,
 		ExportReconcileStore: st,
+		WorkloadMountStale:   st,
 		Close:                db.Close,
 	}, nil
 }
@@ -640,6 +775,8 @@ type operationRecoveryStore struct {
 	restorePreviewEnabled        bool
 	restorePreviewDiscardEnabled bool
 	restoreRunEnabled            bool
+	templateCreateEnabled        bool
+	templateCloneEnabled         bool
 }
 
 func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
@@ -648,6 +785,10 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 		return nil, err
 	}
 	namespaceRecords, err := scoped.store.ListNamespaceUpsertOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	namespaceDisableRecords, err := scoped.store.ListNamespaceDisableOperationsForRecovery(ctx, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -660,6 +801,7 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 		return nil, err
 	}
 	records := append(volumeRecords, namespaceRecords...)
+	records = append(records, namespaceDisableRecords...)
 	records = append(records, bindingRecords...)
 	records = append(records, mountRecords...)
 	if scoped.repoCreateEnabled {
@@ -689,6 +831,20 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 			return nil, err
 		}
 		records = append(records, savePointRecords...)
+	}
+	if scoped.templateCreateEnabled {
+		templateCreateRecords, err := scoped.store.ListTemplateCreateOperationsForRecovery(ctx, now, limit)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, templateCreateRecords...)
+	}
+	if scoped.templateCloneEnabled {
+		templateCloneRecords, err := scoped.store.ListTemplateCloneOperationsForRecovery(ctx, now, limit)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, templateCloneRecords...)
 	}
 	if scoped.restorePreviewEnabled {
 		restorePreviewRecords, err := scoped.store.ListRestorePreviewOperationsForRecovery(ctx, now, limit)
@@ -732,6 +888,10 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
 		return record, err
 	}
+	record, err = scoped.store.AcquireNamespaceDisableOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
+	}
 	record, err = scoped.store.AcquireNamespaceVolumeBindingPutOperationLease(ctx, operationID, request)
 	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
 		return record, err
@@ -742,24 +902,36 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 	}
 	if scoped.repoCreateEnabled {
 		record, err = scoped.store.AcquireRepoCreateOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoLifecycleEnabled && !scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoLifecycleEnabled && !scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.templateCreateEnabled && !scoped.templateCloneEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
 			return record, err
 		}
 	}
 	if scoped.repoLifecycleEnabled {
 		record, err = scoped.store.AcquireRepoLifecycleOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.templateCreateEnabled && !scoped.templateCloneEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
 			return record, err
 		}
 	}
 	if scoped.repoPurgeEnabled {
 		record, err = scoped.store.AcquireRepoPurgeOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.savePointEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.savePointEnabled && !scoped.templateCreateEnabled && !scoped.templateCloneEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
 			return record, err
 		}
 	}
 	if scoped.savePointEnabled {
 		record, err = scoped.store.AcquireSavePointCreateOperationLease(ctx, operationID, request)
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.templateCreateEnabled && !scoped.templateCloneEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
+			return record, err
+		}
+	}
+	if scoped.templateCreateEnabled {
+		record, err = scoped.store.AcquireTemplateCreateOperationLease(ctx, operationID, request)
+		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.templateCloneEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
+			return record, err
+		}
+	}
+	if scoped.templateCloneEnabled {
+		record, err = scoped.store.AcquireTemplateCloneOperationLease(ctx, operationID, request)
 		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
 			return record, err
 		}
@@ -796,6 +968,10 @@ func (scoped operationRecoveryStore) CommitVolumeEnsureWithLease(ctx context.Con
 
 func (scoped operationRecoveryStore) CommitNamespaceUpsertWithLease(ctx context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
 	return scoped.store.CommitNamespaceUpsertWithLease(ctx, namespace, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitNamespaceDisableWithLease(ctx context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {
+	return scoped.store.CommitNamespaceDisableWithLease(ctx, namespace, record, owner, now, event)
 }
 
 func (scoped operationRecoveryStore) CommitNamespaceVolumeBindingPutWithLease(ctx context.Context, binding resources.NamespaceVolumeBinding, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error) {
@@ -856,6 +1032,26 @@ func (scoped operationRecoveryStore) CommitSavePointCreateSucceededWithLease(ctx
 
 func (scoped operationRecoveryStore) CommitSavePointCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	return scoped.store.CommitSavePointCreateFailedWithLease(ctx, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitTemplateCreateSucceededWithLease(ctx context.Context, template resources.Repo, sourceRepoID, sourceSavePointID, cloneHistoryMode string, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {
+	return scoped.store.CommitTemplateCreateSucceededWithLease(ctx, template, sourceRepoID, sourceSavePointID, cloneHistoryMode, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) MarkTemplateCreateWriterFencedWithLease(ctx context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error) {
+	return scoped.store.MarkTemplateCreateWriterFencedWithLease(ctx, fence, record, owner, now)
+}
+
+func (scoped operationRecoveryStore) CommitTemplateCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return scoped.store.CommitTemplateCreateFailedWithLease(ctx, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitTemplateCloneSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {
+	return scoped.store.CommitTemplateCloneSucceededWithLease(ctx, repo, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) CommitTemplateCloneFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return scoped.store.CommitTemplateCloneFailedWithLease(ctx, record, owner, now, event)
 }
 
 func (scoped operationRecoveryStore) UpdateRestorePreviewPreflightWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
@@ -960,6 +1156,13 @@ func exportSessionReconcileCountError(result exportreconcile.Result) error {
 	return fmt.Errorf("export session reconcile incomplete: failed=%d", result.Failed)
 }
 
+func workloadMountStaleLeaseCountError(result workloadmount.StaleLeaseResult) error {
+	if result.Failed == 0 {
+		return nil
+	}
+	return fmt.Errorf("workload mount stale lease scan incomplete: failed=%d kept_blocked=%d", result.Failed, result.KeptBlocked)
+}
+
 func auditDeliveryCountError(stale auditdelivery.StaleRecoveryResult, delivery auditdelivery.BatchResult) error {
 	if stale.Failed == 0 && stale.FailedTerminal == 0 && delivery.Failed == 0 && delivery.DeliveryFailuresRecorded == 0 {
 		return nil
@@ -1009,12 +1212,14 @@ var (
 	_ store.OperationLeaseStore                        = operationRecoveryStore{}
 	_ store.VolumeEnsureOperationCommitStore           = operationRecoveryStore{}
 	_ store.NamespaceUpsertOperationCommitStore        = operationRecoveryStore{}
+	_ store.NamespaceDisableOperationCommitStore       = operationRecoveryStore{}
 	_ store.NamespaceVolumeBindingOperationCommitStore = operationRecoveryStore{}
 	_ store.WorkloadMountBindingOperationCommitStore   = operationRecoveryStore{}
 	_ store.RepoCreateOperationCommitStore             = operationRecoveryStore{}
 	_ store.RepoLifecycleOperationCommitStore          = operationRecoveryStore{}
 	_ store.RepoPurgeOperationCommitStore              = operationRecoveryStore{}
 	_ store.SavePointCreateOperationCommitStore        = operationRecoveryStore{}
+	_ store.TemplateOperationCommitStore               = operationRecoveryStore{}
 	_ store.RestorePreviewOperationCommitStore         = operationRecoveryStore{}
 	_ store.RestorePreviewDiscardOperationCommitStore  = operationRecoveryStore{}
 	_ store.RestoreRunOperationCommitStore             = operationRecoveryStore{}

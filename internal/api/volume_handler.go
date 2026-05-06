@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +17,10 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 )
 
+type VolumeHealthReader interface {
+	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
+}
+
 type EnsureVolumeHandlerConfig struct {
 	IntakeStore       OperationIntakeStore
 	PrincipalResolver PrincipalResolver
@@ -22,6 +28,27 @@ type EnsureVolumeHandlerConfig struct {
 	OperationID       OperationIDGenerator
 	Now               func() time.Time
 	AuditSink         audit.Sink
+}
+
+type VolumeHealthHandlerConfig struct {
+	Reader            VolumeHealthReader
+	PrincipalResolver PrincipalResolver
+	DeploymentPolicy  AllowedCallerPolicy
+	Now               func() time.Time
+	AuditSink         audit.Sink
+}
+
+type VolumeHealthResponse struct {
+	VolumeID  string                `json:"volume_id"`
+	Status    string                `json:"status"`
+	CheckedAt string                `json:"checked_at"`
+	Findings  []VolumeHealthFinding `json:"findings"`
+}
+
+type VolumeHealthFinding struct {
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+	Severity string `json:"severity"`
 }
 
 type ensureVolumeRequestBodyDTO struct {
@@ -36,6 +63,82 @@ func EnsureVolumeHandler(config EnsureVolumeHandlerConfig) http.Handler {
 	route, _ := RouteMetadataByOperationID("ensureVolume")
 	leaf := ensureVolumeLeafHandler{route: route, intakeStore: config.IntakeStore, operationID: config.OperationID, now: config.Now, sink: config.AuditSink}
 	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, ensureVolumeRouteResolver{route: route}, config.DeploymentPolicy, config.AuditSink)
+}
+
+func VolumeHealthHandler(config VolumeHealthHandlerConfig) http.Handler {
+	route, _ := RouteMetadataByOperationID("getVolumeHealth")
+	leaf := volumeHealthLeafHandler{route: route, reader: config.Reader, now: config.Now, sink: config.AuditSink}
+	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, ensureVolumeRouteResolver{route: route}, config.DeploymentPolicy, config.AuditSink)
+}
+
+type volumeHealthLeafHandler struct {
+	route  RouteMetadata
+	reader VolumeHealthReader
+	now    func() time.Time
+	sink   audit.Sink
+}
+
+func (handler volumeHealthLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	requestContext, ok := RequestContextFromRequest(r)
+	if !ok || handler.reader == nil {
+		writeOperationIntakeHTTPError(w, r, internalOperationIntakeError())
+		return
+	}
+	volumeID, ok := ensureVolumePathVolumeID(r, handler.route)
+	if !ok {
+		writeOperationIntakeHTTPError(w, r, internalOperationIntakeError())
+		return
+	}
+	if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
+		writeEnsureVolumeValidationError(w, r, handler.route, requestContext, CodeInvalidID, "invalid volume id", []string{"invalid_volume_id"}, handler.sink)
+		return
+	}
+	if strings.TrimSpace(r.Header.Get(auth.HeaderNamespaceID)) != "" {
+		writeEnsureVolumeValidationError(w, r, handler.route, requestContext, CodeResourceNamespaceMismatch, "volume-global operation must not include namespace header", []string{"namespace_header_not_allowed"}, handler.sink)
+		return
+	}
+	volume, err := handler.reader.GetVolume(r.Context(), volumeID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			envelope := NewErrorEnvelope(CodeRepoNotFound, "volume was not found", false, CorrelationIDFromRequest(r), nil, nil)
+			_ = WriteErrorEnvelope(w, http.StatusNotFound, envelope)
+			return
+		}
+		envelope := NewErrorEnvelope(CodeStorageUnavailable, "durable metadata store is unavailable", true, CorrelationIDFromRequest(r), nil, nil)
+		_ = WriteErrorEnvelope(w, http.StatusServiceUnavailable, envelope)
+		return
+	}
+	if err := volume.Validate(); err != nil || volume.ID != volumeID {
+		envelope := NewErrorEnvelope(CodeStorageUnavailable, "durable metadata store is unavailable", true, CorrelationIDFromRequest(r), nil, nil)
+		_ = WriteErrorEnvelope(w, http.StatusServiceUnavailable, envelope)
+		return
+	}
+	checkedAt := time.Now().UTC()
+	if handler.now != nil {
+		checkedAt = handler.now().UTC()
+	}
+	_ = writeJSON(w, http.StatusOK, volumeHealthFromVolume(volume, checkedAt))
+}
+
+func volumeHealthFromVolume(volume resources.Volume, checkedAt time.Time) VolumeHealthResponse {
+	status := "healthy"
+	findings := []VolumeHealthFinding{}
+	if volume.Status == resources.VolumeStatusDisabled {
+		status = "unavailable"
+		findings = append(findings, VolumeHealthFinding{Code: "VOLUME_DISABLED", Message: "volume is disabled", Severity: "critical"})
+	} else if volume.Status == resources.VolumeStatusDegraded {
+		status = "degraded"
+		findings = append(findings, VolumeHealthFinding{Code: "VOLUME_DEGRADED", Message: "volume metadata reports degraded status", Severity: "warning"})
+	}
+	for _, capability := range []string{"webdav_export", "workload_mount", "jvs_external_control_root"} {
+		if got, _ := volume.Capabilities[capability].(bool); !got {
+			if status == "healthy" {
+				status = "degraded"
+			}
+			findings = append(findings, VolumeHealthFinding{Code: "CAPABILITY_NOT_READY", Message: capability + " capability is not available", Severity: "warning"})
+		}
+	}
+	return VolumeHealthResponse{VolumeID: volume.ID, Status: status, CheckedAt: checkedAt.Format(time.RFC3339), Findings: findings}
 }
 
 type ensureVolumeRouteResolver struct{ route RouteMetadata }

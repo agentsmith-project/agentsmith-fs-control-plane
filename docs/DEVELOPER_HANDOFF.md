@@ -1,14 +1,14 @@
 # Developer Handoff
 
-Status: neutral Go skeleton, contract guardrails, resource metadata
-persistence, metadata recovery workers, opt-in `repo_create` JVS execution, and
-explicit-gated repo lifecycle recovery for archive, restore-archived, delete,
-restore-tombstoned, plus separately gated `repo_purge` recovery are in place;
-the audit outbox stale-recovery and HTTP JSON delivery worker is wired behind an
-explicit gate. WebDAV export create/get/revoke, the WebDAV policy gateway, DB
-runtime delta observation, and explicit-gated terminal export reconcile are now
-implemented. Mount, save/restore, template, and non-HTTP audit sink integrations
-remain unimplemented.
+Status: neutral Go service, contract guardrails, resource metadata persistence,
+durable operation intake/recovery, repo/JVS execution, repo lifecycle recovery,
+save/restore flows, namespace-scoped template create/clone, WebDAV export
+create/get/revoke plus gateway serving, workload mount issuance/orchestrator
+plans, writer fences with shared repo-row serialization, workload mount
+stale-lease scanning, and explicit-gated audit outbox HTTP JSON delivery are in
+place. Non-HTTP audit sink integrations, external owner/security acceptance,
+generated-client review, runbook drills, and human GA acceptance remain open
+where tracked by readiness gates.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -122,7 +122,8 @@ Completed:
   atomically commit the create operation, export session, and audit event while
   returning credential secrets only on the first successful create response
 - repo and template storage identities are recorded as control-plane metadata;
-  RepoTemplate publication lifecycle and handlers remain unimplemented
+  namespace-scoped immutable template create/clone handlers and recovery paths
+  are implemented with same-namespace and same-volume GA gates
 - minimal PostgreSQL repo fence adapter for held fence read, create, and active
   release, with focused tests
 - repo create intake for durable `repo_create` operations
@@ -154,10 +155,12 @@ Completed:
   status, namespace/binding status, writer-session fences, lifecycle fences,
   and lifecycle source-status rules; it is wired to lifecycle intake/admission
 - session substrate pure model for export and workload-mount session state,
-  restore-run writer gating, and repo lifecycle drain gating; export sessions
-  are wired into API create/get/revoke, WebDAV gateway admission and runtime
-  observation, terminal reconcile, and repo archive/delete recovery drain
-  checks. Workload mount plans and restore-run execution are still separate.
+  restore-run/template writer gating, and repo lifecycle drain gating; export
+  sessions are wired into API create/get/revoke, WebDAV gateway admission and
+  runtime observation, terminal reconcile, and repo archive/delete recovery
+  drain checks. Workload mount issuance, orchestrator plans, stale mount
+  scanning, restore-run execution, and template create source dirty-race gates
+  are wired through durable operation and session/fence boundaries.
 - WebDAV export gateway serving through `afscp-export-gateway --serve`, with
   Basic auth, active/unexpired WebDAV session admission, mode/method policy,
   source and `Destination` path policy, payload no-follow filesystem access,
@@ -179,6 +182,19 @@ Completed:
   zero-count expired `active -> expired` without requiring a fresh gateway
   heartbeat. Nonzero counts and stale/uncertain states still fail closed and
   require operator/runbook follow-up.
+- workload mount issuance and orchestrator-only mount plans are implemented.
+  Stale non-terminal workload mounts are scanned by an explicit worker runner;
+  the scan reports kept-blocked bindings as operator-visible evidence rather
+  than silently terminalizing uncertain sessions.
+- save point create, restore preview/discard/run, and namespace-scoped template
+  create/clone are implemented as operation-backed JVS worker paths using the
+  pinned v0.4.8 binary. Template create creates a fresh save point inside the
+  operation and uses writer-session fencing plus active/stale export and mount
+  checks before cloning.
+- writer-session fence acquisition for restore/template and read-write
+  export/workload mount admission share the repo row as the durable
+  serialization primitive before held-fence checks, closing the source dirty
+  race between RW session admission and writer-fence commit.
 - audit outbox pure model and tests
 - pure recovery planner/classification for operation, fence, audit outbox, and
   repo recovery inspection durable records
@@ -186,9 +202,9 @@ Completed:
   held repo fences, and supplied holder/last lifecycle operation records, plus
   PostgreSQL SELECT-only readers for lifecycle candidate repos and all held repo
   fences
-- repo recovery inspection marks sessions, exports, and mounts as explicit
-  `not_implemented` / not-inspectable surfaces; that marker is not evidence that
-  no sessions, exports, or mounts exist
+- repo recovery inspection now has durable session surfaces for exports and
+  workload mounts where implemented; external owner review and runbook drills
+  still decide whether evidence is sufficient for GA closure
 - path resolver guardrails and shared corpus
 - denied audit coverage in the neutral shell and AuthGate paths
 - contract verifier covering selected OpenAPI, schema, docs, and Go DTO drift
@@ -196,16 +212,15 @@ Completed:
 
 Partially completed:
 
-- API shell routes known contract paths to capability-denied responses, with
-  metadata-only namespace upsert and namespace volume binding intake/read
-  handlers implemented, plus repo create intake, repo lifecycle operation
-  intake/admission, namespace-bound repo read storage projections, and operation
-  inspection. The explicit-gated repo lifecycle workers cover
-  archive/restore-archived/delete/restore-tombstoned and separately gated
-  purge recovery; mount, save/restore, template, broader session drain
-  execution beyond export terminal reconcile, and storage-backed handlers
-  beyond the listed intake/read/export surfaces remain
-  unimplemented.
+- API shell routes known contract paths to concrete handlers where implemented,
+  including namespace upsert/disable, namespace volume binding, repo create/read
+  and lifecycle intake, save/restore, template create/clone, WebDAV export,
+  workload mount issuance/plan/status/heartbeat/release/revoke, and operation
+  inspection. The explicit-gated workers cover metadata recovery, repo create,
+  repo lifecycle and purge, save/restore, template create/clone, export terminal
+  reconcile, workload mount stale-lease scanning, and audit outbox HTTP JSON
+  delivery. External acceptance, generated-client review, non-HTTP audit sinks,
+  deployment drills, and human GA sign-off remain open where tracked.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
   models. The first PostgreSQL adapter slice implements operation read/write,
@@ -230,36 +245,26 @@ Partially completed:
   the accepted operation time with exclusive retention expiry and restores to
   recorded `pre_delete_status`. With the repo purge gate enabled, purge removes
   AFSCP-managed retained storage and commits `purged` metadata through a
-  dedicated purge boundary. Export session reconcile runs before operation
-  recovery when enabled. It does not implement save/restore, template, workload
-  mount, or audit sinks beyond the explicitly configured HTTP JSON outbox
-  delivery worker.
-- Path resolver guardrails exist and are used by repo create recovery and the
-  WebDAV export gateway; broader mount, file API, and remaining lifecycle
-  integration remains absent.
+  dedicated purge boundary. Export session reconcile and workload mount
+  stale-lease scanning run before operation recovery when enabled. Save/restore
+  and template create/clone run through dedicated JVS worker paths. Audit sinks
+  beyond the explicitly configured HTTP JSON outbox delivery worker remain
+  unimplemented.
+- Path resolver guardrails exist and are used by repo create/recovery,
+  save/restore, template, WebDAV export gateway, and workload mount paths. File
+  API integration remains outside this handoff scope.
 
 Not implemented:
 
-- real template, mount, save, or restore handlers
-- JVS save/restore/template/mount handlers; repo lifecycle intake/admission
-  handlers, export create/get/revoke handlers, WebDAV gateway serving, export
-  terminal reconcile, and archive/restore-archived/delete/restore-tombstoned/
-  purge recovery already exist
 - complex gateway crash recovery or per-request WebDAV operation records. If a
   gateway process crashes after a positive start delta commits and before the
   matching end delta, active request/write counts may conservatively remain
   positive until an operator/runbook repair or future recovery path resolves
   the session.
-- concrete workload-mount handler wiring for the session admission model beyond
-  lifecycle intake checks; repo access admission is already wired for lifecycle
-  intake/admission
 - audit delivery sinks beyond the minimal HTTP JSON at-least-once worker; the
   external sink must dedupe by `audit_event_id`
-- JVS execution beyond repo create `init`/`doctor --strict` and repo lifecycle
-  restore `doctor --strict`
-- workload mount issuance or orchestrator mount plans
-- broader fence enforcement beyond the implemented repo fence/lifecycle worker
-  paths
+- generated clients, external owner/security acceptance, deployment-specific
+  observability thresholds, runbook drills, and human GA acceptance evidence
 
 ## Contract Implementation Order
 
@@ -272,14 +277,12 @@ Continue in dependency order:
 3. Add recovery loop behavior only after the remaining durable primitives have
    tests.
 4. Implement volume and namespace binding APIs.
-5. Continue from implemented repo create intake, explicit-gated `repo_create`
-   JVS recovery, and explicit-gated
-   archive/restore-archived/delete/restore-tombstoned lifecycle recovery toward
-   the remaining repo lifecycle, export/WebDAV, workload mount,
-   save/restore, and template handlers only after their dependency gates are
-   accepted. G-005 is closed by JVS v0.4.8 evidence; remaining repo/JVS/storage
-   work may proceed only through accepted contracts, fences, session drain,
-   operation leases, audit behavior, and focused tests.
+5. Continue from the implemented repo create, repo lifecycle, export/WebDAV,
+   workload mount, save/restore, and template paths by closing remaining review
+   evidence only through accepted contracts, fences, session drain, operation
+   leases, audit behavior, focused tests, runbook drills, and owner acceptance.
+   G-005 is closed by JVS v0.4.8 evidence; it is not by itself GA acceptance for
+   storage mutation.
 
 ## JVS Gate Status
 
@@ -287,11 +290,12 @@ G-005 is closed. JVS v0.4.8 is pinned and smoke-tested in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`; the v0.4.7 blocker evidence
 remains historical in `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
 
-This closes the JVS gate. Repo create, restore-archived, and
-restore-tombstoned now have explicit-gated worker paths for their pinned JVS
-commands. Remaining storage mutation still requires accepted contracts, fences,
-session drain, operation leases, audit behavior, and focused tests. AFSCP must
-not delete private JVS files directly.
+This closes the JVS gate. Repo create, save/restore, template create/clone, and
+repo lifecycle JVS verification now have explicit-gated worker paths for their
+pinned JVS commands. GA acceptance for storage mutation still requires accepted
+contracts, fences, session drain, operation leases, audit behavior, focused
+tests, runbook drills, and owner review. AFSCP must not delete private JVS files
+directly.
 
 ## Repo Lifecycle Rules
 

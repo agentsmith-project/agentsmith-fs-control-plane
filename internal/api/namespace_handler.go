@@ -27,6 +27,12 @@ type upsertNamespaceRequestBody struct {
 	NamespaceID string `json:"namespace_id"`
 }
 
+type DisableNamespaceHandlerConfig NamespaceUpsertHandlerConfig
+
+type disableNamespaceRequestBody struct {
+	Reason string `json:"reason"`
+}
+
 // NamespaceUpsertHandler accepts/reuses namespace upsert operations only; it does not mutate namespace metadata.
 func NamespaceUpsertHandler(config NamespaceUpsertHandlerConfig) http.Handler {
 	route, _ := RouteMetadataByOperationID("upsertNamespace")
@@ -38,6 +44,69 @@ func NamespaceUpsertHandler(config NamespaceUpsertHandlerConfig) http.Handler {
 		sink:        config.AuditSink,
 	}
 	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, namespaceUpsertRouteResolver{route: route}, config.DeploymentPolicy, config.AuditSink)
+}
+
+func DisableNamespaceHandler(config DisableNamespaceHandlerConfig) http.Handler {
+	route, _ := RouteMetadataByOperationID("disableNamespace")
+	leaf := namespaceDisableLeafHandler{
+		route:       route,
+		intakeStore: config.IntakeStore,
+		operationID: config.OperationID,
+		now:         config.Now,
+		sink:        config.AuditSink,
+	}
+	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, namespaceUpsertRouteResolver{route: route}, config.DeploymentPolicy, config.AuditSink)
+}
+
+type namespaceDisableLeafHandler struct {
+	route       RouteMetadata
+	intakeStore OperationIntakeStore
+	operationID OperationIDGenerator
+	now         func() time.Time
+	sink        audit.Sink
+}
+
+func (handler namespaceDisableLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	requestContext, ok := RequestContextFromRequest(r)
+	if !ok {
+		writeOperationIntakeHTTPError(w, r, internalOperationIntakeError())
+		return
+	}
+	namespaceID, ok := namespaceUpsertPathNamespaceID(r, handler.route)
+	if !ok {
+		writeOperationIntakeHTTPError(w, r, internalOperationIntakeError())
+		return
+	}
+	if err := pathresolver.ValidateID(pathresolver.NamespaceID, namespaceID); err != nil {
+		writeNamespaceUpsertValidationError(w, r, handler.route, requestContext, CodeInvalidID, "invalid namespace id", []string{"invalid_namespace_id"}, handler.sink)
+		return
+	}
+	if requestContext.NamespaceID == "" || requestContext.NamespaceID != namespaceID {
+		writeNamespaceUpsertValidationError(w, r, handler.route, requestContext, CodeResourceNamespaceMismatch, "request namespace does not match route namespace", []string{"namespace_mismatch"}, handler.sink)
+		return
+	}
+	body, err := decodeDisableNamespaceRequest(r)
+	if err != nil {
+		writeNamespaceUpsertValidationError(w, r, handler.route, requestContext, CodeInvalidID, "invalid namespace disable request", []string{"invalid_request_body"}, handler.sink)
+		return
+	}
+	canonical := disableNamespaceRequestBody{Reason: body.Reason}
+	envelope, err := CreateOrReuseOperationIntake(r.Context(), OperationIntakeConfig{Store: handler.intakeStore}, OperationIntakeRequest{
+		RequestContext:      requestContext,
+		Route:               handler.route,
+		NamespaceID:         namespaceID,
+		Resource:            operations.ResourceRef{Type: "namespace", ID: namespaceID},
+		CanonicalRequest:    canonical,
+		InputSummary:        map[string]any{"namespace_id": namespaceID, "reason": body.Reason},
+		Phase:               operations.OperationPhaseNamespaceDisableValidate,
+		GenerateOperationID: handler.operationID,
+		Now:                 handler.now,
+	})
+	if err != nil {
+		writeOperationIntakeHTTPError(w, r, err)
+		return
+	}
+	_ = writeJSON(w, http.StatusAccepted, envelope)
 }
 
 type namespaceUpsertRouteResolver struct {
@@ -145,6 +214,26 @@ func decodeUpsertNamespaceRequest(r *http.Request) (upsertNamespaceRequestBody, 
 		return upsertNamespaceRequestBody{}, errors.New("multiple json values")
 	} else if !errors.Is(err, io.EOF) {
 		return upsertNamespaceRequestBody{}, err
+	}
+	return body, nil
+}
+
+func decodeDisableNamespaceRequest(r *http.Request) (disableNamespaceRequestBody, error) {
+	var body disableNamespaceRequestBody
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		return disableNamespaceRequestBody{}, err
+	}
+	body.Reason = strings.TrimSpace(body.Reason)
+	if body.Reason == "" || len(body.Reason) > 1024 {
+		return disableNamespaceRequestBody{}, errors.New("invalid reason")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		return disableNamespaceRequestBody{}, errors.New("multiple json values")
+	} else if !errors.Is(err, io.EOF) {
+		return disableNamespaceRequestBody{}, err
 	}
 	return body, nil
 }

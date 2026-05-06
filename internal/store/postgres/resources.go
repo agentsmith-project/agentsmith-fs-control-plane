@@ -161,7 +161,7 @@ func (store *Store) GetRepoInNamespace(ctx context.Context, namespaceID, repoID 
 	if err := pathresolver.ValidateID(pathresolver.NamespaceID, namespaceID); err != nil {
 		return resources.Repo{}, err
 	}
-	if err := pathresolver.ValidateID(pathresolver.RepoID, repoID); err != nil {
+	if err := validateRepoOrTemplateID(repoID); err != nil {
 		return resources.Repo{}, err
 	}
 	row := store.exec.QueryRowContext(ctx, repoSelectSQL()+" WHERE namespace_id = $1 AND repo_id = $2", namespaceID, repoID)

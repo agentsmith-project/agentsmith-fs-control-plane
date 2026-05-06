@@ -22,6 +22,7 @@ const (
 	defaultOperationRecoveryLeaseDuration = 5 * time.Minute
 	defaultWorkerRunOnceTimeout           = 30 * time.Second
 	defaultExportSessionReconcileLimit    = 10
+	defaultWorkloadMountStaleLeaseLimit   = 10
 	defaultAuditDeliveryLimit             = 10
 	defaultAuditDeliveryMaxAttempts       = 5
 	defaultAuditDeliveryRetryBackoff      = time.Minute
@@ -80,6 +81,7 @@ type APIConfig struct {
 	ServiceTokens                     string
 	DeploymentGlobalAllowedCallers    string
 	DeploymentNamespaceAllowedCallers string
+	SavePointHistory                  WorkerRepoCreateRecoveryConfig
 }
 
 type ExportGatewayConfig struct {
@@ -93,6 +95,7 @@ type WorkerConfig struct {
 	RunOnceTimeout         time.Duration
 	OperationRecovery      WorkerOperationRecoveryConfig
 	ExportSessionReconcile WorkerExportSessionReconcileConfig
+	WorkloadMountStale     WorkerWorkloadMountStaleLeaseConfig
 	AuditDelivery          WorkerAuditDeliveryConfig
 }
 
@@ -106,6 +109,8 @@ type WorkerOperationRecoveryConfig struct {
 	RepoLifecycle         WorkerRepoCreateRecoveryConfig
 	RepoPurge             WorkerRepoCreateRecoveryConfig
 	SavePoint             WorkerRepoCreateRecoveryConfig
+	TemplateCreate        WorkerRepoCreateRecoveryConfig
+	TemplateClone         WorkerRepoCreateRecoveryConfig
 	RestorePreview        WorkerRepoCreateRecoveryConfig
 	RestorePreviewDiscard WorkerRepoCreateRecoveryConfig
 	RestoreRun            WorkerRepoCreateRecoveryConfig
@@ -123,6 +128,12 @@ type WorkerExportSessionReconcileConfig struct {
 	Enabled     bool
 	PostgresDSN string
 	Owner       string
+	Limit       int
+}
+
+type WorkerWorkloadMountStaleLeaseConfig struct {
+	Enabled     bool
+	PostgresDSN string
 	Limit       int
 }
 
@@ -168,6 +179,9 @@ func Load(source Source) (Config, error) {
 			},
 			ExportSessionReconcile: WorkerExportSessionReconcileConfig{
 				Limit: defaultExportSessionReconcileLimit,
+			},
+			WorkloadMountStale: WorkerWorkloadMountStaleLeaseConfig{
+				Limit: defaultWorkloadMountStaleLeaseLimit,
 			},
 			AuditDelivery: WorkerAuditDeliveryConfig{
 				Limit:          defaultAuditDeliveryLimit,
@@ -271,6 +285,16 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.OperationRecovery.SavePoint = savePoint
+	templateCreate, err := loadTemplateCreateRecoveryConfig(source)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.OperationRecovery.TemplateCreate = templateCreate
+	templateClone, err := loadTemplateCloneRecoveryConfig(source)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.OperationRecovery.TemplateClone = templateClone
 	restorePreview, err := loadRestorePreviewRecoveryConfig(source)
 	if err != nil {
 		return WorkerConfig{}, err
@@ -327,6 +351,11 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.ExportSessionReconcile = exportReconcile
+	workloadMountStale, err := loadWorkerWorkloadMountStaleLeaseConfig(source, worker.WorkloadMountStale)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.WorkloadMountStale = workloadMountStale
 	auditDelivery, err := loadWorkerAuditDeliveryConfig(source, worker.AuditDelivery)
 	if err != nil {
 		return WorkerConfig{}, err
@@ -369,6 +398,35 @@ func loadWorkerExportSessionReconcileConfig(source Source, defaults WorkerExport
 	return cfg, nil
 }
 
+func loadWorkerWorkloadMountStaleLeaseConfig(source Source, defaults WorkerWorkloadMountStaleLeaseConfig) (WorkerWorkloadMountStaleLeaseConfig, error) {
+	cfg := defaults
+	enabled, err := boolValue(source, "AFSCP_WORKLOAD_MOUNT_STALE_LEASE_RECONCILE_ENABLED")
+	if err != nil {
+		return WorkerWorkloadMountStaleLeaseConfig{}, err
+	}
+	cfg.Enabled = enabled
+	cfg.PostgresDSN = valueOrDefault(source, "AFSCP_WORKLOAD_MOUNT_STALE_LEASE_RECONCILE_POSTGRES_DSN", "")
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_POSTGRES_DSN", "")
+	}
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_DATABASE_URL", "")
+	}
+	if cfg.Limit, err = intValue(source, "AFSCP_WORKLOAD_MOUNT_STALE_LEASE_RECONCILE_LIMIT", cfg.Limit); err != nil {
+		return WorkerWorkloadMountStaleLeaseConfig{}, err
+	}
+	if cfg.Limit <= 0 {
+		return WorkerWorkloadMountStaleLeaseConfig{}, fmt.Errorf("AFSCP_WORKLOAD_MOUNT_STALE_LEASE_RECONCILE_LIMIT must be positive")
+	}
+	if !cfg.Enabled {
+		return cfg, nil
+	}
+	if cfg.PostgresDSN == "" {
+		return WorkerWorkloadMountStaleLeaseConfig{}, fmt.Errorf("AFSCP_POSTGRES_DSN is required when AFSCP_WORKLOAD_MOUNT_STALE_LEASE_RECONCILE_ENABLED is true")
+	}
+	return cfg, nil
+}
+
 func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
 	cfg := defaults
 	cfg.Mode = strings.ToLower(valueOrDefault(source, "AFSCP_API_MODE", cfg.Mode))
@@ -388,6 +446,52 @@ func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
 	cfg.ServiceTokens = valueOrDefault(source, "AFSCP_API_SERVICE_TOKENS", "")
 	cfg.DeploymentGlobalAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS", "")
 	cfg.DeploymentNamespaceAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS", "")
+	savePointHistory, err := loadJVSConfigWhenCapabilityAvailable(source, "AFSCP_API_SAVE_POINT_HISTORY")
+	if err != nil {
+		return APIConfig{}, err
+	}
+	cfg.SavePointHistory = savePointHistory
+	return cfg, nil
+}
+
+func loadJVSConfigWhenCapabilityAvailable(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {
+	apiGate, err := boolValue(source, gateKey+"_ENABLED")
+	if err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	if !apiGate {
+		return WorkerRepoCreateRecoveryConfig{VolumeRoots: map[string]string{}}, nil
+	}
+	enabled, err := boolValue(source, "AFSCP_JVS_ENABLED")
+	if err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	ready, err := boolValue(source, "AFSCP_JVS_READY")
+	if err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	if !enabled || !ready {
+		return WorkerRepoCreateRecoveryConfig{VolumeRoots: map[string]string{}}, nil
+	}
+	cfg := WorkerRepoCreateRecoveryConfig{Enabled: true, VolumeRoots: map[string]string{}}
+	cfg.JVSBinaryPath = valueOrDefault(source, "AFSCP_JVS_BINARY_PATH", "")
+	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_BINARY_PATH", cfg.JVSBinaryPath, gateKey); err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	cfg.JVSBinarySHA256 = strings.ToLower(valueOrDefault(source, "AFSCP_JVS_BINARY_SHA256", ""))
+	if !validSHA256Hex(cfg.JVSBinarySHA256) {
+		return WorkerRepoCreateRecoveryConfig{}, fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must be a sha256 hex digest")
+	}
+	cfg.JVSCWD = valueOrDefault(source, "AFSCP_JVS_CWD", "")
+	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_CWD", cfg.JVSCWD, gateKey); err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	rootsRaw := valueOrDefault(source, "AFSCP_VOLUME_ROOTS", "")
+	roots, err := parseVolumeRoots(rootsRaw, gateKey)
+	if err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	cfg.VolumeRoots = roots
 	return cfg, nil
 }
 
@@ -561,6 +665,14 @@ func loadRepoPurgeRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig,
 
 func loadSavePointRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
 	return loadJVSOperationRecoveryConfig(source, "AFSCP_SAVE_POINT_RECOVERY_ENABLED")
+}
+
+func loadTemplateCreateRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
+	return loadJVSOperationRecoveryConfig(source, "AFSCP_TEMPLATE_CREATE_RECOVERY_ENABLED")
+}
+
+func loadTemplateCloneRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
+	return loadJVSOperationRecoveryConfig(source, "AFSCP_TEMPLATE_CLONE_RECOVERY_ENABLED")
 }
 
 func loadRestorePreviewRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {

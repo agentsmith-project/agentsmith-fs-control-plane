@@ -12,6 +12,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportreconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
 func TestRunOnceRejectsEmptyConfigBeforeRunnerCalls(t *testing.T) {
@@ -29,21 +30,22 @@ func TestRunOnceExecutesConfiguredRunnersInFixedOrderWithContext(t *testing.T) {
 	order := []string{}
 	export := &fakeExportReconcileRunner{name: "export", order: &order, result: exportreconcile.Result{Scanned: 2, Terminalized: 1}}
 	op := &fakeOperationRunner{name: "operation", order: &order, result: recovery.OperationBatchResult{Scanned: 3, Claimed: 1}}
+	mountStale := &fakeWorkloadMountStaleRunner{name: "mount_stale", order: &order, result: workloadmount.StaleLeaseResult{Scanned: 4, KeptBlocked: 4}}
 	stale := &fakeStaleRunner{name: "stale", order: &order, result: auditdelivery.StaleRecoveryResult{Recovered: 2, RetryWait: 1}}
 	delivery := &fakeDeliveryRunner{name: "delivery", order: &order, result: auditdelivery.BatchResult{Claimed: 4, Delivered: 3}}
 
-	result, err := New(Config{ExportSessionReconcile: export, OperationRecovery: op, AuditStaleRecovery: stale, AuditDelivery: delivery}).RunOnce(ctx)
+	result, err := New(Config{ExportSessionReconcile: export, OperationRecovery: op, WorkloadMountStale: mountStale, AuditStaleRecovery: stale, AuditDelivery: delivery}).RunOnce(ctx)
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if strings.Join(order, ",") != "export,operation,stale,delivery" {
-		t.Fatalf("order = %#v, want export operation stale delivery", order)
+	if strings.Join(order, ",") != "export,operation,mount_stale,stale,delivery" {
+		t.Fatalf("order = %#v, want export operation mount-stale stale delivery", order)
 	}
-	if export.ctx != ctx || op.ctx != ctx || stale.ctx != ctx || delivery.ctx != ctx {
+	if export.ctx != ctx || op.ctx != ctx || mountStale.ctx != ctx || stale.ctx != ctx || delivery.ctx != ctx {
 		t.Fatal("runner did not receive request context")
 	}
 	summary := result.Summary()
-	if summary.ExportSessionReconcile.Scanned != 2 || summary.ExportSessionReconcile.Terminalized != 1 || summary.Operation.Scanned != 3 || summary.Operation.Claimed != 1 || summary.AuditStale.Recovered != 2 || summary.AuditDelivery.Delivered != 3 {
+	if summary.ExportSessionReconcile.Scanned != 2 || summary.ExportSessionReconcile.Terminalized != 1 || summary.Operation.Scanned != 3 || summary.Operation.Claimed != 1 || summary.WorkloadMountStale.Scanned != 4 || summary.WorkloadMountStale.KeptBlocked != 4 || summary.AuditStale.Recovered != 2 || summary.AuditDelivery.Delivered != 3 {
 		t.Fatalf("summary = %#v, want aggregate counts", summary)
 	}
 }
@@ -215,6 +217,24 @@ type fakeOperationRunner struct {
 }
 
 func (runner *fakeOperationRunner) RunOnce(ctx context.Context) (recovery.OperationBatchResult, error) {
+	*runner.order = append(*runner.order, runner.name)
+	runner.ctx = ctx
+	if runner.after != nil {
+		runner.after()
+	}
+	return runner.result, runner.err
+}
+
+type fakeWorkloadMountStaleRunner struct {
+	name   string
+	order  *[]string
+	ctx    context.Context
+	result workloadmount.StaleLeaseResult
+	err    error
+	after  func()
+}
+
+func (runner *fakeWorkloadMountStaleRunner) RunOnce(ctx context.Context) (workloadmount.StaleLeaseResult, error) {
 	*runner.order = append(*runner.order, runner.name)
 	runner.ctx = ctx
 	if runner.after != nil {

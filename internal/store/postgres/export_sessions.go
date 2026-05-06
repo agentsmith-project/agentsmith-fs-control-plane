@@ -411,13 +411,13 @@ func exportCreateOrReuseSQL() string {
 		"), active_binding AS (" +
 		"SELECT namespace_id FROM namespace_volume_bindings WHERE namespace_id = $17 AND status = 'active' AND COALESCE((export_policy->>'webdav_enabled')::boolean, false) = true FOR SHARE" +
 		"), active_repo AS (" +
-		"SELECT repo_id FROM repos WHERE namespace_id = $17 AND repo_id = $18 AND repo_kind = 'repo' AND status = 'active' AND lifecycle_status = 'active' FOR SHARE" +
+		"SELECT repo_id FROM repos WHERE namespace_id = $17 AND repo_id = $18 AND repo_kind = 'repo' AND status = 'active' AND lifecycle_status = 'active' FOR UPDATE" +
 		"), active_volume AS (" +
 		"SELECT volumes.volume_id FROM volumes JOIN repos ON repos.volume_id = volumes.volume_id WHERE repos.namespace_id = $17 AND repos.repo_id = $18 AND volumes.status = 'active' AND COALESCE((volumes.capabilities->>'webdav_export')::boolean, false) = true FOR SHARE" +
 		"), held_lifecycle_fence AS (" +
-		"SELECT fence_id FROM repo_fences WHERE repo_id = $18 AND fence_kind = 'lifecycle' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
+		"SELECT fence_id FROM repo_fences, active_repo WHERE repo_fences.repo_id = active_repo.repo_id AND repo_fences.fence_kind = 'lifecycle' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
 		"), held_writer_fence AS (" +
-		"SELECT fence_id FROM repo_fences WHERE repo_id = $18 AND fence_kind = 'writer_session' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
+		"SELECT fence_id FROM repo_fences, active_repo WHERE repo_fences.repo_id = active_repo.repo_id AND repo_fences.fence_kind = 'writer_session' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
 		"), inserted_operation AS (" +
 		"INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") SELECT " + placeholders(1, len(operationColumns)) + " WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
 		"AND $3 = 'succeeded' AND $2 = 'export_create' AND $4 = 'export_create_committed' AND $15 = 'export' AND $16 = $20 AND $20 = $33 AND $17 = $34 AND $18 = $35 " +
