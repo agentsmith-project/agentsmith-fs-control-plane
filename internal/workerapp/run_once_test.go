@@ -749,6 +749,70 @@ func TestRunOnceRestorePreviewEnabledClaimsThroughRestorePreviewExecutor(t *test
 	}
 }
 
+func TestRunOnceRestorePreviewDiscardDisabledDoesNotListOrClaim(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppRestorePreviewDiscardOperationRecord("op_discard", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if summary := result.Summary().Operation; summary.Scanned != 0 || summary.Claimed != 0 || store.restorePreviewDiscardListCalls != 0 || len(store.acquireIDs) != 0 {
+		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want restore_preview_discard ignored while gate disabled", summary, store.restorePreviewDiscardListCalls, store.acquireIDs)
+	}
+}
+
+func TestRunOnceRestorePreviewDiscardEnabledClaimsThroughDiscardExecutor(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppRestorePreviewDiscardOperationRecord("op_discard", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	store.previewOperation = workerAppRestorePreviewSucceededOperationRecord("op_preview01", now)
+	store.restorePlan = workerAppRestorePreviewPendingPlan(now)
+	jvs := &workerAppFakeJVSRunner{
+		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "pending_restore_preview", ActivePlanID: "plan_001", Blocking: true, Workspace: "main"},
+		restoreDiscardSummary: jvsrunner.RestoreDiscardSummary{PlanID: "plan_001", PlanDiscarded: true, Workspace: "main"},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRestorePreviewDiscardConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_restore_preview_discard" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want restore_preview_discard claimed", summary)
+	}
+	if store.restorePreviewDiscardListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_discard" {
+		t.Fatalf("list/acquire = %d/%#v, want restore_preview_discard listed and acquired", store.restorePreviewDiscardListCalls, store.acquireIDs)
+	}
+	if strings.Join(jvs.calls, ",") != "recovery_status,restore_discard" {
+		t.Fatalf("jvs calls = %#v, want recovery_status,restore_discard", jvs.calls)
+	}
+	if store.restorePlan.ID != "plan_001" || store.restorePlan.Status != restoreplan.StatusDiscarded || store.operation.Type != operations.OperationRestorePreviewDiscard || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestorePreviewDiscardCommitted {
+		t.Fatalf("plan/operation = %#v/%#v, want discarded restore plan and succeeded discard operation", store.restorePlan, store.operation)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestorePreviewDiscard || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
+		t.Fatalf("audit events = %#v, want restore preview discard success", store.auditEvents)
+	}
+}
+
 func TestRunOnceRepoLifecycleOperatorInterventionReturnsManualError(t *testing.T) {
 	now := workerAppNow()
 	lifecycleRecord := workerAppRepoLifecycleOperationRecord("op_restore", operations.OperationRepoRestoreArchived, now)
@@ -1307,6 +1371,20 @@ func workerAppRestorePreviewConfigSource(overrides config.MapSource) config.MapS
 	return source
 }
 
+func workerAppRestorePreviewDiscardConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppConfigSource(config.MapSource{
+		"AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED": "true",
+		"AFSCP_JVS_BINARY_PATH":                          "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":                        strings.Repeat("a", 64),
+		"AFSCP_JVS_CWD":                                  "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                             "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return source
+}
+
 func workerAppOperationRecord(now time.Time) operations.OperationRecord {
 	return operations.OperationRecord{
 		ID:               "op_namespace",
@@ -1434,6 +1512,31 @@ func workerAppRestorePreviewOperationRecord(operationID string, now time.Time) o
 	}
 }
 
+func workerAppRestorePreviewDiscardOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	record := workerAppRestorePreviewOperationRecord(operationID, now)
+	record.Type = operations.OperationRestorePreviewDiscard
+	record.Phase = operations.OperationPhaseRestorePreviewDiscardValidate
+	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem_discard").String()
+	record.IdempotencyKey = "idem_discard"
+	record.RequestHash = operations.RequestHash("sha256:restore-preview-discard")
+	record.InputSummary = map[string]any{"preview_operation_id": "op_preview01"}
+	return record
+}
+
+func workerAppRestorePreviewSucceededOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	record := workerAppRestorePreviewOperationRecord(operationID, now)
+	record.State = operations.OperationStateSucceeded
+	record.Phase = operations.OperationPhaseRestorePreviewCommitted
+	record.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001"}
+	record.VerificationResult = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "restore_plan_status": "pending"}
+	record.FinishedAt = &now
+	return record
+}
+
+func workerAppRestorePreviewPendingPlan(now time.Time) restoreplan.Plan {
+	return restoreplan.Plan{ID: "plan_001", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", PreviewOperationID: "op_preview01", SourceSavePointID: "sp_001", Status: restoreplan.StatusPending, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}
+}
+
 func workerAppRepoLifecycleResource(now time.Time, status resources.RepoStatus) resources.Repo {
 	return resources.Repo{
 		ID:                  "repo_alpha01",
@@ -1521,35 +1624,37 @@ func workerAppNow() time.Time {
 }
 
 type fakeWorkerAppStore struct {
-	records                 map[string]operations.OperationRecord
-	order                   []string
-	volume                  resources.Volume
-	repo                    resources.Repo
-	namespace               resources.Namespace
-	binding                 resources.NamespaceVolumeBinding
-	exports                 []sessionstate.ExportSession
-	mounts                  []sessionstate.WorkloadMountBinding
-	operation               operations.OperationRecord
-	restorePlan             restoreplan.Plan
-	auditEvents             []audit.Event
-	fences                  []fences.Fence
-	releasedFenceID         string
-	listDeadline            time.Time
-	closeCalls              int
-	acquireIDs              []string
-	acquirePolicies         map[string]operations.LeaseCancelPolicy
-	recoveredAudit          []audit.OutboxRecord
-	claimedAudit            []audit.OutboxRecord
-	auditCallOrder          []string
-	auditRecoverOwner       string
-	auditRecoverLimit       int
-	auditClaimOwner         string
-	auditClaimLimit         int
-	savePointListCalls      int
-	restorePreviewListCalls int
-	auditDelivered          []string
-	auditFailed             []workerAppAuditFailedCall
-	auditDeliverErr         error
+	records                        map[string]operations.OperationRecord
+	order                          []string
+	volume                         resources.Volume
+	repo                           resources.Repo
+	namespace                      resources.Namespace
+	binding                        resources.NamespaceVolumeBinding
+	exports                        []sessionstate.ExportSession
+	mounts                         []sessionstate.WorkloadMountBinding
+	operation                      operations.OperationRecord
+	previewOperation               operations.OperationRecord
+	restorePlan                    restoreplan.Plan
+	auditEvents                    []audit.Event
+	fences                         []fences.Fence
+	releasedFenceID                string
+	listDeadline                   time.Time
+	closeCalls                     int
+	acquireIDs                     []string
+	acquirePolicies                map[string]operations.LeaseCancelPolicy
+	recoveredAudit                 []audit.OutboxRecord
+	claimedAudit                   []audit.OutboxRecord
+	auditCallOrder                 []string
+	auditRecoverOwner              string
+	auditRecoverLimit              int
+	auditClaimOwner                string
+	auditClaimLimit                int
+	savePointListCalls             int
+	restorePreviewListCalls        int
+	restorePreviewDiscardListCalls int
+	auditDelivered                 []string
+	auditFailed                    []workerAppAuditFailedCall
+	auditDeliverErr                error
 }
 
 type workerAppAuditFailedCall struct {
@@ -1866,6 +1971,33 @@ func (store *fakeWorkerAppStore) ListRestorePreviewOperationsForRecovery(ctx con
 	return out, nil
 }
 
+func (store *fakeWorkerAppStore) ListRestorePreviewDiscardOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	store.restorePreviewDiscardListCalls++
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if record.Type != operations.OperationRestorePreviewDiscard || (record.Phase != operations.OperationPhaseRestorePreviewDiscardValidate && record.Phase != operations.OperationPhaseRestorePreviewDiscarding) {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+		case operations.OperationStateRunning:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		case operations.OperationStateCancelRequested:
+			if record.Phase == operations.OperationPhaseRestorePreviewDiscardValidate && namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (store *fakeWorkerAppStore) AcquireRepoCreateOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	record, ok := store.records[operationID]
 	if !ok {
@@ -1971,6 +2103,27 @@ func (store *fakeWorkerAppStore) AcquireRestorePreviewOperationLease(_ context.C
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	if request.CancelPolicy == operations.LeaseCancelPolicyFinalize && record.Phase != operations.OperationPhaseRestorePreviewValidate {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
+func (store *fakeWorkerAppStore) AcquireRestorePreviewDiscardOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if record.Type != operations.OperationRestorePreviewDiscard || (record.Phase != operations.OperationPhaseRestorePreviewDiscardValidate && record.Phase != operations.OperationPhaseRestorePreviewDiscarding) {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if request.CancelPolicy == operations.LeaseCancelPolicyFinalize && record.Phase != operations.OperationPhaseRestorePreviewDiscardValidate {
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	store.acquireIDs = append(store.acquireIDs, operationID)
@@ -2149,6 +2302,74 @@ func (store *fakeWorkerAppStore) CommitRestorePreviewFailedWithLease(_ context.C
 	return operation, nil
 }
 
+func (store *fakeWorkerAppStore) MarkRestorePreviewDiscardingWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
+	operation := record.Record()
+	store.records[operation.ID] = operation
+	plan.Status = restoreplan.StatusDiscarding
+	plan.UpdatedAt = now
+	store.restorePlan = plan
+	store.operation = operation
+	return plan, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitRestorePreviewDiscardSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.restorePlan.Status = restoreplan.StatusDiscarded
+	store.restorePlan.UpdatedAt = now
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return store.restorePlan, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitRestorePreviewDiscardFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	if operation.Phase == operations.OperationPhaseRestorePreviewDiscarding {
+		store.restorePlan.Status = restoreplan.StatusOperatorInterventionRequired
+		store.restorePlan.UpdatedAt = now
+	}
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) GetOperation(_ context.Context, operationID string) (operations.OperationRecord, error) {
+	if store.previewOperation.ID == operationID {
+		return store.previewOperation, nil
+	}
+	if record, ok := store.records[operationID]; ok {
+		return record, nil
+	}
+	return operations.OperationRecord{}, errors.New("operation not found")
+}
+
+func (store *fakeWorkerAppStore) GetRestorePlanByPreviewOperation(_ context.Context, previewOperationID string) (restoreplan.Plan, error) {
+	if store.restorePlan.PreviewOperationID == previewOperationID {
+		return store.restorePlan, nil
+	}
+	return restoreplan.Plan{}, errors.New("restore plan not found")
+}
+
+func (store *fakeWorkerAppStore) GetActiveRestorePlanByRepo(context.Context, string) (restoreplan.Plan, error) {
+	return store.restorePlan, nil
+}
+
+func (store *fakeWorkerAppStore) CreatePendingRestorePlan(_ context.Context, plan restoreplan.Plan) error {
+	store.restorePlan = plan
+	return nil
+}
+
+func (store *fakeWorkerAppStore) TransitionRestorePlanStatus(_ context.Context, _ string, _, to restoreplan.Status, now time.Time) (restoreplan.Plan, error) {
+	store.restorePlan.Status = to
+	store.restorePlan.UpdatedAt = now
+	return store.restorePlan, nil
+}
+
 func (store *fakeWorkerAppStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
 	if store.repo.ID == "" {
 		return resources.Repo{}, errors.New("repo not found")
@@ -2261,6 +2482,7 @@ type workerAppFakeJVSRunner struct {
 	historySummary        jvsrunner.HistorySummary
 	recoveryStatusSummary jvsrunner.RecoveryStatusSummary
 	restorePreviewSummary jvsrunner.RestorePreviewSummary
+	restoreDiscardSummary jvsrunner.RestoreDiscardSummary
 }
 
 type workerAppFakeStoragePurger struct {
@@ -2309,6 +2531,11 @@ func (runner *workerAppFakeJVSRunner) RecoveryStatus(context.Context, string) (j
 func (runner *workerAppFakeJVSRunner) RestorePreview(context.Context, string, string) (jvsrunner.RestorePreviewSummary, error) {
 	runner.calls = append(runner.calls, "restore_preview")
 	return runner.restorePreviewSummary, nil
+}
+
+func (runner *workerAppFakeJVSRunner) RestoreDiscard(context.Context, string, string) (jvsrunner.RestoreDiscardSummary, error) {
+	runner.calls = append(runner.calls, "restore_discard")
+	return runner.restoreDiscardSummary, nil
 }
 
 func workerAppAuditRecord(eventID string, payload []byte) audit.OutboxRecord {

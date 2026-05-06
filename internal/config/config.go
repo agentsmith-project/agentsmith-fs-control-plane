@@ -78,16 +78,17 @@ type WorkerConfig struct {
 }
 
 type WorkerOperationRecoveryConfig struct {
-	Enabled        bool
-	PostgresDSN    string
-	Owner          string
-	Limit          int
-	LeaseDuration  time.Duration
-	RepoCreate     WorkerRepoCreateRecoveryConfig
-	RepoLifecycle  WorkerRepoCreateRecoveryConfig
-	RepoPurge      WorkerRepoCreateRecoveryConfig
-	SavePoint      WorkerRepoCreateRecoveryConfig
-	RestorePreview WorkerRepoCreateRecoveryConfig
+	Enabled               bool
+	PostgresDSN           string
+	Owner                 string
+	Limit                 int
+	LeaseDuration         time.Duration
+	RepoCreate            WorkerRepoCreateRecoveryConfig
+	RepoLifecycle         WorkerRepoCreateRecoveryConfig
+	RepoPurge             WorkerRepoCreateRecoveryConfig
+	SavePoint             WorkerRepoCreateRecoveryConfig
+	RestorePreview        WorkerRepoCreateRecoveryConfig
+	RestorePreviewDiscard WorkerRepoCreateRecoveryConfig
 }
 
 type WorkerRepoCreateRecoveryConfig struct {
@@ -232,6 +233,11 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.OperationRecovery.RestorePreview = restorePreview
+	restorePreviewDiscard, err := loadRestorePreviewDiscardRecoveryConfig(source)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.OperationRecovery.RestorePreviewDiscard = restorePreviewDiscard
 
 	limit, err := intValue(source, "AFSCP_OPERATION_RECOVERY_LIMIT", worker.OperationRecovery.Limit)
 	if err != nil {
@@ -389,6 +395,10 @@ func loadSavePointRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig,
 
 func loadRestorePreviewRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
 	return loadJVSOperationRecoveryConfig(source, "AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED")
+}
+
+func loadRestorePreviewDiscardRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
+	return loadJVSOperationRecoveryConfig(source, "AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED")
 }
 
 func loadJVSOperationRecoveryConfig(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {

@@ -97,6 +97,18 @@ func TestRestorePreviewPhasesAreStable(t *testing.T) {
 	}
 }
 
+func TestRestorePreviewDiscardPhasesAreStable(t *testing.T) {
+	if OperationPhaseRestorePreviewDiscardValidate != "validate_restore_preview_discard" {
+		t.Fatalf("validate phase = %q, want validate_restore_preview_discard", OperationPhaseRestorePreviewDiscardValidate)
+	}
+	if OperationPhaseRestorePreviewDiscarding != "restore_preview_discarding" {
+		t.Fatalf("discarding phase = %q, want restore_preview_discarding", OperationPhaseRestorePreviewDiscarding)
+	}
+	if OperationPhaseRestorePreviewDiscardCommitted != "restore_preview_discard_committed" {
+		t.Fatalf("committed phase = %q, want restore_preview_discard_committed", OperationPhaseRestorePreviewDiscardCommitted)
+	}
+}
+
 func TestRouteOperationTypesReturnsDefensiveCopy(t *testing.T) {
 	mapped := RouteOperationTypes()
 	mapped["createRepo"] = OperationMigrationCutover

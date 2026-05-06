@@ -577,23 +577,25 @@ func newFakeStore() *fakeRepoCreateStore {
 }
 
 type fakeRepoCreateStore struct {
-	namespace                     resources.Namespace
-	binding                       resources.NamespaceVolumeBinding
-	volume                        resources.Volume
-	volumeRoots                   map[string]string
-	fences                        []fences.Fence
-	repo                          resources.Repo
-	restorePlan                   restoreplan.Plan
-	operation                     operations.OperationRecord
-	auditEvents                   []audit.Event
-	exports                       []sessionstate.ExportSession
-	mounts                        []sessionstate.WorkloadMountBinding
-	createFenceCalls              int
-	progressUpdates               int
-	restorePreviewProgressUpdates int
-	releasedFenceID               string
-	successErr                    error
-	blockingLifecycle             []operations.OperationRecord
+	namespace                            resources.Namespace
+	binding                              resources.NamespaceVolumeBinding
+	volume                               resources.Volume
+	volumeRoots                          map[string]string
+	fences                               []fences.Fence
+	repo                                 resources.Repo
+	restorePlan                          restoreplan.Plan
+	previewOperation                     operations.OperationRecord
+	operation                            operations.OperationRecord
+	auditEvents                          []audit.Event
+	exports                              []sessionstate.ExportSession
+	mounts                               []sessionstate.WorkloadMountBinding
+	createFenceCalls                     int
+	progressUpdates                      int
+	restorePreviewProgressUpdates        int
+	restorePreviewDiscardProgressUpdates int
+	releasedFenceID                      string
+	successErr                           error
+	blockingLifecycle                    []operations.OperationRecord
 }
 
 func (store *fakeRepoCreateStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
@@ -706,6 +708,62 @@ func (store *fakeRepoCreateStore) CommitRestorePreviewFailedWithLease(_ context.
 	return store.operation, nil
 }
 
+func (store *fakeRepoCreateStore) GetOperation(_ context.Context, operationID string) (operations.OperationRecord, error) {
+	if store.previewOperation.ID == operationID {
+		return store.previewOperation, nil
+	}
+	return operations.OperationRecord{}, errors.New("operation not found")
+}
+
+func (store *fakeRepoCreateStore) GetRestorePlanByPreviewOperation(_ context.Context, previewOperationID string) (restoreplan.Plan, error) {
+	if store.restorePlan.PreviewOperationID == previewOperationID {
+		return store.restorePlan, nil
+	}
+	return restoreplan.Plan{}, errors.New("restore plan not found")
+}
+
+func (store *fakeRepoCreateStore) GetActiveRestorePlanByRepo(context.Context, string) (restoreplan.Plan, error) {
+	return store.restorePlan, nil
+}
+
+func (store *fakeRepoCreateStore) CreatePendingRestorePlan(_ context.Context, plan restoreplan.Plan) error {
+	store.restorePlan = plan
+	return nil
+}
+
+func (store *fakeRepoCreateStore) TransitionRestorePlanStatus(_ context.Context, _ string, _, to restoreplan.Status, now time.Time) (restoreplan.Plan, error) {
+	store.restorePlan.Status = to
+	store.restorePlan.UpdatedAt = now
+	return store.restorePlan, nil
+}
+
+func (store *fakeRepoCreateStore) MarkRestorePreviewDiscardingWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
+	store.restorePreviewDiscardProgressUpdates++
+	plan.Status = restoreplan.StatusDiscarding
+	plan.UpdatedAt = now
+	store.restorePlan = plan
+	store.operation = record.Record()
+	return plan, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitRestorePreviewDiscardSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	store.restorePlan.Status = restoreplan.StatusDiscarded
+	store.restorePlan.UpdatedAt = now
+	store.operation = record.Record()
+	store.auditEvents = append(store.auditEvents, event)
+	return store.restorePlan, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitRestorePreviewDiscardFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	if store.operation.Phase == operations.OperationPhaseRestorePreviewDiscarding {
+		store.restorePlan.Status = restoreplan.StatusOperatorInterventionRequired
+		store.restorePlan.UpdatedAt = now
+	}
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+
 type fakeJVSRunner struct {
 	calls                 []string
 	payloadRoot           string
@@ -717,13 +775,16 @@ type fakeJVSRunner struct {
 	historySummary        jvsrunner.HistorySummary
 	recoveryStatusSummary jvsrunner.RecoveryStatusSummary
 	restorePreviewSummary jvsrunner.RestorePreviewSummary
+	restoreDiscardSummary jvsrunner.RestoreDiscardSummary
 	beforeRestorePreview  func()
+	beforeRestoreDiscard  func()
 	initErr               error
 	doctorErr             error
 	saveErr               error
 	historyErr            error
 	recoveryStatusErr     error
 	restorePreviewErr     error
+	restoreDiscardErr     error
 }
 
 func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot string) (jvsrunner.InitSummary, error) {
@@ -764,6 +825,15 @@ func (runner *fakeJVSRunner) RestorePreview(_ context.Context, controlRoot, save
 		runner.beforeRestorePreview()
 	}
 	return runner.restorePreviewSummary, runner.restorePreviewErr
+}
+
+func (runner *fakeJVSRunner) RestoreDiscard(_ context.Context, controlRoot, planID string) (jvsrunner.RestoreDiscardSummary, error) {
+	runner.calls = append(runner.calls, "restore_discard")
+	runner.controlRoot = controlRoot
+	if runner.beforeRestoreDiscard != nil {
+		runner.beforeRestoreDiscard()
+	}
+	return runner.restoreDiscardSummary, runner.restoreDiscardErr
 }
 
 func repoCreateFence(now time.Time, fenceID, operationID string) fences.Fence {

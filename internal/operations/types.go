@@ -58,6 +58,10 @@ const (
 	OperationPhaseRestorePreviewValidate      = "validate_restore_preview"
 	OperationPhaseRestorePreviewPreflightIdle = "restore_preview_preflight_idle"
 	OperationPhaseRestorePreviewCommitted     = "restore_preview_committed"
+
+	OperationPhaseRestorePreviewDiscardValidate  = "validate_restore_preview_discard"
+	OperationPhaseRestorePreviewDiscarding       = "restore_preview_discarding"
+	OperationPhaseRestorePreviewDiscardCommitted = "restore_preview_discard_committed"
 )
 
 var operationTypes = []OperationType{

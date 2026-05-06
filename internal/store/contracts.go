@@ -290,6 +290,29 @@ type RestorePreviewOperationRecoveryStore interface {
 	RestorePreviewOperationMetadataReader
 }
 
+type RestorePreviewDiscardOperationCommitStore interface {
+	MarkRestorePreviewDiscardingWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error)
+	CommitRestorePreviewDiscardSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error)
+	CommitRestorePreviewDiscardFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+}
+
+type RestorePreviewDiscardOperationMetadataReader interface {
+	RestorePreviewOperationMetadataReader
+	OperationReader
+	RestorePlanReader
+}
+
+// RestorePreviewDiscardOperationRecoveryStore owns the durable recovery
+// boundary for restore_preview_discard. It may discard only the pending plan
+// linked to the referenced preview operation, and must not infer plan lifecycle
+// from terminal operation state.
+type RestorePreviewDiscardOperationRecoveryStore interface {
+	ListRestorePreviewDiscardOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireRestorePreviewDiscardOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	RestorePreviewDiscardOperationCommitStore
+	RestorePreviewDiscardOperationMetadataReader
+}
+
 // RepoJVSMutationGateReader is the read-only durable gate for JVS history
 // readers. It observes operation-row non-terminal JVS mutations only; active
 // restore plan blocking for new mutations lives in mutation acquire SQL. It

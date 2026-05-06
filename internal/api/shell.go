@@ -175,6 +175,20 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	})
 	operationInspectionHandler = requestLogHandler(operationInspectionHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/operations/{operationId}", "getOperation")
 
+	restorePreviewDiscardHandler := RestorePreviewDiscardHandler(RestorePreviewDiscardHandlerConfig{
+		IntakeStore:       config.OperationIntakeStore,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
+	})
+	restorePreviewDiscardHandler = requestLogHandler(restorePreviewDiscardHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/restore-preview:discard", "restorePreviewDiscard")
+
 	bindingHandler := NamespaceVolumeBindingHandler(NamespaceVolumeBindingHandlerConfig{
 		Reader:            config.NamespaceBindingReader,
 		IntakeStore:       config.OperationIntakeStore,
@@ -218,6 +232,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"getNamespaceVolumeBinding": getBindingHandler,
 		"listRepos":                 listReposHandler,
 		"purgeRepo":                 purgeRepoHandler,
+		"restorePreviewDiscard":     restorePreviewDiscardHandler,
 		"restoreTombstonedRepo":     restoreTombstonedRepoHandler,
 		"getOperation":              operationInspectionHandler,
 		"listSavePoints":            listSavePointsHandler,

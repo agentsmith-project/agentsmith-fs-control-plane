@@ -369,6 +369,10 @@ func (store *cmdWorkerAppStore) ListRestorePreviewOperationsForRecovery(context.
 	return nil, nil
 }
 
+func (store *cmdWorkerAppStore) ListRestorePreviewDiscardOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 func (store *cmdWorkerAppStore) AcquireNamespaceUpsertOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
@@ -398,6 +402,10 @@ func (store *cmdWorkerAppStore) AcquireSavePointCreateOperationLease(context.Con
 }
 
 func (store *cmdWorkerAppStore) AcquireRestorePreviewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) AcquireRestorePreviewDiscardOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
 
@@ -459,6 +467,30 @@ func (store *cmdWorkerAppStore) CommitRestorePreviewSucceededWithLease(context.C
 
 func (store *cmdWorkerAppStore) CommitRestorePreviewFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) MarkRestorePreviewDiscardingWithLease(context.Context, restoreplan.Plan, operations.SanitizedOperationRecord, string, time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
+	return restoreplan.Plan{}, operations.OperationRecord{}, errors.New("unexpected progress update")
+}
+
+func (store *cmdWorkerAppStore) CommitRestorePreviewDiscardSucceededWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	return restoreplan.Plan{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitRestorePreviewDiscardFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) GetOperation(context.Context, string) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected operation read")
+}
+
+func (store *cmdWorkerAppStore) GetRestorePlanByPreviewOperation(context.Context, string) (restoreplan.Plan, error) {
+	return restoreplan.Plan{}, errors.New("unexpected restore plan read")
+}
+
+func (store *cmdWorkerAppStore) GetActiveRestorePlanByRepo(context.Context, string) (restoreplan.Plan, error) {
+	return restoreplan.Plan{}, errors.New("unexpected restore plan read")
 }
 
 func (store *cmdWorkerAppStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
