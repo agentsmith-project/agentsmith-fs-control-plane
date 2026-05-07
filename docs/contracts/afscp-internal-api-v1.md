@@ -54,10 +54,17 @@ AFSCP must reject and audit:
 - workload mount binding create/get
 - workload mount binding status/heartbeat/release/revoke
 - orchestrator mount plan get
-- operation get
+- operation get by ID
 
 Product display-name rename and catalog detach are outside AFSCP. Repo storage
 lifecycle is in GA through [repo-lifecycle-v1.md](repo-lifecycle-v1.md).
+
+`GET /internal/v1/operations/{operationId}` is the only stable GA internal API
+inspection surface. GA does not define operations list/search APIs, correlated
+resource lookup APIs, intervention queue APIs, held-fence aggregation APIs, or
+audit outbox lag aggregation APIs. Those operator inspection workflows are
+implemented through runbooks, read-only database queries, observability
+dashboards, or deployment-side operator tooling.
 
 Restore preview discard is part of the current GA restore slice. The
 machine-readable API contract exposes the endpoint, operation type
@@ -178,7 +185,10 @@ Operation inspection returns a redacted `OperationRecord` directly. Missing
 operations use the stable `OPERATION_NOT_FOUND` response. Product caller
 operation-inspection denials, including cross-namespace or global operation
 records, also return `OPERATION_NOT_FOUND` to avoid revealing operation
-existence; operator/admin policy denials remain authorization failures.
+existence; operator/admin policy denials remain authorization failures. This
+operation-by-ID endpoint is not a contract for operation enumeration, search,
+correlated-resource discovery, intervention aggregation, fence aggregation, or
+audit outbox aggregation.
 
 `STORAGE_UNAVAILABLE` is for durable control-plane metadata/store outages,
 timeouts, or connection/query failures and should map to HTTP 503 with

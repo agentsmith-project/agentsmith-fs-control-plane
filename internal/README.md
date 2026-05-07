@@ -29,7 +29,8 @@ needed before real handlers and storage mutation work:
   records, WebDAV export session create/get/revoke, gateway credential lookup,
   atomic runtime delta accounting, and terminal reconcile, including internal
   template storage identity.
-  RepoTemplate publication lifecycle and handlers remain unimplemented.
+  RepoTemplate create/clone intake, recovery store boundaries, and gated worker
+  executors are implemented.
 - `audit`: audit event typing, redaction expectations, and pure outbox state
   transitions.
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
@@ -66,9 +67,9 @@ needed before real handlers and storage mutation work:
   event through the dedicated namespace volume binding store boundary.
 - `jvsrunner`: JVS v0.4.8 CLI runner abstraction for fixed
   external-control-root JSON commands, including `init`, `doctor --strict`,
-  save/history/restore primitives, recovery status, and repo clone. Only
-  `init`/`doctor` are wired through current repo workers; save/restore/template
-  workers and handlers remain absent.
+  save/history/restore primitives, recovery status, and repo clone. Repo, save
+  point, restore preview/discard/run, and template recovery workers wire these
+  primitives behind explicit worker gates.
 - `repoexec`: opt-in repo recovery executors. `repo_create` resolves metadata,
   acquires the create fence, runs JVS `init`/`doctor --strict`, and commits repo
   metadata, terminal operation, audit, and fence release through dedicated store
@@ -86,23 +87,27 @@ needed before real handlers and storage mutation work:
   canonical internal repo root resolution from trusted volume roots plus repo
   IDs.
 
-Repo create intake, repo lifecycle operation intake/admission, export
-create/get/revoke handlers, namespace-bound repo read handlers, operation
-inspection, and the WebDAV export gateway exist. Still intentionally absent:
-JVS save/restore/template execution, workload mount issuance, save/restore and
-template endpoint handlers beyond intake/admission, real external audit
-delivery integration beyond the HTTP JSON at-least-once sink, repo/template
-lifecycle mutation beyond the implemented lifecycle workers, per-request WebDAV
-operation records or complex crash recovery for gateway runtime counts, and
-fence enforcement beyond the minimal repo fence adapter slice.
+Repo create intake, repo lifecycle operation intake/admission, save point,
+restore preview/discard/run, repo template, export create/get/revoke, workload
+mount binding, namespace-bound repo read handlers, operation inspection, and
+the WebDAV export gateway exist. Still intentionally absent: host/orchestrator
+mount application beyond control-plane workload mount binding issuance, real
+external audit delivery integration beyond the HTTP JSON at-least-once sink,
+repo/template lifecycle mutation beyond the implemented lifecycle workers,
+per-request WebDAV operation records or complex crash recovery for gateway
+runtime counts, and fence enforcement beyond the minimal repo fence adapter
+slice.
 The worker app currently wires export session terminal reconcile when
-`AFSCP_EXPORT_SESSION_RECONCILE_ENABLED=true`, then
-`volume_ensure`, `namespace_upsert`, `namespace_volume_binding_put`, and opt-in
-`repo_create` plus `repo_archive`/`repo_restore_archived`/`repo_delete`/
-`repo_restore_tombstoned`, plus separately gated `repo_purge` operation recovery
-when explicitly enabled. It also wires audit outbox stale recovery and HTTP JSON
-delivery when `AFSCP_WORKER_AUDIT_DELIVERY_ENABLED=true`; delivery is
-at-least-once and the external sink must dedupe by `audit_event_id`.
+`AFSCP_EXPORT_SESSION_RECONCILE_ENABLED=true`, workload mount stale lease scans
+when `AFSCP_WORKER_WORKLOAD_MOUNT_STALE_ENABLED=true`, then
+`volume_ensure`, `namespace_upsert`, `namespace_disable`,
+`namespace_volume_binding_put`, workload mount binding recovery, and opt-in
+`repo_create`, repo lifecycle, `repo_purge`, save point, restore
+preview/discard/run, and template create/clone operation recovery when the
+corresponding worker gates are explicitly enabled. It also wires audit outbox
+stale recovery and HTTP JSON delivery when
+`AFSCP_WORKER_AUDIT_DELIVERY_ENABLED=true`; delivery is at-least-once and the
+external sink must dedupe by `audit_event_id`.
 
 Use [docs/DEVELOPER_HANDOFF.md](../docs/DEVELOPER_HANDOFF.md) for the current
 handoff and next development order.

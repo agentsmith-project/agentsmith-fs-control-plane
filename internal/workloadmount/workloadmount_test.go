@@ -11,7 +11,7 @@ import (
 func TestValidateMountPathCorpus(t *testing.T) {
 	valid := []string{
 		"/mnt/repo",
-		"/workspace/data-1",
+		"/mnt/data-alpha",
 		"/var/lib/app/data",
 	}
 	for _, path := range valid {

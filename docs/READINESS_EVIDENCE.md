@@ -40,9 +40,11 @@ behavior in the neutral shell/AuthGate paths. The planner and repo recovery
 inspection are only read-only classifiers for later worker/runbook decisions;
 they do not execute a general recovery loop or touch JVS/mount/storage mutation.
 Audit outbox stale recovery plus HTTP JSON delivery is wired as an explicitly
-enabled at-least-once worker path; external sinks must dedupe by
-`audit_event_id`. WebDAV export create/get/revoke, the WebDAV policy gateway,
-DB-backed runtime delta observation, and explicit-gated terminal export session
+enabled at-least-once worker path; that is the AFSCP GA audit delivery scope,
+and non-HTTP sink integrations are future extensions rather than GA blockers.
+External sinks must dedupe by `audit_event_id`. WebDAV export create/get/revoke,
+the WebDAV policy gateway, DB-backed runtime delta observation, and
+explicit-gated terminal export session
 reconcile now exist. The WebDAV/export review gate remains in review: current
 runtime accounting is aggregate and conservative, with no per-request operation
 rows or complex gateway crash recovery if a positive start delta is committed
@@ -50,9 +52,9 @@ without a matching end delta. Current implementation evidence also includes
 repo lifecycle workers, save/restore flows, namespace-scoped template
 create/clone, workload mount issuance and orchestrator plans, writer-session
 fences with shared repo-row serialization against read-write session admission,
-and an explicit workload mount stale-lease scan. Non-HTTP audit sinks,
-generated-client compatibility review, AFSCP owner/security acceptance, runbook
-drills, and human GA acceptance remain incomplete.
+and an explicit workload mount stale-lease scan. Generated-client compatibility
+review, AFSCP owner/security acceptance, runbook drills, and human GA acceptance
+remain incomplete.
 
 ## Gate Ledger
 
@@ -71,8 +73,8 @@ drills, and human GA acceptance remain incomplete.
 | G-010B | Repo lifecycle fence and session drain | in_review | AFSCP maintainer | Operations owner, platform/runtime contract owner, generated-client compatibility owner | `docs/contracts/repo-lifecycle-v1.md`, `docs/contracts/operation-state-machine-v1.md` | read-only/read-write drain semantics drafted; export terminal reconcile and workload mount stale-lease scan with kept-blocked operator signal exist | 2026-05-05 | Platform/runtime contract acceptance, nonzero/uncertain recovery runbook drills, and human acceptance remain pending |
 | G-010C | Repo retention and purge authorization | in_review | AFSCP maintainer | AFSCP product owner, security owner, operations owner | `docs/adr/0008-repo-lifecycle-policy.md`, `api/schemas/afscp-internal-v1.schema.json` | lifecycle policy and caller approval-reference requirements drafted | 2026-05-05 | AFSCP product/security acceptance required |
 | G-010D | Repo lifecycle recovery and runbooks | in_review | AFSCP maintainer | Operations owner, security owner | `docs/contracts/repo-lifecycle-v1.md`, `docs/OPERATIONAL_READINESS.md`, `docs/runbooks/ga-runbooks.md` | recovery phases, runbooks, and drill expectations drafted | 2026-05-05 | Drill evidence still required before GA |
-| G-010E | Repo lifecycle audit and redaction | in_review | AFSCP maintainer | Security owner, AFSCP product owner | `docs/OPERATIONS_AND_AUDIT.md`, `docs/contracts/repo-lifecycle-v1.md`, `internal/audit/event_test.go` | lifecycle audit events and redaction rules drafted; stable audit taxonomy/redaction guardrail tests added | 2026-05-05 | HTTP JSON audit delivery sink exists; non-HTTP sink implementation, deployment retention evidence, and review acceptance remain pending |
-| G-011 | Operation recovery and audit | in_review | AFSCP maintainer | Operations owner, security owner | `docs/adr/0007-operation-store-and-audit-outbox.md`, `docs/contracts/operation-state-machine-v1.md`, `docs/OPERATIONAL_READINESS.md`, `migrations/0001_control_plane_persistence.sql`, `internal/store/migration_contract_test.go`, `internal/operations`, `internal/audit`, `internal/inspection`, `internal/store/postgres` | PostgreSQL operation store and outbox selected; migration contract, operation lease pure model/tests plus DB-only lease and lease-fenced worker update primitives, audit outbox pure model/tests, read-only recovery classification including repo recovery inspection, and first PostgreSQL adapter slice for operations/idempotency/audit outbox append plus DB-only at-least-once delivery primitive, minimal repo fence read/create/active-release, SELECT-only repo recovery inspection readers, and explicit-gated HTTP JSON audit delivery worker integration exist | 2026-05-05 | External sink idempotency by `audit_event_id`, delivery drills, and non-HTTP sink review remain pending |
+| G-010E | Repo lifecycle audit and redaction | in_review | AFSCP maintainer | Security owner, AFSCP product owner | `docs/OPERATIONS_AND_AUDIT.md`, `docs/contracts/repo-lifecycle-v1.md`, `internal/audit/event_test.go` | lifecycle audit events and redaction rules drafted; stable audit taxonomy/redaction guardrail tests added | 2026-05-05 | HTTP JSON audit delivery sink exists; deployment retention evidence and review acceptance remain pending |
+| G-011 | Operation recovery and audit | in_review | AFSCP maintainer | Operations owner, security owner | `docs/adr/0007-operation-store-and-audit-outbox.md`, `docs/contracts/operation-state-machine-v1.md`, `docs/OPERATIONAL_READINESS.md`, `migrations/0001_control_plane_persistence.sql`, `internal/store/migration_contract_test.go`, `internal/operations`, `internal/audit`, `internal/inspection`, `internal/store/postgres` | PostgreSQL operation store and outbox selected; migration contract, operation lease pure model/tests plus DB-only lease and lease-fenced worker update primitives, audit outbox pure model/tests, read-only recovery classification including repo recovery inspection, and first PostgreSQL adapter slice for operations/idempotency/audit outbox append plus DB-only at-least-once delivery primitive, minimal repo fence read/create/active-release, SELECT-only repo recovery inspection readers, and explicit-gated HTTP JSON audit delivery worker integration exist | 2026-05-05 | External sink idempotency by `audit_event_id`, delivery drills, and review acceptance remain pending |
 | G-012 | Namespace disable and policy-change behavior | in_review | AFSCP maintainer | AFSCP product owner, security owner | `docs/contracts/namespace-volume-binding-v1.md`, `docs/SECURITY_AND_TENANCY.md`, `internal/resources`, `internal/store/postgres` | namespace disable semantics drafted; operation-backed namespace disable handler/recovery, namespace/binding metadata persistence, and mutation/session policy gates are implemented | 2026-05-05 | AFSCP product/security acceptance plus deployment and integration drills remain pending |
 | G-013 | Required runbooks and drills | in_review | Operations owner | AFSCP maintainer, security owner | `docs/runbooks/README.md`, `docs/runbooks/ga-runbooks.md`, `docs/OPERATIONAL_READINESS.md` | runbook catalog, scenario runbooks, and drill evidence format drafted | 2026-05-05 | Drills still required before GA |
 | G-014 | Observability and alerting | in_review | Operations owner | Platform owner, security owner | `docs/OPERATIONAL_READINESS.md` | alert classes and threshold requirements drafted | 2026-05-05 | Numeric SLO thresholds still deployment-dependent |

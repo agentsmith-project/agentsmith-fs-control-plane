@@ -10,7 +10,7 @@ func TestOperationEnvelopeJSONIsFlatAndSchemaShaped(t *testing.T) {
 	envelope := NewOperationEnvelope(OperationEnvelopeSpec{
 		OperationID:    "op_alpha",
 		OperationState: OperationStateQueued,
-		Resource:       ResourceRef{Type: "repo", ID: "repo_project"},
+		Resource:       ResourceRef{Type: "repo", ID: "repo_unit"},
 	})
 
 	got, err := MarshalOperationEnvelope(envelope)
@@ -18,7 +18,7 @@ func TestOperationEnvelopeJSONIsFlatAndSchemaShaped(t *testing.T) {
 		t.Fatalf("MarshalOperationEnvelope returned error: %v", err)
 	}
 
-	want := `{"operation_id":"op_alpha","operation_state":"queued","resource":{"type":"repo","id":"repo_project"},"result":null,"error":null}`
+	want := `{"operation_id":"op_alpha","operation_state":"queued","resource":{"type":"repo","id":"repo_unit"},"result":null,"error":null}`
 	if string(got) != want {
 		t.Fatalf("unexpected JSON\nwant: %s\n got: %s", want, string(got))
 	}
@@ -32,8 +32,8 @@ func TestOperationEnvelopeCarriesResultAndTerminalError(t *testing.T) {
 	envelope := NewOperationEnvelope(OperationEnvelopeSpec{
 		OperationID:    operationID,
 		OperationState: OperationStateFailed,
-		Resource:       ResourceRef{Type: "repo", ID: "repo_project"},
-		Result:         map[string]any{"repo_id": "repo_project"},
+		Resource:       ResourceRef{Type: "repo", ID: "repo_unit"},
+		Result:         map[string]any{"repo_id": "repo_unit"},
 		Error: &StandardError{
 			Code:          CodeCapabilityDenied,
 			Message:       "denied",
@@ -56,7 +56,7 @@ func TestOperationEnvelopeCarriesResultAndTerminalError(t *testing.T) {
 	if _, ok := decoded["operation"]; ok {
 		t.Fatalf("flat API OperationEnvelope must not include operation: %s", got)
 	}
-	if string(decoded["result"]) != `{"repo_id":"repo_project"}` {
+	if string(decoded["result"]) != `{"repo_id":"repo_unit"}` {
 		t.Fatalf("result JSON = %s, want repo object", decoded["result"])
 	}
 	if string(decoded["error"]) == "null" {

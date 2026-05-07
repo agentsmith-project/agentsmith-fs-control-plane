@@ -35,7 +35,9 @@ GA includes:
 - WebDAV export sessions with short-lived credentials
 - workload mount bindings and orchestrator-only mount plans
 - mount binding heartbeat, release, revoke, expiry, and stale-lease reconciliation
-- durable operations, idempotency, recovery, low-level audit, and operator inspection
+- durable operations, idempotency, recovery, low-level audit, and operator
+  inspection, with `GET /internal/v1/operations/{operationId}` as the only
+  stable GA internal API inspection surface
 
 GA excludes:
 
@@ -48,6 +50,10 @@ GA excludes:
 - namespace delete APIs
 - product display-name rename, catalog detach, or other caller-specific lifecycle vocabulary
 - billing UI, per-file ACL UI, SMB/NFS, and multi-region replication policy
+- internal API operations list/search endpoints and audit/fence aggregation
+  endpoints; correlated-resource lookup, intervention queues, fence views, and
+  audit outbox lag views are runbook, read-only DB, observability, or
+  deployment-side operator-tooling concerns
 
 If a calling product needs an excluded behavior, the caller must keep that
 behavior outside AFSCP or sponsor a new reviewed contract before it enters core.
@@ -108,7 +114,7 @@ behavior must pass the corresponding gate before it is accepted for GA.
 | Workload mount | workload mount platform/runtime contract, payload-only subdir mapping, Secret RBAC, heartbeat/release/revoke, and confirmed-unmounted semantics are accepted |
 | Writer-session fence | acquisition, release, recovery, stale lease behavior, read-only treatment, and operator-intervention behavior are a shared contract |
 | Repo lifecycle | archive, restore-archived, delete, restore-tombstoned, purge, transition rules, lifecycle fence, session drain, retention, purge approval-reference, and recovery semantics are accepted |
-| Operation/audit | state machine, idempotency, recovery matrix, audit outbox, retention, redaction, replay, and operator intervention are accepted |
+| Operation/audit | state machine, idempotency, recovery matrix, audit outbox, retention, redaction, replay, operator intervention, and the single operation-by-ID internal API inspection boundary are accepted |
 | Namespace policy | disable and policy-change behavior for new and existing sessions is frozen |
 | Governance | review approvers, evidence requirements, waiver policy, risk register, and contract versioning are active |
 | GA operations | required runbooks, observability, alerting, backup/restore, recovery drills, and on-call readiness criteria are documented |

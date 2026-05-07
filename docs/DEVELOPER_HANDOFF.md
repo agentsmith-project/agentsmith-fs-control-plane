@@ -6,9 +6,10 @@ save/restore flows, namespace-scoped template create/clone, WebDAV export
 create/get/revoke plus gateway serving, workload mount issuance/orchestrator
 plans, writer fences with shared repo-row serialization, workload mount
 stale-lease scanning, and explicit-gated audit outbox HTTP JSON delivery are in
-place. Non-HTTP audit sink integrations, AFSCP owner/security acceptance,
-generated-client compatibility review, runbook drills, and human GA acceptance
-remain open where tracked by readiness gates.
+place. The AFSCP GA audit delivery scope is HTTP JSON; non-HTTP audit sink
+integrations are future extensions, not GA blockers. AFSCP owner/security
+acceptance, generated-client compatibility review, runbook drills, and human GA
+acceptance remain open where tracked by readiness gates.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -227,8 +228,8 @@ Partially completed:
   inspection. The explicit-gated workers cover metadata recovery, repo create,
   repo lifecycle and purge, save/restore, template create/clone, export terminal
   reconcile, workload mount stale-lease scanning, and audit outbox HTTP JSON
-  delivery. External acceptance, generated-client review, non-HTTP audit sinks,
-  deployment drills, and human GA sign-off remain open where tracked.
+  delivery. External acceptance, generated-client review, deployment drills,
+  and human GA sign-off remain open where tracked.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
   models. The first PostgreSQL adapter slice implements operation read/write,
@@ -255,9 +256,9 @@ Partially completed:
   AFSCP-managed retained storage and commits `purged` metadata through a
   dedicated purge boundary. Export session reconcile and workload mount
   stale-lease scanning run before operation recovery when enabled. Save/restore
-  and template create/clone run through dedicated JVS worker paths. Audit sinks
-  beyond the explicitly configured HTTP JSON outbox delivery worker remain
-  unimplemented.
+  and template create/clone run through dedicated JVS worker paths. The
+  explicitly configured HTTP JSON outbox delivery worker is the GA audit
+  delivery implementation; other sink kinds remain future extensions.
 - Path resolver guardrails exist and are used by repo create/recovery,
   save/restore, template, WebDAV export gateway, and workload mount paths. File
   API integration remains outside this handoff scope.
@@ -269,8 +270,8 @@ Not implemented:
   matching end delta, active request/write counts may conservatively remain
   positive until an operator/runbook repair or future recovery path resolves
   the session.
-- audit delivery sinks beyond the minimal HTTP JSON at-least-once worker; the
-  external sink must dedupe by `audit_event_id`
+- deployment evidence that the configured external HTTP JSON audit sink dedupes
+  by `audit_event_id`
 - generated clients, AFSCP owner/security acceptance, deployment-specific
   observability thresholds, runbook drills, and human GA acceptance evidence
 

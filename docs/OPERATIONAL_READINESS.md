@@ -68,6 +68,11 @@ GA restore drills must prove:
 - purged repos are not resurrected
 - audit event replay is idempotent
 
+GA audit delivery acceptance covers the configured HTTP JSON sink path. Non-HTTP
+audit sink integrations are future extensions and are not required to close
+operational readiness; deployments still must prove external sink idempotency,
+outbox retention, replay, drill evidence, and review acceptance.
+
 ## Runbook Drill Evidence
 
 Each runbook drill must record:

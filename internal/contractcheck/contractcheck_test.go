@@ -1209,12 +1209,20 @@ func TestCurrentRepoPullRequestTemplateHasGovernanceEvidenceChecklist(t *testing
 
 func TestCurrentRepoCoreTestsDoNotLeakCallerProductFixtureVocabulary(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
-	forbidden := []struct {
+	globalForbidden := []struct {
 		name    string
 		pattern *regexp.Regexp
 	}{
 		{name: "caller role fixture", pattern: regexp.MustCompile(`\bworkspace_owner\b`)},
 		{name: "repo kind fixture", pattern: regexp.MustCompile(`\bKind\s*[:=]\s*"workspace"`)},
+	}
+	boundaryForbidden := []struct {
+		name    string
+		pattern *regexp.Regexp
+	}{
+		{name: "product-like repo fixture", pattern: regexp.MustCompile(`\brepo_project\b`)},
+		{name: "product-like caller fixture", pattern: regexp.MustCompile(`\bproduct-caller\b`)},
+		{name: "product-like mount fixture", pattern: regexp.MustCompile(`/workspace/data-1\b`)},
 	}
 
 	var failures []string
@@ -1226,7 +1234,18 @@ func TestCurrentRepoCoreTestsDoNotLeakCallerProductFixtureVocabulary(t *testing.
 		if err != nil {
 			t.Fatalf("ReadFile returned error: %v", err)
 		}
-		for _, fixture := range forbidden {
+		for _, fixture := range globalForbidden {
+			if fixture.pattern.Match(body) {
+				failures = append(failures, filepath.ToSlash(path)+": "+fixture.name)
+			}
+		}
+	}
+	for _, path := range currentRepoCoreFixtureBoundaryGuardPaths(repoRoot) {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile returned error: %v", err)
+		}
+		for _, fixture := range boundaryForbidden {
 			if fixture.pattern.Match(body) {
 				failures = append(failures, filepath.ToSlash(path)+": "+fixture.name)
 			}
@@ -1234,6 +1253,27 @@ func TestCurrentRepoCoreTestsDoNotLeakCallerProductFixtureVocabulary(t *testing.
 	}
 	if len(failures) > 0 {
 		t.Fatalf("core tests must use generic illegal caller/kind fixtures, got product vocabulary leak(s): %s", strings.Join(failures, "; "))
+	}
+}
+
+func TestCurrentRepoInternalREADMEImplementationStatusIsCurrent(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	path := filepath.Join(repoRoot, "internal", "README.md")
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("internal README must exist at %s: %v", path, err)
+	}
+
+	forbidden := []string{
+		"save/restore/template workers and handlers remain absent",
+		"Still intentionally absent:\nJVS save/restore/template execution",
+		"save/restore and\ntemplate endpoint handlers beyond intake/admission",
+	}
+	for _, phrase := range forbidden {
+		if strings.Contains(string(body), phrase) {
+			t.Fatalf("internal README has stale implementation status phrase %q", phrase)
+		}
 	}
 }
 
@@ -1386,6 +1426,24 @@ func sameStrings(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+func currentRepoCoreFixtureBoundaryGuardPaths(repoRoot string) []string {
+	relPaths := []string{
+		"internal/api/operation_test.go",
+		"internal/operations/types_test.go",
+		"internal/operations/idempotency_test.go",
+		"internal/store/contracts_test.go",
+		"internal/pathresolver/pathresolver_test.go",
+		"internal/pathresolver/testcorpus/corpus.go",
+		"internal/workloadmount/workloadmount_test.go",
+	}
+
+	paths := make([]string, 0, len(relPaths))
+	for _, rel := range relPaths {
+		paths = append(paths, filepath.Join(repoRoot, filepath.FromSlash(rel)))
+	}
+	return paths
 }
 
 func contains(s, needle string) bool {

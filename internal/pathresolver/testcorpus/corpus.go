@@ -221,33 +221,33 @@ var rejectedCallerPathCases = []CallerPathCase{
 }
 
 var acceptedManagedRootCases = []ManagedRootCase{
-	{Name: "repo payload root", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project/payload", Tags: []string{TagRepoManagedRoot}},
+	{Name: "repo payload root", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_unit/payload", Tags: []string{TagRepoManagedRoot}},
 	{Name: "template payload root", RootSubdir: "afscp/namespaces/ns_alpha/templates/tmpl_base/payload", Tags: []string{TagTemplateManagedRoot}},
 }
 
 var rejectedManagedRootCases = []ManagedRootCase{
 	{Name: "empty", RootSubdir: ""},
-	{Name: "absolute", RootSubdir: "/afscp/namespaces/ns_alpha/repos/repo_project/payload"},
-	{Name: "control root is not payload root", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project/control", Tags: []string{TagManagedRootControlRoot}},
+	{Name: "absolute", RootSubdir: "/afscp/namespaces/ns_alpha/repos/repo_unit/payload"},
+	{Name: "control root is not payload root", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_unit/control", Tags: []string{TagManagedRootControlRoot}},
 	{Name: "repo root with template id", RootSubdir: "afscp/namespaces/ns_alpha/repos/tmpl_base/payload", Tags: []string{TagManagedRootKindMismatch}},
-	{Name: "template root with repo id", RootSubdir: "afscp/namespaces/ns_alpha/templates/repo_project/payload", Tags: []string{TagManagedRootKindMismatch}},
-	{Name: "root contains jvs", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project/.jvs/payload", Tags: []string{TagJVS, TagManagedRootPayloadEscape}},
-	{Name: "encoded separator", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project/payload%2fsecret", Tags: []string{TagEncodedSeparator}},
-	{Name: "double encoded separator", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project/payload%252fsecret", Tags: []string{TagDoubleEncodedSeparator}},
-	{Name: "unicode slash-like", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project\u2215payload", Tags: []string{TagUnicodeSlashLike}},
-	{Name: "control char", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project/payload\n", Tags: []string{TagControlChar}},
+	{Name: "template root with repo id", RootSubdir: "afscp/namespaces/ns_alpha/templates/repo_unit/payload", Tags: []string{TagManagedRootKindMismatch}},
+	{Name: "root contains jvs", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_unit/.jvs/payload", Tags: []string{TagJVS, TagManagedRootPayloadEscape}},
+	{Name: "encoded separator", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_unit/payload%2fsecret", Tags: []string{TagEncodedSeparator}},
+	{Name: "double encoded separator", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_unit/payload%252fsecret", Tags: []string{TagDoubleEncodedSeparator}},
+	{Name: "unicode slash-like", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_unit\u2215payload", Tags: []string{TagUnicodeSlashLike}},
+	{Name: "control char", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_unit/payload\n", Tags: []string{TagControlChar}},
 }
 
 var rejectedPayloadTraversalCases = []PayloadTraversalCase{
-	{Name: "payload path attempts jvs", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project/payload", RawPath: ".jvs/config.json", Tags: []string{TagJVS}},
-	{Name: "payload path encoded separator", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project/payload", RawPath: "dir%2ffile.txt", Tags: []string{TagEncodedSeparator}},
-	{Name: "payload path double encoded traversal", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_project/payload", RawPath: "dir/%252e%252e/file.txt"},
+	{Name: "payload path attempts jvs", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_unit/payload", RawPath: ".jvs/config.json", Tags: []string{TagJVS}},
+	{Name: "payload path encoded separator", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_unit/payload", RawPath: "dir%2ffile.txt", Tags: []string{TagEncodedSeparator}},
+	{Name: "payload path double encoded traversal", RootSubdir: "afscp/namespaces/ns_alpha/repos/repo_unit/payload", RawPath: "dir/%252e%252e/file.txt"},
 }
 
 var traversalPlanCases = []TraversalPlanCase{
 	{
 		Name:            "plain components",
-		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
+		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_unit/payload",
 		Segments:        []string{"dir", "file.txt"},
 		NoFollow:        true,
 		RejectHardlinks: true,
@@ -258,7 +258,7 @@ var traversalPlanCases = []TraversalPlanCase{
 	},
 	{
 		Name:            "symlink component",
-		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
+		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_unit/payload",
 		Segments:        []string{"dir", "file.txt"},
 		NoFollow:        true,
 		RejectHardlinks: true,
@@ -270,7 +270,7 @@ var traversalPlanCases = []TraversalPlanCase{
 	},
 	{
 		Name:            "hardlinked file",
-		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
+		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_unit/payload",
 		Segments:        []string{"dir", "file.txt"},
 		NoFollow:        true,
 		RejectHardlinks: true,
@@ -283,7 +283,7 @@ var traversalPlanCases = []TraversalPlanCase{
 	},
 	{
 		Name:            "missing nofollow",
-		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
+		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_unit/payload",
 		Segments:        []string{"dir", "file.txt"},
 		NoFollow:        false,
 		RejectHardlinks: true,
@@ -292,7 +292,7 @@ var traversalPlanCases = []TraversalPlanCase{
 	},
 	{
 		Name:            "missing hardlink rejection",
-		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
+		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_unit/payload",
 		Segments:        []string{"dir", "file.txt"},
 		NoFollow:        true,
 		RejectHardlinks: false,
@@ -301,7 +301,7 @@ var traversalPlanCases = []TraversalPlanCase{
 	},
 	{
 		Name:            "nil inspector",
-		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_project/payload",
+		RootSubdir:      "afscp/namespaces/ns_alpha/repos/repo_unit/payload",
 		Segments:        []string{"dir", "file.txt"},
 		NoFollow:        true,
 		RejectHardlinks: true,

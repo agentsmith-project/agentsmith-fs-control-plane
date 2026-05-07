@@ -152,9 +152,9 @@ func TestOperationRecordJSONMatchesSchemaBoundaryShape(t *testing.T) {
 		CorrelationID:       "corr-1",
 		CallerService:       "afscp-api",
 		AuthorizedActor:     Actor{Type: "system", ID: "svc-1"},
-		Resource:            ResourceRef{Type: "repo", ID: "repo_project"},
+		Resource:            ResourceRef{Type: "repo", ID: "repo_unit"},
 		NamespaceID:         "ns_alpha",
-		RepoID:              "repo_project",
+		RepoID:              "repo_unit",
 		TemplateID:          "tmpl_base",
 		ExportID:            "export_snapshot",
 		MountBindingID:      "wmb_worker",
@@ -234,7 +234,7 @@ func TestOperationRecordRequiredNullableFieldsMarshalAsNull(t *testing.T) {
 		CorrelationID:    "corr-1",
 		CallerService:    "afscp-api",
 		AuthorizedActor:  Actor{Type: "system", ID: "svc-1"},
-		Resource:         ResourceRef{Type: "repo", ID: "repo_project"},
+		Resource:         ResourceRef{Type: "repo", ID: "repo_unit"},
 		CreatedAt:        time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC),
 	}
 
@@ -273,7 +273,7 @@ func TestOperationRecordRequiredObjectFieldsMarshalAsObjects(t *testing.T) {
 		CorrelationID:    "corr-1",
 		CallerService:    "afscp-api",
 		AuthorizedActor:  Actor{Type: "system", ID: "svc-1"},
-		Resource:         ResourceRef{Type: "repo", ID: "repo_project"},
+		Resource:         ResourceRef{Type: "repo", ID: "repo_unit"},
 		Error:            nil,
 		CreatedAt:        time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC),
 	}

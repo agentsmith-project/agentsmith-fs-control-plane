@@ -201,7 +201,7 @@ func TestResolveRepoRootPathsRejectsUntrustedVolumeRoot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := ResolveRepoRootPaths(tt.root, "ns_alpha", "repo_project"); err == nil {
+			if _, err := ResolveRepoRootPaths(tt.root, "ns_alpha", "repo_unit"); err == nil {
 				t.Fatalf("ResolveRepoRootPaths(%q, ...) succeeded, want error", tt.root)
 			}
 		})
@@ -216,7 +216,7 @@ func TestResolveRepoRootPathsRejectsInvalidIDs(t *testing.T) {
 		namespaceID string
 		repoID      string
 	}{
-		{name: "bad namespace", namespaceID: "repo_alpha", repoID: "repo_project"},
+		{name: "bad namespace", namespaceID: "repo_alpha", repoID: "repo_unit"},
 		{name: "bad repo", namespaceID: "ns_alpha", repoID: "ns_project"},
 	}
 
@@ -274,7 +274,7 @@ func TestRepoPathContractRejectsKindMismatchesBeforePathCompute(t *testing.T) {
 		{
 			name: "template resolver rejects repo id",
 			resolve: func() (string, error) {
-				paths, err := ResolveTemplatePaths("ns_alpha", "repo_project")
+				paths, err := ResolveTemplatePaths("ns_alpha", "repo_unit")
 				return paths.PayloadVolumeSubdir, err
 			},
 		},
@@ -288,7 +288,7 @@ func TestRepoPathContractRejectsKindMismatchesBeforePathCompute(t *testing.T) {
 		{
 			name: "repo resolver rejects repo-shaped namespace id",
 			resolve: func() (string, error) {
-				paths, err := ResolveRepoPaths("repo_alpha", "repo_project")
+				paths, err := ResolveRepoPaths("repo_alpha", "repo_unit")
 				return paths.PayloadVolumeSubdir, err
 			},
 		},

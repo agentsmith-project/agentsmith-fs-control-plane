@@ -8,6 +8,12 @@ namespace/repo/export/mount/operation IDs, and audit event IDs.
 ## Shared Operator Rules
 
 - Prefer API/operator tooling over raw filesystem access.
+- Use `GET /internal/v1/operations/{operationId}` for stable internal API
+  operation inspection by ID.
+- Treat correlated-resource operation lookup, intervention queues, held-fence
+  views, and audit outbox lag views as runbook, read-only database,
+  observability dashboard, or deployment-side operator-tooling workflows. They
+  are not GA internal API list/search or aggregation contracts.
 - Do not expose or paste JuiceFS root credentials, metadata URLs, Secret values,
   WebDAV passwords, bearer tokens, or raw host paths into tickets or chat.
 - If a state transition cannot be proven, move the operation to

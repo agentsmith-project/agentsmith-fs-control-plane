@@ -110,10 +110,18 @@ GA must use an append-only or outbox-style audit sink with documented retention.
 
 ## GA Operator Minimum Surface
 
+GA internal API operation inspection has one stable contract surface:
+`GET /internal/v1/operations/{operationId}` returns a redacted operation record
+by ID. GA does not add internal API operations list/search endpoints or
+audit/fence aggregation endpoints. Broader inspection is still required for
+operations, but it belongs to runbooks, read-only database queries,
+observability dashboards, or deployment-side operator tooling.
+
 Operators must be able to inspect:
 
-- operation by ID and by correlated resource
-- operations requiring intervention
+- operation by ID through the stable internal API
+- operation state by correlated resource through runbook or operator tooling
+- operations requiring intervention through runbook or operator tooling
 - volume health
 - namespace binding and status
 - repo/template/export/mount binding status

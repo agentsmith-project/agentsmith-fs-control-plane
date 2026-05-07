@@ -193,11 +193,11 @@ func TestNewQueuedOperationRecordUsesCallerSuppliedDurableBoundaryInputs(t *test
 		CorrelationID:       "corr-1",
 		CallerService:       "afscp-api",
 		AuthorizedActor:     Actor{Type: "system", ID: "svc-1"},
-		Resource:            ResourceRef{Type: "repo", ID: "repo_project"},
+		Resource:            ResourceRef{Type: "repo", ID: "repo_unit"},
 		NamespaceID:         "ns_alpha",
-		RepoID:              "repo_project",
+		RepoID:              "repo_unit",
 		ExternalResourceIDs: map[string]string{"jvs_repo_id": "jvs-secret"},
-		InputSummary:        map[string]any{"repo_id": "repo_project"},
+		InputSummary:        map[string]any{"repo_id": "repo_unit"},
 		CreatedAt:           createdAt,
 	})
 	if err != nil {
@@ -209,7 +209,7 @@ func TestNewQueuedOperationRecordUsesCallerSuppliedDurableBoundaryInputs(t *test
 	if record.IdempotencyScope != scope.String() || record.RequestHash != RequestHash("sha256:new") {
 		t.Fatalf("idempotency fields not copied: %#v", record)
 	}
-	if record.CallerService != "afscp-api" || record.Resource.ID != "repo_project" {
+	if record.CallerService != "afscp-api" || record.Resource.ID != "repo_unit" {
 		t.Fatalf("caller/resource boundary not copied: %#v", record)
 	}
 	if !record.CreatedAt.Equal(createdAt) {
