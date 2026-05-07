@@ -22,8 +22,8 @@ Important: do not use `agentsmith-oss` for current-state analysis. It is an old 
 ## Pre-Dev Readiness Rules
 
 1. Record the runtime language/framework in a new ADR before adding application code.
-2. Runtime is now recorded in ADR 0005. Start only the neutral service skeleton until the relevant GA pre-dev admission gates are closed: package layout, health endpoint, config loading, logging, test harness, generated contract plumbing, and empty route registration.
-3. Freeze internal auth, caller-service authorization, schemas, OpenAPI, JVS runner, operation/audit, WebDAV, workload mount, writer-session fence, and namespace policy contracts before endpoint handlers or storage mutations.
+2. Runtime is now recorded in ADR 0005, and the pre-dev handoff has entered the GA implementation baseline. Implementation may continue against accepted package layout, health endpoint, config loading, logging, test harness, generated contract plumbing, route registration, and handler/operation contracts.
+3. Keep internal auth, caller-service authorization, schemas, OpenAPI, JVS runner, operation/audit, WebDAV, workload mount, writer-session fence, and namespace policy changes aligned with accepted contracts. Contract-breaking changes need review and evidence before implementation proceeds.
 4. Keep all implementation choices aligned with `docs/GA_PRE_DEV_READINESS.md`.
 
 ## Revised Boundary

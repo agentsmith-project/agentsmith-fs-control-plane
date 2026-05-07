@@ -225,6 +225,7 @@ Calling products must not provide authoritative raw filesystem paths. AFSCP comp
 ### Repo
 
 Ordinary repo responses expose IDs and status only.
+`jvs_repo_id` is an opaque storage/JVS identity for diagnostics and correlation, not a product catalog handle, credential, mount material, or authorization source.
 
 ```json
 {

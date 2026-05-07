@@ -1,7 +1,7 @@
 # AFSCP Storage Control Plane
 
-Status: GA pre-development handoff; neutral Go skeleton and contract plumbing
-are staged for review.
+Status: GA implementation baseline; the pre-development handoff is complete,
+and implementation is proceeding from accepted contracts.
 
 `agentsmith-fs-control-plane` hosts AFSCP: a product-agnostic file storage control plane for managed volumes, JVS repos, repo lifecycle, repo templates, exports, workload mounts, and durable storage operations.
 
@@ -66,13 +66,13 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 
 ## Implementation Rule
 
-Current implementation is neutral skeleton/contract plumbing plus focused
-control-plane primitives. Endpoint handlers, export handlers, JVS-backed storage
-mutations, and GA claims remain blocked until the relevant gates in
-`docs/GA_PRE_DEV_READINESS.md` and `docs/READINESS_EVIDENCE.md` are accepted.
-G-005 is closed by JVS v0.4.8 smoke evidence; repo/JVS/storage handlers may now
-proceed only through accepted contracts, fences, session drain, operation
-leases, audit behavior, and focused tests.
+Pre-dev handoff has entered the GA implementation baseline. Core handlers and
+operations are being implemented incrementally against accepted schemas,
+OpenAPI, auth, JVS, operation/audit, export, mount, and writer-session
+contracts. New or modified handlers and storage mutations must still pass
+through the corresponding gates, evidence, fences, operation leases, audit
+behavior, and focused tests. Do not claim final production GA from this
+baseline.
 
 ## License
 

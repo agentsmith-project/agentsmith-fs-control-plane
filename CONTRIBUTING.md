@@ -18,7 +18,7 @@ Development rules:
 - Do not add caller-specific workflow concepts to AFSCP core.
 - Do not implement ordinary cross-namespace template sharing or clone for GA.
 - Do not add merge semantics or ordinary single-writer enforcement for GA.
-- Do not implement endpoint handlers or storage mutations until schemas, OpenAPI, auth, JVS runner, operation/audit, export, mount, and writer-session fence contracts are accepted.
+- Only implement or modify endpoint handlers or storage mutations through accepted schemas, OpenAPI, auth, JVS, operation, audit, export, mount, writer-session contracts, and focused tests.
 - Tie implementation PRs to accepted ADRs, contracts, and GA admission evidence.
 
 The runtime language and initial service shape are selected in [ADR 0005](docs/adr/0005-runtime-and-service-shape.md). New implementation PRs should follow [docs/DEVELOPER_HANDOFF.md](docs/DEVELOPER_HANDOFF.md).
