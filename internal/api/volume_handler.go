@@ -21,6 +21,36 @@ type VolumeHealthReader interface {
 	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
 }
 
+type VolumeBackendHealthProbe interface {
+	CheckVolumeBackendHealth(ctx context.Context, volume resources.Volume) (VolumeBackendHealthResult, error)
+}
+
+type VolumeBackendHealthResult struct {
+	Healthy bool
+}
+
+type VolumeHealthFindingCode string
+
+const (
+	VolumeHealthFindingVolumeDisabled      VolumeHealthFindingCode = "VOLUME_DISABLED"
+	VolumeHealthFindingVolumeDegraded      VolumeHealthFindingCode = "VOLUME_DEGRADED"
+	VolumeHealthFindingCapabilityNotReady  VolumeHealthFindingCode = "CAPABILITY_NOT_READY"
+	VolumeHealthFindingBackendProbeMissing VolumeHealthFindingCode = "BACKEND_PROBE_MISSING"
+	VolumeHealthFindingBackendProbeFailed  VolumeHealthFindingCode = "BACKEND_PROBE_FAILED"
+	VolumeHealthFindingBackendProbeError   VolumeHealthFindingCode = "BACKEND_PROBE_ERROR"
+)
+
+func VolumeHealthFindingCodeStrings() []string {
+	return []string{
+		string(VolumeHealthFindingVolumeDisabled),
+		string(VolumeHealthFindingVolumeDegraded),
+		string(VolumeHealthFindingCapabilityNotReady),
+		string(VolumeHealthFindingBackendProbeMissing),
+		string(VolumeHealthFindingBackendProbeFailed),
+		string(VolumeHealthFindingBackendProbeError),
+	}
+}
+
 type EnsureVolumeHandlerConfig struct {
 	IntakeStore       OperationIntakeStore
 	PrincipalResolver PrincipalResolver
@@ -32,6 +62,7 @@ type EnsureVolumeHandlerConfig struct {
 
 type VolumeHealthHandlerConfig struct {
 	Reader            VolumeHealthReader
+	BackendProbe      VolumeBackendHealthProbe
 	PrincipalResolver PrincipalResolver
 	DeploymentPolicy  AllowedCallerPolicy
 	Now               func() time.Time
@@ -67,15 +98,16 @@ func EnsureVolumeHandler(config EnsureVolumeHandlerConfig) http.Handler {
 
 func VolumeHealthHandler(config VolumeHealthHandlerConfig) http.Handler {
 	route, _ := RouteMetadataByOperationID("getVolumeHealth")
-	leaf := volumeHealthLeafHandler{route: route, reader: config.Reader, now: config.Now, sink: config.AuditSink}
+	leaf := volumeHealthLeafHandler{route: route, reader: config.Reader, backendProbe: config.BackendProbe, now: config.Now, sink: config.AuditSink}
 	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, ensureVolumeRouteResolver{route: route}, config.DeploymentPolicy, config.AuditSink)
 }
 
 type volumeHealthLeafHandler struct {
-	route  RouteMetadata
-	reader VolumeHealthReader
-	now    func() time.Time
-	sink   audit.Sink
+	route        RouteMetadata
+	reader       VolumeHealthReader
+	backendProbe VolumeBackendHealthProbe
+	now          func() time.Time
+	sink         audit.Sink
 }
 
 func (handler volumeHealthLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -117,28 +149,50 @@ func (handler volumeHealthLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.
 	if handler.now != nil {
 		checkedAt = handler.now().UTC()
 	}
-	_ = writeJSON(w, http.StatusOK, volumeHealthFromVolume(volume, checkedAt))
+	probeConfigured := handler.backendProbe != nil
+	probeResult := VolumeBackendHealthResult{}
+	var probeErr error
+	if probeConfigured {
+		probeResult, probeErr = handler.backendProbe.CheckVolumeBackendHealth(r.Context(), volume)
+	}
+	_ = writeJSON(w, http.StatusOK, volumeHealthFromVolume(volume, checkedAt, probeConfigured, probeResult, probeErr))
 }
 
-func volumeHealthFromVolume(volume resources.Volume, checkedAt time.Time) VolumeHealthResponse {
+func volumeHealthFromVolume(volume resources.Volume, checkedAt time.Time, backendProbeConfigured bool, backendProbeResult VolumeBackendHealthResult, backendProbeErr error) VolumeHealthResponse {
 	status := "healthy"
 	findings := []VolumeHealthFinding{}
 	if volume.Status == resources.VolumeStatusDisabled {
 		status = "unavailable"
-		findings = append(findings, VolumeHealthFinding{Code: "VOLUME_DISABLED", Message: "volume is disabled", Severity: "critical"})
+		findings = append(findings, volumeHealthFinding(VolumeHealthFindingVolumeDisabled, "volume is disabled", "critical"))
 	} else if volume.Status == resources.VolumeStatusDegraded {
 		status = "degraded"
-		findings = append(findings, VolumeHealthFinding{Code: "VOLUME_DEGRADED", Message: "volume metadata reports degraded status", Severity: "warning"})
+		findings = append(findings, volumeHealthFinding(VolumeHealthFindingVolumeDegraded, "volume metadata reports degraded status", "warning"))
 	}
 	for _, capability := range []string{"webdav_export", "workload_mount", "jvs_external_control_root"} {
 		if got, _ := volume.Capabilities[capability].(bool); !got {
 			if status == "healthy" {
 				status = "degraded"
 			}
-			findings = append(findings, VolumeHealthFinding{Code: "CAPABILITY_NOT_READY", Message: capability + " capability is not available", Severity: "warning"})
+			findings = append(findings, volumeHealthFinding(VolumeHealthFindingCapabilityNotReady, capability+" capability is not available", "warning"))
 		}
 	}
+	if !backendProbeConfigured {
+		if status == "healthy" {
+			status = "degraded"
+		}
+		findings = append(findings, volumeHealthFinding(VolumeHealthFindingBackendProbeMissing, "backend health probe is not configured", "warning"))
+	} else if backendProbeErr != nil {
+		status = "unavailable"
+		findings = append(findings, volumeHealthFinding(VolumeHealthFindingBackendProbeError, "backend health probe could not complete", "critical"))
+	} else if !backendProbeResult.Healthy {
+		status = "unavailable"
+		findings = append(findings, volumeHealthFinding(VolumeHealthFindingBackendProbeFailed, "backend health probe did not pass", "critical"))
+	}
 	return VolumeHealthResponse{VolumeID: volume.ID, Status: status, CheckedAt: checkedAt.Format(time.RFC3339), Findings: findings}
+}
+
+func volumeHealthFinding(code VolumeHealthFindingCode, message, severity string) VolumeHealthFinding {
+	return VolumeHealthFinding{Code: string(code), Message: message, Severity: severity}
 }
 
 type ensureVolumeRouteResolver struct{ route RouteMetadata }

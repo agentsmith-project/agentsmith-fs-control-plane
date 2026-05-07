@@ -76,6 +76,9 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
 - AFSCP validates namespace/repo/template/export consistency.
 - AFSCP rejects mismatches between `X-AFSCP-Namespace-Id` and any path, query, body, or stored resource namespace.
 - AFSCP rejects non-empty `X-AFSCP-Namespace-Id` on volume-global admin operations.
+- Volume health is not metadata-only; healthy requires valid metadata,
+  required volume capabilities, and an explicitly passing backend probe. A
+  missing backend probe degrades health with a stable finding code.
 - Cross-namespace template clone is rejected by default.
 - Cross-volume template clone is rejected with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
 - Restore-run and restore-preview discard references to preview operations must

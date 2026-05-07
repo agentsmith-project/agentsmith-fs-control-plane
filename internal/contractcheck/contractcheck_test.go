@@ -675,6 +675,40 @@ func TestVerifyFilesCatchesSchemaEnumGoParityDrift(t *testing.T) {
 	assertFindingCount(t, findings, CodeSchemaOperationTypeEnumGoDrift, 1)
 }
 
+func TestVerifyFilesCatchesVolumeHealthFindingCodeEnumDrift(t *testing.T) {
+	driftedSchema := strings.Replace(validSchema, `        "BACKEND_PROBE_MISSING",`+"\n", "", 1)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: validOpenAPI,
+		schema:  driftedSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, "schema.volume_health_finding_code_enum_go_drift")
+}
+
+func TestVerifyFilesCatchesVolumeHealthFindingCodeRefInvalid(t *testing.T) {
+	driftedSchema := strings.Replace(validSchema, `"code": { "$ref": "#/$defs/VolumeHealthFindingCode" }`, `"code": { "type": "string" }`, 1)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: validOpenAPI,
+		schema:  driftedSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, CodeSchemaVolumeHealthFindingCodeRefInvalid)
+}
+
 func TestVerifyFilesCatchesAllowedCallerRolesUsingGlobalCallerRole(t *testing.T) {
 	driftedSchema := strings.Replace(validSchema, `"items": { "$ref": "#/$defs/NamespaceBindingCallerRole" }`, `"items": { "$ref": "#/$defs/CallerRole" }`, 1)
 	paths := writeContractFixture(t, contractFixture{
@@ -1414,6 +1448,40 @@ const validSchema = `
         "mount_binding_revoke",
         "migration_cutover"
       ]
+    },
+    "VolumeHealthFindingCode": {
+      "type": "string",
+      "enum": [
+        "VOLUME_DISABLED",
+        "VOLUME_DEGRADED",
+        "CAPABILITY_NOT_READY",
+        "BACKEND_PROBE_MISSING",
+        "BACKEND_PROBE_FAILED",
+        "BACKEND_PROBE_ERROR"
+      ]
+    },
+    "VolumeHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["volume_id", "status", "checked_at", "findings"],
+      "properties": {
+        "volume_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["healthy", "degraded", "unavailable"] },
+        "checked_at": { "type": "string" },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message", "severity"],
+            "properties": {
+              "code": { "$ref": "#/$defs/VolumeHealthFindingCode" },
+              "message": { "type": "string" },
+              "severity": { "type": "string", "enum": ["info", "warning", "critical"] }
+            }
+          }
+        }
+      }
     },
     "ErrorCode": {
       "type": "string",

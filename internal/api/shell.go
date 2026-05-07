@@ -39,6 +39,7 @@ type InternalAPIShellConfig struct {
 	NamespaceReader                NamespaceReader
 	RepoReader                     RepoReader
 	VolumeReader                   VolumeReader
+	VolumeBackendHealthProbe       VolumeBackendHealthProbe
 	WorkloadMountBindingReader     WorkloadMountBindingReader
 	WorkloadMountPlanReader        WorkloadMountPlanReader
 	ExportStore                    ExportStore
@@ -90,6 +91,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	volumeHandler = requestLogHandler(volumeHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/volumes/{volumeId}:ensure", "ensureVolume")
 	volumeHealthHandler := VolumeHealthHandler(VolumeHealthHandlerConfig{
 		Reader:            config.VolumeReader,
+		BackendProbe:      config.VolumeBackendHealthProbe,
 		PrincipalResolver: config.PrincipalResolver,
 		DeploymentPolicy: RouteAwareAllowedCallerPolicy{
 			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),

@@ -399,11 +399,228 @@ func TestInternalRuntimeReadinessFailsClosedWithoutStorePing(t *testing.T) {
 	}
 }
 
+func TestInternalRuntimeVolumeHealthDefaultsMissingBackendProbeToNotHealthy(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	runtime, err := NewRuntime(Options{
+		Source: config.MapSource{
+			"AFSCP_API_MODE":                                 "internal",
+			"AFSCP_API_POSTGRES_DSN":                         "postgres://api:secret@db/afscp",
+			"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
+			"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_api:admin:volume_admin",
+			"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
+		},
+		StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {
+			if dsn != "postgres://api:secret@db/afscp" {
+				t.Fatalf("dsn = %q", dsn)
+			}
+			store := &fakeRuntimeStore{binding: testBinding(), volume: activeRuntimeVolume(now)}
+			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+		},
+		Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer closeRuntime(t, runtime)
+
+	req := internalGET("/internal/v1/volumes/vol_main/health", "svc_api", "token-api")
+	req.Header.Del(auth.HeaderNamespaceID)
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("volume health status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var body api.VolumeHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("volume health did not decode: %v: %s", err, rec.Body.String())
+	}
+	if body.Status == "healthy" {
+		t.Fatalf("volume health = healthy, want missing backend probe finding: %#v", body)
+	}
+	if !runtimeVolumeHealthHasFinding(body, "BACKEND_PROBE_MISSING") {
+		t.Fatalf("findings = %#v, want BACKEND_PROBE_MISSING", body.Findings)
+	}
+}
+
+func TestInternalRuntimeVolumeHealthUsesConfiguredVolumeRootProbe(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	root := t.TempDir()
+	runtime := newVolumeHealthRuntime(t, config.MapSource{
+		"AFSCP_API_VOLUME_ROOTS": "vol_main=" + root,
+	}, activeRuntimeVolume(now))
+	defer closeRuntime(t, runtime)
+
+	rec := serveRuntimeVolumeHealth(runtime)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("volume health status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var body api.VolumeHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("volume health did not decode: %v: %s", err, rec.Body.String())
+	}
+	if body.Status != "healthy" || len(body.Findings) != 0 {
+		t.Fatalf("volume health = %#v, want healthy without findings", body)
+	}
+	if strings.Contains(rec.Body.String(), root) {
+		t.Fatalf("volume health leaked configured root %q: %s", root, rec.Body.String())
+	}
+}
+
+func TestInternalRuntimeVolumeHealthRootProbeFailuresAreSanitized(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	fileRoot := filepath.Join(t.TempDir(), "secret-volume-file")
+	if err := os.WriteFile(fileRoot, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write file root: %v", err)
+	}
+	missingRoot := filepath.Join(t.TempDir(), "secret-missing-volume-root")
+	otherRoot := filepath.Join(t.TempDir(), "secret-other-volume-root")
+	if err := os.Mkdir(otherRoot, 0o700); err != nil {
+		t.Fatalf("mkdir other root: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		roots   string
+		leakTag string
+	}{
+		{name: "root missing", roots: "vol_main=" + missingRoot, leakTag: missingRoot},
+		{name: "root not directory", roots: "vol_main=" + fileRoot, leakTag: fileRoot},
+		{name: "volume id missing", roots: "vol_other=" + otherRoot, leakTag: otherRoot},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := newVolumeHealthRuntime(t, config.MapSource{
+				"AFSCP_API_VOLUME_ROOTS": tt.roots,
+			}, activeRuntimeVolume(now))
+			defer closeRuntime(t, runtime)
+
+			rec := serveRuntimeVolumeHealth(runtime)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("volume health status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
+			var body api.VolumeHealthResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("volume health did not decode: %v: %s", err, rec.Body.String())
+			}
+			if body.Status == "healthy" {
+				t.Fatalf("volume health = healthy, want backend probe finding: %#v", body)
+			}
+			if !runtimeVolumeHealthHasFinding(body, "BACKEND_PROBE_FAILED") {
+				t.Fatalf("findings = %#v, want BACKEND_PROBE_FAILED", body.Findings)
+			}
+			for _, leaked := range []string{tt.leakTag, "secret-volume"} {
+				if strings.Contains(rec.Body.String(), leaked) {
+					t.Fatalf("volume health leaked %q in %s", leaked, rec.Body.String())
+				}
+			}
+		})
+	}
+}
+
+func TestInternalRuntimeVolumeHealthRootProbeRejectsSymlinkAndMissingPermissions(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	targetRoot := filepath.Join(t.TempDir(), "secret-volume-target")
+	if err := os.Mkdir(targetRoot, 0o700); err != nil {
+		t.Fatalf("mkdir target root: %v", err)
+	}
+	symlinkRoot := filepath.Join(t.TempDir(), "secret-volume-symlink")
+	if err := os.Symlink(targetRoot, symlinkRoot); err != nil {
+		t.Fatalf("symlink root: %v", err)
+	}
+	noWriteRoot := filepath.Join(t.TempDir(), "secret-volume-no-write")
+	if err := os.Mkdir(noWriteRoot, 0o500); err != nil {
+		t.Fatalf("mkdir no-write root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(noWriteRoot, 0o700) })
+	noSearchRoot := filepath.Join(t.TempDir(), "secret-volume-no-search")
+	if err := os.Mkdir(noSearchRoot, 0o600); err != nil {
+		t.Fatalf("mkdir no-search root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(noSearchRoot, 0o700) })
+
+	tests := []struct {
+		name string
+		root string
+	}{
+		{name: "symlink", root: symlinkRoot},
+		{name: "no write permission bits", root: noWriteRoot},
+		{name: "no execute search permission bits", root: noSearchRoot},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := newVolumeHealthRuntime(t, config.MapSource{
+				"AFSCP_API_VOLUME_ROOTS": "vol_main=" + tt.root,
+			}, activeRuntimeVolume(now))
+			defer closeRuntime(t, runtime)
+
+			rec := serveRuntimeVolumeHealth(runtime)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("volume health status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
+			var body api.VolumeHealthResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("volume health did not decode: %v: %s", err, rec.Body.String())
+			}
+			if body.Status == "healthy" {
+				t.Fatalf("volume health = healthy, want backend probe finding: %#v", body)
+			}
+			if !runtimeVolumeHealthHasFinding(body, "BACKEND_PROBE_FAILED") {
+				t.Fatalf("findings = %#v, want BACKEND_PROBE_FAILED", body.Findings)
+			}
+			for _, leaked := range []string{tt.root, targetRoot, "secret-volume"} {
+				if strings.Contains(rec.Body.String(), leaked) {
+					t.Fatalf("volume health leaked %q in %s", leaked, rec.Body.String())
+				}
+			}
+		})
+	}
+}
+
 func newTestRuntime(t *testing.T) *Runtime {
 	t.Helper()
 	return newTestRuntimeWithStorePing(t, func(context.Context) error {
 		return nil
 	})
+}
+
+func newVolumeHealthRuntime(t *testing.T, overrides config.MapSource, volume resources.Volume) *Runtime {
+	t.Helper()
+	source := config.MapSource{
+		"AFSCP_API_MODE":                                 "internal",
+		"AFSCP_API_POSTGRES_DSN":                         "postgres://api:secret@db/afscp",
+		"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
+		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_api:admin:volume_admin",
+		"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
+	}
+	for key, value := range overrides {
+		source[key] = value
+	}
+	runtime, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {
+			if dsn != "postgres://api:secret@db/afscp" {
+				t.Fatalf("dsn = %q", dsn)
+			}
+			store := &fakeRuntimeStore{binding: testBinding(), volume: volume}
+			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+		},
+		Clock: func() time.Time { return time.Unix(100, 0).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	return runtime
+}
+
+func serveRuntimeVolumeHealth(runtime *Runtime) *httptest.ResponseRecorder {
+	req := internalGET("/internal/v1/volumes/vol_main/health", "svc_api", "token-api")
+	req.Header.Del(auth.HeaderNamespaceID)
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, req)
+	return rec
 }
 
 func newTestRuntimeWithStorePing(t *testing.T, ping func(context.Context) error) *Runtime {
@@ -487,8 +704,30 @@ func testBinding() resources.NamespaceVolumeBinding {
 	}
 }
 
+func activeRuntimeVolume(now time.Time) resources.Volume {
+	return resources.Volume{
+		ID:             "vol_main",
+		Backend:        resources.VolumeBackendJuiceFS,
+		IsolationClass: resources.VolumeIsolationShared,
+		Status:         resources.VolumeStatusActive,
+		Capabilities:   map[string]any{"webdav_export": true, "workload_mount": true, "jvs_external_control_root": true, "directory_quota": false},
+		CreatedAt:      now.Add(-time.Hour),
+		UpdatedAt:      now,
+	}
+}
+
+func runtimeVolumeHealthHasFinding(response api.VolumeHealthResponse, code string) bool {
+	for _, finding := range response.Findings {
+		if finding.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 type fakeRuntimeStore struct {
 	binding resources.NamespaceVolumeBinding
+	volume  resources.Volume
 	closed  bool
 }
 
@@ -520,7 +759,10 @@ func (*fakeRuntimeStore) ListReposByNamespace(context.Context, string) ([]resour
 	return nil, nil
 }
 
-func (*fakeRuntimeStore) GetVolume(context.Context, string) (resources.Volume, error) {
+func (store *fakeRuntimeStore) GetVolume(_ context.Context, volumeID string) (resources.Volume, error) {
+	if store.volume.ID == volumeID {
+		return store.volume, nil
+	}
 	return resources.Volume{}, sql.ErrNoRows
 }
 

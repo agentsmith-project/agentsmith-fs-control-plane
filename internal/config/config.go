@@ -94,6 +94,7 @@ type APIConfig struct {
 	ServiceTokens                     string
 	DeploymentGlobalAllowedCallers    string
 	DeploymentNamespaceAllowedCallers string
+	VolumeRoots                       map[string]string
 	SavePointHistory                  WorkerRepoCreateRecoveryConfig
 }
 
@@ -179,7 +180,8 @@ func Load(source Source) (Config, error) {
 		Environment:      defaultEnvironment,
 		ReadinessProfile: defaultReadinessProfile,
 		API: APIConfig{
-			Mode: "neutral",
+			Mode:        "neutral",
+			VolumeRoots: map[string]string{},
 		},
 		ExportGateway: ExportGatewayConfig{
 			Prefix:      "/e/",
@@ -473,6 +475,25 @@ func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
 	cfg.ServiceTokens = valueOrDefault(source, "AFSCP_API_SERVICE_TOKENS", "")
 	cfg.DeploymentGlobalAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS", "")
 	cfg.DeploymentNamespaceAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS", "")
+	if cfg.Mode != "internal" {
+		cfg.VolumeRoots = map[string]string{}
+	} else {
+		rootsRaw := valueOrDefault(source, "AFSCP_API_VOLUME_ROOTS", "")
+		rootsKey := "AFSCP_API_VOLUME_ROOTS"
+		if rootsRaw == "" {
+			rootsRaw = valueOrDefault(source, "AFSCP_VOLUME_ROOTS", "")
+			rootsKey = "AFSCP_VOLUME_ROOTS"
+		}
+		if rootsRaw == "" {
+			cfg.VolumeRoots = map[string]string{}
+		} else {
+			roots, err := parseOptionalVolumeRoots(rootsRaw, rootsKey)
+			if err != nil {
+				return APIConfig{}, err
+			}
+			cfg.VolumeRoots = roots
+		}
+	}
 	savePointHistory, err := loadJVSConfigWhenCapabilityAvailable(source, "AFSCP_API_SAVE_POINT_HISTORY")
 	if err != nil {
 		return APIConfig{}, err
@@ -540,19 +561,42 @@ func loadExportGatewayConfig(source Source, defaults ExportGatewayConfig, listen
 		cfg.Prefix = "/e/"
 	}
 	rootsRaw := valueOrDefault(source, "AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS", "")
-	if rootsRaw == "" {
-		rootsRaw = valueOrDefault(source, "AFSCP_VOLUME_ROOTS", "")
+	if rootsRaw != "" {
+		roots, err := parseOptionalVolumeRoots(rootsRaw, "AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS")
+		if err != nil {
+			return ExportGatewayConfig{}, err
+		}
+		cfg.VolumeRoots = roots
+		return cfg, nil
 	}
+
+	rootsRaw = valueOrDefault(source, "AFSCP_VOLUME_ROOTS", "")
 	if rootsRaw == "" {
 		cfg.VolumeRoots = map[string]string{}
 		return cfg, nil
 	}
-	roots, err := parseVolumeRoots(rootsRaw, "AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS")
+	roots, err := parseOptionalVolumeRoots(rootsRaw, "AFSCP_VOLUME_ROOTS")
 	if err != nil {
-		return ExportGatewayConfig{}, err
+		if exportGatewayExplicitlyConfigured(source) {
+			return ExportGatewayConfig{}, err
+		}
+		cfg.VolumeRoots = map[string]string{}
+		return cfg, nil
 	}
 	cfg.VolumeRoots = roots
 	return cfg, nil
+}
+
+func exportGatewayExplicitlyConfigured(source Source) bool {
+	if source == nil {
+		return false
+	}
+	for _, key := range []string{"AFSCP_EXPORT_GATEWAY_LISTEN_ADDR", "AFSCP_EXPORT_GATEWAY_POSTGRES_DSN", "AFSCP_EXPORT_GATEWAY_PREFIX"} {
+		if valueOrDefault(source, key, "") != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func ValidateExportGatewayConfig(cfg ExportGatewayConfig) error {
@@ -781,29 +825,41 @@ func parseVolumeRoots(raw, gateKey string) (map[string]string, error) {
 	if raw == "" {
 		return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS is required when %s is true", gateKey)
 	}
+	return parseVolumeRootsForKey(raw, "AFSCP_VOLUME_ROOTS")
+}
+
+func parseOptionalVolumeRoots(raw, key string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]string{}, nil
+	}
+	return parseVolumeRootsForKey(raw, key)
+}
+
+func parseVolumeRootsForKey(raw, key string) (map[string]string, error) {
 	roots := map[string]string{}
 	for _, part := range strings.Split(raw, ",") {
 		pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
 		if len(pair) != 2 || strings.TrimSpace(pair[0]) == "" || strings.TrimSpace(pair[1]) == "" {
-			return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must be vol_id=/abs/root pairs")
+			return nil, fmt.Errorf("%s must be vol_id=/abs/root pairs", key)
 		}
 		volumeID := strings.TrimSpace(pair[0])
 		root := strings.TrimSpace(pair[1])
 		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
-			return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must contain valid volume ids and absolute clean roots")
+			return nil, fmt.Errorf("%s must contain valid volume ids and absolute clean roots", key)
 		}
 		if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == string(filepath.Separator) {
-			return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must contain valid volume ids and absolute clean roots")
+			return nil, fmt.Errorf("%s must contain valid volume ids and absolute clean roots", key)
 		}
 		if _, exists := roots[volumeID]; exists {
-			return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS must contain unique volume ids and non-overlapping roots")
+			return nil, fmt.Errorf("%s must contain unique volume ids and non-overlapping roots", key)
 		}
 		roots[volumeID] = root
 	}
 	if len(roots) == 0 {
-		return nil, fmt.Errorf("AFSCP_VOLUME_ROOTS is required when %s is true", gateKey)
+		return nil, fmt.Errorf("%s is required", key)
 	}
-	if err := validateVolumeRoots(roots, "AFSCP_VOLUME_ROOTS"); err != nil {
+	if err := validateVolumeRoots(roots, key); err != nil {
 		return nil, err
 	}
 	return roots, nil

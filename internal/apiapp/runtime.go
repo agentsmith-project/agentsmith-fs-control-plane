@@ -21,9 +21,11 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store/postgres"
 
 	_ "github.com/lib/pq"
+	"golang.org/x/sys/unix"
 )
 
 type InternalStore interface {
@@ -163,6 +165,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		NamespaceReader:                handle.Store,
 		RepoReader:                     handle.Store,
 		VolumeReader:                   handle.Store,
+		VolumeBackendHealthProbe:       newVolumeRootBackendHealthProbe(cfg.API.VolumeRoots),
 		WorkloadMountBindingReader:     handle.Store,
 		WorkloadMountPlanReader:        handle.Store,
 		ExportStore:                    handle.Store,
@@ -182,6 +185,53 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 	})
 
 	return &Runtime{Handler: handler, close: handle.Close}, nil
+}
+
+type volumeRootBackendHealthProbe struct {
+	roots map[string]string
+}
+
+func newVolumeRootBackendHealthProbe(roots map[string]string) api.VolumeBackendHealthProbe {
+	if len(roots) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(roots))
+	for volumeID, root := range roots {
+		cloned[volumeID] = root
+	}
+	return volumeRootBackendHealthProbe{roots: cloned}
+}
+
+func (probe volumeRootBackendHealthProbe) CheckVolumeBackendHealth(ctx context.Context, volume resources.Volume) (api.VolumeBackendHealthResult, error) {
+	select {
+	case <-ctx.Done():
+		return api.VolumeBackendHealthResult{}, ctx.Err()
+	default:
+	}
+
+	root, ok := probe.roots[volume.ID]
+	if !ok {
+		return api.VolumeBackendHealthResult{Healthy: false}, nil
+	}
+	if !volumeRootUsableForChildCreation(root) {
+		return api.VolumeBackendHealthResult{Healthy: false}, nil
+	}
+	return api.VolumeBackendHealthResult{Healthy: true}, nil
+}
+
+func volumeRootUsableForChildCreation(root string) bool {
+	info, err := os.Lstat(root)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false
+	}
+	mode := info.Mode().Perm()
+	if mode&0o222 == 0 || mode&0o111 == 0 {
+		return false
+	}
+	if err := unix.Access(root, unix.W_OK|unix.X_OK); err != nil {
+		return false
+	}
+	return true
 }
 
 func verifyFileSHA256(path, want string) error {

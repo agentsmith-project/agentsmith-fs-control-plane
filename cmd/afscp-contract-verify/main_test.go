@@ -290,6 +290,40 @@ const cliValidSchema = `
         "migration_cutover"
       ]
     },
+    "VolumeHealthFindingCode": {
+      "type": "string",
+      "enum": [
+        "VOLUME_DISABLED",
+        "VOLUME_DEGRADED",
+        "CAPABILITY_NOT_READY",
+        "BACKEND_PROBE_MISSING",
+        "BACKEND_PROBE_FAILED",
+        "BACKEND_PROBE_ERROR"
+      ]
+    },
+    "VolumeHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["volume_id", "status", "checked_at", "findings"],
+      "properties": {
+        "volume_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["healthy", "degraded", "unavailable"] },
+        "checked_at": { "type": "string" },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message", "severity"],
+            "properties": {
+              "code": { "$ref": "#/$defs/VolumeHealthFindingCode" },
+              "message": { "type": "string" },
+              "severity": { "type": "string", "enum": ["info", "warning", "critical"] }
+            }
+          }
+        }
+      }
+    },
     "ErrorCode": {
       "type": "string",
       "enum": [

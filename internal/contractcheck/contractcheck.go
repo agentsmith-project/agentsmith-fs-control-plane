@@ -45,6 +45,8 @@ const (
 	CodeSchemaErrorCodeEnumGoDrift                         = "schema.error_code_enum_go_drift"
 	CodeSchemaCallerRoleEnumGoDrift                        = "schema.caller_role_enum_go_drift"
 	CodeSchemaNamespaceBindingCallerRoleEnumGoDrift        = "schema.namespace_binding_caller_role_enum_go_drift"
+	CodeSchemaVolumeHealthFindingCodeEnumGoDrift           = "schema.volume_health_finding_code_enum_go_drift"
+	CodeSchemaVolumeHealthFindingCodeRefInvalid            = "schema.volume_health_finding_code_ref_invalid"
 	CodeSchemaNamespaceBindingCallerRoleForbidden          = "schema.namespace_binding_caller_role_forbidden"
 	CodeSchemaAllowedCallerRoleRefInvalid                  = "schema.allowed_caller_role_ref_invalid"
 	CodeSchemaOperationTypeEnumGoDrift                     = "schema.operation_type_enum_go_drift"
@@ -392,6 +394,8 @@ func verifySchema(path, body string) []Finding {
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "CallerRole", authRoleStrings(), CodeSchemaCallerRoleEnumGoDrift)...)
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "NamespaceBindingCallerRole", namespaceBindingCallerRoleStrings(), CodeSchemaNamespaceBindingCallerRoleEnumGoDrift)...)
 	findings = append(findings, verifyNamespaceBindingAllowedCallerRoles(path, body, defs)...)
+	findings = append(findings, verifySchemaEnumParity(path, body, defs, "VolumeHealthFindingCode", api.VolumeHealthFindingCodeStrings(), CodeSchemaVolumeHealthFindingCodeEnumGoDrift)...)
+	findings = append(findings, verifyVolumeHealthFindingCodeRef(path, body, defs)...)
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "OperationType", operationTypeStrings(), CodeSchemaOperationTypeEnumGoDrift)...)
 	findings = append(findings, verifySchemaQuotaSemantics(path, body, root)...)
 	findings = append(findings, verifyJSONSchemaRawCredentialFields(path, body, root)...)
@@ -913,6 +917,21 @@ func hasQuotaSemantics(text string) bool {
 	}
 	return strings.Contains(lower, "integration") &&
 		(strings.Contains(lower, "enables") || strings.Contains(lower, "enabled") || strings.Contains(lower, "explicitly enables"))
+}
+
+func verifyVolumeHealthFindingCodeRef(path, body string, defs map[string]any) []Finding {
+	volumeHealth, _ := defs["VolumeHealth"].(map[string]any)
+	findingsProperty, _ := propertiesMap(volumeHealth)["findings"].(map[string]any)
+	items, _ := findingsProperty["items"].(map[string]any)
+	if propertyRefEquals(items, "code", "#/$defs/VolumeHealthFindingCode") {
+		return nil
+	}
+	return []Finding{{
+		Code:    CodeSchemaVolumeHealthFindingCodeRefInvalid,
+		File:    path,
+		Line:    findLine(body, `"VolumeHealth"`),
+		Message: "VolumeHealth findings.code must reference #/$defs/VolumeHealthFindingCode",
+	}}
 }
 
 func verifySchemaEnumParity(path, body string, defs map[string]any, defName string, want []string, code string) []Finding {

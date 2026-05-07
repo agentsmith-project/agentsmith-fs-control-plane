@@ -209,6 +209,160 @@ func TestLoadAPIInternalRuntimeDSNFallsBackToSharedPostgres(t *testing.T) {
 	}
 }
 
+func TestLoadAPIVolumeRootsFromExplicitConfigAndFallback(t *testing.T) {
+	tests := []struct {
+		name   string
+		source MapSource
+		want   map[string]string
+	}{
+		{
+			name: "explicit api roots win",
+			source: MapSource{
+				"AFSCP_API_MODE":         "internal",
+				"AFSCP_API_VOLUME_ROOTS": "vol_api=/srv/afscp/api-volumes/vol_api",
+				"AFSCP_VOLUME_ROOTS":     "vol_shared=/srv/afscp/shared-volumes/vol_shared",
+			},
+			want: map[string]string{"vol_api": "/srv/afscp/api-volumes/vol_api"},
+		},
+		{
+			name: "fallback shared roots",
+			source: MapSource{
+				"AFSCP_API_MODE":     "internal",
+				"AFSCP_VOLUME_ROOTS": "vol_shared=/srv/afscp/shared-volumes/vol_shared",
+			},
+			want: map[string]string{"vol_shared": "/srv/afscp/shared-volumes/vol_shared"},
+		},
+		{
+			name:   "empty stays unconfigured",
+			source: MapSource{"AFSCP_API_MODE": "internal"},
+			want:   map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(tt.source)
+			if err != nil {
+				t.Fatalf("Load returned error: %v", err)
+			}
+			if len(cfg.API.VolumeRoots) != len(tt.want) {
+				t.Fatalf("api volume roots = %#v, want %#v", cfg.API.VolumeRoots, tt.want)
+			}
+			for volumeID, root := range tt.want {
+				if got := cfg.API.VolumeRoots[volumeID]; got != root {
+					t.Fatalf("api volume root %s = %q, want %q in %#v", volumeID, got, root, cfg.API.VolumeRoots)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadNeutralAPIIgnoresMalformedVolumeRoots(t *testing.T) {
+	tests := []struct {
+		name   string
+		source MapSource
+	}{
+		{
+			name:   "default neutral mode",
+			source: MapSource{"AFSCP_VOLUME_ROOTS": "vol_api=/srv/afscp/secret-root,vol_other=/srv/afscp/secret-root/child"},
+		},
+		{
+			name:   "explicit neutral mode",
+			source: MapSource{"AFSCP_API_MODE": "neutral", "AFSCP_VOLUME_ROOTS": "vol_api=/srv/afscp/secret-root,vol_other=/srv/afscp/secret-root/child"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(tt.source)
+			if err != nil {
+				t.Fatalf("Load returned error in neutral mode, want malformed shared roots ignored: %v", err)
+			}
+			if len(cfg.API.VolumeRoots) != 0 {
+				t.Fatalf("api volume roots = %#v, want empty in neutral mode", cfg.API.VolumeRoots)
+			}
+			if len(cfg.ExportGateway.VolumeRoots) != 0 {
+				t.Fatalf("export gateway volume roots = %#v, want empty when shared roots are malformed and gateway is not explicit", cfg.ExportGateway.VolumeRoots)
+			}
+		})
+	}
+}
+
+func TestLoadNeutralAPIDoesNotDisableExportGatewaySharedRootFallback(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_API_MODE":     "neutral",
+		"AFSCP_VOLUME_ROOTS": "vol_shared=/srv/afscp/shared-volumes/vol_shared",
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if len(cfg.API.VolumeRoots) != 0 {
+		t.Fatalf("api volume roots = %#v, want empty in neutral mode", cfg.API.VolumeRoots)
+	}
+	if got := cfg.ExportGateway.VolumeRoots["vol_shared"]; got != "/srv/afscp/shared-volumes/vol_shared" {
+		t.Fatalf("export gateway shared fallback root = %q in %#v", got, cfg.ExportGateway.VolumeRoots)
+	}
+}
+
+func TestLoadAPIVolumeRootsRejectsBadRootsWithoutLeakingValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		source MapSource
+		want   string
+	}{
+		{
+			name:   "explicit relative root",
+			source: MapSource{"AFSCP_API_MODE": "internal", "AFSCP_API_VOLUME_ROOTS": "vol_api=secret-relative-root"},
+			want:   "AFSCP_API_VOLUME_ROOTS",
+		},
+		{
+			name:   "explicit overlapping roots",
+			source: MapSource{"AFSCP_API_MODE": "internal", "AFSCP_API_VOLUME_ROOTS": "vol_api=/srv/afscp/secret-root,vol_other=/srv/afscp/secret-root/child"},
+			want:   "AFSCP_API_VOLUME_ROOTS",
+		},
+		{
+			name:   "fallback bad root",
+			source: MapSource{"AFSCP_API_MODE": "internal", "AFSCP_VOLUME_ROOTS": "vol_api=/srv/afscp/secret-root,vol_other=/srv/afscp/secret-root/child"},
+			want:   "AFSCP_VOLUME_ROOTS",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(tt.source)
+			if err == nil {
+				t.Fatal("Load succeeded, want API volume root config error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want %s", err, tt.want)
+			}
+			for _, leaked := range []string{"secret-relative-root", "/srv/afscp/secret-root", "/srv/afscp/secret-root/child"} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Fatalf("error leaked raw root %q: %v", leaked, err)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadExportGatewayExplicitConfigRejectsMalformedSharedRoots(t *testing.T) {
+	_, err := Load(MapSource{
+		"AFSCP_EXPORT_GATEWAY_POSTGRES_DSN": "postgres://gateway:secret@db/afscp",
+		"AFSCP_VOLUME_ROOTS":                "vol_api=/srv/afscp/secret-root,vol_other=/srv/afscp/secret-root/child",
+	})
+	if err == nil {
+		t.Fatal("Load succeeded, want export gateway shared root fallback error")
+	}
+	if !strings.Contains(err.Error(), "AFSCP_VOLUME_ROOTS") {
+		t.Fatalf("error = %q, want shared roots key", err)
+	}
+	for _, leaked := range []string{"/srv/afscp/secret-root", "/srv/afscp/secret-root/child", "secret"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("error leaked raw root %q: %v", leaked, err)
+		}
+	}
+}
+
 func TestLoadExportGatewayConfig(t *testing.T) {
 	cfg, err := Load(MapSource{
 		"AFSCP_EXPORT_GATEWAY_LISTEN_ADDR":  "127.0.0.1:9090",

@@ -488,6 +488,13 @@ POST /internal/v1/volumes/{volumeId}:ensure
 GET  /internal/v1/volumes/{volumeId}/health
 ```
 
+Volume health combines durable volume metadata, required volume capabilities,
+and an injected backend volume health probe. `status:"healthy"` is allowed only
+when all three pass. If the backend probe is missing, fails, or errors, the
+response is not healthy and uses stable finding codes such as
+`BACKEND_PROBE_MISSING`, `BACKEND_PROBE_FAILED`, or `BACKEND_PROBE_ERROR`
+without returning raw backend paths, secrets, or underlying error text.
+
 ### Namespaces
 
 ```http
