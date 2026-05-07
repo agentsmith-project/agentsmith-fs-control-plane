@@ -275,6 +275,96 @@ func TestInternalRuntimeCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testing
 	}
 }
 
+func TestInternalRuntimeCreateExportCapabilityDeniedWhenWebDAVUnavailable(t *testing.T) {
+	tests := []struct {
+		name   string
+		enable string
+		ready  string
+	}{
+		{name: "disabled", enable: "false", ready: "false"},
+		{name: "not ready", enable: "true", ready: "false"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Unix(100, 0).UTC()
+			binding := testBinding()
+			binding.AllowedCallers = []resources.AllowedCaller{{
+				CallerService: "svc_api",
+				Roles:         []resources.CallerRole{resources.CallerRoleExportAdmin},
+			}}
+			store := &fakeRuntimeStore{
+				binding: binding,
+				namespace: resources.Namespace{
+					ID:        "ns_alpha",
+					Status:    resources.NamespaceStatusActive,
+					CreatedAt: now.Add(-time.Hour),
+					UpdatedAt: now,
+				},
+				repo: resources.Repo{
+					ID:                  "repo_alpha",
+					NamespaceID:         "ns_alpha",
+					VolumeID:            "vol_main",
+					JVSRepoID:           "jvs_repo_alpha",
+					Kind:                resources.RepoKindRepo,
+					Status:              resources.RepoStatusActive,
+					ControlVolumeSubdir: "afscp/namespaces/ns_alpha/repos/repo_alpha/control",
+					PayloadVolumeSubdir: "afscp/namespaces/ns_alpha/repos/repo_alpha/payload",
+					Lifecycle:           resources.RepoLifecycle{Status: resources.RepoStatusActive},
+					CreatedAt:           now.Add(-time.Hour),
+					UpdatedAt:           now,
+				},
+				volume: activeRuntimeVolume(now),
+			}
+			source := readyTestRuntimeSource()
+			source["AFSCP_WEBDAV_ENABLED"] = tt.enable
+			source["AFSCP_WEBDAV_READY"] = tt.ready
+			runtime, err := NewRuntime(Options{
+				Source: source,
+				StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {
+					if dsn != "postgres://api:secret@db/afscp" {
+						t.Fatalf("dsn = %q", dsn)
+					}
+					return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+				},
+				OperationID: func() string { return "op_export_runtime" },
+				Clock:       func() time.Time { return now },
+			})
+			if err != nil {
+				t.Fatalf("NewRuntime: %v", err)
+			}
+			defer closeRuntime(t, runtime)
+
+			req := httptest.NewRequest(http.MethodPost, "/internal/v1/repos/repo_alpha/exports", strings.NewReader(`{"mode":"read_only","ttl_seconds":120}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(auth.HeaderAuthorization, "Bearer token-api")
+			req.Header.Set(auth.HeaderCorrelationID, "corr_test")
+			req.Header.Set(auth.HeaderCallerService, "svc_api")
+			req.Header.Set(auth.HeaderNamespaceID, "ns_alpha")
+			req.Header.Set(auth.HeaderIdempotencyKey, "idem_export")
+			req.Header.Set(auth.HeaderActorType, "service")
+			req.Header.Set(auth.HeaderActorID, "svc_api")
+			rec := httptest.NewRecorder()
+
+			runtime.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+			}
+			var env api.ErrorEnvelope
+			if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+				t.Fatalf("decode error envelope: %v: %s", err, rec.Body.String())
+			}
+			if env.Error.Code != api.CodeCapabilityDenied {
+				t.Fatalf("error code = %s, want %s", env.Error.Code, api.CodeCapabilityDenied)
+			}
+			if store.exportCreateCalls != 0 {
+				t.Fatalf("export create calls = %d, want denied before durable create", store.exportCreateCalls)
+			}
+		})
+	}
+}
+
 func TestServiceTokenPrincipalResolverAuthenticatesBearerAndRejectsCallerMismatch(t *testing.T) {
 	resolver, err := NewServiceTokenPrincipalResolver("svc_api=token-api")
 	if err != nil {

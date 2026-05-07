@@ -54,12 +54,15 @@ func TestRunDryRunValidatesGatewayConfigWithoutServing(t *testing.T) {
 
 	code := runWithDeps(context.Background(), []string{"--dry-run"}, &stdout, &stderr, commandDeps{
 		loadConfig: func(config.Source) (config.Config, error) {
-			return config.Config{ExportGateway: config.ExportGatewayConfig{
-				ListenAddr:  "127.0.0.1:9090",
-				PostgresDSN: "postgres://gateway:secret@db/afscp",
-				Prefix:      "/e/",
-				VolumeRoots: map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
-			}}, nil
+			return config.Config{
+				Capabilities: config.Capabilities{WebDAV: config.Capability{Enabled: true, Ready: true}},
+				ExportGateway: config.ExportGatewayConfig{
+					ListenAddr:  "127.0.0.1:9090",
+					PostgresDSN: "postgres://gateway:secret@db/afscp",
+					Prefix:      "/e/",
+					VolumeRoots: map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+				},
+			}, nil
 		},
 		serve: func(context.Context, exportgateway.ServerConfig) error {
 			served = true
@@ -88,12 +91,15 @@ func TestRunServeBootstrapsGatewayWithoutConnectingInCommandTest(t *testing.T) {
 
 	code := runWithDeps(context.Background(), []string{"--serve", "--listen-addr=127.0.0.1:9191"}, &stdout, &stderr, commandDeps{
 		loadConfig: func(config.Source) (config.Config, error) {
-			return config.Config{ExportGateway: config.ExportGatewayConfig{
-				ListenAddr:  "127.0.0.1:9090",
-				PostgresDSN: "postgres://gateway:secret@db/afscp",
-				Prefix:      "/e/",
-				VolumeRoots: map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
-			}}, nil
+			return config.Config{
+				Capabilities: config.Capabilities{WebDAV: config.Capability{Enabled: true, Ready: true}},
+				ExportGateway: config.ExportGatewayConfig{
+					ListenAddr:  "127.0.0.1:9090",
+					PostgresDSN: "postgres://gateway:secret@db/afscp",
+					Prefix:      "/e/",
+					VolumeRoots: map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+				},
+			}, nil
 		},
 		serve: func(ctx context.Context, cfg exportgateway.ServerConfig) error {
 			got = cfg
@@ -109,6 +115,52 @@ func TestRunServeBootstrapsGatewayWithoutConnectingInCommandTest(t *testing.T) {
 	}
 	if got.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
 		t.Fatalf("volume roots = %#v", got.VolumeRoots)
+	}
+}
+
+func TestRunDryRunAndServeRejectUnavailableWebDAVCapability(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		capability config.Capability
+	}{
+		{name: "dry-run disabled", args: []string{"--dry-run"}, capability: config.Capability{Enabled: false, Ready: false}},
+		{name: "dry-run not ready", args: []string{"--dry-run"}, capability: config.Capability{Enabled: true, Ready: false}},
+		{name: "serve disabled", args: []string{"--serve"}, capability: config.Capability{Enabled: false, Ready: false}},
+		{name: "serve not ready", args: []string{"--serve"}, capability: config.Capability{Enabled: true, Ready: false}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			served := false
+
+			code := runWithDeps(context.Background(), tt.args, &stdout, &stderr, commandDeps{
+				loadConfig: func(config.Source) (config.Config, error) {
+					cfg := readyGatewayCommandConfig()
+					cfg.Capabilities.WebDAV = tt.capability
+					return cfg, nil
+				},
+				serve: func(context.Context, exportgateway.ServerConfig) error {
+					served = true
+					return nil
+				},
+			})
+
+			if code == 0 {
+				t.Fatal("run succeeded, want unavailable WebDAV capability failure")
+			}
+			if served {
+				t.Fatal("serve called despite unavailable WebDAV capability")
+			}
+			if strings.Contains(stdout.String(), "dry-run ok") {
+				t.Fatalf("stdout = %q, want no dry-run success", stdout.String())
+			}
+			if !strings.Contains(strings.ToLower(stderr.String()), "webdav") {
+				t.Fatalf("stderr = %q, want WebDAV capability context", stderr.String())
+			}
+		})
 	}
 }
 
@@ -143,12 +195,7 @@ func TestRunServeErrorIsRedacted(t *testing.T) {
 
 	code := runWithDeps(context.Background(), []string{"--serve"}, &stdout, &stderr, commandDeps{
 		loadConfig: func(config.Source) (config.Config, error) {
-			return config.Config{ExportGateway: config.ExportGatewayConfig{
-				ListenAddr:  "127.0.0.1:9090",
-				PostgresDSN: "postgres://gateway:secret@db/afscp",
-				Prefix:      "/e/",
-				VolumeRoots: map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
-			}}, nil
+			return readyGatewayCommandConfig(), nil
 		},
 		serve: func(context.Context, exportgateway.ServerConfig) error {
 			return errors.New("postgres://gateway:secret@db/afscp unavailable")
@@ -192,4 +239,16 @@ type fakeAuditAppendStore struct {
 func (store *fakeAuditAppendStore) AppendAuditEvent(ctx context.Context, event audit.Event) error {
 	store.events = append(store.events, event)
 	return nil
+}
+
+func readyGatewayCommandConfig() config.Config {
+	return config.Config{
+		Capabilities: config.Capabilities{WebDAV: config.Capability{Enabled: true, Ready: true}},
+		ExportGateway: config.ExportGatewayConfig{
+			ListenAddr:  "127.0.0.1:9090",
+			PostgresDSN: "postgres://gateway:secret@db/afscp",
+			Prefix:      "/e/",
+			VolumeRoots: map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+		},
+	}
 }

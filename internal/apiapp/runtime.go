@@ -186,6 +186,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		Now:                            func() time.Time { return now().UTC() },
 		WebDAVExportPublicBaseURL:      webDAVExportPublicBaseURL,
 		ReadinessProvider:              internalReadinessProvider(cfg, handle.Ping),
+		WebDAVExportAdmissionDisabled:  !cfg.Capabilities.WebDAV.Available(),
 		WorkloadMountAdmissionDisabled: !cfg.Capabilities.Mount.Available(),
 	})
 

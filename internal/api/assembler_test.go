@@ -202,6 +202,74 @@ func TestInternalAPIShellCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testin
 	}
 }
 
+func TestInternalAPIShellCreateExportCapabilityDeniedWhenWebDAVAdmissionDisabled(t *testing.T) {
+	meta := exportMetaFixture()
+	store := &fakeExportStore{}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:             namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:        meta.bindingReader,
+		NamespaceReader:               meta.namespaceReader,
+		RepoReader:                    meta.repoReader,
+		VolumeReader:                  meta.volumeReader,
+		RepoFenceReader:               &fakeRepoFenceReader{fences: meta.fences},
+		ExportStore:                   store,
+		GenerateOperationID:           func() string { return "op_export_shell" },
+		Now:                           fixedNamespaceNow,
+		WebDAVExportAdmissionDisabled: true,
+		WebDAVExportPublicBaseURL:     "https://files.example.test",
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeCapabilityDenied)
+	}
+	if store.createCalls != 0 {
+		t.Fatalf("create calls = %d, want denied before durable export create", store.createCalls)
+	}
+}
+
+func TestInternalAPIShellGetAndRevokeExportRemainAvailableWhenWebDAVAdmissionDisabled(t *testing.T) {
+	meta := exportMetaFixture()
+	store := &fakeExportStore{}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:             namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:        meta.bindingReader,
+		NamespaceReader:               meta.namespaceReader,
+		RepoReader:                    meta.repoReader,
+		VolumeReader:                  meta.volumeReader,
+		RepoFenceReader:               &fakeRepoFenceReader{fences: meta.fences},
+		ExportStore:                   store,
+		GenerateOperationID:           func() string { return "op_export_shell" },
+		Now:                           fixedNamespaceNow,
+		WebDAVExportAdmissionDisabled: true,
+		WebDAVExportPublicBaseURL:     "https://files.example.test",
+	})
+
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, exportRequest(http.MethodGet, "/internal/v1/exports/export_123", "", "ns_123"))
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d body = %s, want 200", getRec.Code, getRec.Body.String())
+	}
+	if store.getCalls != 1 {
+		t.Fatalf("get calls = %d, want 1", store.getCalls)
+	}
+
+	revokeRec := httptest.NewRecorder()
+	handler.ServeHTTP(revokeRec, exportRequest(http.MethodDelete, "/internal/v1/exports/export_123", "", "ns_123"))
+	if revokeRec.Code != http.StatusAccepted {
+		t.Fatalf("revoke status = %d body = %s, want 202", revokeRec.Code, revokeRec.Body.String())
+	}
+	if store.revokeCalls != 1 {
+		t.Fatalf("revoke calls = %d, want 1", store.revokeCalls)
+	}
+}
+
 func TestInternalAPIShellServesRepoReadRoutesThroughRepoReader(t *testing.T) {
 	repoReader := &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}}
 	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{

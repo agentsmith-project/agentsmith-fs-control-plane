@@ -61,6 +61,7 @@ type InternalAPIShellConfig struct {
 	WebDAVExportPublicBaseURL      string
 	Readiness                      ReadinessResponse
 	ReadinessProvider              func(context.Context) ReadinessResponse
+	WebDAVExportAdmissionDisabled  bool
 	WorkloadMountAdmissionDisabled bool
 }
 
@@ -475,7 +476,9 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		implemented["getVolumeHealth"] = volumeHealthHandler
 	}
 	if exportStore != nil && config.RepoReader != nil && config.NamespaceReader != nil && config.NamespaceBindingReader != nil && config.VolumeReader != nil && config.RepoFenceReader != nil {
-		implemented["createExport"] = createExportHandler
+		if !config.WebDAVExportAdmissionDisabled {
+			implemented["createExport"] = createExportHandler
+		}
 		implemented["getExport"] = getExportHandler
 		implemented["revokeExport"] = revokeExportHandler
 	}

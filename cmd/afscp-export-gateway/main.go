@@ -97,6 +97,10 @@ func runWithDeps(ctx context.Context, args []string, stdout io.Writer, stderr io
 		fmt.Fprintf(stderr, "%s: invalid config: %s\n", commandName, redacted(err.Error()))
 		return 1
 	}
+	if !cfg.Capabilities.WebDAV.Available() {
+		fmt.Fprintf(stderr, "%s: WebDAV capability is disabled or not ready\n", commandName)
+		return 1
+	}
 	if *dryRun {
 		fmt.Fprintf(stdout, "%s dry-run ok\n", commandName)
 		return 0
