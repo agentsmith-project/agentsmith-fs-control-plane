@@ -200,7 +200,7 @@ func TestNamespaceVolumeBindingValidateMatchesRoleAndPolicyContract(t *testing.T
 
 	t.Run("rejects unknown role", func(t *testing.T) {
 		binding := validBinding()
-		binding.AllowedCallers[0].Roles = []CallerRole{"workspace_owner"}
+		binding.AllowedCallers[0].Roles = []CallerRole{"unknown_role"}
 		if err := binding.Validate(); err == nil {
 			t.Fatal("Validate succeeded, want role rejection")
 		}
@@ -252,7 +252,7 @@ func TestRepoValidateCoversLifecycleAndRecordedPathIdentity(t *testing.T) {
 	}{
 		{name: "bad repo id", edit: func(repo *Repo) { repo.ID = "tmpl_wrong" }},
 		{name: "bad volume id", edit: func(repo *Repo) { repo.VolumeID = "" }},
-		{name: "unknown kind", edit: func(repo *Repo) { repo.Kind = "workspace" }},
+		{name: "unknown kind", edit: func(repo *Repo) { repo.Kind = "unsupported_kind" }},
 		{name: "unknown status", edit: func(repo *Repo) { repo.Status = "deleted" }},
 		{name: "empty jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = "" }},
 		{name: "too long jvs repo id", edit: func(repo *Repo) { repo.JVSRepoID = strings.Repeat("a", 129) }},

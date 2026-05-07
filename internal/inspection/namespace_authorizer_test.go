@@ -175,7 +175,7 @@ func TestNamespaceVolumeBindingAuthorizerDeniesUnsupportedRole(t *testing.T) {
 		bindings: map[string]resources.NamespaceVolumeBinding{
 			"ns_123": namespaceBindingFixture("ns_123", resources.NamespaceStatusActive, resources.AllowedCaller{
 				CallerService: "product-caller",
-				Roles:         []resources.CallerRole{resources.CallerRole("workspace_owner")},
+				Roles:         []resources.CallerRole{resources.CallerRole("unknown_role")},
 			}),
 		},
 	}

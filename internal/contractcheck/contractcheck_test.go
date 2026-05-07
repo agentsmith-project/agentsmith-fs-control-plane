@@ -3,6 +3,7 @@ package contractcheck
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -1154,6 +1155,36 @@ func TestCurrentRepoContractsPass(t *testing.T) {
 	}
 	if len(findings) > 0 {
 		t.Fatalf("expected current repo contracts to pass, got findings: %+v", findings)
+	}
+}
+
+func TestCurrentRepoCoreTestsDoNotLeakCallerProductFixtureVocabulary(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	forbidden := []struct {
+		name    string
+		pattern *regexp.Regexp
+	}{
+		{name: "caller role fixture", pattern: regexp.MustCompile(`\bworkspace_owner\b`)},
+		{name: "repo kind fixture", pattern: regexp.MustCompile(`\bKind\s*[:=]\s*"workspace"`)},
+	}
+
+	var failures []string
+	for _, path := range coreTestFixtureGuardPaths(repoRoot) {
+		if isCoreTestFixtureGuardSelfTest(repoRoot, path) {
+			continue
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile returned error: %v", err)
+		}
+		for _, fixture := range forbidden {
+			if fixture.pattern.Match(body) {
+				failures = append(failures, filepath.ToSlash(path)+": "+fixture.name)
+			}
+		}
+	}
+	if len(failures) > 0 {
+		t.Fatalf("core tests must use generic illegal caller/kind fixtures, got product vocabulary leak(s): %s", strings.Join(failures, "; "))
 	}
 }
 

@@ -20,9 +20,9 @@ func TestRestoreRunWriterGateExportSemantics(t *testing.T) {
 		{name: "read only active ignored", session: exportFixture(AccessModeReadOnly, ExportStatusActive, now.Add(time.Hour)), wantAllowed: true},
 		{name: "read write revoking drained allows restore", session: exportDrainedFixture(now, ExportStatusRevoking), wantAllowed: true},
 		{name: "read write expired drained allows restore", session: exportDrainedFixture(now, ExportStatusActive), wantAllowed: true},
-		{name: "terminal revoked ignored", session: exportTerminalFixture(now, ExportStatusRevoked), wantAllowed: true},
-		{name: "terminal expired ignored", session: exportTerminalFixture(now, ExportStatusExpired), wantAllowed: true},
-		{name: "terminal failed ignored", session: exportTerminalFixture(now, ExportStatusFailed), wantAllowed: true},
+		{name: "terminal revoked observed", session: exportTerminalFixture(now, ExportStatusRevoked), wantAllowed: true},
+		{name: "terminal expired observed", session: exportTerminalFixture(now, ExportStatusExpired), wantAllowed: true},
+		{name: "terminal failed observed", session: exportTerminalFixture(now, ExportStatusFailed), wantAllowed: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -35,6 +35,27 @@ func TestRestoreRunWriterGateExportSemantics(t *testing.T) {
 			assertDecision(t, decision, tt.wantAllowed, tt.wantFamily)
 		})
 	}
+}
+
+func TestRestoreRunWriterGateRequiresTerminalExportEvidence(t *testing.T) {
+	now := testNow()
+	for _, status := range []ExportStatus{ExportStatusRevoked, ExportStatusExpired, ExportStatusFailed} {
+		t.Run(string(status)+" without terminal observed", func(t *testing.T) {
+			session := exportDrainedFixture(now, status)
+			session.StatusReason = "terminal_reconciled"
+			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{session}})
+			assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
+		})
+		t.Run(string(status)+" terminal observed", func(t *testing.T) {
+			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{exportTerminalFixture(now, status)}})
+			assertDecision(t, decision, true, "")
+		})
+	}
+
+	failedWithoutReason := exportTerminalFixture(now, ExportStatusFailed)
+	failedWithoutReason.StatusReason = ""
+	decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{failedWithoutReason}})
+	assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
 }
 
 func TestRestoreRunWriterGateStaleExportObservationFailsClosed(t *testing.T) {
@@ -188,9 +209,11 @@ func TestLifecycleDrainGateRequiresTerminalMountNonAccessingEvidence(t *testing.
 
 func TestLifecycleDrainGateRequiresTerminalExportNonAccessingEvidence(t *testing.T) {
 	now := testNow()
-	for _, status := range []ExportStatus{ExportStatusRevoked, ExportStatusExpired} {
+	for _, status := range []ExportStatus{ExportStatusRevoked, ExportStatusExpired, ExportStatusFailed} {
 		t.Run(string(status)+" without terminal evidence", func(t *testing.T) {
-			decision := LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{exportDrainedFixture(now, status)}})
+			session := exportDrainedFixture(now, status)
+			session.StatusReason = "terminal_reconciled"
+			decision := LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{session}})
 			assertDecision(t, decision, false, ErrorFamilyStaleSessionsBlockLifecycle)
 		})
 		t.Run(string(status)+" terminal observed", func(t *testing.T) {
@@ -199,13 +222,10 @@ func TestLifecycleDrainGateRequiresTerminalExportNonAccessingEvidence(t *testing
 		})
 	}
 
-	for _, session := range []ExportSession{
-		exportDrainedFixture(now, ExportStatusFailed),
-		exportTerminalFixture(now, ExportStatusFailed),
-	} {
-		decision := LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{session}})
-		assertDecision(t, decision, false, ErrorFamilyStaleSessionsBlockLifecycle)
-	}
+	failedWithoutReason := exportTerminalFixture(now, ExportStatusFailed)
+	failedWithoutReason.StatusReason = ""
+	decision := LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{failedWithoutReason}})
+	assertDecision(t, decision, false, ErrorFamilyStaleSessionsBlockLifecycle)
 }
 
 func TestGateAggregatesActiveBeforeStale(t *testing.T) {
@@ -365,6 +385,9 @@ func exportDrainedFixture(now time.Time, status ExportStatus) ExportSession {
 func exportTerminalFixture(now time.Time, status ExportStatus) ExportSession {
 	session := exportDrainedFixture(now, status)
 	session.TerminalObservedAt = timePtr(now.Add(-time.Second))
+	if status == ExportStatusFailed {
+		session.StatusReason = "terminal_reconciled"
+	}
 	return session
 }
 

@@ -72,7 +72,7 @@ func TestMapAllowedCallerDeniesPrivilegedMixedDuplicateEmptyAndUnknownRoles(t *t
 		roles []resources.CallerRole
 	}{
 		{name: "empty roles"},
-		{name: "unknown role", roles: []resources.CallerRole{"workspace_owner"}},
+		{name: "unknown role", roles: []resources.CallerRole{"unknown_role"}},
 		{name: "duplicate ordinary role", roles: []resources.CallerRole{resources.CallerRoleRepoAdmin, resources.CallerRoleRepoAdmin}},
 		{name: "volume admin", roles: []resources.CallerRole{resources.CallerRoleVolumeAdmin}},
 		{name: "operator admin", roles: []resources.CallerRole{resources.CallerRoleOperatorAdmin}},

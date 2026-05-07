@@ -1,6 +1,7 @@
 package sessionstate
 
 import (
+	"strings"
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
@@ -260,13 +261,13 @@ func (err sessionError) Error() string {
 }
 
 func exportBlocker(kind gateKind, session ExportSession, now time.Time) blockerClass {
-	if exportTerminal(session.Status) {
-		if kind == gateLifecycleDrain && !exportHasLifecycleTerminalEvidence(session) {
-			return blockerStale
-		}
+	if kind == gateRestoreRunWriter && session.Mode != AccessModeReadWrite {
 		return blockerNone
 	}
-	if kind == gateRestoreRunWriter && session.Mode != AccessModeReadWrite {
+	if exportTerminal(session.Status) {
+		if !exportHasTerminalEvidence(session) {
+			return blockerStale
+		}
 		return blockerNone
 	}
 	if exportObservationStale(session, now) {
@@ -304,10 +305,15 @@ func exportWriterDrained(session ExportSession, now time.Time) bool {
 	return false
 }
 
-func exportHasLifecycleTerminalEvidence(session ExportSession) bool {
+func exportHasTerminalEvidence(session ExportSession) bool {
+	if !nonZeroTimePtr(session.TerminalObservedAt) {
+		return false
+	}
 	switch session.Status {
 	case ExportStatusRevoked, ExportStatusExpired:
-		return nonZeroTimePtr(session.TerminalObservedAt)
+		return true
+	case ExportStatusFailed:
+		return strings.TrimSpace(session.StatusReason) != ""
 	default:
 		return false
 	}

@@ -686,7 +686,11 @@ func backendDestination(r *http.Request, dest gatewayPath) string {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	return scheme + "://" + r.Host + backendPath(dest)
+	return (&url.URL{
+		Scheme: scheme,
+		Host:   r.Host,
+		Path:   backendPath(dest),
+	}).String()
 }
 
 func backendPath(parsed gatewayPath) string {

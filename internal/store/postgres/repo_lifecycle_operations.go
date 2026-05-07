@@ -167,7 +167,7 @@ func repoLifecycleSuccessCommitWithLeaseSQL() string {
 		"), held_fence AS (" +
 		"SELECT fence_id FROM repo_fences WHERE repo_id = $15 AND fence_id = $34 AND fence_kind = 'lifecycle' AND holder_operation_id = $12 AND status = 'active' AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
 		"), no_sessions AS (" +
-		"SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM export_sessions WHERE repo_id = $15 AND (status NOT IN ('revoked','expired') OR terminal_observed_at IS NULL)) AND NOT EXISTS (SELECT 1 FROM workload_mount_bindings WHERE repo_id = $15 AND (status NOT IN ('released','revoked','expired','failed') OR confirmed_unmounted_at IS NULL))" +
+		"SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM export_sessions WHERE repo_id = $15 AND (status NOT IN ('revoked','expired','failed') OR terminal_observed_at IS NULL OR active_request_count <> 0 OR active_write_count <> 0 OR (status = 'failed' AND btrim(status_reason) = ''))) AND NOT EXISTS (SELECT 1 FROM workload_mount_bindings WHERE repo_id = $15 AND (status NOT IN ('released','revoked','expired','failed') OR confirmed_unmounted_at IS NULL))" +
 		"), updated_repo AS (" +
 		"UPDATE repos SET status = $25, lifecycle_status = $28, retention_expires_at = $29, last_lifecycle_operation_id = $30, pre_delete_status = $31, updated_at = $33 " +
 		"FROM eligible_operation, active_namespace, active_binding, active_volume, held_fence, no_sessions WHERE repos.repo_id = $15 AND repos.namespace_id = $14 AND repos.volume_id = active_volume.volume_id AND repos.volume_id = $22 AND repos.jvs_repo_id = $23 AND repos.repo_kind = $24 AND repos.control_volume_subdir = $26 AND repos.payload_volume_subdir = $27 AND (" +

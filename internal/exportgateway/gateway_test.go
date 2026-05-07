@@ -218,6 +218,38 @@ func TestReadWritePutGetAndCopyMoveDestinationPolicy(t *testing.T) {
 	}
 }
 
+func TestCopyDestinationEscapesBackendPathSpecials(t *testing.T) {
+	tests := []struct {
+		name            string
+		escapedFilename string
+		wantFilename    string
+	}{
+		{name: "question mark", escapedFilename: "name%3Fpart.txt", wantFilename: "name?part.txt"},
+		{name: "fragment marker", escapedFilename: "name%23part.txt", wantFilename: "name#part.txt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
+			env.writePayload(t, "docs/hello.txt", "hello")
+
+			rec := env.request("COPY", "/e/"+testExportID+"/docs/hello.txt", nil, "http://files.example.test/e/"+testExportID+"/docs/"+tt.escapedFilename)
+
+			if rec.Code >= 400 {
+				t.Fatalf("COPY status = %d, want success, body %q", rec.Code, rec.Body.String())
+			}
+			if got := env.readPayload(t, "docs/"+tt.wantFilename); got != "hello" {
+				t.Fatalf("copied payload = %q, want hello", got)
+			}
+			if _, err := os.Stat(filepath.Join(env.payloadRoot, "docs", "name")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unexpected truncated destination docs/name exists or stat failed: %v", err)
+			}
+			if len(env.auditSink.events) != 0 {
+				t.Fatalf("audit events = %d, want 0", len(env.auditSink.events))
+			}
+		})
+	}
+}
+
 func TestPathPolicyRejectsUnsafeSourcePaths(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
 

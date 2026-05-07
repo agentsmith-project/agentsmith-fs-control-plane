@@ -136,12 +136,15 @@ func TestRepoPurgeSuccessCommitSQLRequiresExportTerminalEvidence(t *testing.T) {
 
 	assertSQLContainsInOrder(t, exportPredicate,
 		"WHERE repo_id = $15",
-		"status NOT IN ('revoked','expired')",
+		"status NOT IN ('revoked','expired','failed')",
 		"terminal_observed_at IS NULL",
 	)
-	if strings.Contains(exportPredicate, "'failed'") {
-		t.Fatalf("purge no_sessions allows failed export sessions to pass drain: %s", exportPredicate)
-	}
+	assertSQLContainsAll(t, exportPredicate,
+		"active_request_count <> 0",
+		"active_write_count <> 0",
+		"status = 'failed'",
+		"btrim(status_reason) = ''",
+	)
 }
 
 func TestRepoPurgeValidatorsRejectNonPurgeTypes(t *testing.T) {
