@@ -1,9 +1,9 @@
 # JVS Integration
 
-Status: GA implementation-baseline JVS integration guidance. FINAL GA remains
-governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
-operations, runbook drill, and human sign-off entries must still be complete
-before GA acceptance is treated as closed.
+Status: GA implementation-baseline JVS integration guidance.
+
+Final GA is governed by `docs/GA_RELEASE_GATES.md`,
+`docs/READINESS_EVIDENCE.md`, and `scripts/verify-ga-release.sh`.
 
 AFSCP is the only ordinary JVS executor in the storage-control path.
 
@@ -11,9 +11,8 @@ AFSCP is the only ordinary JVS executor in the storage-control path.
 
 The GA implementation baseline integrates through the JVS CLI with JSON output.
 The JVS `v0.4.8` release pin, asset, checksum, and smoke evidence are accepted
-as G-005 in `docs/READINESS_EVIDENCE.md`; that acceptance covers the JVS pin
-gate only and does not close FINAL GA or the remaining storage, security,
-generated-client, operations, runbook, or human acceptance gates.
+as G-005 in `docs/READINESS_EVIDENCE.md`; that evidence covers the JVS pin gate
+only and does not by itself close GA release evidence for storage mutation.
 
 Do not reimplement JVS save, version restore, or clone semantics inside AFSCP.
 Repo availability, archive, tombstone, and purge semantics are owned by the
@@ -67,7 +66,7 @@ Routine command shape:
 jvs --control-root <control_root_path> --workspace main <command> --json
 ```
 
-External control root rules accepted for AFSCP:
+External control root rules for AFSCP:
 
 - `payload_root_path` is the JVS `main` workspace folder and contains user files only.
 - `control_root_path` contains JVS control metadata and is not mounted/exported.

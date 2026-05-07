@@ -1,8 +1,11 @@
 # GA Runbooks
 
-Status: GA implementation-baseline runbook set. FINAL GA still requires drill
-evidence, operations/security/owner acceptance where applicable, and human
-sign-off recorded in `docs/READINESS_EVIDENCE.md`.
+Status: GA implementation-baseline runbook set.
+
+Final GA is governed by `docs/GA_RELEASE_GATES.md`,
+`docs/READINESS_EVIDENCE.md`, and `scripts/verify-ga-release.sh`. These
+runbooks are repo-local operational artifacts; they do not create a separate
+role-approval or meeting gate.
 
 Every incident action must record operator, reason, correlation ID, affected
 namespace/repo/export/mount/operation IDs, and audit event IDs.
@@ -185,7 +188,7 @@ Actions:
 
 Terminal evidence:
 
-- fence released with audit reason, or intervention remains open.
+- fence released with audit reason, or intervention remains non-terminal.
 
 ## JVS Doctor Failure
 
@@ -331,23 +334,23 @@ Terminal evidence:
 
 Symptoms:
 
-- export runtime accounting shows open runtime request ledger rows after a
+- export runtime accounting shows non-terminal runtime request ledger rows after a
   gateway crash or restart.
-- lifecycle drain or revoke remains blocked because one or more open runtime
+- lifecycle drain or revoke remains blocked because one or more non-terminal runtime
   request rows have not closed.
-- gateway logs, process state, or heartbeat evidence cannot prove an open
+- gateway logs, process state, or heartbeat evidence cannot prove a non-terminal
   runtime request is still active.
 
 Actions:
 
 - Keep the export session non-terminal and keep lifecycle drain blocked until
   no-access evidence is recorded.
-- Inspect the export session, open `export_runtime_requests` rows, heartbeat
+- Inspect the export session, non-terminal `export_runtime_requests` rows, heartbeat
   expiry, revoke state, gateway process identity, and redacted gateway logs.
-- Prefer the normal stale open runtime request recovery path. The worker
-  recovery closes expired open ledger rows and subtracts their counts only when
+- Prefer the normal stale non-terminal runtime request recovery path. The worker
+  recovery closes expired non-terminal ledger rows and subtracts their counts only when
   aggregate counts can cover the recovered rows.
-- Terminal reconcile must not proceed while any open runtime request row remains
+- Terminal reconcile must not proceed while any non-terminal runtime request row remains
   for the export.
 - Do not manually set aggregate counts to zero and do not write negative runtime
   deltas. If ledger/aggregate drift exists or the stale row cannot be proven
@@ -520,7 +523,7 @@ Actions:
   due delivery in the same run-once pass. A recovered record may remain
   `retry_wait` until its backoff is due.
 - For terminal `failed` records or sustained lag, retain the outbox evidence,
-  delivery summary, and sink-side receipt evidence, then open an incident or
+  delivery summary, and sink-side receipt evidence, then create an incident or
   operator intervention item.
 - Alert if denied/security events remain delayed after replay attempts.
 

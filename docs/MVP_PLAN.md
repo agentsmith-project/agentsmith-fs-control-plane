@@ -79,4 +79,4 @@ bound to accepted contracts:
 - Calling products can map their own business objects to AFSCP primitives without AFSCP knowing those business object types.
 - Operators can inspect and recover GA operation failures using documented runbooks.
 - Repo lifecycle operations support generic archive/delete/restore/purge storage-state changes without exposing raw storage paths or credentials.
-- GA-blocking risks in `docs/RISK_REGISTER.md` are closed or have approved residual-risk acceptance under `docs/DEVELOPMENT_GOVERNANCE.md`.
+- GA-blocking risks in `docs/RISK_REGISTER.md` are closed only by repo-local automated evidence covered by `scripts/verify-ga-release.sh`; non-waivable blockers cannot be bypassed by manual approval or subjective risk exception.

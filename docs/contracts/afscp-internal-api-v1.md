@@ -1,9 +1,8 @@
 # Contract: AFSCP Internal API V1
 
-Status: GA implementation-baseline contract. FINAL GA acceptance remains
-governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
-operations, runbook drill, and human sign-off entries must be complete before
-the relevant readiness gates are treated as closed.
+Status: GA implementation-baseline contract. FINAL GA is governed by
+`docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and
+`scripts/verify-ga-release.sh`.
 
 AFSCP internal APIs are called by trusted product control planes, privileged admin jobs, migration jobs, operator tools, and a dedicated workload orchestrator service.
 

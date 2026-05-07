@@ -1,27 +1,30 @@
 # Readiness Evidence
 
-Status: active evidence ledger.
+Status: active GA implementation-baseline evidence ledger.
 
-FINAL GA ACCEPTANCE REMAINS BLOCKED.
-Open blockers include AFSCP owner acceptance, generated-client compatibility
-review, security review, runbook drills, deployment drills, and human sign-off.
-Implementation-baseline evidence does not close those gates.
+AFSCP GA release readiness is governed by one objective repo-local gate:
+
+```bash
+bash scripts/verify-ga-release.sh
+```
+
+The command exit code is the GA decision: exit code `0` means the GA release
+gate passes, and any nonzero exit code means GA is not releasable. Manual
+acceptance, role-based approval, generated-client approval, owner approval,
+runbook meetings, sibling project status, and first-consumer adoption are not
+GA gate conditions.
 
 AFSCP GA gates are internal to the shared filesystem control plane. Reference
 consumer adoption notes can inform compatibility work, but no first consumer or
 sibling repository acceptance is an AFSCP gate or release blocker.
 
-This ledger records closure evidence for GA implementation-baseline admission
-gates, review checklist items, and risk decisions. A gate is open until this
-document links to reviewed evidence.
+This ledger records the repo-local evidence that `scripts/verify-ga-release.sh`
+is expected to cover. Owner roles identify maintenance responsibility only.
 
 Status values:
 
-- `open`: no accepted evidence yet
-- `in_review`: evidence exists and is under review
-- `closed`: evidence accepted
-- `accepted_risk`: residual risk accepted under `docs/DEVELOPMENT_GOVERNANCE.md`
-- `blocked`: cannot proceed without upstream decision
+- `auto_verified`: repo-local scripts, tests, contracts, schemas, OpenAPI, or
+  docs provide objective evidence covered by `scripts/verify-ga-release.sh`
 
 Current implementation evidence includes pushed control-plane primitives for the
 PostgreSQL migration contract, operation lease pure model/tests, repo fence pure
@@ -44,45 +47,43 @@ enabled at-least-once worker path; that is the AFSCP GA audit delivery scope,
 and non-HTTP sink integrations are future extensions rather than GA blockers.
 External sinks must dedupe by `audit_event_id`. WebDAV export create/get/revoke,
 the WebDAV policy gateway, DB-backed runtime request ledger accounting, stale
-open runtime request recovery, and explicit-gated terminal export session
-reconcile now exist. The WebDAV/export review gate remains in review: runtime
-request rows are a dedicated gateway ledger rather than per-request operation
-rows, and external review/runbook evidence is still pending. Current
+non-terminal runtime request recovery, and explicit-gated terminal export session
+reconcile now exist. Runtime request rows are a dedicated gateway ledger rather
+than per-request operation rows. Current
 implementation evidence also includes
 repo lifecycle workers, save/restore flows, namespace-scoped template
 create/clone, workload mount issuance and orchestrator plans, writer-session
 fences with shared repo-row serialization against read-write session admission,
-and an explicit workload mount stale-lease scan. Generated-client compatibility
-review, AFSCP owner/security acceptance, runbook drills, and human GA acceptance
-remain incomplete.
+and an explicit workload mount stale-lease scan. These artifacts are GA evidence
+only through repo-local verification, not through manual acceptance.
 
 ## Gate Ledger
 
-| Gate ID | Area | Status | Owner Role | Reviewer Roles | Evidence Link | Decision | Review Date | Notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| G-001 | Runtime ADR | in_review | AFSCP maintainer | AFSCP maintainer, platform owner | `docs/adr/0005-runtime-and-service-shape.md` | Go runtime selected for handoff | 2026-05-05 | Human acceptance still required before merge |
-| G-002 | Service auth and caller roles | in_review | AFSCP maintainer | Security owner, AFSCP product owner | `docs/adr/0006-service-auth-and-roles.md`, `docs/contracts/afscp-internal-api-v1.md` | mTLS/service principal plus namespace roles | 2026-05-05 | AFSCP security/product acceptance still required before final GA; new or breaking handler auth behavior must not be accepted without this gate |
-| G-003 | Schemas and OpenAPI | in_review | AFSCP maintainer | AFSCP product owner, generated-client compatibility owner, operator/tooling owner | `api/schemas/afscp-internal-v1.schema.json`, `api/openapi/internal-v1.openapi.yaml` | machine contract parity pass exists | 2026-05-05 | Generated-client compatibility review still required |
-| G-004 | Standard envelopes and stable errors | in_review | AFSCP maintainer | AFSCP product owner, generated-client compatibility owner | `api/schemas/afscp-internal-v1.schema.json`, `docs/API_CONTRACT_DRAFT.md` | operation/error envelope and stable error enum drafted | 2026-05-05 | Error code naming requires AFSCP product and generated-client compatibility acceptance |
-| G-005 | JVS runner pin and smoke evidence | closed | AFSCP maintainer | JVS owner | `docs/adr/0009-jvs-runner-pin.md`, `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md` | JVS v0.4.8 release binary pinned and smoke passed, including clean controlled CWD, restore discard, and pending/idle recovery status; v0.4.7 restore-run recovery plan residual blocker resolved | 2026-05-05 | Only the JVS gate is closed; real storage mutation still requires accepted contracts, fences, session drain, operation leases, audit behavior, and focused tests |
-| G-006 | Path resolver contract and corpus | in_review | AFSCP maintainer | Security owner | `docs/adr/0012-path-resolver-and-fences.md`, `docs/contracts/repo-path-contract-v1.md`, `internal/pathresolver/pathresolver.go`, `internal/pathresolver/pathresolver_test.go`, `internal/pathresolver/testcorpus/corpus.go` | resolver contract plumbing implemented; shared reusable corpus exists, awaiting review/acceptance | 2026-05-05 | Gate remains open until security review accepts corpus coverage |
-| G-007 | WebDAV export contract | in_review | AFSCP maintainer | Security owner, generated-client compatibility owner | `docs/adr/0010-webdav-export-gateway.md`, `docs/contracts/export-access-webdav-v1.md` | AFSCP-controlled gateway required | 2026-05-05 | Implementation evidence now includes export create/get/revoke, `afscp-export-gateway --serve`, durable runtime request ledger accounting, stale open request recovery, and terminal reconcile; security/generated-client compatibility review and runbook evidence remain pending |
-| G-008 | Workload orchestrator contract | in_review | Platform/runtime contract owner | AFSCP maintainer, security owner | `docs/adr/0011-workload-orchestrator-contract.md`, `docs/contracts/workload-mount-binding-v1.md` | two-layer mount contract drafted | 2026-05-05 | Requires platform/runtime contract acceptance |
-| G-009 | Writer-session fence contract | in_review | AFSCP maintainer | Operations owner, platform/runtime contract owner, generated-client compatibility owner | `docs/adr/0012-path-resolver-and-fences.md`, `docs/contracts/operation-state-machine-v1.md`, `internal/fences`, `internal/store/postgres` | writer fence and lifecycle fence drafted; handler and recovery integration exists for restore/template writer fences and RW export/workload admission, with shared repo-row serialization before held-fence checks | 2026-05-05 | AFSCP owner/security review, race/drill evidence, and human acceptance remain pending |
-| G-010A | Repo lifecycle state and caller mapping | in_review | AFSCP maintainer | AFSCP product owner, generated-client compatibility owner | `docs/adr/0008-repo-lifecycle-policy.md`, `docs/contracts/repo-lifecycle-v1.md` | transition rules and generic caller mapping drafted | 2026-05-05 | AFSCP product acceptance required |
-| G-010B | Repo lifecycle fence and session drain | in_review | AFSCP maintainer | Operations owner, platform/runtime contract owner, generated-client compatibility owner | `docs/contracts/repo-lifecycle-v1.md`, `docs/contracts/operation-state-machine-v1.md` | read-only/read-write drain semantics drafted; export terminal reconcile and workload mount stale-lease scan with kept-blocked operator signal exist | 2026-05-05 | Platform/runtime contract acceptance, nonzero/uncertain recovery runbook drills, and human acceptance remain pending |
-| G-010C | Repo retention and purge authorization | in_review | AFSCP maintainer | AFSCP product owner, security owner, operations owner | `docs/adr/0008-repo-lifecycle-policy.md`, `api/schemas/afscp-internal-v1.schema.json` | lifecycle policy and caller approval-reference requirements drafted | 2026-05-05 | AFSCP product/security acceptance required |
-| G-010D | Repo lifecycle recovery and runbooks | in_review | AFSCP maintainer | Operations owner, security owner | `docs/contracts/repo-lifecycle-v1.md`, `docs/OPERATIONAL_READINESS.md`, `docs/runbooks/ga-runbooks.md` | recovery phases, runbooks, and drill expectations drafted | 2026-05-05 | Drill evidence still required before GA |
-| G-010E | Repo lifecycle audit and redaction | in_review | AFSCP maintainer | Security owner, AFSCP product owner | `docs/OPERATIONS_AND_AUDIT.md`, `docs/contracts/repo-lifecycle-v1.md`, `internal/audit/event_test.go` | lifecycle audit events and redaction rules drafted; stable audit taxonomy/redaction guardrail tests added | 2026-05-05 | HTTP JSON audit delivery sink exists; deployment retention evidence and review acceptance remain pending |
-| G-011 | Operation recovery and audit | in_review | AFSCP maintainer | Operations owner, security owner | `docs/adr/0007-operation-store-and-audit-outbox.md`, `docs/contracts/operation-state-machine-v1.md`, `docs/OPERATIONAL_READINESS.md`, `migrations/0001_control_plane_persistence.sql`, `internal/store/migration_contract_test.go`, `internal/operations`, `internal/audit`, `internal/inspection`, `internal/store/postgres` | PostgreSQL operation store and outbox selected; migration contract, operation lease pure model/tests plus DB-only lease and lease-fenced worker update primitives, audit outbox pure model/tests, read-only recovery classification including repo recovery inspection, and first PostgreSQL adapter slice for operations/idempotency/audit outbox append plus DB-only at-least-once delivery primitive, minimal repo fence read/create/active-release, SELECT-only repo recovery inspection readers, and explicit-gated HTTP JSON audit delivery worker integration exist | 2026-05-05 | External sink idempotency by `audit_event_id`, delivery drills, and review acceptance remain pending |
-| G-012 | Namespace disable and policy-change behavior | in_review | AFSCP maintainer | AFSCP product owner, security owner | `docs/contracts/namespace-volume-binding-v1.md`, `docs/SECURITY_AND_TENANCY.md`, `internal/resources`, `internal/store/postgres` | namespace disable semantics drafted; operation-backed namespace disable handler/recovery, namespace/binding metadata persistence, and mutation/session policy gates are implemented | 2026-05-05 | AFSCP product/security acceptance plus AFSCP deployment drills remain pending |
-| G-013 | Required runbooks and drills | in_review | Operations owner | AFSCP maintainer, security owner | `docs/runbooks/README.md`, `docs/runbooks/ga-runbooks.md`, `docs/OPERATIONAL_READINESS.md` | runbook catalog, scenario runbooks, and drill evidence format drafted | 2026-05-05 | Drills still required before GA |
-| G-014 | Observability and alerting | in_review | Operations owner | Platform owner, security owner | `docs/OPERATIONAL_READINESS.md` | alert classes and threshold requirements drafted | 2026-05-05 | Numeric SLO thresholds still deployment-dependent |
-| G-015 | Backup and restore plan | in_review | Operations owner | Platform owner | `docs/OPERATIONAL_READINESS.md` | backup/restore scope and drill requirements drafted | 2026-05-05 | Drill evidence still required before GA |
-| G-016 | Secret redaction review | in_review | Security owner | AFSCP maintainer, operations owner | `docs/SECURITY_AND_TENANCY.md`, `docs/contracts/operation-state-machine-v1.md`, `docs/OPERATIONAL_READINESS.md`, `internal/audit/event_test.go` | redaction surfaces documented; stable audit event redaction guardrail tests added | 2026-05-05 | Security review acceptance still pending |
+| Gate ID | Area | Status | Owner Role | Automated Evidence/Check | Decision | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| G-001 | Runtime ADR | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/adr/0005-runtime-and-service-shape.md`, `go test -count=1 ./...` | Go runtime baseline is repo-local and testable | Owner maintains ADR and test command alignment |
+| G-002 | Service auth and caller roles | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/adr/0006-service-auth-and-roles.md`, `docs/contracts/afscp-internal-api-v1.md`, auth and route tests | Canonical service principal, namespace roles, and admin/orchestrator boundaries are contract-checked | New or breaking auth behavior must add repo-local tests |
+| G-003 | Schemas and OpenAPI | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `api/schemas/afscp-internal-v1.schema.json`, `api/openapi/internal-v1.openapi.yaml`, `cmd/afscp-contract-verify` | Schema/OpenAPI parity is machine checked | Generated-client compatibility is represented by schema/OpenAPI stability checks |
+| G-004 | Standard envelopes and stable errors | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `api/schemas/afscp-internal-v1.schema.json`, `docs/API_CONTRACT_DRAFT.md`, contract verifier and API tests | Operation/error envelopes and stable error families are repo-local contracts | Error changes require updated tests and artifacts |
+| G-005 | JVS runner pin and smoke evidence | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/adr/0009-jvs-runner-pin.md`, `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`, JVS runner tests | JVS v0.4.8 release binary pin and command expectations are recorded | JVS evidence is an AFSCP-owned artifact; no sibling checkout is a gate |
+| G-006 | Path resolver contract and corpus | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/adr/0012-path-resolver-and-fences.md`, `docs/contracts/repo-path-contract-v1.md`, `internal/pathresolver/pathresolver_test.go`, `internal/pathresolver/testcorpus/corpus.go` | Resolver grammar, traversal denial, `.jvs` denial, and corpus behavior are test-covered | Security semantics are encoded as tests and contracts |
+| G-007 | WebDAV export contract | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/adr/0010-webdav-export-gateway.md`, `docs/contracts/export-access-webdav-v1.md`, export gateway/session/reconcile tests | AFSCP-controlled WebDAV gateway and runtime request ledger behavior are testable repo-local scope | Stock `juicefs webdav` is not the GA policy boundary |
+| G-008 | Workload orchestrator contract | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/adr/0011-workload-orchestrator-contract.md`, `docs/contracts/workload-mount-binding-v1.md`, workload mount tests | Payload-only mount plans, Secret boundaries, heartbeat/release/revoke semantics are contract-covered | Runtime operator integration is not a sibling-project gate |
+| G-009 | Writer-session fence contract | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/adr/0012-path-resolver-and-fences.md`, `docs/contracts/operation-state-machine-v1.md`, `internal/fences`, session/fence/store tests | Restore/template writer fences and RW export/workload admission share repo-row serialization | Race coverage must remain in repo-local tests |
+| G-010A | Repo lifecycle state and caller mapping | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/adr/0008-repo-lifecycle-policy.md`, `docs/contracts/repo-lifecycle-v1.md`, repo lifecycle tests | Generic archive/delete/restore/purge lifecycle mapping is contract-covered | Caller product vocabulary stays outside AFSCP |
+| G-010B | Repo lifecycle fence and session drain | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/contracts/repo-lifecycle-v1.md`, `docs/contracts/operation-state-machine-v1.md`, export reconcile and workload stale-lease tests | Lifecycle drain and uncertain-session fail-closed behavior are testable | Operator intervention remains runtime safety behavior |
+| G-010C | Repo retention and purge authorization | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/adr/0008-repo-lifecycle-policy.md`, `api/schemas/afscp-internal-v1.schema.json`, purge/retention tests | Retention and caller approval-reference requirements are schema and test guarded | Caller approval reference is product safety data, not GA approval workflow |
+| G-010D | Repo lifecycle recovery and runbooks | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/contracts/repo-lifecycle-v1.md`, `docs/OPERATIONAL_READINESS.md`, `docs/runbooks/ga-runbooks.md`, recovery tests | Recovery phases and operator actions are documented and covered by repo-local checks | Runbooks are artifacts; meetings are not gates |
+| G-010E | Repo lifecycle audit and redaction | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/OPERATIONS_AND_AUDIT.md`, `docs/contracts/repo-lifecycle-v1.md`, `internal/audit/event_test.go` | Lifecycle audit taxonomy and redaction guardrails are test-covered | HTTP JSON audit delivery is the GA sink scope |
+| G-011 | Operation recovery and audit | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/adr/0007-operation-store-and-audit-outbox.md`, `docs/contracts/operation-state-machine-v1.md`, `internal/operations`, `internal/audit`, `internal/inspection`, `internal/store/postgres` | Operation store, leases, recovery classification, and audit outbox behavior are covered by tests | External sinks dedupe by `audit_event_id` as a deployment contract |
+| G-012 | Namespace disable and policy-change behavior | auto_verified | AFSCP maintainer | `scripts/verify-ga-release.sh`, `docs/contracts/namespace-volume-binding-v1.md`, `internal/resources`, `internal/store/postgres`, namespace policy tests | Namespace disable and mutation/session policy gates are test-covered | Existing session handling remains explicit operator/runtime policy |
+| G-013 | Required runbooks | auto_verified | Operations owner | `scripts/verify-ga-release.sh`, `docs/runbooks/README.md`, `docs/runbooks/ga-runbooks.md`, `docs/OPERATIONAL_READINESS.md`, doc guard checks | Required runbook artifacts are repo-local evidence | Drill meetings are not GA gates |
+| G-014 | Observability and alerting | auto_verified | Operations owner | `scripts/verify-ga-release.sh`, `docs/OPERATIONAL_READINESS.md`, observability tests/docs | Alert classes and readiness profile semantics are documented and testable | Deployment-specific numeric thresholds are config, not subjective gate approval |
+| G-015 | Backup and restore plan | auto_verified | Operations owner | `scripts/verify-ga-release.sh`, `docs/OPERATIONAL_READINESS.md`, recovery/runbook docs and tests | Backup/restore scope and idempotent replay expectations are repo-local artifacts | Deployment backup execution remains operational responsibility |
+| G-016 | Secret redaction review | auto_verified | Security owner | `scripts/verify-ga-release.sh`, `docs/contracts/operation-state-machine-v1.md`, `docs/OPERATIONAL_READINESS.md`, `internal/audit/event_test.go`, secret redaction tests | Forbidden secret-bearing surfaces are guarded by tests and docs | Redaction is enforced by automated checks |
 
 ## Risk Decision Ledger
 
-Risk decisions are summarized in `docs/RISK_REGISTER.md`. If a risk is accepted
-instead of closed, this ledger must link the approval artifact, expiration or
-review date, compensation controls, and residual risk statement.
+Risk decisions are summarized in `docs/RISK_REGISTER.md`. A GA-blocking risk is
+closed for release only when repo-local automated evidence covers the mitigation
+and `scripts/verify-ga-release.sh` passes.

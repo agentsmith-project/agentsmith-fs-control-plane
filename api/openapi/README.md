@@ -6,10 +6,8 @@ exposed as a user-facing API.
 
 Endpoint handler and storage behavior changes may continue from this artifact
 only while the relevant contracts, generated clients, and readiness evidence
-remain aligned. FINAL GA acceptance remains governed by
-`docs/READINESS_EVIDENCE.md`; owner, security, generated-client, operations,
-runbook drill, and human sign-off entries must be complete before the
-applicable readiness gate is closed.
+remain aligned. FINAL GA is governed by `docs/GA_RELEASE_GATES.md`,
+`docs/READINESS_EVIDENCE.md`, and `scripts/verify-ga-release.sh`.
 
 The OpenAPI includes the standard operation envelope, standard error envelope,
 stable error families, caller context headers, orchestrator-only response

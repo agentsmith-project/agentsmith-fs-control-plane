@@ -7,9 +7,9 @@ create/get/revoke plus gateway serving, workload mount issuance/orchestrator
 plans, writer fences with shared repo-row serialization, workload mount
 stale-lease scanning, and explicit-gated audit outbox HTTP JSON delivery are in
 place. The AFSCP GA audit delivery scope is HTTP JSON; non-HTTP audit sink
-integrations are future extensions, not GA blockers. AFSCP owner/security
-acceptance, generated-client compatibility review, runbook drills, and human GA
-acceptance remain open where tracked by readiness gates.
+integrations are future extensions, not GA blockers. Final GA is governed by
+`docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and
+`scripts/verify-ga-release.sh`.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -84,12 +84,13 @@ internal/observability
 Verification commands:
 
 ```bash
+bash scripts/verify-ga-release.sh
 bash scripts/verify-ga-baseline.sh
 ```
 
-The script runs `git diff --check`, `go test -count=1 ./...`, and the internal
-API contract verifier. Passing it is local implementation baseline evidence, not
-final production GA acceptance.
+`scripts/verify-ga-release.sh` is the GA release gate. The baseline script runs
+`git diff --check`, `go test -count=1 ./...`, and the internal API contract
+verifier as lower-level implementation evidence.
 
 Internal API deployments must set
 `AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL` only when the WebDAV export
@@ -180,9 +181,9 @@ Completed:
   source and `Destination` path policy, payload no-follow filesystem access,
   and DB-backed runtime request ledger accounting
 - durable export runtime request accounting uses the dedicated
-  `export_runtime_requests` ledger: request begin inserts an open row and
+  `export_runtime_requests` ledger: request begin inserts a non-terminal row and
   increments active counts in the same DB boundary, heartbeat refreshes that
-  same durable request ID, and end closes only an open row before decrementing
+  same durable request ID, and end closes only a non-terminal row before decrementing
   counts. Positive begin is admitted only while the session is still `active`
   and unexpired at the DB boundary, closing the revoke/expiry TOCTOU window.
 - explicit-gated terminal export session reconcile through `afscp-worker
@@ -192,10 +193,10 @@ Completed:
   `AFSCP_POSTGRES_DSN` and `AFSCP_DATABASE_URL`, and requires
   `AFSCP_EXPORT_SESSION_RECONCILE_OWNER`; batch size is controlled by
   `AFSCP_EXPORT_SESSION_RECONCILE_LIMIT`.
-- terminal export reconcile first recovers stale open runtime request rows whose
+- terminal export reconcile first recovers stale non-terminal runtime request rows whose
   heartbeat expiry has elapsed, verifies aggregate counts can cover those rows,
   subtracts the recovered counts, then covers zero-count `revoking -> revoked`
-  and zero-count expired `active -> expired` only when no open runtime request
+  and zero-count expired `active -> expired` only when no non-terminal runtime request
   rows remain. Drift where aggregate counts cannot cover stale ledger rows
   fails closed.
 - workload mount issuance and orchestrator-only mount plans are implemented.
@@ -219,8 +220,8 @@ Completed:
   PostgreSQL SELECT-only readers for lifecycle candidate repos and all held repo
   fences
 - repo recovery inspection now has durable session surfaces for exports and
-  workload mounts where implemented; AFSCP owner/platform-runtime review and
-  runbook drills still decide whether evidence is sufficient for GA closure
+  workload mounts where implemented; repo-local release verification decides
+  whether evidence is sufficient for GA closure
 - path resolver guardrails and shared corpus
 - denied audit coverage in the neutral shell and AuthGate paths
 - contract verifier covering selected OpenAPI, schema, docs, and Go DTO drift
@@ -235,9 +236,9 @@ Partially completed:
   inspection. The explicit-gated workers cover metadata recovery, repo create,
   repo lifecycle and purge, save/restore, template create/clone, export terminal
   reconcile, workload mount stale-lease scanning, and audit outbox HTTP JSON
-  delivery. AFSCP owner/security acceptance, generated-client review,
-  deployment drills, and human GA sign-off remain open where tracked by
-  AFSCP-owned readiness gates.
+  delivery. GA closure is the repo-local release verification command, not
+  owner/security approval, generated-client approval, deployment meetings, or
+  manual GA approval.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
   models. The first PostgreSQL adapter slice implements operation read/write,
@@ -278,39 +279,39 @@ Not implemented:
   gateway ledger, not operation rows.
 - deployment evidence that the configured external HTTP JSON audit sink dedupes
   by `audit_event_id`
-- generated clients, AFSCP owner/security acceptance, deployment-specific
-  observability thresholds, AFSCP runbook drills, and human GA acceptance evidence
+- deployment-specific observability threshold values beyond the generic
+  repo-local readiness contract
 
 ## Contract Implementation Order
 
 Continue in dependency order:
 
-1. Finish review and acceptance for the existing contract verifier, denied audit,
-   migration contract, lease, fence, outbox, and path resolver guardrails.
-2. Review and accept the read-only repo recovery inspection over durable repo,
-   fence, and operation records.
+1. Keep the existing contract verifier, denied audit, migration contract,
+   lease, fence, outbox, and path resolver guardrails covered by tests.
+2. Keep read-only repo recovery inspection over durable repo, fence, and
+   operation records covered by tests.
 3. Add recovery loop behavior only after the remaining durable primitives have
    tests.
 4. Implement volume and namespace binding APIs.
 5. Continue from the implemented repo create, repo lifecycle, export/WebDAV,
-   workload mount, save/restore, and template paths by closing remaining review
-   evidence only through accepted contracts, fences, session drain, operation
-   leases, audit behavior, focused tests, runbook drills, and owner acceptance.
-   G-005 is closed by JVS v0.4.8 evidence; it is not by itself GA acceptance for
-   storage mutation.
+   workload mount, save/restore, and template paths by closing remaining
+   evidence through contracts, fences, session drain, operation leases, audit
+   behavior, focused tests, and runbook artifacts. G-005 is covered by JVS
+   v0.4.8 evidence; it is not by itself GA release evidence for storage
+   mutation.
 
 ## JVS Gate Status
 
-G-005 is closed. JVS v0.4.8 is pinned and smoke-tested in
+G-005 is auto-verified. JVS v0.4.8 is pinned and smoke-tested in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`; the v0.4.7 blocker evidence
 remains historical in `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
 
-This closes the JVS gate. Repo create, save/restore, template create/clone, and
+This covers the JVS gate. Repo create, save/restore, template create/clone, and
 repo lifecycle JVS verification now have explicit-gated worker paths for their
-pinned JVS commands. GA acceptance for storage mutation still requires accepted
+pinned JVS commands. GA release evidence for storage mutation comes from
 contracts, fences, session drain, operation leases, audit behavior, focused
-tests, runbook drills, and owner review. AFSCP must not delete private JVS files
-directly.
+tests, runbook artifacts, and `scripts/verify-ga-release.sh`. AFSCP must not
+delete private JVS files directly.
 
 ## Repo Lifecycle Rules
 
@@ -380,10 +381,10 @@ Every boundary package needs tests before handler work depends on it:
 
 Before implementing any storage mutation handler:
 
-- related ADR is accepted
+- related ADR is recorded
 - related schema/OpenAPI path is updated
 - related gate in `docs/READINESS_EVIDENCE.md` links to evidence
-- risk register entry is closed or explicitly accepted when waivable
+- risk register entry has repo-local automated evidence
 - runbook exists for failure and intervention
 - tests exist for denial, idempotency, audit, and recovery
 

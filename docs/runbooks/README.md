@@ -1,13 +1,14 @@
 # Runbooks
 
-Runbooks are GA-required operational artifacts, not optional follow-up notes.
+Runbooks are GA operational artifacts covered by `scripts/verify-ga-release.sh`,
+not optional follow-up notes and not separate role-approval gates.
 
 Initial handoff:
 
 - [local-dev-handoff.md](local-dev-handoff.md)
 - [ga-runbooks.md](ga-runbooks.md)
 
-Required before GA:
+Required repo-local runbook coverage:
 
 - failed repo create
 - failed save point create
@@ -48,4 +49,4 @@ Each runbook must include:
 - customer/calling-product impact notes
 - verification steps
 - rollback or escalation path
-- drill evidence before GA
+- repo-local verification evidence

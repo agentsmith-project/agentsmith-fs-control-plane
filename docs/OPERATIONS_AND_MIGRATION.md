@@ -1,11 +1,11 @@
 # Operations And Migration
 
-Status: GA implementation-baseline operations and migration guidance. FINAL GA
-remains governed by `docs/READINESS_EVIDENCE.md`; owner, security,
-generated-client, operations, runbook drill, and human sign-off entries must be
-complete before GA acceptance is treated as closed. New or breaking endpoint
-handler and storage behavior must pass the applicable readiness evidence review
-before acceptance.
+Status: GA implementation-baseline operations and migration guidance.
+
+Final GA is governed by `docs/GA_RELEASE_GATES.md`,
+`docs/READINESS_EVIDENCE.md`, and `scripts/verify-ga-release.sh`. New or
+breaking endpoint handler and storage behavior must keep the applicable
+repo-local evidence aligned before it is GA-releasable.
 
 ## Operation Store
 

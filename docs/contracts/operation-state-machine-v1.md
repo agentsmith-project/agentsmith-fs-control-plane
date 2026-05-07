@@ -1,9 +1,8 @@
 # Contract: Operation State Machine V1
 
-Status: GA implementation-baseline contract. FINAL GA acceptance remains
-governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
-operations, runbook drill, and human sign-off entries must be complete before
-the applicable readiness gate is closed.
+Status: GA implementation-baseline contract. FINAL GA is governed by
+`docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and
+`scripts/verify-ga-release.sh`.
 
 AFSCP mutations are durable operations. The operation store is the recovery source of truth after process restart.
 
@@ -280,7 +279,7 @@ Required GA behavior:
 - archive, delete, and purge require all export and workload mount sessions,
   read-only or read-write, to reach confirmed terminal non-accessing state
   before storage is tombstoned or purged; WebDAV export write-drained evidence
-  accepted by restore-run writer gating is not sufficient for lifecycle drain
+  used by restore-run writer gating is not sufficient for lifecycle drain
 - lifecycle fence acquisition must reject or wait for active storage mutations on the same repo; uncertain in-flight mutations fail closed or require operator intervention
 - uncertain sessions fail closed with `STALE_SESSION_BLOCKS_LIFECYCLE` or enter `operator_intervention_required`
 - purge is irreversible and must verify retention policy or approved break-glass purge before physical removal

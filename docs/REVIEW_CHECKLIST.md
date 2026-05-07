@@ -1,23 +1,21 @@
 # GA Review Checklist
 
-Use this checklist for final GA acceptance review after the implementation
-baseline. New or changed endpoint handlers and storage mutation logic must also
-be reviewed against this checklist before acceptance.
+Use this checklist to keep final GA release evidence aligned after the
+implementation baseline. New or changed endpoint handlers and storage mutation
+logic must also keep this checklist covered by repo-local evidence.
 
 This checklist does not close any readiness gate by itself. FINAL GA remains
-governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
-operations, runbook drill, and human sign-off entries must be complete before
-GA acceptance is treated as closed.
+governed by `docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and
+`scripts/verify-ga-release.sh`.
 
 AFSCP GA is reviewed as an independent shared filesystem control-plane release.
 Reference consumers can provide adoption feedback, but their acceptance is not
 the final AFSCP GA gate.
 
-Each checked item needs an owner role, reviewer role, evidence link or file
-path, and blocking/non-blocking status recorded in `docs/READINESS_EVIDENCE.md`.
+Each checked item needs an owner role, evidence link or file path, and
+blocking/non-blocking status recorded in `docs/READINESS_EVIDENCE.md`.
 The evidence entry should name the related gate or risk ID where one exists.
-Waivers and residual-risk acceptance follow `docs/DEVELOPMENT_GOVERNANCE.md`;
-credential exposure, tenant isolation failure, user data loss, irrecoverable
+Credential exposure, tenant isolation failure, user data loss, irrecoverable
 operation ambiguity, and caller-visible contract break risks are non-waivable
 for GA.
 
@@ -25,9 +23,9 @@ for GA.
 
 - [ ] AFSCP core docs use generic storage concepts: volume, namespace, repo, save point, restore, template, export, mount, operation.
 - [ ] This repo contains only generic adoption guidance; caller-specific adoption and handoff material lives outside this repo in consumer-owned repositories.
-- [ ] Direct and indirect caller model is accepted.
+- [ ] Direct and indirect caller model is documented and test guarded.
 - [ ] Cross-namespace template clone remains rejected by default.
-- [ ] Ordinary concurrent read/write behavior is accepted without merge semantics.
+- [ ] Ordinary concurrent read/write behavior is documented without merge semantics.
 - [ ] Restore-run is treated as a version mutation, blocks new read-write sessions, and rejects active or uncertain read-write sessions.
 - [ ] Ordinary client access uses controlled exports rather than raw JuiceFS.
 - [ ] Product deletion/archive/restore/purge behavior maps to AFSCP repo lifecycle APIs when storage state changes.
@@ -45,8 +43,8 @@ for GA.
 - [ ] No direct dependency on a caller product package exists.
 - [ ] Namespace volume binding does not contain an authoritative raw filesystem path supplied by a caller.
 - [ ] Namespace binding includes caller-service authorization policy.
-- [ ] Namespace disable semantics for new and existing sessions are accepted.
-- [ ] Repo lifecycle fence, session drain, tombstone, restore, purge, and retention semantics are accepted.
+- [ ] Namespace disable semantics for new and existing sessions are contract and test guarded.
+- [ ] Repo lifecycle fence, session drain, tombstone, restore, purge, and retention semantics are contract and test guarded.
 
 ## Security
 
@@ -54,7 +52,7 @@ for GA.
 - [ ] Workload containers receive no JuiceFS root credentials.
 - [ ] Ordinary product callers never receive JuiceFS Secret references.
 - [ ] Orchestrator-only mount plans are protected by a dedicated caller role.
-- [ ] WebDAV is served by an AFSCP-controlled policy gateway or equivalent wrapper; stock `juicefs webdav` alone is not accepted.
+- [ ] WebDAV is served by an AFSCP-controlled policy gateway or equivalent wrapper; stock `juicefs webdav` alone is not the policy boundary.
 - [ ] WebDAV exposes only payload roots, never JVS control roots, and rejects root-level `.jvs` access/creation attempts.
 - [ ] Workload mounts expose only `payload_volume_subdir`; embedded-control repos are rejected until migrated or protected by a verified filtered view.
 - [ ] Mount binding lease/status lifecycle defines revoke-request versus confirmed-unmounted terminal states and is integrated with restore-run.
@@ -70,24 +68,24 @@ for GA.
 ## Contract Readiness
 
 - [ ] Runtime language decision is captured in a new ADR.
-- [ ] Internal service auth and caller identity model are accepted.
+- [ ] Internal service auth and caller identity model are contract and test guarded.
 - [ ] JSON schemas and internal OpenAPI exist and match narrative contracts.
-- [ ] Standard operation envelope and standard error envelope are accepted.
-- [ ] Stable error families are accepted by AFSCP product and generated-client compatibility reviewers.
+- [ ] Standard operation envelope and standard error envelope are schema and test guarded.
+- [ ] Stable error families are schema and contract-verifier guarded.
 - [ ] JVS release binary/version/checksum is pinned, required command smoke tests pass, and runner CWD cannot affect repo resolution.
 - [ ] JVS argv, JSON success/error, exit-code mapping, dirty-state behavior, and recovery mapping are frozen.
-- [ ] Workload mount binding/orchestrator plan split is accepted by platform/runtime contract reviewers.
-- [ ] Writer-session fence is accepted by operations, platform/runtime contract, and generated-client compatibility reviewers.
-- [ ] Repo lifecycle contract is accepted by AFSCP product, operations, and security owners.
-- [ ] Export session/access credential contract is accepted by generated-client compatibility reviewers.
-- [ ] Operation recovery matrix and audit delivery semantics are accepted.
+- [ ] Workload mount binding/orchestrator plan split is contract and test guarded.
+- [ ] Writer-session fence is covered by operations, platform/runtime, and API contract evidence.
+- [ ] Repo lifecycle contract is covered by lifecycle, session drain, purge, and audit tests.
+- [ ] Export session/access credential contract is schema and test guarded.
+- [ ] Operation recovery matrix and audit delivery semantics are contract and test guarded.
 
 ## GA Operations
 
-- [ ] Required runbooks in `docs/runbooks/README.md` exist and have drill evidence.
+- [ ] Required runbooks in `docs/runbooks/README.md` exist as repo-local evidence.
 - [ ] Observability covers volume health, JVS failures, operation failures, stale leases, held fences, export denials, and audit outbox lag.
 - [ ] Backup and restore behavior is documented for operation store and metadata records.
 - [ ] Secret rotation runbook exists.
 - [ ] Operator intervention semantics and escalation are documented.
-- [ ] All GA-blocking risks in `docs/RISK_REGISTER.md` are closed or have approved residual-risk acceptance under `docs/DEVELOPMENT_GOVERNANCE.md`.
+- [ ] All GA-blocking risks in `docs/RISK_REGISTER.md` have repo-local automated evidence.
 - [ ] Operation records, logs, audit payloads, generated schemas, OpenAPI examples, and error payloads pass secret redaction review.

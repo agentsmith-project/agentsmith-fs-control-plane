@@ -6,10 +6,9 @@ product-agnostic narrative source for the internal OpenAPI spec.
 The implementation baseline, request/response/error schemas under
 `api/schemas/`, and internal OpenAPI under `api/openapi/` now exist. Changes to
 schemas, endpoint handlers, generated clients, or storage behavior must keep
-this narrative, generated artifacts, and contract verification aligned. FINAL
-GA remains governed by `docs/READINESS_EVIDENCE.md`; owner, security,
-generated-client, operations, runbook drill, and human sign-off entries must be
-complete before GA acceptance is treated as closed.
+this narrative, generated artifacts, and contract verification aligned. Final
+GA is governed by `docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`,
+and `scripts/verify-ga-release.sh`.
 
 ## Service Access
 

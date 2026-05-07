@@ -10,7 +10,7 @@ TDD red/green evidence:
 
 Precise test commands:
 
-`scripts/verify-ga-baseline.sh` result:
+`scripts/verify-ga-release.sh` result:
 
 Risk/gate impact:
 
@@ -24,7 +24,7 @@ Package/module naming review:
 - [ ] Worker/subagent ownership is clear for code and docs changes.
 - [ ] TDD red/green evidence is included for behavioral or governance guards.
 - [ ] Precise test commands and outcomes are listed.
-- [ ] `scripts/verify-ga-baseline.sh` result is recorded or explicitly marked not run with reason.
+- [ ] `scripts/verify-ga-release.sh` result is recorded or explicitly marked not run with reason.
 - [ ] Main agent did not directly write code/docs provenance is recorded.
 - [ ] Risk/gate impact is stated without closing any gate unless separately accepted.
 - [ ] Product-agnostic boundary check confirms no caller-specific package names, fixture names, or docs wording were introduced.

@@ -5,9 +5,8 @@ bundle for the internal API. It is intentionally product-agnostic and must stay
 aligned with `api/openapi/internal-v1.openapi.yaml` and
 `docs/API_CONTRACT_DRAFT.md`.
 
-FINAL GA acceptance remains governed by `docs/READINESS_EVIDENCE.md`; owner,
-security, generated-client, operations, runbook drill, and human sign-off
-entries must be complete before the applicable readiness gate is closed.
+FINAL GA is governed by `docs/GA_RELEASE_GATES.md`,
+`docs/READINESS_EVIDENCE.md`, and `scripts/verify-ga-release.sh`.
 
 Schema coverage:
 

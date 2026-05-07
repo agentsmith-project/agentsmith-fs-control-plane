@@ -1,17 +1,18 @@
 # Operational Readiness Contract
 
-Status: active operational acceptance contract for final GA.
+Status: active operational readiness contract for final GA.
 
-Drills and threshold owners are still pending where tracked; this document does
-not mark operational readiness complete.
+This document defines repo-local operational evidence for
+`scripts/verify-ga-release.sh`. It does not create a separate role-approval
+gate.
 
-This document turns the runbook checklist into operator-ready acceptance
-criteria. It does not replace the detailed runbooks; it defines what each
-runbook and drill must prove.
+This document turns the runbook checklist into operator-ready criteria. It does
+not replace the detailed runbooks; it defines what each runbook artifact and
+automated check must cover.
 
 GA candidate deployments must explicitly set `AFSCP_READINESS_PROFILE=ga` so
 `/readyz` requires the full GA capability set; passing `/readyz` is still not a
-substitute for final evidence review and human GA approval.
+substitute for the repo-local GA release gate.
 
 Internal API runtime config must include
 `AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL` only when WebDAV export capability is
@@ -48,8 +49,8 @@ available and the runtime store health check passes.
 - backup age threshold for operation store and metadata
 
 The development team may choose concrete numeric thresholds after deployment
-SLOs are known, but each threshold must have an owner, alert severity, runbook,
-and drill record before GA.
+SLOs are known, but each threshold class must have an owner, alert severity,
+runbook, and repo-local evidence before GA release.
 
 ## Backup And Restore
 
@@ -62,7 +63,7 @@ GA backup scope:
 - audit outbox records until delivered and retained
 - deployment config excluding raw Secret values
 
-GA restore drills must prove:
+GA restore evidence must prove:
 
 - operation store restore does not reissue credentials blindly
 - lifecycle fences are recovered from durable state
@@ -70,16 +71,15 @@ GA restore drills must prove:
 - purged repos are not resurrected
 - audit event replay is idempotent
 
-GA audit delivery acceptance covers the configured HTTP JSON sink path. Non-HTTP
+GA audit delivery evidence covers the configured HTTP JSON sink path. Non-HTTP
 audit sink integrations are future extensions and are not required to close
-operational readiness; deployments still must prove external sink idempotency,
-outbox retention, replay, drill evidence, and review acceptance.
+operational readiness; deployments still must preserve external sink
+idempotency, outbox retention, and replay behavior.
 
-## Runbook Drill Evidence
+## Runbook Evidence
 
-Each runbook drill must record:
+Each runbook artifact should record:
 
-- drill date
 - environment
 - induced failure or scenario
 - detection signal

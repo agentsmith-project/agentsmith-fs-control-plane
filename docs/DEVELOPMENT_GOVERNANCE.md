@@ -4,7 +4,8 @@ Status: active governance contract.
 
 AFSCP holds privileged storage credentials and mutates durable user data. The
 development process must make product, security, contract, and operations
-decisions visible before implementation depends on them.
+decisions visible as repo-local contracts and tests before implementation
+depends on them.
 
 ## Governance Principles
 
@@ -46,61 +47,49 @@ operational impact, contract impact, and rollback or supersession conditions.
 
 ## Contract Ownership
 
-| Contract Area | Required Reviewers |
+Owner roles identify who maintains the contract area. They do not add manual GA
+approval conditions; GA release closure is governed by
+`docs/GA_RELEASE_GATES.md` and `scripts/verify-ga-release.sh`.
+
+| Contract Area | Owner Roles |
 | --- | --- |
-| Product boundary and GA scope | AFSCP product owner, API consumer-contract/generated-client compatibility reviewer |
-| Internal API and schemas | AFSCP maintainer, API consumer-contract/generated-client compatibility reviewer, operator/tooling owner |
-| Service auth and caller roles | AFSCP maintainer, security owner, API consumer-contract/generated-client compatibility reviewer |
+| Product boundary and GA scope | AFSCP maintainer, API contract owner |
+| Internal API and schemas | AFSCP maintainer, API contract owner, operator/tooling owner |
+| Service auth and caller roles | AFSCP maintainer, security owner, API contract owner |
 | JVS runner | AFSCP maintainer, JVS owner |
 | Repo lifecycle | AFSCP maintainer, AFSCP product owner, operations owner, security owner |
-| WebDAV export | AFSCP maintainer, security owner, API consumer-contract/generated-client compatibility reviewer |
-| Workload mount plan | AFSCP maintainer, platform/runtime contract reviewer, security owner |
+| WebDAV export | AFSCP maintainer, security owner, API contract owner |
+| Workload mount plan | AFSCP maintainer, platform/runtime contract owner, security owner |
 | Operation/audit/recovery | AFSCP maintainer, operations owner, security owner |
 | Deployment and Secret access | AFSCP maintainer, platform owner, security owner |
 
-Named people can be added later, but the role must be clear in every review.
+Named people can be added later, but the role is maintenance metadata rather
+than a GA gate condition.
 
-## Review Gates
+## Automated Release Gates
 
-The following gates are blocking for endpoint handlers and storage mutation
-logic:
+Endpoint handlers and storage mutation logic must stay covered by repo-local
+evidence. GA release closure is the successful execution of:
 
-- schemas and OpenAPI are generated and reviewed
-- standard error envelope and stable error families are reviewed
-- credential boundary review passes
-- JVS runner pin and smoke evidence are present
-- workload mount platform/runtime contract is accepted
-- repo lifecycle contract is accepted for archive/delete/restore/purge storage state
-- WebDAV gateway contract is accepted for exports
-- writer-session fence contract is accepted for restore/export/mount interactions
-- operation recovery and audit retention semantics are accepted
-- GA-blocking risks are closed or have approved residual-risk acceptance under this governance contract
+```bash
+bash scripts/verify-ga-release.sh
+```
 
-Every gate needs:
+That command must cover:
 
 - owner role
-- approving reviewer role
-- evidence link or file path
-- blocking status
-- waiver decision, if any
+- repo-local evidence link or file path
+- script, test, contract, schema, OpenAPI, runbook, or doc guard coverage
+- blocking status when the automated evidence fails
 
-Gate closure is recorded in `docs/READINESS_EVIDENCE.md`. A gate is not closed
-because a document says it should be done; it is closed only when the ledger
-links to the reviewed evidence.
+Gate evidence is recorded in `docs/READINESS_EVIDENCE.md`. A gate is not closed
+because a document says it should be done; it is closed only when the release
+verification command passes.
 
-Waivers and residual-risk acceptance are the same controlled process. They are
-allowed only for risks that cannot plausibly cause credential exposure, tenant
-isolation failure, user data loss, irrecoverable operation ambiguity, or a
-caller-visible contract break. Those risk classes are non-waivable for GA.
-
-Any accepted residual risk must include:
-
-- product, security, and operations approver roles
-- expiration or review date
-- compensation controls
-- evidence link
-- residual risk statement
-- rollback or disablement condition
+GA-blocking risks are not waived by approval. They are either covered by
+repo-local automated evidence or the release gate fails. Credential exposure,
+tenant isolation failure, user data loss, irrecoverable operation ambiguity, and
+caller-visible contract break remain non-waivable for GA.
 
 ## Contract Versioning
 
@@ -136,8 +125,8 @@ Risk closure requires:
 - mitigation decision
 - evidence requirement
 - owner role
-- residual risk statement
-- link to updated docs, tests, runbooks, or ADRs
+- link to updated docs, tests, runbooks, schemas, OpenAPI, contracts, or ADRs
+- coverage by `scripts/verify-ga-release.sh`
 
 Risk decisions are tracked in `docs/RISK_REGISTER.md`; readiness evidence is
 tracked in `docs/READINESS_EVIDENCE.md`.

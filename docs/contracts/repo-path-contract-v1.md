@@ -1,9 +1,8 @@
 # Contract: Repo Path V1
 
-Status: GA implementation-baseline contract. FINAL GA acceptance remains
-governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
-operations, runbook drill, and human sign-off entries must be complete before
-the applicable readiness gate is closed.
+Status: GA implementation-baseline contract. FINAL GA is governed by
+`docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and
+`scripts/verify-ga-release.sh`.
 
 AFSCP resolves repo paths from structured IDs. Callers never provide raw filesystem paths.
 

@@ -97,4 +97,4 @@ AFSCP should provide an independently runnable, independently releasable shared 
 22. Operators can inspect operations, audit events, repo lifecycle projections, volume/namespace health, stale leases, held lifecycle fences, and operator-intervention records without accessing forbidden credentials.
 23. Namespace disable behavior is defined for new operations and active or uncertain sessions.
 24. Product display rename and catalog detach are handled by the calling product; AFSCP repo identity remains stable.
-25. All GA-blocking risks in `docs/RISK_REGISTER.md` are closed or have approved residual-risk acceptance under `docs/DEVELOPMENT_GOVERNANCE.md`.
+25. All GA-blocking risks in `docs/RISK_REGISTER.md` are closed only by repo-local automated evidence covered by `scripts/verify-ga-release.sh`. Non-waivable GA blockers cannot be bypassed by manual approval or subjective risk exception.

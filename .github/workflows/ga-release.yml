@@ -1,0 +1,19 @@
+name: GA Release Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  ga-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+      - name: Run GA release gate
+        run: bash scripts/verify-ga-release.sh

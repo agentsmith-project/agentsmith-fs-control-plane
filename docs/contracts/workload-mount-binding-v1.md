@@ -1,9 +1,8 @@
 # Contract: Workload Mount Binding V1
 
-Status: GA implementation-baseline contract. FINAL GA acceptance remains
-governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
-operations, runbook drill, and human sign-off entries must be complete before
-the applicable readiness gate is closed.
+Status: GA implementation-baseline contract. FINAL GA is governed by
+`docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and
+`scripts/verify-ga-release.sh`.
 
 AFSCP creates product-agnostic workload mount bindings. A dedicated external orchestrator consumes privileged mount plans and performs runtime mounting.
 
@@ -116,5 +115,5 @@ Workload mounts cannot be GA-enabled until the orchestrator contract proves:
 - revoke means requested teardown until the orchestrator confirms unmounted or otherwise non-accessing
 - `released` and `revoked` are reported only as evidence-bearing non-accessing terminal statuses; `expired` and `failed` remain observed/uncertain and do not unblock lifecycle without future explicit evidence
 
-If these requirements are not accepted for a runtime, AFSCP returns
+If these requirements are not met for a runtime, AFSCP returns
 `CAPABILITY_DENIED` instead of issuing a degraded mount binding.

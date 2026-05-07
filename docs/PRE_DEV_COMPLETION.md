@@ -1,13 +1,12 @@
 # Pre-Dev Completion Package
 
-Status: GA implementation-baseline package; FINAL GA remains pending recorded
-acceptance, runbook drills, and human sign-off.
+Status: GA implementation-baseline package.
 
 This package records the documentation, contract, and decision work that
 admitted the current implementation baseline. The JVS upstream blocker found
-during evidence gathering is now closed by v0.4.8 smoke evidence, but final GA
-remains governed by `docs/READINESS_EVIDENCE.md` owner, security,
-generated-client, operations, runbook drill, and human sign-off entries.
+during evidence gathering is now closed by v0.4.8 smoke evidence. Final GA is
+governed by `docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and the
+repo-local command `scripts/verify-ga-release.sh`.
 
 ## Completed Artifacts
 
@@ -104,13 +103,13 @@ control-plane state. API/runtime implementation now includes repo/JVS lifecycle,
 save/restore, namespace-scoped template create/clone, WebDAV export
 create/get/revoke plus gateway serving, workload mount issuance and
 orchestrator plans, writer fences, and durable operation-backed storage
-mutation. Continue directly toward GA by finishing guardrail review, owner
-acceptance, generated-client review, security review, runbook drills, and human
-acceptance for the remaining open readiness gates.
+mutation. Continue directly toward GA by keeping guardrails, generated
+artifacts, security boundaries, runbooks, and operations behavior covered by
+repo-local verification.
 
-G-005 is closed by JVS v0.4.8 evidence in
-`docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`. This only closes the JVS gate.
-Repo/JVS/storage handlers may now proceed only through accepted contracts,
+G-005 is auto-verified by JVS v0.4.8 evidence in
+`docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`. This only covers the JVS gate.
+Repo/JVS/storage handlers may now proceed only through versioned contracts,
 fences, session drain, operation leases, audit behavior, and focused tests.
 
 ## Non-Negotiable Guardrails
@@ -121,10 +120,10 @@ fences, session drain, operation leases, audit behavior, and focused tests.
 - Do not put caller workspace, catalog object, project, job/task object, or
   caller-specific catalog concepts into AFSCP core packages.
 - Do not implement storage mutation handlers from narrative docs alone; use the
-  schemas/OpenAPI and accepted ADRs/contracts.
+  schemas/OpenAPI and recorded ADRs/contracts.
 - Do not implement repo delete as raw filesystem delete.
 - Do not enable WebDAV, workload mount, restore-run, or repo lifecycle behavior
   without the relevant session drain/fence semantics.
 - Do not treat G-005 closure as implementation approval for storage mutation;
-  use accepted contracts, fences, session drain, operation leases, audit
-  behavior, and focused tests.
+  use contracts, fences, session drain, operation leases, audit behavior, and
+  focused tests covered by `scripts/verify-ga-release.sh`.

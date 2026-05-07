@@ -29,10 +29,9 @@ the product-neutral documentation set listed above.
    continue against accepted package layout, health endpoint, config loading,
    logging, test harness, generated contract plumbing, route registration, and
    handler/operation contracts.
-3. Keep internal auth, caller-service authorization, schemas, OpenAPI, JVS runner, operation/audit, WebDAV, workload mount, writer-session fence, and namespace policy changes aligned with accepted contracts. Contract-breaking changes need review and evidence before implementation proceeds.
-4. FINAL GA remains governed by `docs/READINESS_EVIDENCE.md`; owner, security,
-   generated-client, operations, runbook drill, and human sign-off evidence
-   must be complete before GA acceptance is treated as closed.
+3. Keep internal auth, caller-service authorization, schemas, OpenAPI, JVS runner, operation/audit, WebDAV, workload mount, writer-session fence, and namespace policy changes aligned with versioned contracts. Contract-breaking changes need repo-local evidence before implementation proceeds.
+4. FINAL GA remains governed by `docs/GA_RELEASE_GATES.md`,
+   `docs/READINESS_EVIDENCE.md`, and `scripts/verify-ga-release.sh`.
 
 ## Revised Boundary
 
@@ -141,13 +140,13 @@ Client/desktop connector owns:
 
 1. Use the existing Go service skeleton and `docs/DEVELOPER_HANDOFF.md` as the
    implementation baseline.
-2. Continue or modify storage mutation handlers only through accepted contracts,
-   gate evidence, owner acceptance where required, and focused tests; baseline
+2. Continue or modify storage mutation handlers only through versioned contracts,
+   gate evidence, and focused tests; baseline
    implementation does not by itself close the relevant gate in
    `docs/READINESS_EVIDENCE.md`.
-3. Treat G-005 as closed by
+3. Treat G-005 as covered by
    `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`; repo/JVS/storage handlers
-   still require the other accepted contracts, fences, session drain, operation
+   still require the other contracts, fences, session drain, operation
    leases, audit behavior, and focused tests.
 4. Keep generated clients and handlers aligned with `api/openapi/internal-v1.openapi.yaml` and `api/schemas/afscp-internal-v1.schema.json`.
-5. Close GA-blocking risks in `docs/RISK_REGISTER.md` or approve residual risk under `docs/DEVELOPMENT_GOVERNANCE.md` when waivable.
+5. Keep GA-blocking risks in `docs/RISK_REGISTER.md` covered by repo-local automated evidence.

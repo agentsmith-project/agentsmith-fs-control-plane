@@ -14,6 +14,18 @@ belongs outside this repo in consumer-owned repositories. Those materials are
 not the AFSCP core model, release gate, or source of business logic. AFSCP
 exposes robust filesystem primitives and enforces storage boundaries.
 
+## GA Release Gate
+
+AFSCP GA release decisions are made by this repo-local automated gate:
+
+```bash
+bash scripts/verify-ga-release.sh
+```
+
+The script exit code is authoritative: exit code `0` means the GA release gate
+passes, and any nonzero exit code means GA is not releasable. The baseline
+script is implementation evidence, but it is not the final GA gate.
+
 ## Current Decision
 
 - Build AFSCP as an independent storage control plane and deployment.
@@ -76,10 +88,9 @@ exposes robust filesystem primitives and enforces storage boundaries.
 Pre-dev handoff has entered the GA implementation baseline. Core handlers and
 operations are being implemented incrementally against accepted schemas,
 OpenAPI, auth, JVS, operation/audit, export, mount, and writer-session
-contracts. New or modified handlers and storage mutations must still pass
-through the corresponding gates, evidence, fences, operation leases, audit
-behavior, and focused tests. Do not claim final production GA from this
-baseline.
+contracts. New or modified handlers and storage mutations must keep repo-local
+release evidence, fences, operation leases, audit behavior, and focused tests
+aligned. Do not claim final production GA from the baseline script.
 
 ## License
 

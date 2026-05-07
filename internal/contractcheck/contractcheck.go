@@ -64,6 +64,7 @@ const (
 	CodeDocsProductSpecificTermForbidden      = "docs.product_specific_term_forbidden"
 	CodeDocsQuotaSemanticsMissing             = "docs.quota_semantics_missing"
 	CodeDocsExternalAdoptionEvidenceForbidden = "docs.external_adoption_evidence_forbidden"
+	CodeDocsHumanGAGateForbidden              = "docs.human_ga_gate_forbidden"
 
 	CodeGoOperationsOperationEnvelopeAmbiguous    = "go.operations_operation_envelope_ambiguous"
 	CodeGoAPIOperationEnvelopeMissing             = "go.api_operation_envelope_missing"
@@ -1312,10 +1313,7 @@ func verifyCoreProductDocs(repoRoot string) []Finding {
 }
 
 func verifyCoreGateEvidenceDocs(repoRoot string) []Finding {
-	paths := []string{
-		filepath.Join(repoRoot, "docs", "READINESS_EVIDENCE.md"),
-		filepath.Join(repoRoot, "docs", "RISK_REGISTER.md"),
-	}
+	paths := coreGateEvidenceDocPaths(repoRoot)
 	var findings []Finding
 	for _, path := range paths {
 		body, err := os.ReadFile(path)
@@ -1333,8 +1331,221 @@ func verifyCoreGateEvidenceDocs(repoRoot string) []Finding {
 				Message: "`docs/INTEGRATION_GUIDE.md` is external adoption notes and must not be used as GA gate or risk evidence",
 			})
 		}
+		findings = append(findings, findHumanManagedGAGateFindings(path, string(body))...)
 	}
 	return findings
+}
+
+func coreGateEvidenceDocPaths(repoRoot string) []string {
+	return []string{
+		filepath.Join(repoRoot, "README.md"),
+		filepath.Join(repoRoot, "docs", "READINESS_EVIDENCE.md"),
+		filepath.Join(repoRoot, "docs", "RISK_REGISTER.md"),
+		filepath.Join(repoRoot, "docs", "GA_RELEASE_GATES.md"),
+		filepath.Join(repoRoot, "docs", "DEVELOPMENT_GOVERNANCE.md"),
+		filepath.Join(repoRoot, "docs", "PRODUCT_REQUIREMENTS.md"),
+		filepath.Join(repoRoot, "docs", "MVP_PLAN.md"),
+	}
+}
+
+func findHumanManagedGAGateFindings(path, body string) []Finding {
+	var findings []Finding
+	lines := splitLines(body)
+	for i := range lines {
+		if term := humanManagedGAGateTerm(humanManagedGAGateLineContext(lines, i)); term != "" {
+			findings = append(findings, Finding{
+				Code:    CodeDocsHumanGAGateForbidden,
+				File:    path,
+				Line:    i + 1,
+				Message: fmt.Sprintf("active GA gate docs must use objective repo-local script results, not human/manual acceptance or subjective release blocker status %q", term),
+			})
+		}
+	}
+	return findings
+}
+
+func humanManagedGAGateLineContext(lines []string, index int) string {
+	line := lines[index]
+	if index > 0 && previousLineContinuesNegation(lines[index-1]) {
+		line = lines[index-1] + " " + line
+	}
+	if currentLineContinuesList(line) && index+1 < len(lines) {
+		for next := index + 1; next < len(lines) && next <= index+3; next++ {
+			line += " " + lines[next]
+			if strings.HasSuffix(strings.TrimSpace(lines[next]), ".") {
+				break
+			}
+		}
+	}
+	return line
+}
+
+func previousLineContinuesNegation(line string) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(line))
+	for _, suffix := range []string{"do not", "does not", "must not", "cannot", "can't"} {
+		if strings.HasSuffix(trimmed, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func currentLineContinuesList(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasSuffix(trimmed, ",") || strings.HasSuffix(trimmed, ";")
+}
+
+func humanManagedGAGateTerm(line string) string {
+	lower := strings.ToLower(line)
+	if hasNegatedHumanManagedGAGateContext(lower) {
+		return ""
+	}
+
+	for _, term := range []string{
+		"human sign-off",
+		"human signoff",
+		"human approval",
+		"human review",
+		"manual sign-off",
+		"manual signoff",
+		"manual approval",
+		"manual review",
+		"owner acceptance",
+		"owner approval",
+		"owner sign-off",
+		"owner signoff",
+		"security acceptance",
+		"security approval",
+		"security sign-off",
+		"security signoff",
+		"generated-client acceptance",
+		"generated-client approval",
+		"generated client acceptance",
+		"generated client approval",
+		"platform acceptance",
+		"platform approval",
+		"platform sign-off",
+		"platform signoff",
+		"role approval",
+		"role-approval",
+		"residual-risk acceptance",
+		"residual risk acceptance",
+		"residual-risk approval",
+		"residual risk approval",
+		"residual-risk waiver",
+		"residual risk waiver",
+		"risk acceptance",
+		"risk exception",
+		"risk waiver",
+		"subjective risk exception",
+		"runbook drill",
+		"runbook drills",
+		"deployment drill",
+		"deployment drills",
+	} {
+		if strings.Contains(lower, term) && (hasGAGateContext(lower) || hasGateClosureContext(lower)) {
+			return term
+		}
+	}
+
+	if !hasGAGateContext(lower) {
+		return ""
+	}
+	for _, status := range []string{"in_review", "open", "blocked", "pending", "tbd"} {
+		if containsDelimitedGateStatus(lower, status) {
+			return status
+		}
+	}
+	return ""
+}
+
+func hasNegatedHumanManagedGAGateContext(lowerLine string) bool {
+	for _, phrase := range []string{
+		"are not independent ga gate",
+		"are not independent release gate",
+		"are not ga gate",
+		"are not release gate",
+		"not independent ga gate",
+		"not independent gate condition",
+		"not independent ga gate condition",
+		"not independent ga release gate condition",
+		"do not add",
+		"does not add",
+		"not add",
+		"must not add",
+		"not through",
+		"cannot be bypassed by",
+		"cannot bypass",
+		"can't be bypassed by",
+		"not waived by",
+		"not as role approval state",
+		"not a role approval state",
+		"not a ga gate",
+		"not an afscp gate",
+		"not ga release workflow",
+		"not a release blocker",
+		"not release blocker",
+		"meetings are not gates",
+		"meetings are not ga gates",
+		"manual acceptance is not",
+		"manual approval is not",
+		"owner approval is not",
+		"security approval is not",
+		"generated-client approval is not",
+		"generated client approval is not",
+		"subjective risk exception is not",
+	} {
+		if strings.Contains(lowerLine, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGAGateContext(lowerLine string) bool {
+	if !strings.Contains(lowerLine, "ga") &&
+		!strings.Contains(lowerLine, "release") &&
+		!strings.Contains(lowerLine, "readiness") {
+		return false
+	}
+	for _, term := range []string{"gate", "release", "acceptance", "blocker", "blocked", "condition", "closed", "readiness", "evidence"} {
+		if strings.Contains(lowerLine, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGateClosureContext(lowerLine string) bool {
+	for _, term := range []string{"blocker", "blocked", "condition", "closed", "closes", "required"} {
+		if strings.Contains(lowerLine, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsDelimitedGateStatus(line, status string) bool {
+	for offset := 0; ; {
+		index := strings.Index(line[offset:], status)
+		if index < 0 {
+			return false
+		}
+		start := offset + index
+		end := start + len(status)
+		if isGateStatusBoundary(line, start-1) && isGateStatusBoundary(line, end) {
+			return true
+		}
+		offset = end
+	}
+}
+
+func isGateStatusBoundary(line string, index int) bool {
+	if index < 0 || index >= len(line) {
+		return true
+	}
+	ch := line[index]
+	return !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')
 }
 
 func coreProductDocPaths(repoRoot string) []string {

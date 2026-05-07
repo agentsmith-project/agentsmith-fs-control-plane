@@ -2,6 +2,7 @@ package contractcheck
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -1159,6 +1160,71 @@ func TestVerifyCoreProductDocsRejectsExternalAdoptionEvidence(t *testing.T) {
 	assertHasFindingInFile(t, findings, CodeDocsExternalAdoptionEvidenceForbidden, riskPath)
 }
 
+func TestVerifyCoreProductDocsRejectsHumanManagedGAGates(t *testing.T) {
+	root := t.TempDir()
+	readinessPath := filepath.Join(root, "docs", "READINESS_EVIDENCE.md")
+	riskPath := filepath.Join(root, "docs", "RISK_REGISTER.md")
+	gaGatesPath := filepath.Join(root, "docs", "GA_RELEASE_GATES.md")
+	developmentGovernancePath := filepath.Join(root, "docs", "DEVELOPMENT_GOVERNANCE.md")
+	productRequirementsPath := filepath.Join(root, "docs", "PRODUCT_REQUIREMENTS.md")
+	mvpPlanPath := filepath.Join(root, "docs", "MVP_PLAN.md")
+	writeFile(t, filepath.Join(root, "README.md"), "GA release gate: pass `scripts/verify-ga-release.sh`; its exit code is the GA decision.\n")
+	writeFile(t, readinessPath, strings.Join([]string{
+		"Final GA acceptance is blocked pending human sign-off.",
+		"Release blocker closes only after owner acceptance and security acceptance.",
+		"Generated-client acceptance and platform acceptance are required closed conditions.",
+		"Deployment drills and runbook drills remain TBD release blockers.",
+		"Allowed runtime states: operator_intervention_required, operator_admin, break_glass_admin.",
+		"Allowed product semantics: caller approval reference, operation manual, and operator repair.",
+	}, "\n"))
+	writeFile(t, riskPath, "| Gate | Status |\n| --- | --- |\n| GA release gate | in_review |\n| GA release gate | open |\n| GA release gate | pending |\n")
+	writeFile(t, gaGatesPath, strings.Join([]string{
+		"The GA release gate requires owner approval.",
+		"Manual review, security approval, owner approval, and generated-client approval are not independent GA gate conditions.",
+		"Runtime operator controls remain product behavior, not GA release workflow.",
+	}, "\n"))
+	writeFile(t, developmentGovernancePath, strings.Join([]string{
+		"GA release closure requires manual approval.",
+		"Owner roles identify who maintains the contract area. They do not add manual GA approval conditions.",
+	}, "\n"))
+	writeFile(t, productRequirementsPath, strings.Join([]string{
+		"GA-blocking residual risk can close through residual-risk acceptance.",
+		"Non-waivable GA blockers cannot be bypassed by manual approval or subjective risk exception.",
+		"Purge requests include a caller approval reference as runtime safety data.",
+	}, "\n"))
+	writeFile(t, mvpPlanPath, "GA-blocking risks in `docs/RISK_REGISTER.md` are closed or have approved residual-risk acceptance under `docs/DEVELOPMENT_GOVERNANCE.md`.\n")
+
+	findings := verifyCoreProductDocs(root)
+
+	assertFindingCount(t, findings, CodeDocsHumanGAGateForbidden, 11)
+	assertHasFindingInFile(t, findings, CodeDocsHumanGAGateForbidden, readinessPath)
+	assertHasFindingInFile(t, findings, CodeDocsHumanGAGateForbidden, riskPath)
+	assertHasFindingInFile(t, findings, CodeDocsHumanGAGateForbidden, gaGatesPath)
+	assertHasFindingInFile(t, findings, CodeDocsHumanGAGateForbidden, developmentGovernancePath)
+	assertHasFindingInFile(t, findings, CodeDocsHumanGAGateForbidden, productRequirementsPath)
+	assertHasFindingInFile(t, findings, CodeDocsHumanGAGateForbidden, mvpPlanPath)
+	assertNoFindingMessageContains(t, findings, "operator_intervention_required", CodeDocsHumanGAGateForbidden)
+	assertNoFindingMessageContains(t, findings, "caller approval reference", CodeDocsHumanGAGateForbidden)
+	assertNoFindingMessageContains(t, findings, "operation manual", CodeDocsHumanGAGateForbidden)
+	assertNoFindingMessageContains(t, findings, "not independent GA gate conditions", CodeDocsHumanGAGateForbidden)
+	assertNoFindingMessageContains(t, findings, "do not add manual GA approval conditions", CodeDocsHumanGAGateForbidden)
+	assertNoFindingMessageContains(t, findings, "cannot be bypassed", CodeDocsHumanGAGateForbidden)
+}
+
+func TestFindHumanManagedGAGateFindingsAllowsNegatedGovernanceAndRuntimeSafetySemantics(t *testing.T) {
+	findings := findHumanManagedGAGateFindings("docs/GA_RELEASE_GATES.md", strings.Join([]string{
+		"Manual review, generated-client approval, security approval, and owner approval are not independent GA gate conditions.",
+		"Owner roles do not add manual GA approval conditions.",
+		"GA-blocking risks cannot be bypassed by manual approval or subjective risk exception.",
+		"Runtime operator controls remain product behavior, not GA release workflow.",
+		"Allowed product semantics: caller approval reference, purge approval reference, operation manual, and operator repair.",
+	}, "\n"))
+
+	if len(findings) > 0 {
+		t.Fatalf("expected negated governance and runtime safety semantics to pass, got findings: %+v", findings)
+	}
+}
+
 func TestCurrentRepoContractsPass(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 
@@ -1193,7 +1259,7 @@ func TestPullRequestTemplateGovernanceGuardCatchesMissingOrIncompleteTemplate(t 
 			want: []string{
 				"worker/subagent ownership",
 				"TDD red/green evidence",
-				"GA baseline verification",
+				"GA release verification",
 				"main-agent provenance",
 				"risk/gate impact",
 				"product-agnostic boundary check",
@@ -1298,6 +1364,7 @@ func TestCurrentRepoInternalREADMEImplementationStatusIsCurrent(t *testing.T) {
 func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	paths := []string{
+		filepath.Join(repoRoot, "README.md"),
 		filepath.Join(repoRoot, "api", "schemas", "README.md"),
 		filepath.Join(repoRoot, "api", "openapi", "README.md"),
 		filepath.Join(repoRoot, "docs", "API_CONTRACT_DRAFT.md"),
@@ -1316,6 +1383,11 @@ func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
 		t.Fatal("expected active contract docs under docs/contracts/*.md")
 	}
 	paths = append(paths, contractPaths...)
+	gateDefinitionPaths := []string{
+		filepath.Join(repoRoot, "docs", "GA_RELEASE_GATES.md"),
+		filepath.Join(repoRoot, "docs", "DEVELOPMENT_GOVERNANCE.md"),
+		filepath.Join(repoRoot, "docs", "PRODUCT_REQUIREMENTS.md"),
+	}
 	forbidden := []string{
 		"GA pre-dev",
 		"GA pre-dev narrative draft",
@@ -1353,6 +1425,9 @@ func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
 			if !strings.Contains(text, "docs/READINESS_EVIDENCE.md") {
 				t.Fatalf("%s must cite docs/READINESS_EVIDENCE.md for current readiness governance", path)
 			}
+			if !strings.Contains(text, "scripts/verify-ga-release.sh") {
+				t.Fatalf("%s must point GA release decisions at scripts/verify-ga-release.sh", path)
+			}
 			hasCurrentBaseline := false
 			for _, phrase := range currentBaselinePhrases {
 				if strings.Contains(normalizedText, phrase) {
@@ -1362,6 +1437,27 @@ func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
 			}
 			if !hasCurrentBaseline {
 				t.Fatalf("%s must describe GA implementation-baseline or current implementation baseline status", path)
+			}
+		})
+	}
+
+	for _, path := range gateDefinitionPaths {
+		t.Run(filepath.ToSlash(path), func(t *testing.T) {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile returned error: %v", err)
+			}
+			text := string(body)
+			for _, phrase := range forbidden {
+				if strings.Contains(text, phrase) {
+					t.Fatalf("%s has stale current implementation status phrase %q", path, phrase)
+				}
+			}
+			if strings.Contains(text, "FINAL GA ACCEPTANCE REMAINS BLOCKED") {
+				t.Fatalf("%s must not keep final GA acceptance blocked status; repo-local script exit code is now the GA decision", path)
+			}
+			if !strings.Contains(text, "scripts/verify-ga-release.sh") {
+				t.Fatalf("%s must point GA release decisions at scripts/verify-ga-release.sh", path)
 			}
 		})
 	}
@@ -1378,8 +1474,15 @@ func TestCurrentRepoReadinessEvidenceHasCurrentImplementationStatus(t *testing.T
 	text := string(body)
 	normalizedText := strings.Join(strings.Fields(text), " ")
 
-	if !strings.Contains(text, "FINAL GA ACCEPTANCE REMAINS BLOCKED") {
-		t.Fatalf("%s must keep final GA acceptance blocked status", path)
+	if strings.Contains(text, "FINAL GA ACCEPTANCE REMAINS BLOCKED") {
+		t.Fatalf("%s must not keep final GA acceptance blocked status; repo-local script exit code is now the GA decision", path)
+	}
+	if !strings.Contains(text, "scripts/verify-ga-release.sh") {
+		t.Fatalf("%s must point GA release decisions at scripts/verify-ga-release.sh", path)
+	}
+	if !strings.Contains(strings.ToLower(normalizedText), "exit code") &&
+		!strings.Contains(strings.ToLower(normalizedText), "exit status") {
+		t.Fatalf("%s must state the GA release script exit code/status is the GA decision", path)
 	}
 	if !strings.Contains(normalizedText, "GA implementation-baseline") &&
 		!strings.Contains(normalizedText, "implementation-baseline") {
@@ -1398,6 +1501,95 @@ func TestCurrentRepoReadinessEvidenceHasCurrentImplementationStatus(t *testing.T
 	boundary := "Reference consumer adoption notes can inform compatibility work, but no first consumer or sibling repository acceptance is an AFSCP gate or release blocker."
 	if !strings.Contains(normalizedText, boundary) {
 		t.Fatalf("%s must state first/reference consumer adoption is not an AFSCP gate or release blocker", path)
+	}
+}
+
+func TestCurrentRepoGAVerificationScriptsAreAuthoritative(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	releasePath := filepath.Join(repoRoot, "scripts", "verify-ga-release.sh")
+	baselinePath := filepath.Join(repoRoot, "scripts", "verify-ga-baseline.sh")
+	readmePath := filepath.Join(repoRoot, "scripts", "README.md")
+
+	releaseBody, err := os.ReadFile(releasePath)
+	if err != nil {
+		t.Fatalf("authoritative GA release gate must exist at %s: %v", releasePath, err)
+	}
+	releaseText := string(releaseBody)
+	for _, required := range []string{
+		"git diff --check",
+		"bash -n scripts/verify-ga-release.sh",
+		"bash -n scripts/verify-ga-baseline.sh",
+		"go test -count=1 ./internal/contractcheck",
+		"bash scripts/verify-ga-baseline.sh",
+	} {
+		if !strings.Contains(releaseText, required) {
+			t.Fatalf("%s must run %q", releasePath, required)
+		}
+	}
+	for _, forbidden := range []string{
+		"mbos-sandbox",
+		"improve-agentsmith",
+		"../",
+	} {
+		if strings.Contains(releaseText, forbidden) {
+			t.Fatalf("%s must remain repo-local and not reference sibling project token %q", releasePath, forbidden)
+		}
+	}
+	if _, err := os.Stat(baselinePath); err != nil {
+		t.Fatalf("baseline script must remain at %s: %v", baselinePath, err)
+	}
+	for _, path := range []string{releasePath, baselinePath} {
+		cmd := exec.Command("bash", "-n", path)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("bash -n %s failed: %v\n%s", path, err, string(output))
+		}
+	}
+	baselineBody, err := os.ReadFile(baselinePath)
+	if err != nil {
+		t.Fatalf("baseline script must be readable at %s: %v", baselinePath, err)
+	}
+	baselineText := string(baselineBody)
+	for _, required := range []string{
+		"git diff --check",
+		"go test -count=1 ./...",
+		"go run ./cmd/afscp-contract-verify",
+	} {
+		if !strings.Contains(baselineText, required) {
+			t.Fatalf("%s must run baseline check %q", baselinePath, required)
+		}
+	}
+
+	readmeBody, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("scripts README must exist at %s: %v", readmePath, err)
+	}
+	readmeText := string(readmeBody)
+	if !strings.Contains(readmeText, "scripts/verify-ga-release.sh") ||
+		!strings.Contains(strings.ToLower(readmeText), "authoritative") ||
+		!strings.Contains(strings.ToLower(readmeText), "exit code") ||
+		!strings.Contains(strings.ToLower(readmeText), "release-only governance checks") ||
+		!strings.Contains(readmeText, "scripts/verify-ga-baseline.sh") {
+		t.Fatalf("%s must document release-only governance checks, baseline checks, and scripts/verify-ga-release.sh as the authoritative GA gate whose exit code decides GA", readmePath)
+	}
+}
+
+func TestCurrentRepoGAReleaseWorkflowRunsAuthoritativeScript(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ga-release.yml")
+
+	body, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("repo-local GA release workflow must exist at %s: %v", workflowPath, err)
+	}
+	text := string(body)
+	for _, required := range []string{
+		"actions/checkout",
+		"actions/setup-go",
+		"bash scripts/verify-ga-release.sh",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("%s must include %q", workflowPath, required)
+		}
 	}
 }
 
@@ -1496,8 +1688,8 @@ func missingPRTemplateGovernanceChecklistItems(body string) []string {
 			pattern: regexp.MustCompile(`(?is)precise.*test.*commands|test.*commands.*precise`),
 		},
 		{
-			label:   "GA baseline verification",
-			pattern: regexp.MustCompile(`(?is)scripts/verify-ga-baseline\.sh`),
+			label:   "GA release verification",
+			pattern: regexp.MustCompile(`(?is)scripts/verify-ga-release\.sh`),
 		},
 		{
 			label:   "main-agent provenance",
@@ -1532,7 +1724,7 @@ func prTemplateRequiredGovernanceChecklistLabels() []string {
 		"worker/subagent ownership",
 		"TDD red/green evidence",
 		"precise test commands",
-		"GA baseline verification",
+		"GA release verification",
 		"main-agent provenance",
 		"risk/gate impact",
 		"product-agnostic boundary check",

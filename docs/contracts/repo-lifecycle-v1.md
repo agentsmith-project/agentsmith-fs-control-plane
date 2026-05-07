@@ -1,9 +1,8 @@
 # Contract: Repo Lifecycle V1
 
-Status: GA implementation-baseline contract. FINAL GA acceptance remains
-governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
-operations, runbook drill, and human sign-off entries must be complete before
-the applicable readiness gate is closed.
+Status: GA implementation-baseline contract. FINAL GA is governed by
+`docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and
+`scripts/verify-ga-release.sh`.
 
 AFSCP owns storage lifecycle for repos. Calling products own product catalog
 state, display names, user-facing deletion UX, and permission checks.
@@ -61,7 +60,7 @@ wired slices already include export admission, WebDAV gateway admission and
 runtime request ledger accounting, repo lifecycle worker drain checks,
 restore/template writer-fence admission, and read-write export/workload
 admission through shared repo-row serialization. Remaining endpoint coverage
-and drill evidence are still review items.
+must stay covered by repo-local evidence.
 The session substrate pure model also exists for restore-run writer gating and
 lifecycle drain gating over export and workload-mount sessions. Export sessions
 are wired to the API create/get/revoke boundary, WebDAV gateway admission and
