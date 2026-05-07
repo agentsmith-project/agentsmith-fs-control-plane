@@ -13,6 +13,9 @@ GA candidate deployments must explicitly set `AFSCP_READINESS_PROFILE=ga` so
 `/readyz` requires the full GA capability set; passing `/readyz` is still not a
 substitute for final evidence review and human GA approval.
 
+`/readyz` reports storage ready only when static storage capability config is
+available and the runtime store health check passes.
+
 ## Alert Classes
 
 | Class | Examples | Page |

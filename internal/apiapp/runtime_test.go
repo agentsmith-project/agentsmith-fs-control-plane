@@ -268,6 +268,76 @@ func TestInternalRuntimeReadinessDefaultProfileDoesNotRequireDisabledWebDAV(t *t
 	}
 }
 
+func TestInternalRuntimeReadinessDefaultProfileRequiresStaticStorageCapability(t *testing.T) {
+	tests := []struct {
+		name        string
+		overrides   config.MapSource
+		wantEnabled bool
+		wantReason  string
+	}{
+		{
+			name:        "storage config missing",
+			overrides:   config.MapSource{},
+			wantEnabled: false,
+			wantReason:  "storage_not_configured",
+		},
+		{
+			name: "storage disabled",
+			overrides: config.MapSource{
+				"AFSCP_STORAGE_ENABLED": "false",
+				"AFSCP_STORAGE_READY":   "false",
+			},
+			wantEnabled: false,
+			wantReason:  "storage_not_configured",
+		},
+		{
+			name: "storage enabled but unready",
+			overrides: config.MapSource{
+				"AFSCP_STORAGE_ENABLED": "true",
+				"AFSCP_STORAGE_READY":   "false",
+			},
+			wantEnabled: true,
+			wantReason:  "storage_not_ready",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := baseTestRuntimeSource()
+			for key, value := range tt.overrides {
+				source[key] = value
+			}
+			pingCalls := 0
+			runtime := newTestRuntimeWithSource(t, source, func(context.Context) error {
+				pingCalls++
+				return nil
+			})
+			defer closeRuntime(t, runtime)
+
+			rec := httptest.NewRecorder()
+			runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+			}
+			if pingCalls != 0 {
+				t.Fatalf("storage ping calls = %d, want 0 when static storage is unavailable", pingCalls)
+			}
+
+			var body api.ReadinessResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+			}
+			if body.Ready {
+				t.Fatalf("readiness = ready, want not ready when static storage is unavailable")
+			}
+			storage := body.Capabilities[api.CapabilityStorage]
+			if storage.Enabled != tt.wantEnabled || storage.Ready || !storage.Gated || storage.Reason != tt.wantReason {
+				t.Fatalf("storage gate = %#v, want enabled=%t ready=false gated=true reason=%q", storage, tt.wantEnabled, tt.wantReason)
+			}
+		})
+	}
+}
+
 func TestInternalRuntimeReadinessGAProfileRequiresFullGACapabilitySet(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -282,6 +352,24 @@ func TestInternalRuntimeReadinessGAProfileRequiresFullGACapabilitySet(t *testing
 				"AFSCP_JVS_READY":   "false",
 			},
 			wantGate: api.CapabilityJVS,
+			wantCode: http.StatusServiceUnavailable,
+		},
+		{
+			name: "storage disabled",
+			overrides: config.MapSource{
+				"AFSCP_STORAGE_ENABLED": "false",
+				"AFSCP_STORAGE_READY":   "false",
+			},
+			wantGate: api.CapabilityStorage,
+			wantCode: http.StatusServiceUnavailable,
+		},
+		{
+			name: "storage unready",
+			overrides: config.MapSource{
+				"AFSCP_STORAGE_ENABLED": "true",
+				"AFSCP_STORAGE_READY":   "false",
+			},
+			wantGate: api.CapabilityStorage,
 			wantCode: http.StatusServiceUnavailable,
 		},
 		{
@@ -630,7 +718,15 @@ func newTestRuntimeWithStorePing(t *testing.T, ping func(context.Context) error)
 
 func newTestRuntimeWithSourceOverrides(t *testing.T, overrides config.MapSource, ping func(context.Context) error) *Runtime {
 	t.Helper()
-	source := config.MapSource{
+	source := readyTestRuntimeSource()
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return newTestRuntimeWithSource(t, source, ping)
+}
+
+func baseTestRuntimeSource() config.MapSource {
+	return config.MapSource{
 		"AFSCP_API_MODE":                                 "internal",
 		"AFSCP_API_POSTGRES_DSN":                         "postgres://api:secret@db/afscp",
 		"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
@@ -643,9 +739,17 @@ func newTestRuntimeWithSourceOverrides(t *testing.T, overrides config.MapSource,
 		"AFSCP_MOUNT_ENABLED":                            "true",
 		"AFSCP_MOUNT_READY":                              "true",
 	}
-	for key, value := range overrides {
-		source[key] = value
-	}
+}
+
+func readyTestRuntimeSource() config.MapSource {
+	source := baseTestRuntimeSource()
+	source["AFSCP_STORAGE_ENABLED"] = "true"
+	source["AFSCP_STORAGE_READY"] = "true"
+	return source
+}
+
+func newTestRuntimeWithSource(t *testing.T, source config.MapSource, ping func(context.Context) error) *Runtime {
+	t.Helper()
 	runtime, err := NewRuntime(Options{
 		Source: source,
 		StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {

@@ -412,12 +412,7 @@ func internalReadiness(cfg config.Config) api.ReadinessResponse {
 		Ready:                false,
 		RequiredCapabilities: internalRequiredReadinessCapabilities(cfg),
 		Capabilities: map[string]api.CapabilityGate{
-			api.CapabilityStorage: {
-				Enabled: true,
-				Ready:   true,
-				Gated:   false,
-				Reason:  "",
-			},
+			api.CapabilityStorage:      capabilityReadiness(cfg.Capabilities.Storage, "storage_not_configured", "storage_not_ready"),
 			api.CapabilityJVS:          capabilityReadiness(cfg.Capabilities.JVS, "jvs_not_configured", "jvs_not_ready"),
 			api.CapabilityWebDAVExport: capabilityReadiness(cfg.Capabilities.WebDAV, "webdav_not_configured", "webdav_not_ready"),
 			api.CapabilityWorkloadMount: {
@@ -433,6 +428,9 @@ func internalReadiness(cfg config.Config) api.ReadinessResponse {
 func internalReadinessProvider(cfg config.Config, ping func(context.Context) error) func(context.Context) api.ReadinessResponse {
 	return func(ctx context.Context) api.ReadinessResponse {
 		readiness := internalReadiness(cfg)
+		if !cfg.Capabilities.Storage.Available() {
+			return readiness
+		}
 		if ping == nil {
 			readiness.Capabilities[api.CapabilityStorage] = api.CapabilityGate{
 				Enabled: true,
