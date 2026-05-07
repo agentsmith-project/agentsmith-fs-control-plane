@@ -236,21 +236,25 @@ func TestCommitRestoreRunFailedWithLeaseHandlesValidateWriterFencedAndConsumingB
 
 func TestRestoreRunCommitsRejectRawCommandsBeforeSQL(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
-	record := restoreRunOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseRestoreRunCommitted)
-	record.SessionFenceID = "fence_restore_run01"
-	record.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001"}
-	record.JVSJSONOutput = map[string]any{"restore_plan_id": "plan_001", "recommended_next_command": "jvs restore run plan_001"}
-	record.VerificationResult = map[string]any{"restore_plan_id": "plan_001", "restore_plan_status": "consumed"}
-	record.FinishedAt = &now
-	exec := &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}
-	st := &Store{exec: exec}
+	for _, key := range []string{"recommended_next_command", "mount_command", "raw_mount_command", "direct_mount_command"} {
+		t.Run(key, func(t *testing.T) {
+			record := restoreRunOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseRestoreRunCommitted)
+			record.SessionFenceID = "fence_restore_run01"
+			record.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001"}
+			record.JVSJSONOutput = map[string]any{"restore_plan_id": "plan_001", key: "juicefs mount repo_main /mnt/workspace"}
+			record.VerificationResult = map[string]any{"restore_plan_id": "plan_001", "restore_plan_status": "consumed"}
+			record.FinishedAt = &now
+			exec := &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}
+			st := &Store{exec: exec}
 
-	_, _, err := st.CommitRestoreRunSucceededWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, restoreRunAudit(record, audit.OutcomeSucceeded, now))
-	if err == nil || errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("CommitRestoreRunSucceededWithLease error = %v, want validation before SQL", err)
-	}
-	if exec.query != "" {
-		t.Fatalf("issued SQL for raw command output: %s", exec.query)
+			_, _, err := st.CommitRestoreRunSucceededWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, restoreRunAudit(record, audit.OutcomeSucceeded, now))
+			if err == nil || errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("CommitRestoreRunSucceededWithLease error = %v, want validation before SQL", err)
+			}
+			if exec.query != "" {
+				t.Fatalf("issued SQL for raw command output: %s", exec.query)
+			}
+		})
 	}
 }
 
@@ -268,6 +272,9 @@ func TestRestoreRunCommitsRejectRawCommandAuditDetailsBeforeSQL(t *testing.T) {
 	}{
 		{name: "top-level", details: map[string]any{"recommended_next_command": "jvs restore run plan_001"}},
 		{name: "nested map string string", details: map[string]any{"jvs": map[string]string{"run_command": "jvs restore run plan_001"}}},
+		{name: "mount command", details: map[string]any{"mount_command": "juicefs mount repo_main /mnt/workspace"}},
+		{name: "raw mount command", details: map[string]any{"jvs": map[string]string{"raw_mount_command": "juicefs mount repo_raw /mnt/raw"}}},
+		{name: "direct mount command", details: map[string]any{"commands": []any{map[string]any{"direct_mount_command": "juicefs mount repo_direct /mnt/direct"}}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

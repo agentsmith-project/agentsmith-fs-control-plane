@@ -214,6 +214,9 @@ func isStorageInternalOrCommandKey(normalized string) bool {
 		"runcommand",
 		"recommendednextcommand",
 		"restorecommand",
+		"mountcommand",
+		"rawmountcommand",
+		"directmountcommand",
 		"command":
 		return true
 	default:

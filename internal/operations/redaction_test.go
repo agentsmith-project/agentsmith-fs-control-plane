@@ -237,6 +237,9 @@ func TestSanitizedForPersistenceRedactsStorageInternalAndCommandFields(t *testin
 			"control_volume_subdir":    "afscp/namespaces/ns_123/repos/repo_123/control",
 			"payload_volume_subdir":    "afscp/namespaces/ns_123/repos/repo_123/payload",
 			"recommended_next_command": "jvs restore --run plan_123",
+			"mount_command":            "juicefs mount repo_main /mnt/workspace",
+			"raw_mount_command":        "juicefs mount repo_raw /mnt/raw",
+			"direct_mount_command":     "juicefs mount repo_direct /mnt/direct",
 			"nested": map[string]any{
 				"repo_root":      "/srv/afscp/namespaces/ns_123/repos/repo_123",
 				"run_command":    "jvs restore --run nested",
@@ -294,6 +297,7 @@ func TestSanitizedForPersistenceRedactsStorageInternalAndCommandFields(t *testin
 		"afscp/namespaces/ns_123/repos/repo_456/control",
 		"jvs restore --run",
 		"jvs doctor",
+		"juicefs mount",
 		".jvs",
 	} {
 		if strings.Contains(rendered, strings.ToLower(forbidden)) {

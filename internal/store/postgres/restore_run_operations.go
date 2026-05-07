@@ -399,7 +399,7 @@ func containsForbiddenRestoreRunCommand(value any) bool {
 		for key, value := range typed {
 			normalized := strings.ToLower(strings.TrimSpace(key))
 			switch normalized {
-			case "run_command", "recommended_next_command", "restore_command", "command":
+			case "run_command", "recommended_next_command", "restore_command", "mount_command", "raw_mount_command", "direct_mount_command", "command":
 				return true
 			}
 			if containsForbiddenRestoreRunCommand(value) {
@@ -410,7 +410,7 @@ func containsForbiddenRestoreRunCommand(value any) bool {
 		for key := range typed {
 			normalized := strings.ToLower(strings.TrimSpace(key))
 			switch normalized {
-			case "run_command", "recommended_next_command", "restore_command", "command":
+			case "run_command", "recommended_next_command", "restore_command", "mount_command", "raw_mount_command", "direct_mount_command", "command":
 				return true
 			}
 		}
