@@ -179,6 +179,11 @@ components:
     NamespaceId:
       name: X-AFSCP-Namespace-Id
       in: header
+  schemas:
+    OperationEnvelope:
+      type: object
+    ExportCreateOperationEnvelope:
+      type: object
 paths:
 `)
 	for _, route := range api.InternalV1RouteMetadata() {
@@ -203,6 +208,16 @@ paths:
 		if cliIsMutatingMethod(route.Method) {
 			builder.WriteString(`        - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
+`)
+		}
+		if route.OperationID == "createExport" {
+			builder.WriteString(`      responses:
+        "202":
+          description: accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportCreateOperationEnvelope"
 `)
 		}
 	}

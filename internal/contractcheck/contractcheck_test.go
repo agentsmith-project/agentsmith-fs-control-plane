@@ -246,6 +246,30 @@ paths:
 	assertHasFinding(t, findings, CodeOpenAPIRouteOperationExtra)
 }
 
+func TestVerifyFilesCatchesCreateExportResponseSchemaDrift(t *testing.T) {
+	openapi := strings.Replace(validOpenAPI,
+		`                $ref: "#/components/schemas/ExportCreateOperationEnvelope"`,
+		`                $ref: "#/components/schemas/OperationEnvelope"`,
+		1,
+	)
+	if openapi == validOpenAPI {
+		t.Fatal("test fixture did not contain createExport response schema ref")
+	}
+	paths := writeContractFixture(t, contractFixture{
+		openapi: openapi,
+		schema:  validSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, CodeOpenAPIResponseSchemaMismatch)
+}
+
 func TestVerifyFilesCatchesOpenAPIRawDirectMountAccessSingleTokenCases(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1356,6 +1380,11 @@ components:
     NamespaceId:
       name: X-AFSCP-Namespace-Id
       in: header
+  schemas:
+    OperationEnvelope:
+      type: object
+    ExportCreateOperationEnvelope:
+      type: object
 paths:
 `)
 	for _, route := range api.InternalV1RouteMetadata() {
@@ -1380,6 +1409,16 @@ paths:
 		if isMutatingMethod(route.Method) {
 			builder.WriteString(`        - $ref: "#/components/parameters/ActorType"
         - $ref: "#/components/parameters/ActorId"
+`)
+		}
+		if route.OperationID == "createExport" {
+			builder.WriteString(`      responses:
+        "202":
+          description: accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportCreateOperationEnvelope"
 `)
 		}
 	}

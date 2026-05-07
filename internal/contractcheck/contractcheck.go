@@ -24,6 +24,7 @@ const (
 	CodeOpenAPINamespaceParameterMissing         = "openapi.namespace_id_parameter_missing"
 	CodeOpenAPIMutatingHeaderMissing             = "openapi.mutating_header_missing"
 	CodeOpenAPIOperationsMissing                 = "openapi.operations_missing"
+	CodeOpenAPIResponseSchemaMismatch            = "openapi.response_schema_mismatch"
 	CodeOpenAPIRawDirectMountAccessForbidden     = "openapi.raw_direct_mount_access_forbidden"
 	CodeOpenAPIRouteOperationExtra               = "openapi.route_operation_extra"
 	CodeOpenAPIRouteOperationMissing             = "openapi.route_operation_missing"
@@ -196,6 +197,7 @@ func verifyOpenAPI(path, body string) []Finding {
 		}
 	}
 
+	findings = append(findings, verifyOpenAPIResponseSchemaGuards(path, operations)...)
 	findings = append(findings, verifyOpenAPIRouteParity(path, body, operations)...)
 	findings = append(findings, verifyOpenAPISchemaRawCredentialFields(path, body)...)
 
@@ -373,6 +375,40 @@ func verifyOpenAPIRouteParity(openAPIPath, body string, operations []openAPIOper
 	}
 
 	return findings
+}
+
+func verifyOpenAPIResponseSchemaGuards(openAPIPath string, operations []openAPIOperation) []Finding {
+	const (
+		createExportOperationID = "createExport"
+		createExportStatus      = "202"
+		createExportSchemaRef   = "#/components/schemas/ExportCreateOperationEnvelope"
+	)
+
+	for _, op := range operations {
+		if op.OperationID != createExportOperationID {
+			continue
+		}
+		got, line, ok := findOpenAPIResponseSchemaRef(op.Body, createExportStatus)
+		if ok && got == createExportSchemaRef {
+			return nil
+		}
+		if !ok {
+			got = "<missing>"
+		}
+		if line > 0 {
+			line = op.Line + line - 1
+		} else {
+			line = op.Line
+		}
+		return []Finding{{
+			Code:    CodeOpenAPIResponseSchemaMismatch,
+			File:    openAPIPath,
+			Line:    line,
+			Message: fmt.Sprintf("%s %s operation %q %s response schema must reference %s, got %s", strings.ToUpper(op.Method), op.Path, op.operationName(), createExportStatus, createExportSchemaRef, got),
+		}}
+	}
+
+	return nil
 }
 
 func verifySchema(path, body string) []Finding {
@@ -1689,6 +1725,63 @@ func hasParameterRef(body, name string) bool {
 	}
 
 	return false
+}
+
+func findOpenAPIResponseSchemaRef(body, status string) (string, int, bool) {
+	lines := splitLines(body)
+	inResponses := false
+	responsesIndent := -1
+	inStatus := false
+	statusIndent := -1
+	statusLine := 0
+	inSchema := false
+	schemaIndent := -1
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		indent := leadingSpaces(line)
+		key, value, hasKey := parseYAMLKeyValue(line)
+
+		if inSchema {
+			if indent <= schemaIndent {
+				inSchema = false
+			} else if hasKey && key == "$ref" {
+				return yamlScalarValue(value), i + 1, true
+			}
+		}
+
+		if inStatus {
+			if indent <= statusIndent {
+				inStatus = false
+				inSchema = false
+			} else if hasKey && key == "schema" {
+				inSchema = true
+				schemaIndent = indent
+				continue
+			}
+		}
+
+		if inResponses {
+			if indent <= responsesIndent {
+				inResponses = false
+			} else if hasKey && key == status {
+				inStatus = true
+				statusIndent = indent
+				statusLine = i + 1
+				continue
+			}
+		}
+
+		if !inResponses && hasKey && key == "responses" {
+			inResponses = true
+			responsesIndent = indent
+		}
+	}
+
+	return "", statusLine, false
 }
 
 func parseYAMLKeyValue(line string) (string, string, bool) {
