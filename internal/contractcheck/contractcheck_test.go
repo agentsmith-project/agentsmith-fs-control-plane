@@ -246,6 +246,78 @@ paths:
 	assertHasFinding(t, findings, CodeOpenAPIRouteOperationExtra)
 }
 
+func TestVerifyFilesCatchesOpenAPIRawDirectMountAccessSingleTokenCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		operationID string
+	}{
+		{name: "raw token", path: "/internal/v1/repos/{repoId}:raw", operationID: "inspectRepo"},
+		{name: "direct token", path: "/internal/v1/repos/{repoId}:direct", operationID: "inspectRepo"},
+		{name: "juicefs token", path: "/internal/v1/repos/{repoId}:juicefs", operationID: "inspectRepo"},
+		{name: "break glass token", path: "/internal/v1/repos/{repoId}:break-glass", operationID: "inspectRepo"},
+		{name: "mount command token", path: "/internal/v1/repos/{repoId}:mount-command", operationID: "inspectRepo"},
+		{name: "compact raw mount command", path: "/internal/v1/repos/{repoId}:probe", operationID: "rawmountcommand"},
+		{name: "compact direct mount", path: "/internal/v1/repos/{repoId}:probe", operationID: "directmount"},
+		{name: "compact break glass", path: "/internal/v1/repos/{repoId}:probe", operationID: "breakglass"},
+		{name: "compact mount command", path: "/internal/v1/repos/{repoId}:probe", operationID: "mountcommand"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openapi := strings.Replace(validOpenAPI, `
+paths:
+`, `
+paths:
+  `+tt.path+`:
+    get:
+      operationId: `+tt.operationID+`
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
+`, 1)
+			paths := writeContractFixture(t, contractFixture{
+				openapi: openapi,
+				schema:  validSchema,
+				docs:    validDocs,
+				draft:   validDocs,
+			})
+
+			findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+			if err != nil {
+				t.Fatalf("VerifyFiles returned error: %v", err)
+			}
+
+			assertFindingCount(t, findings, CodeOpenAPIRawDirectMountAccessForbidden, 1)
+		})
+	}
+}
+
+func TestForbiddenOpenAPIRawDirectMountTokensCoversCompactSingleTokens(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{name: "raw mount command", value: "rawmountcommand", want: []string{"rawmountcommand"}},
+		{name: "direct mount", value: "directmount", want: []string{"directmount"}},
+		{name: "break glass", value: "breakglass", want: []string{"breakglass"}},
+		{name: "mount command", value: "mountcommand", want: []string{"mountcommand"}},
+		{name: "workload mount binding allowed", value: "createWorkloadMountBinding", want: nil},
+		{name: "workload mount path allowed", value: "/internal/v1/workload-mount-bindings/{mountBindingId}", want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := forbiddenOpenAPIRawDirectMountTokens(tt.value)
+			if !sameStrings(got, tt.want) {
+				t.Fatalf("forbidden tokens for %q = %#v, want %#v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestVerifyFilesCatchesOpenAPIMissingRouteOperation(t *testing.T) {
 	openapi := strings.Replace(validOpenAPI, `
   /internal/v1/repos:
@@ -734,6 +806,18 @@ func assertNoFindingMessageContains(t *testing.T, findings []Finding, needle, co
 			t.Fatalf("did not expect finding code %q mentioning %q: %+v", code, needle, finding)
 		}
 	}
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func contains(s, needle string) bool {

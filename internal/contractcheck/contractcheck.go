@@ -20,13 +20,14 @@ import (
 )
 
 const (
-	CodeOpenAPINamespaceParameterInvalid = "openapi.namespace_id_parameter_invalid"
-	CodeOpenAPINamespaceParameterMissing = "openapi.namespace_id_parameter_missing"
-	CodeOpenAPIMutatingHeaderMissing     = "openapi.mutating_header_missing"
-	CodeOpenAPIOperationsMissing         = "openapi.operations_missing"
-	CodeOpenAPIRouteOperationExtra       = "openapi.route_operation_extra"
-	CodeOpenAPIRouteOperationMissing     = "openapi.route_operation_missing"
-	CodeOpenAPIRouteOperationIDMismatch  = "openapi.route_operation_id_mismatch"
+	CodeOpenAPINamespaceParameterInvalid     = "openapi.namespace_id_parameter_invalid"
+	CodeOpenAPINamespaceParameterMissing     = "openapi.namespace_id_parameter_missing"
+	CodeOpenAPIMutatingHeaderMissing         = "openapi.mutating_header_missing"
+	CodeOpenAPIOperationsMissing             = "openapi.operations_missing"
+	CodeOpenAPIRawDirectMountAccessForbidden = "openapi.raw_direct_mount_access_forbidden"
+	CodeOpenAPIRouteOperationExtra           = "openapi.route_operation_extra"
+	CodeOpenAPIRouteOperationMissing         = "openapi.route_operation_missing"
+	CodeOpenAPIRouteOperationIDMismatch      = "openapi.route_operation_id_mismatch"
 
 	CodeSchemaExportSessionRequiredMissing                 = "schema.export_session_required_missing"
 	CodeSchemaExportSessionPropertyMissing                 = "schema.export_session_property_missing"
@@ -147,6 +148,15 @@ func verifyOpenAPI(path, body string) []Finding {
 	}
 
 	for _, op := range operations {
+		if tokens := forbiddenOpenAPIRawDirectMountTokens(op.Path, op.OperationID); len(tokens) > 0 {
+			findings = append(findings, Finding{
+				Code:    CodeOpenAPIRawDirectMountAccessForbidden,
+				File:    path,
+				Line:    op.Line,
+				Message: fmt.Sprintf("ordinary/internal v1 OpenAPI must not expose raw/direct/break-glass mount access; %s %s operation %q contains forbidden token(s): %s", strings.ToUpper(op.Method), op.Path, op.operationName(), strings.Join(tokens, ", ")),
+			})
+		}
+
 		if isNamespaceBoundOperation(op) && !hasParameterRef(op.Body, "NamespaceId") {
 			findings = append(findings, Finding{
 				Code:    CodeOpenAPINamespaceParameterMissing,
@@ -177,6 +187,105 @@ func verifyOpenAPI(path, body string) []Finding {
 	findings = append(findings, verifyOpenAPIRouteParity(path, body, operations)...)
 
 	return findings
+}
+
+func forbiddenOpenAPIRawDirectMountTokens(values ...string) []string {
+	delimitedForbidden := []string{"direct", "raw", "juicefs", "break-glass", "mount-command"}
+	compactForbidden := []string{"rawmountcommand", "directmount", "breakglass", "mountcommand", "juicefs"}
+	seen := make(map[string]bool)
+	var found []string
+	for _, value := range values {
+		forms := []string{
+			normalizeForbiddenOpenAPITokenText(value, "-"),
+			normalizeForbiddenOpenAPITokenText(value, "_"),
+		}
+		foundDelimited := false
+		for _, token := range delimitedForbidden {
+			for _, form := range forms {
+				if !containsDelimitedToken(form, token) {
+					continue
+				}
+				if !seen[token] {
+					seen[token] = true
+					found = append(found, token)
+				}
+				foundDelimited = true
+				break
+			}
+		}
+		if foundDelimited {
+			continue
+		}
+		for _, token := range compactForbidden {
+			if !containsCompactForbiddenToken(value, token) {
+				continue
+			}
+			if !seen[token] {
+				seen[token] = true
+				found = append(found, token)
+			}
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
+func normalizeForbiddenOpenAPITokenText(value, separator string) string {
+	var builder strings.Builder
+	var previous byte
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if ch >= 'A' && ch <= 'Z' {
+			if i > 0 && isTokenWordByte(previous) && previous != '-' && previous != '_' && previous != '/' && previous != ':' {
+				builder.WriteString(separator)
+			}
+			ch += 'a' - 'A'
+		}
+		if isTokenWordByte(ch) {
+			builder.WriteByte(ch)
+		} else {
+			builder.WriteString(separator)
+		}
+		previous = value[i]
+	}
+	return builder.String()
+}
+
+func containsDelimitedToken(value, token string) bool {
+	token = strings.ReplaceAll(strings.ToLower(token), "_", "-")
+	value = strings.ReplaceAll(strings.ToLower(value), "_", "-")
+	for _, part := range strings.FieldsFunc(value, func(r rune) bool { return r == '-' || r == '/' || r == ':' || r == '.' }) {
+		if part == token {
+			return true
+		}
+	}
+	return strings.Contains("-"+value+"-", "-"+token+"-")
+}
+
+func containsCompactForbiddenToken(value, token string) bool {
+	compact := compactLowerAlnum(value)
+	if token == "mountcommand" {
+		compact = strings.ReplaceAll(compact, "rawmountcommand", "")
+	}
+	return strings.Contains(compact, token)
+}
+
+func compactLowerAlnum(value string) string {
+	var builder strings.Builder
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if ch >= 'A' && ch <= 'Z' {
+			ch += 'a' - 'A'
+		}
+		if isTokenWordByte(ch) {
+			builder.WriteByte(ch)
+		}
+	}
+	return builder.String()
+}
+
+func isTokenWordByte(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
 }
 
 type openAPIRouteKey struct {

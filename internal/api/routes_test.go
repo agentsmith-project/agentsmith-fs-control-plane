@@ -126,6 +126,109 @@ func TestRestorePreviewDiscardRouteMetadata(t *testing.T) {
 	}
 }
 
+func TestInternalV1RouteMetadataDoesNotExposeRawDirectMountAccess(t *testing.T) {
+	for _, route := range InternalV1RouteMetadata() {
+		t.Run(route.OperationID, func(t *testing.T) {
+			if route.RequiredRole == auth.RoleBreakGlassAdmin {
+				t.Fatalf("route %s %s requires break-glass admin; ordinary internal v1 routes must not use break-glass direct access", route.Method, route.Path)
+			}
+
+			if tokens := routeRawDirectMountForbiddenTokens(route.Path, route.OperationID); len(tokens) > 0 {
+				t.Fatalf("route %s %s operationId %q contains forbidden raw/direct mount token(s): %s", route.Method, route.Path, route.OperationID, strings.Join(tokens, ", "))
+			}
+		})
+	}
+}
+
+func TestRouteRawDirectMountForbiddenMatcherCoversCompactSingleTokens(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "raw mount command", value: "rawmountcommand", want: "rawmountcommand"},
+		{name: "direct mount", value: "directmount", want: "directmount"},
+		{name: "break glass", value: "breakglass", want: "breakglass"},
+		{name: "mount command", value: "mountcommand", want: "mountcommand"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := routeRawDirectMountForbiddenTokens(tt.value)
+			if len(tokens) != 1 || tokens[0] != tt.want {
+				t.Fatalf("route forbidden tokens for %q = %#v, want [%q]", tt.value, tokens, tt.want)
+			}
+		})
+	}
+}
+
+func routeRawDirectMountForbiddenTokens(values ...string) []string {
+	delimitedTokens := []string{"direct", "raw", "juicefs", "break-glass", "mount-command"}
+	compactTokens := []string{"rawmountcommand", "directmount", "breakglass", "mountcommand", "juicefs"}
+	seen := make(map[string]bool)
+	var found []string
+	for _, value := range values {
+		normalized := normalizeRouteForbiddenTokenText(value)
+		foundDelimited := false
+		for _, token := range delimitedTokens {
+			if !routeContainsDelimitedForbiddenToken(normalized, token) {
+				continue
+			}
+			if !seen[token] {
+				seen[token] = true
+				found = append(found, token)
+			}
+			foundDelimited = true
+		}
+		if foundDelimited {
+			continue
+		}
+		compact := strings.ReplaceAll(normalized, "-", "")
+		for _, token := range compactTokens {
+			search := compact
+			if token == "mountcommand" {
+				search = strings.ReplaceAll(search, "rawmountcommand", "")
+			}
+			if !strings.Contains(search, token) {
+				continue
+			}
+			if !seen[token] {
+				seen[token] = true
+				found = append(found, token)
+			}
+		}
+	}
+	return found
+}
+
+func routeContainsDelimitedForbiddenToken(value, token string) bool {
+	for _, part := range strings.FieldsFunc(value, func(r rune) bool { return r == '-' || r == '/' || r == ':' || r == '.' }) {
+		if part == token {
+			return true
+		}
+	}
+	return strings.Contains("-"+value+"-", "-"+token+"-")
+}
+
+func normalizeRouteForbiddenTokenText(value string) string {
+	var builder strings.Builder
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if ch >= 'A' && ch <= 'Z' {
+			if i > 0 {
+				builder.WriteByte('-')
+			}
+			ch += 'a' - 'A'
+		}
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
+			builder.WriteByte(ch)
+		} else {
+			builder.WriteByte('-')
+		}
+	}
+	return strings.Trim(builder.String(), "-")
+}
+
 func TestInternalV1RouteMetadataTemplatePathsExtractExpectedParams(t *testing.T) {
 	expectedValues := map[string]string{
 		"volumeId":       "vol_123",

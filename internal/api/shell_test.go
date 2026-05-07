@@ -244,6 +244,14 @@ func TestNeutralShellWithAuditSinkEmitsDeniedEventsWithoutSensitiveRequestData(t
 			wantType:     audit.EventTypePathDenied,
 			wantResource: "unmatched",
 		},
+		{
+			name:         "raw direct mount canary path denied",
+			method:       http.MethodPost,
+			path:         "/internal/v1/repos/repo_123/raw-mount-command?token=query-secret",
+			wantStatus:   http.StatusNotFound,
+			wantType:     audit.EventTypePathDenied,
+			wantResource: "unmatched",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &fakeAuditSink{}
@@ -261,6 +269,13 @@ func TestNeutralShellWithAuditSinkEmitsDeniedEventsWithoutSensitiveRequestData(t
 			}
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("expected status %d, got %d: %s", tc.wantStatus, rec.Code, rec.Body.String())
+			}
+			var envelope ErrorEnvelope
+			if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("error envelope did not decode: %v", err)
+			}
+			if tc.wantType == audit.EventTypePathDenied && envelope.Error.Code != CodePathDenied {
+				t.Fatalf("error code = %s, want %s", envelope.Error.Code, CodePathDenied)
 			}
 			if len(sink.events) != 1 {
 				t.Fatalf("expected one audit event, got %d", len(sink.events))
@@ -292,8 +307,12 @@ func TestNeutralShellWithAuditSinkEmitsDeniedEventsWithoutSensitiveRequestData(t
 				t.Fatalf("event Details[path] = %#v, want %#v", got, want)
 			}
 
+			responseBody := rec.Body.String()
 			rendered := auditEventString(t, event)
-			for _, leaked := range []string{"request-authorization-token", "query-token", "body-secret"} {
+			for _, leaked := range []string{"request-authorization-token", "query-token", "query-secret", "body-secret"} {
+				if strings.Contains(responseBody, leaked) {
+					t.Fatalf("denied response leaked %q in %s", leaked, responseBody)
+				}
 				if strings.Contains(rendered, leaked) {
 					t.Fatalf("denied audit event leaked %q in %s", leaked, rendered)
 				}
