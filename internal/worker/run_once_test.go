@@ -38,8 +38,8 @@ func TestRunOnceExecutesConfiguredRunnersInFixedOrderWithContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if strings.Join(order, ",") != "export,operation,mount_stale,stale,delivery" {
-		t.Fatalf("order = %#v, want export operation mount-stale stale delivery", order)
+	if strings.Join(order, ",") != "export,mount_stale,operation,stale,delivery" {
+		t.Fatalf("order = %#v, want export mount-stale operation stale delivery", order)
 	}
 	if export.ctx != ctx || op.ctx != ctx || mountStale.ctx != ctx || stale.ctx != ctx || delivery.ctx != ctx {
 		t.Fatal("runner did not receive request context")
@@ -47,6 +47,68 @@ func TestRunOnceExecutesConfiguredRunnersInFixedOrderWithContext(t *testing.T) {
 	summary := result.Summary()
 	if summary.ExportSessionReconcile.Scanned != 2 || summary.ExportSessionReconcile.Terminalized != 1 || summary.Operation.Scanned != 3 || summary.Operation.Claimed != 1 || summary.WorkloadMountStale.Scanned != 4 || summary.WorkloadMountStale.KeptBlocked != 4 || summary.AuditStale.Recovered != 2 || summary.AuditDelivery.Delivered != 3 {
 		t.Fatalf("summary = %#v, want aggregate counts", summary)
+	}
+}
+
+func TestRunOnceSkipsOperationRecoveryWhenSessionEvidencePrerequisiteFails(t *testing.T) {
+	exportErr := errors.New("export evidence stale")
+	mountErr := errors.New("mount evidence stale")
+	tests := []struct {
+		name          string
+		config        func(*[]string) Config
+		wantOrder     string
+		wantErr       error
+		wantErrDetail string
+	}{
+		{
+			name: "export reconcile",
+			config: func(order *[]string) Config {
+				export := &fakeExportReconcileRunner{name: "export", order: order, result: exportreconcile.Result{Scanned: 1, Failed: 1}, err: exportErr}
+				op := &fakeOperationRunner{name: "operation", order: order}
+				return Config{ExportSessionReconcile: export, OperationRecovery: op}
+			},
+			wantOrder:     "export",
+			wantErr:       exportErr,
+			wantErrDetail: "export session reconcile: export evidence stale",
+		},
+		{
+			name: "workload mount stale scan",
+			config: func(order *[]string) Config {
+				export := &fakeExportReconcileRunner{name: "export", order: order}
+				mountStale := &fakeWorkloadMountStaleRunner{name: "mount_stale", order: order, result: workloadmount.StaleLeaseResult{Scanned: 1, Failed: 1}, err: mountErr}
+				op := &fakeOperationRunner{name: "operation", order: order}
+				return Config{ExportSessionReconcile: export, WorkloadMountStale: mountStale, OperationRecovery: op}
+			},
+			wantOrder:     "export,mount_stale",
+			wantErr:       mountErr,
+			wantErrDetail: "workload mount stale lease scan: mount evidence stale",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			order := []string{}
+			result, err := New(tt.config(&order)).RunOnce(context.Background())
+			if err == nil {
+				t.Fatal("RunOnce succeeded, want prerequisite error")
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("RunOnce error = %v, want wrapped prerequisite error", err)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrDetail) {
+				t.Fatalf("RunOnce error = %v, want visible detail %q", err, tt.wantErrDetail)
+			}
+			if strings.Contains(err.Error(), "operation recovery") {
+				t.Fatalf("RunOnce error = %v, want no operation recovery error", err)
+			}
+
+			if strings.Join(order, ",") != tt.wantOrder {
+				t.Fatalf("order = %#v, want %s", order, tt.wantOrder)
+			}
+			if result.Summary().Operation != (OperationSummary{}) {
+				t.Fatalf("operation summary = %#v, want zero", result.Summary().Operation)
+			}
+		})
 	}
 }
 

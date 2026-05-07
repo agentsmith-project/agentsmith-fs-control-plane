@@ -2,7 +2,11 @@ package workerapp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +26,8 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
+
+const acceptedJVSBinarySHA256 = "f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521"
 
 func TestNewRunOnceRunnerDisabledFailsBeforeOpeningStore(t *testing.T) {
 	factoryCalls := 0
@@ -1116,6 +1122,35 @@ func TestRunOnceRepoLifecycleEnabledMissingJVSConfigFailsClosed(t *testing.T) {
 	}
 }
 
+func TestRunOnceRestorePreviewEnabledRejectsUnpinnedJVSChecksum(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore(workerAppRestorePreviewOperationRecord("op_restore_preview", now))
+	jvsFactoryCalls := 0
+
+	_, err := NewRunOnceRunner(Options{
+		Source: workerAppRestorePreviewConfigSource(config.MapSource{
+			"AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64),
+		}),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			jvsFactoryCalls++
+			return &workerAppFakeJVSRunner{}, nil
+		},
+		Clock: func() time.Time { return now },
+	})
+	if err == nil {
+		t.Fatal("NewRunOnceRunner succeeded, want pinned JVS checksum error")
+	}
+	if !strings.Contains(err.Error(), "pinned JVS") {
+		t.Fatalf("error = %q, want pinned JVS checksum context", err)
+	}
+	if jvsFactoryCalls != 0 {
+		t.Fatalf("jvs factory calls = %d, want config rejection before runner construction", jvsFactoryCalls)
+	}
+}
+
 func TestRunOnceScopedStoreDoesNotStarveVolumeBehindNonScopedRecords(t *testing.T) {
 	now := workerAppNow()
 	repoQueued := workerAppRepoOperationRecord("op_repo_queued", operations.OperationStateQueued, now)
@@ -1233,7 +1268,7 @@ func TestNewJVSRunnerFromConfigRedactsBinaryReadErrors(t *testing.T) {
 	_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
 		Enabled:         true,
 		JVSBinaryPath:   rawPath,
-		JVSBinarySHA256: strings.Repeat("a", 64),
+		JVSBinarySHA256: acceptedJVSBinarySHA256,
 		JVSCWD:          "/var/lib/afscp/jvs-cwd",
 		VolumeRoots:     map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
 	})
@@ -1242,6 +1277,29 @@ func TestNewJVSRunnerFromConfigRedactsBinaryReadErrors(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), rawPath) || strings.Contains(strings.ToLower(err.Error()), "secret") {
 		t.Fatalf("error leaked raw binary path: %v", err)
+	}
+}
+
+func TestNewJVSRunnerFromConfigVerifiesFileAgainstAcceptedPin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jvs")
+	content := []byte("not the accepted jvs release binary")
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatalf("write fake jvs binary: %v", err)
+	}
+	sum := sha256.Sum256(content)
+
+	_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
+		Enabled:         true,
+		JVSBinaryPath:   path,
+		JVSBinarySHA256: hex.EncodeToString(sum[:]),
+		JVSCWD:          "/var/lib/afscp/jvs-cwd",
+		VolumeRoots:     map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+	})
+	if err == nil {
+		t.Fatal("NewJVSRunnerFromConfig succeeded with non-pinned binary hash, want checksum error")
+	}
+	if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("error = %q, want checksum mismatch", err)
 	}
 }
 
@@ -1571,7 +1629,7 @@ func workerAppRepoConfigSource(overrides config.MapSource) config.MapSource {
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_REPO_CREATE_RECOVERY_ENABLED": "true",
 		"AFSCP_JVS_BINARY_PATH":              "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":            strings.Repeat("a", 64),
+		"AFSCP_JVS_BINARY_SHA256":            acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                      "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                 "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -1585,7 +1643,7 @@ func workerAppRepoLifecycleConfigSource(overrides config.MapSource) config.MapSo
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED": "true",
 		"AFSCP_JVS_BINARY_PATH":                 "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":               strings.Repeat("a", 64),
+		"AFSCP_JVS_BINARY_SHA256":               acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                         "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                    "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -1606,7 +1664,7 @@ func workerAppSavePointConfigSource(overrides config.MapSource) config.MapSource
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_SAVE_POINT_RECOVERY_ENABLED": "true",
 		"AFSCP_JVS_BINARY_PATH":             "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":           strings.Repeat("a", 64),
+		"AFSCP_JVS_BINARY_SHA256":           acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                     "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -1620,7 +1678,7 @@ func workerAppRestorePreviewConfigSource(overrides config.MapSource) config.MapS
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED": "true",
 		"AFSCP_JVS_BINARY_PATH":                  "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                strings.Repeat("a", 64),
+		"AFSCP_JVS_BINARY_SHA256":                acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                          "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                     "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -1634,7 +1692,7 @@ func workerAppRestorePreviewDiscardConfigSource(overrides config.MapSource) conf
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED": "true",
 		"AFSCP_JVS_BINARY_PATH":                          "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                        strings.Repeat("a", 64),
+		"AFSCP_JVS_BINARY_SHA256":                        acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                                  "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                             "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -1648,7 +1706,7 @@ func workerAppRestoreRunConfigSource(overrides config.MapSource) config.MapSourc
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_RESTORE_RUN_RECOVERY_ENABLED": "true",
 		"AFSCP_JVS_BINARY_PATH":              "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":            strings.Repeat("a", 64),
+		"AFSCP_JVS_BINARY_SHA256":            acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                      "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                 "vol_123=/srv/afscp/volumes/vol_123",
 	})

@@ -18,6 +18,7 @@ const (
 	defaultServiceName                    = "afscp"
 	defaultListenAddr                     = "127.0.0.1:8080"
 	defaultEnvironment                    = "development"
+	defaultReadinessProfile               = ReadinessProfileRuntime
 	defaultOperationRecoveryLimit         = 10
 	defaultOperationRecoveryLeaseDuration = 5 * time.Minute
 	defaultWorkerRunOnceTimeout           = 30 * time.Second
@@ -28,6 +29,17 @@ const (
 	defaultAuditDeliveryRetryBackoff      = time.Minute
 	defaultAuditDeliveryStaleThreshold    = 5 * time.Minute
 	defaultAuditDeliveryTimeout           = 10 * time.Second
+)
+
+const (
+	JVSAcceptedReleaseVersion      = "v0.4.8"
+	JVSAcceptedLinuxAMD64AssetName = "jvs-linux-amd64"
+	JVSAcceptedLinuxAMD64SHA256    = "f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521"
+)
+
+const (
+	ReadinessProfileRuntime = "runtime"
+	ReadinessProfileGA      = "ga"
 )
 
 // Source supplies configuration values without tying tests to process env.
@@ -54,13 +66,14 @@ func (EnvSource) Lookup(key string) (string, bool) {
 }
 
 type Config struct {
-	ServiceName   string
-	ListenAddr    string
-	Environment   string
-	Capabilities  Capabilities
-	Worker        WorkerConfig
-	API           APIConfig
-	ExportGateway ExportGatewayConfig
+	ServiceName      string
+	ListenAddr       string
+	Environment      string
+	ReadinessProfile string
+	Capabilities     Capabilities
+	Worker           WorkerConfig
+	API              APIConfig
+	ExportGateway    ExportGatewayConfig
 }
 
 type Capabilities struct {
@@ -161,9 +174,10 @@ func LoadFromEnv() (Config, error) {
 
 func Load(source Source) (Config, error) {
 	cfg := Config{
-		ServiceName: defaultServiceName,
-		ListenAddr:  defaultListenAddr,
-		Environment: defaultEnvironment,
+		ServiceName:      defaultServiceName,
+		ListenAddr:       defaultListenAddr,
+		Environment:      defaultEnvironment,
+		ReadinessProfile: defaultReadinessProfile,
 		API: APIConfig{
 			Mode: "neutral",
 		},
@@ -196,6 +210,10 @@ func Load(source Source) (Config, error) {
 	cfg.ServiceName = strings.ToLower(valueOrDefault(source, "AFSCP_SERVICE_NAME", cfg.ServiceName))
 	cfg.ListenAddr = valueOrDefault(source, "AFSCP_LISTEN_ADDR", cfg.ListenAddr)
 	cfg.Environment = strings.ToLower(valueOrDefault(source, "AFSCP_ENVIRONMENT", cfg.Environment))
+	cfg.ReadinessProfile = strings.ToLower(valueOrDefault(source, "AFSCP_READINESS_PROFILE", cfg.ReadinessProfile))
+	if err := validateReadinessProfile(cfg.ReadinessProfile); err != nil {
+		return Config{}, err
+	}
 
 	var err error
 	if cfg.Capabilities.Storage, err = loadCapability(source, "AFSCP_STORAGE"); err != nil {
@@ -251,6 +269,15 @@ func loadCapability(source Source, prefix string) (Capability, error) {
 		ready = false
 	}
 	return Capability{Enabled: enabled, Ready: ready}, nil
+}
+
+func validateReadinessProfile(profile string) error {
+	switch profile {
+	case ReadinessProfileRuntime, ReadinessProfileGA:
+		return nil
+	default:
+		return fmt.Errorf("AFSCP_READINESS_PROFILE must be runtime or ga")
+	}
 }
 
 func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error) {
@@ -479,8 +506,8 @@ func loadJVSConfigWhenCapabilityAvailable(source Source, gateKey string) (Worker
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	cfg.JVSBinarySHA256 = strings.ToLower(valueOrDefault(source, "AFSCP_JVS_BINARY_SHA256", ""))
-	if !validSHA256Hex(cfg.JVSBinarySHA256) {
-		return WorkerRepoCreateRecoveryConfig{}, fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must be a sha256 hex digest")
+	if err := validatePinnedJVSBinarySHA256(cfg.JVSBinarySHA256); err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	cfg.JVSCWD = valueOrDefault(source, "AFSCP_JVS_CWD", "")
 	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_CWD", cfg.JVSCWD, gateKey); err != nil {
@@ -701,8 +728,8 @@ func loadJVSOperationRecoveryConfig(source Source, gateKey string) (WorkerRepoCr
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	cfg.JVSBinarySHA256 = strings.ToLower(valueOrDefault(source, "AFSCP_JVS_BINARY_SHA256", ""))
-	if !validSHA256Hex(cfg.JVSBinarySHA256) {
-		return WorkerRepoCreateRecoveryConfig{}, fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must be a sha256 hex digest")
+	if err := validatePinnedJVSBinarySHA256(cfg.JVSBinarySHA256); err != nil {
+		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	cfg.JVSCWD = valueOrDefault(source, "AFSCP_JVS_CWD", "")
 	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_CWD", cfg.JVSCWD, gateKey); err != nil {
@@ -723,6 +750,16 @@ func validateCleanAbsoluteConfigPath(key, path, gateKey string) error {
 	}
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || path == string(filepath.Separator) {
 		return fmt.Errorf("%s must be an absolute clean path", key)
+	}
+	return nil
+}
+
+func validatePinnedJVSBinarySHA256(value string) error {
+	if !validSHA256Hex(value) {
+		return fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must be a sha256 hex digest")
+	}
+	if value != JVSAcceptedLinuxAMD64SHA256 {
+		return fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must match pinned JVS %s %s SHA-256", JVSAcceptedReleaseVersion, JVSAcceptedLinuxAMD64AssetName)
 	}
 	return nil
 }

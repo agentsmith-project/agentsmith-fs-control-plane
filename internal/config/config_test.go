@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const acceptedJVSBinarySHA256 = "f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521"
+
 func TestLoadDefaultsFailClosed(t *testing.T) {
 	cfg, err := Load(MapSource{})
 	if err != nil {
@@ -20,6 +22,9 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	}
 	if got, want := cfg.Environment, "development"; got != want {
 		t.Fatalf("Environment = %q, want %q", got, want)
+	}
+	if got, want := cfg.ReadinessProfile, "runtime"; got != want {
+		t.Fatalf("ReadinessProfile = %q, want %q", got, want)
 	}
 
 	assertCapability(t, "storage", cfg.Capabilities.Storage, false, false)
@@ -127,6 +132,39 @@ func TestLoadNormalizesFieldsAndCapabilities(t *testing.T) {
 	assertCapability(t, "jvs", cfg.Capabilities.JVS, true, false)
 	assertCapability(t, "webdav", cfg.Capabilities.WebDAV, true, true)
 	assertCapability(t, "mount", cfg.Capabilities.Mount, false, false)
+}
+
+func TestLoadReadinessProfileAllowsRuntimeAndGA(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "runtime", raw: " runtime ", want: "runtime"},
+		{name: "ga", raw: " GA ", want: "ga"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(MapSource{"AFSCP_READINESS_PROFILE": tt.raw})
+			if err != nil {
+				t.Fatalf("Load returned error: %v", err)
+			}
+			if cfg.ReadinessProfile != tt.want {
+				t.Fatalf("ReadinessProfile = %q, want %q", cfg.ReadinessProfile, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidReadinessProfile(t *testing.T) {
+	_, err := Load(MapSource{"AFSCP_READINESS_PROFILE": "production"})
+	if err == nil {
+		t.Fatal("Load succeeded, want readiness profile error")
+	}
+	if !strings.Contains(err.Error(), "AFSCP_READINESS_PROFILE") {
+		t.Fatalf("error = %q, want readiness profile context", err)
+	}
 }
 
 func TestLoadAPIInternalRuntimeConfig(t *testing.T) {
@@ -266,17 +304,18 @@ func TestLoadRepoCreateRecoveryRequiresExplicitConfigWhenEnabled(t *testing.T) {
 	}{
 		{name: "missing binary", want: "AFSCP_JVS_BINARY_PATH"},
 		{name: "missing checksum", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs"}, want: "AFSCP_JVS_BINARY_SHA256"},
-		{name: "missing cwd", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64)}, want: "AFSCP_JVS_CWD"},
-		{name: "missing roots", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd"}, want: "AFSCP_VOLUME_ROOTS"},
-		{name: "relative binary", override: MapSource{"AFSCP_JVS_BINARY_PATH": "jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol"}, want: "AFSCP_JVS_BINARY_PATH"},
+		{name: "missing cwd", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256}, want: "AFSCP_JVS_CWD"},
+		{name: "missing roots", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256, "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "relative binary", override: MapSource{"AFSCP_JVS_BINARY_PATH": "jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256, "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol"}, want: "AFSCP_JVS_BINARY_PATH"},
 		{name: "bad checksum", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": "not-sha", "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol"}, want: "AFSCP_JVS_BINARY_SHA256"},
-		{name: "relative cwd", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol"}, want: "AFSCP_JVS_CWD"},
-		{name: "bad root mapping", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=relative"}, want: "AFSCP_VOLUME_ROOTS"},
-		{name: "bad volume id slash", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_bad/id=/srv/vol"}, want: "AFSCP_VOLUME_ROOTS"},
-		{name: "bad volume id dot", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_bad.id=/srv/vol"}, want: "AFSCP_VOLUME_ROOTS"},
-		{name: "duplicate volume id", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol-a,vol_123=/srv/vol-b"}, want: "AFSCP_VOLUME_ROOTS"},
-		{name: "duplicate root", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol,vol_456=/srv/vol"}, want: "AFSCP_VOLUME_ROOTS"},
-		{name: "overlapping roots", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol,vol_456=/srv/vol/child"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "unpinned checksum", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64), "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol"}, want: "pinned JVS"},
+		{name: "relative cwd", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256, "AFSCP_JVS_CWD": "cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol"}, want: "AFSCP_JVS_CWD"},
+		{name: "bad root mapping", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256, "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=relative"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "bad volume id slash", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256, "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_bad/id=/srv/vol"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "bad volume id dot", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256, "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_bad.id=/srv/vol"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "duplicate volume id", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256, "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol-a,vol_123=/srv/vol-b"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "duplicate root", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256, "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol,vol_456=/srv/vol"}, want: "AFSCP_VOLUME_ROOTS"},
+		{name: "overlapping roots", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256, "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd", "AFSCP_VOLUME_ROOTS": "vol_123=/srv/vol,vol_456=/srv/vol/child"}, want: "AFSCP_VOLUME_ROOTS"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -310,7 +349,7 @@ func TestLoadRepoCreateRecoveryParsesValidConfig(t *testing.T) {
 		"AFSCP_WORKER_OWNER":                      "worker-a",
 		"AFSCP_REPO_CREATE_RECOVERY_ENABLED":      "true",
 		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                 strings.Repeat("a", 64),
+		"AFSCP_JVS_BINARY_SHA256":                 acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123, vol_other=/srv/afscp/volumes/vol_other",
 	})
@@ -318,7 +357,7 @@ func TestLoadRepoCreateRecoveryParsesValidConfig(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	repo := cfg.Worker.OperationRecovery.RepoCreate
-	if !repo.Enabled || repo.JVSBinaryPath != "/opt/afscp/bin/jvs" || repo.JVSCWD != "/var/lib/afscp/jvs-cwd" || repo.JVSBinarySHA256 != strings.Repeat("a", 64) {
+	if !repo.Enabled || repo.JVSBinaryPath != "/opt/afscp/bin/jvs" || repo.JVSCWD != "/var/lib/afscp/jvs-cwd" || repo.JVSBinarySHA256 != acceptedJVSBinarySHA256 {
 		t.Fatalf("repo_create config = %#v", repo)
 	}
 	if repo.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" || repo.VolumeRoots["vol_other"] != "/srv/afscp/volumes/vol_other" {
@@ -348,7 +387,7 @@ func TestLoadRepoLifecycleRecoveryParsesValidConfig(t *testing.T) {
 		"AFSCP_WORKER_OWNER":                      "worker-a",
 		"AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED":   "true",
 		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                 strings.Repeat("b", 64),
+		"AFSCP_JVS_BINARY_SHA256":                 acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -356,7 +395,7 @@ func TestLoadRepoLifecycleRecoveryParsesValidConfig(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	lifecycle := cfg.Worker.OperationRecovery.RepoLifecycle
-	if !lifecycle.Enabled || lifecycle.JVSBinaryPath != "/opt/afscp/bin/jvs" || lifecycle.JVSBinarySHA256 != strings.Repeat("b", 64) || lifecycle.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
+	if !lifecycle.Enabled || lifecycle.JVSBinaryPath != "/opt/afscp/bin/jvs" || lifecycle.JVSBinarySHA256 != acceptedJVSBinarySHA256 || lifecycle.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
 		t.Fatalf("repo lifecycle config = %#v", lifecycle)
 	}
 }
@@ -369,7 +408,7 @@ func TestLoadRepoPurgeRecoveryParsesIndependentExplicitGate(t *testing.T) {
 		"AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED":   "true",
 		"AFSCP_REPO_PURGE_RECOVERY_ENABLED":       "true",
 		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                 strings.Repeat("c", 64),
+		"AFSCP_JVS_BINARY_SHA256":                 acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -388,7 +427,7 @@ func TestLoadRestorePreviewRecoveryParsesIndependentExplicitGate(t *testing.T) {
 		"AFSCP_WORKER_OWNER":                      "worker-a",
 		"AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED":  "true",
 		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                 strings.Repeat("d", 64),
+		"AFSCP_JVS_BINARY_SHA256":                 acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -396,7 +435,7 @@ func TestLoadRestorePreviewRecoveryParsesIndependentExplicitGate(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	restorePreview := cfg.Worker.OperationRecovery.RestorePreview
-	if !restorePreview.Enabled || restorePreview.JVSBinaryPath != "/opt/afscp/bin/jvs" || restorePreview.JVSBinarySHA256 != strings.Repeat("d", 64) || restorePreview.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
+	if !restorePreview.Enabled || restorePreview.JVSBinaryPath != "/opt/afscp/bin/jvs" || restorePreview.JVSBinarySHA256 != acceptedJVSBinarySHA256 || restorePreview.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
 		t.Fatalf("restore preview config = %#v", restorePreview)
 	}
 	if cfg.Worker.OperationRecovery.SavePoint.Enabled || cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
@@ -411,7 +450,7 @@ func TestLoadRestorePreviewDiscardRecoveryParsesIndependentExplicitGate(t *testi
 		"AFSCP_WORKER_OWNER":                             "worker-a",
 		"AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED": "true",
 		"AFSCP_JVS_BINARY_PATH":                          "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                        strings.Repeat("e", 64),
+		"AFSCP_JVS_BINARY_SHA256":                        acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                                  "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                             "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -419,7 +458,7 @@ func TestLoadRestorePreviewDiscardRecoveryParsesIndependentExplicitGate(t *testi
 		t.Fatalf("Load: %v", err)
 	}
 	discard := cfg.Worker.OperationRecovery.RestorePreviewDiscard
-	if !discard.Enabled || discard.JVSBinaryPath != "/opt/afscp/bin/jvs" || discard.JVSBinarySHA256 != strings.Repeat("e", 64) || discard.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
+	if !discard.Enabled || discard.JVSBinaryPath != "/opt/afscp/bin/jvs" || discard.JVSBinarySHA256 != acceptedJVSBinarySHA256 || discard.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
 		t.Fatalf("restore preview discard config = %#v", discard)
 	}
 	if cfg.Worker.OperationRecovery.RestorePreview.Enabled || cfg.Worker.OperationRecovery.SavePoint.Enabled || cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
@@ -434,7 +473,7 @@ func TestLoadRestoreRunRecoveryParsesIndependentExplicitGate(t *testing.T) {
 		"AFSCP_WORKER_OWNER":                      "worker-a",
 		"AFSCP_RESTORE_RUN_RECOVERY_ENABLED":      "true",
 		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                 strings.Repeat("f", 64),
+		"AFSCP_JVS_BINARY_SHA256":                 acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -442,7 +481,7 @@ func TestLoadRestoreRunRecoveryParsesIndependentExplicitGate(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	restoreRun := cfg.Worker.OperationRecovery.RestoreRun
-	if !restoreRun.Enabled || restoreRun.JVSBinaryPath != "/opt/afscp/bin/jvs" || restoreRun.JVSBinarySHA256 != strings.Repeat("f", 64) || restoreRun.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
+	if !restoreRun.Enabled || restoreRun.JVSBinaryPath != "/opt/afscp/bin/jvs" || restoreRun.JVSBinarySHA256 != acceptedJVSBinarySHA256 || restoreRun.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
 		t.Fatalf("restore run config = %#v", restoreRun)
 	}
 	if cfg.Worker.OperationRecovery.RestorePreview.Enabled || cfg.Worker.OperationRecovery.RestorePreviewDiscard.Enabled || cfg.Worker.OperationRecovery.SavePoint.Enabled || cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {

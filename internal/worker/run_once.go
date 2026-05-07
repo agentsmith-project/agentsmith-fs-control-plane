@@ -133,14 +133,14 @@ func (runner Runner) RunOnce(ctx context.Context) (Result, error) {
 		}
 	}
 
-	if runner.config.OperationRecovery != nil {
+	if runner.config.WorkloadMountStale != nil {
 		if err := ctx.Err(); err != nil {
 			return result, errors.Join(append(errs, err)...)
 		}
-		operationResult, err := runner.config.OperationRecovery.RunOnce(ctx)
-		result.OperationRecovery = operationResult
+		staleMountResult, err := runner.config.WorkloadMountStale.RunOnce(ctx)
+		result.WorkloadMountStale = staleMountResult
 		if err != nil {
-			errs = append(errs, fmt.Errorf("operation recovery: %w", err))
+			errs = append(errs, fmt.Errorf("workload mount stale lease scan: %w", err))
 			if isContextError(err) {
 				return result, errors.Join(errs...)
 			}
@@ -151,14 +151,16 @@ func (runner Runner) RunOnce(ctx context.Context) (Result, error) {
 		}
 	}
 
-	if runner.config.WorkloadMountStale != nil {
+	evidenceErrCount := len(errs)
+
+	if runner.config.OperationRecovery != nil && evidenceErrCount == 0 {
 		if err := ctx.Err(); err != nil {
 			return result, errors.Join(append(errs, err)...)
 		}
-		staleMountResult, err := runner.config.WorkloadMountStale.RunOnce(ctx)
-		result.WorkloadMountStale = staleMountResult
+		operationResult, err := runner.config.OperationRecovery.RunOnce(ctx)
+		result.OperationRecovery = operationResult
 		if err != nil {
-			errs = append(errs, fmt.Errorf("workload mount stale lease scan: %w", err))
+			errs = append(errs, fmt.Errorf("operation recovery: %w", err))
 			if isContextError(err) {
 				return result, errors.Join(errs...)
 			}

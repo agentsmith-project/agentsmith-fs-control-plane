@@ -139,7 +139,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 	}
 	var savePointHistoryJVSRunner api.JVSHistoryRunner
 	if cfg.API.SavePointHistory.Enabled {
-		if err := verifyFileSHA256(cfg.API.SavePointHistory.JVSBinaryPath, cfg.API.SavePointHistory.JVSBinarySHA256); err != nil {
+		if err := verifyFileSHA256(cfg.API.SavePointHistory.JVSBinaryPath, config.JVSAcceptedLinuxAMD64SHA256); err != nil {
 			if handle.Close != nil {
 				err = errors.Join(err, handle.Close())
 			}
@@ -405,6 +405,14 @@ func internalReadinessProvider(cfg config.Config, ping func(context.Context) err
 }
 
 func internalRequiredReadinessCapabilities(cfg config.Config) []string {
+	if cfg.ReadinessProfile == config.ReadinessProfileGA {
+		return []string{
+			api.CapabilityStorage,
+			api.CapabilityJVS,
+			api.CapabilityWebDAVExport,
+			api.CapabilityWorkloadMount,
+		}
+	}
 	required := []string{api.CapabilityStorage}
 	if cfg.Capabilities.JVS.Enabled {
 		required = append(required, api.CapabilityJVS)

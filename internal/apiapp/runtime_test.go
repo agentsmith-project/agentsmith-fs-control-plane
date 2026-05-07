@@ -2,11 +2,15 @@ package apiapp
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +83,44 @@ func TestNewRuntimeFailsClosedWithoutValidTokenMapping(t *testing.T) {
 				t.Fatalf("error leaked token: %v", err)
 			}
 		})
+	}
+}
+
+func TestNewRuntimeFromConfigSavePointHistoryVerifiesJVSBinaryAgainstAcceptedPin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jvs")
+	content := []byte("not the accepted jvs release binary")
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatalf("write fake jvs binary: %v", err)
+	}
+	sum := sha256.Sum256(content)
+
+	runtime, err := NewRuntimeFromConfig(config.Config{
+		API: config.APIConfig{
+			Mode:                              "internal",
+			PostgresDSN:                       "postgres://api:secret@db/afscp",
+			ServiceTokens:                     "svc_api=token-api",
+			DeploymentGlobalAllowedCallers:    "svc_api:product:operation_inspector",
+			DeploymentNamespaceAllowedCallers: "svc_api:product:namespace_admin",
+			SavePointHistory: config.WorkerRepoCreateRecoveryConfig{
+				Enabled:         true,
+				JVSBinaryPath:   path,
+				JVSBinarySHA256: hex.EncodeToString(sum[:]),
+				JVSCWD:          "/var/lib/afscp/jvs-cwd",
+				VolumeRoots:     map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+			},
+		},
+	}, Options{
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			store := &fakeRuntimeStore{binding: testBinding()}
+			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+		},
+	})
+	if err == nil {
+		defer closeRuntime(t, runtime)
+		t.Fatal("NewRuntimeFromConfig succeeded with non-pinned binary hash, want checksum error")
+	}
+	if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("error = %q, want checksum mismatch", err)
 	}
 }
 
@@ -204,6 +246,105 @@ func TestInternalRuntimeReadinessGatesUnconfiguredWebDAVButDoesNotRequireIt(t *t
 	}
 }
 
+func TestInternalRuntimeReadinessDefaultProfileDoesNotRequireDisabledWebDAV(t *testing.T) {
+	runtime := newTestRuntimeWithSourceOverrides(t, config.MapSource{
+		"AFSCP_WEBDAV_ENABLED": "false",
+		"AFSCP_WEBDAV_READY":   "false",
+	}, func(context.Context) error { return nil })
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	if !body.Ready {
+		t.Fatalf("readiness = not ready, want default runtime profile to omit disabled WebDAV")
+	}
+}
+
+func TestInternalRuntimeReadinessGAProfileRequiresFullGACapabilitySet(t *testing.T) {
+	tests := []struct {
+		name      string
+		overrides config.MapSource
+		wantGate  string
+		wantCode  int
+	}{
+		{
+			name: "jvs missing",
+			overrides: config.MapSource{
+				"AFSCP_JVS_ENABLED": "false",
+				"AFSCP_JVS_READY":   "false",
+			},
+			wantGate: api.CapabilityJVS,
+			wantCode: http.StatusServiceUnavailable,
+		},
+		{
+			name: "webdav disabled",
+			overrides: config.MapSource{
+				"AFSCP_WEBDAV_ENABLED": "false",
+				"AFSCP_WEBDAV_READY":   "false",
+			},
+			wantGate: api.CapabilityWebDAVExport,
+			wantCode: http.StatusServiceUnavailable,
+		},
+		{
+			name: "mount unready",
+			overrides: config.MapSource{
+				"AFSCP_MOUNT_ENABLED": "true",
+				"AFSCP_MOUNT_READY":   "false",
+			},
+			wantGate: api.CapabilityWorkloadMount,
+			wantCode: http.StatusServiceUnavailable,
+		},
+		{
+			name:      "all ready",
+			overrides: config.MapSource{},
+			wantCode:  http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			overrides := config.MapSource{"AFSCP_READINESS_PROFILE": "ga"}
+			for key, value := range tt.overrides {
+				overrides[key] = value
+			}
+			runtime := newTestRuntimeWithSourceOverrides(t, overrides, func(context.Context) error { return nil })
+			defer closeRuntime(t, runtime)
+
+			rec := httptest.NewRecorder()
+			runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if rec.Code != tt.wantCode {
+				t.Fatalf("readiness status = %d, want %d: %s", rec.Code, tt.wantCode, rec.Body.String())
+			}
+
+			var body api.ReadinessResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+			}
+			if tt.wantCode == http.StatusOK {
+				if !body.Ready {
+					t.Fatalf("readiness = not ready, want ready")
+				}
+				return
+			}
+			if body.Ready {
+				t.Fatalf("readiness = ready, want GA profile not ready")
+			}
+			gate := body.Capabilities[tt.wantGate]
+			if gate.Enabled && gate.Ready && !gate.Gated {
+				t.Fatalf("%s gate = %#v, want gated or unavailable", tt.wantGate, gate)
+			}
+		})
+	}
+}
+
 func TestInternalRuntimeReadinessChecksStoreHealthWithoutLeakingErrors(t *testing.T) {
 	runtime := newTestRuntimeWithStorePing(t, func(context.Context) error {
 		return errors.New("postgres://api:secret@db/afscp token=store-token Authorization: Bearer bad")
@@ -267,20 +408,29 @@ func newTestRuntime(t *testing.T) *Runtime {
 
 func newTestRuntimeWithStorePing(t *testing.T, ping func(context.Context) error) *Runtime {
 	t.Helper()
+	return newTestRuntimeWithSourceOverrides(t, nil, ping)
+}
+
+func newTestRuntimeWithSourceOverrides(t *testing.T, overrides config.MapSource, ping func(context.Context) error) *Runtime {
+	t.Helper()
+	source := config.MapSource{
+		"AFSCP_API_MODE":                                 "internal",
+		"AFSCP_API_POSTGRES_DSN":                         "postgres://api:secret@db/afscp",
+		"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
+		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_api:product:operation_inspector",
+		"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
+		"AFSCP_JVS_ENABLED":                              "true",
+		"AFSCP_JVS_READY":                                "true",
+		"AFSCP_WEBDAV_ENABLED":                           "true",
+		"AFSCP_WEBDAV_READY":                             "true",
+		"AFSCP_MOUNT_ENABLED":                            "true",
+		"AFSCP_MOUNT_READY":                              "true",
+	}
+	for key, value := range overrides {
+		source[key] = value
+	}
 	runtime, err := NewRuntime(Options{
-		Source: config.MapSource{
-			"AFSCP_API_MODE":                                 "internal",
-			"AFSCP_API_POSTGRES_DSN":                         "postgres://api:secret@db/afscp",
-			"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
-			"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_api:product:operation_inspector",
-			"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
-			"AFSCP_JVS_ENABLED":                              "true",
-			"AFSCP_JVS_READY":                                "true",
-			"AFSCP_WEBDAV_ENABLED":                           "true",
-			"AFSCP_WEBDAV_READY":                             "true",
-			"AFSCP_MOUNT_ENABLED":                            "true",
-			"AFSCP_MOUNT_READY":                              "true",
-		},
+		Source: source,
 		StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {
 			if dsn != "postgres://api:secret@db/afscp" {
 				t.Fatalf("dsn = %q", dsn)

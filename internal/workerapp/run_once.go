@@ -684,7 +684,7 @@ func NewAuditDelivererFromConfig(cfg config.WorkerAuditDeliveryConfig) (auditdel
 }
 
 func NewJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
-	if err := verifyFileSHA256(cfg.JVSBinaryPath, cfg.JVSBinarySHA256); err != nil {
+	if err := verifyFileSHA256(cfg.JVSBinaryPath, config.JVSAcceptedLinuxAMD64SHA256); err != nil {
 		return nil, err
 	}
 	return jvsrunner.New(jvsrunner.Config{BinaryPath: cfg.JVSBinaryPath, CWD: cfg.JVSCWD})

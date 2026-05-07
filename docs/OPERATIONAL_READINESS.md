@@ -9,6 +9,10 @@ This document turns the runbook checklist into operator-ready acceptance
 criteria. It does not replace the detailed runbooks; it defines what each
 runbook and drill must prove.
 
+GA candidate deployments must explicitly set `AFSCP_READINESS_PROFILE=ga` so
+`/readyz` requires the full GA capability set; passing `/readyz` is still not a
+substitute for final evidence review and human GA approval.
+
 ## Alert Classes
 
 | Class | Examples | Page |
