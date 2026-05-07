@@ -91,6 +91,7 @@ terminal non-accessing state from the orchestrator or reconciliation process.
 - Stock JuiceFS CSI subdirectory mounting and Kubernetes `subPath` may be used to select the payload root. They must not mount the repo container directory that contains both `control/` and `payload/`.
 - Read-write binding issuance must be serialized with restore-run by a per-repo writer-session fence.
 - All binding issuance and status-changing calls must respect the per-repo lifecycle fence.
+- Bindings already in `releasing` may receive the payload-only Secret-bearing orchestrator plan solely so the dedicated orchestrator can identify and tear down existing runtime mounts. This does not re-admit workload access, and AFSCP must force `allow_privileged_workload=false` for these teardown plans.
 - AFSCP audits mount binding issuance, orchestrator plan issuance, denial, revoke, and expiry.
 
 ## Orchestrator Acceptance Contract

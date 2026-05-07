@@ -294,12 +294,44 @@ func workloadMountStaleNonTerminalSelectSQL() string {
 }
 
 func workloadMountPlanSelectSQL() string {
-	return "SELECT b.mount_binding_id, b.volume_id, r.payload_volume_subdir, b.mount_path, b.read_only, COALESCE((nvb.mount_policy->>'allow_privileged_workload')::boolean, false) " +
-		"FROM workload_mount_bindings b JOIN repos r ON r.namespace_id = b.namespace_id AND r.repo_id = b.repo_id " +
-		"JOIN namespace_volume_bindings nvb ON nvb.namespace_id = b.namespace_id " +
-		"JOIN namespaces ns ON ns.namespace_id = b.namespace_id " +
-		"WHERE b.namespace_id = $1 AND b.mount_binding_id = $2 AND nvb.status = 'active' " +
-		"AND ((ns.status = 'active' AND b.status IN ('issued','pending','active','releasing')) OR (ns.status = 'disabled' AND b.status = 'releasing'))"
+	return "WITH candidate_binding AS (" +
+		"SELECT mount_binding_id, namespace_id, repo_id, volume_id, mount_path, read_only, status FROM workload_mount_bindings " +
+		"WHERE namespace_id = $1 AND mount_binding_id = $2 AND status IN ('issued','pending','active','releasing')" +
+		"), active_namespace AS (" +
+		"SELECT ns.namespace_id FROM namespaces ns, candidate_binding b WHERE ns.namespace_id = b.namespace_id " +
+		"AND ns.status = 'active' AND b.status IN ('issued','pending','active')" +
+		"), teardown_namespace AS (" +
+		"SELECT ns.namespace_id FROM namespaces ns, candidate_binding b WHERE ns.namespace_id = b.namespace_id " +
+		"AND ns.status IN ('active','disabled') AND b.status = 'releasing'" +
+		"), active_binding AS (" +
+		"SELECT nvb.namespace_id, nvb.mount_policy FROM namespace_volume_bindings nvb, candidate_binding b " +
+		"WHERE nvb.namespace_id = b.namespace_id AND b.status IN ('issued','pending','active') AND nvb.status = 'active' " +
+		"AND COALESCE((nvb.mount_policy->>'workload_mount_enabled')::boolean, false) = true " +
+		"AND COALESCE((nvb.mount_policy->>'workload_mount_requires_jvs_external_control_root')::boolean, false) = true" +
+		"), active_repo AS (" +
+		"SELECT r.repo_id, r.volume_id, r.payload_volume_subdir FROM repos r, candidate_binding b " +
+		"WHERE r.namespace_id = b.namespace_id AND r.repo_id = b.repo_id AND r.volume_id = b.volume_id " +
+		"AND b.status IN ('issued','pending','active') AND r.repo_kind = 'repo' AND r.status = 'active' AND r.lifecycle_status = 'active'" +
+		"), repo_identity AS (" +
+		"SELECT r.repo_id, r.volume_id, r.payload_volume_subdir FROM repos r, candidate_binding b " +
+		"WHERE r.namespace_id = b.namespace_id AND r.repo_id = b.repo_id AND r.volume_id = b.volume_id " +
+		"AND b.status = 'releasing' AND r.repo_kind = 'repo'" +
+		"), active_volume AS (" +
+		"SELECT v.volume_id FROM volumes v, candidate_binding b WHERE v.volume_id = b.volume_id AND b.status IN ('issued','pending','active') AND v.status = 'active' " +
+		"AND COALESCE((v.capabilities->>'workload_mount')::boolean, false) = true " +
+		"AND COALESCE((v.capabilities->>'jvs_external_control_root')::boolean, false) = true" +
+		"), held_lifecycle_fence AS (" +
+		"SELECT fence_id FROM repo_fences, active_repo WHERE repo_fences.repo_id = active_repo.repo_id " +
+		"AND fence_kind = 'lifecycle' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL" +
+		"), issuance_track AS (" +
+		"SELECT b.mount_binding_id, b.volume_id, r.payload_volume_subdir, b.mount_path, b.read_only, COALESCE((nvb.mount_policy->>'allow_privileged_workload')::boolean, false) AS allow_privileged_workload " +
+		"FROM candidate_binding b, active_repo r, active_binding nvb " +
+		"WHERE b.status IN ('issued','pending','active') AND EXISTS (SELECT 1 FROM active_namespace) AND EXISTS (SELECT 1 FROM active_volume) AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)" +
+		"), teardown_track AS (" +
+		"SELECT b.mount_binding_id, b.volume_id, r.payload_volume_subdir, b.mount_path, b.read_only, false AS allow_privileged_workload " +
+		"FROM candidate_binding b, repo_identity r " +
+		"WHERE b.status = 'releasing' AND EXISTS (SELECT 1 FROM teardown_namespace)" +
+		") SELECT * FROM issuance_track UNION ALL SELECT * FROM teardown_track"
 }
 
 func workloadMountBindingCreateCommitSQL() string {
