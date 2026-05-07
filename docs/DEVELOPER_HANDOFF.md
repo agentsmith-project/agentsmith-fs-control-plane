@@ -79,13 +79,12 @@ internal/observability
 Verification commands:
 
 ```bash
-go test -count=1 ./...
-go run ./cmd/afscp-contract-verify \
-  -openapi api/openapi/internal-v1.openapi.yaml \
-  -schema api/schemas/afscp-internal-v1.schema.json \
-  -api-contract docs/contracts/afscp-internal-api-v1.md \
-  -api-draft docs/API_CONTRACT_DRAFT.md
+bash scripts/verify-ga-baseline.sh
 ```
+
+The script runs `git diff --check`, `go test -count=1 ./...`, and the internal
+API contract verifier. Passing it is local implementation baseline evidence, not
+final production GA acceptance.
 
 ## Current Status
 
