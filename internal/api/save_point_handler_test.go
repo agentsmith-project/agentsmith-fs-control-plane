@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
@@ -176,6 +177,40 @@ func TestSavePointCreateDeniesArchivedAndLifecycleFence(t *testing.T) {
 			assertSavePointResponseDoesNotLeak(t, rec.Body.String())
 		})
 	}
+}
+
+func TestSavePointCreateRejectsDisabledNamespaceBeforeIntakeAndAudits(t *testing.T) {
+	intake := &fakeOperationIntakeStore{}
+	sink := &fakeAuditSink{}
+	handler := SavePointHandler(SavePointHandlerConfig{
+		RepoReader:        &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}},
+		NamespaceReader:   &fakeNamespaceReader{namespace: disabledNamespaceFixture("ns_123", "raw secret reason password=secret")},
+		BindingReader:     &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
+		FenceReader:       &fakeRepoFenceReader{},
+		MutationGate:      &fakeRepoJVSMutationGateReader{},
+		IntakeStore:       intake,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    namespaceBindingAllowedPolicy(auth.RoleRepoAdmin),
+		OperationID:       func() string { return "op_savepoint" },
+		Now:               func() time.Time { return fixedNamespaceNow() },
+		AuditSink:         sink,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, savePointRequest(http.MethodPost, "/internal/v1/repos/repo_123/save-points", `{"message":"checkpoint"}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeNamespaceDisabled {
+		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeNamespaceDisabled)
+	}
+	if intake.calls != 0 {
+		t.Fatalf("intake calls = %d, want rejected before durable operation", intake.calls)
+	}
+	assertSavePointResponseDoesNotLeak(t, rec.Body.String())
+	assertDisabledNamespaceDenialAuditDoesNotLeak(t, sink)
 }
 
 func TestSavePointListReturnsHistoryAndFailsClosed(t *testing.T) {
@@ -400,6 +435,12 @@ func activeNamespaceFixture(namespaceID string) resources.Namespace {
 	return resources.Namespace{ID: namespaceID, Status: resources.NamespaceStatusActive, CreatedAt: now, UpdatedAt: now}
 }
 
+func disabledNamespaceFixture(namespaceID, reason string) resources.Namespace {
+	now := fixedNamespaceNow()
+	disabledAt := now.Add(-time.Minute)
+	return resources.Namespace{ID: namespaceID, Status: resources.NamespaceStatusDisabled, DisabledReason: reason, DisabledAt: &disabledAt, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}
+}
+
 func savePointOperationRecord(operationID string, hash operations.RequestHash) operations.OperationRecord {
 	now := fixedNamespaceNow()
 	return operations.OperationRecord{ID: operationID, Type: operations.OperationSavePointCreate, State: operations.OperationStateQueued, Phase: operations.OperationPhaseSavePointCreateValidate, IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_123", operations.OperationSavePointCreate, "idem_savepoint").String(), IdempotencyKey: "idem_savepoint", RequestHash: hash, CorrelationID: "corr_savepoint", CallerService: "agentsmith-api", AuthorizedActor: operations.Actor{Type: "user", ID: "user_123"}, Resource: operations.ResourceRef{Type: "repo", ID: "repo_123"}, NamespaceID: "ns_123", RepoID: "repo_123", ExternalResourceIDs: map[string]string{}, InputSummary: map[string]any{"message": "checkpoint"}, CreatedAt: now}
@@ -448,9 +489,22 @@ func (reader *fakeRepoJVSMutationGateReader) RepoHasNonTerminalJVSMutation(conte
 
 func assertSavePointResponseDoesNotLeak(t *testing.T, body string) {
 	t.Helper()
-	for _, forbidden := range []string{"/srv", ".jvs", "control_root", "payload_root", "raw_path", "jvs save", "jvs history", "password=secret", "token=", "bearer "} {
+	for _, forbidden := range []string{"/srv", ".jvs", "control_root", "payload_root", "raw_path", "jvs save", "jvs history", "password=secret", "raw secret reason", "token=", "bearer "} {
 		if strings.Contains(strings.ToLower(body), forbidden) {
 			t.Fatalf("save point response leaked %q: %s", forbidden, body)
+		}
+	}
+}
+
+func assertDisabledNamespaceDenialAuditDoesNotLeak(t *testing.T, sink *fakeAuditSink) {
+	t.Helper()
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("audit events = %#v, want one denied audit", sink.events)
+	}
+	rendered := strings.ToLower(auditEventString(t, sink.events[0]))
+	for _, forbidden := range []string{"password=secret", "raw secret reason"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("denied audit leaked %q: %s", forbidden, rendered)
 		}
 	}
 }

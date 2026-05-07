@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
@@ -32,6 +33,58 @@ func TestCreateRepoTemplateHandlerQueuesOperationAfterPolicyAndMutationGates(t *
 	}
 	if spec.InputSummary["clone_history_mode"] != "main" {
 		t.Fatalf("input summary = %#v, want GA clone_history_mode main", spec.InputSummary)
+	}
+}
+
+func TestRepoTemplateCreateRejectsDisabledNamespaceBeforeIntakeAndAudits(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*repoTemplateMeta)
+	}{
+		{name: "namespace disabled", edit: func(meta *repoTemplateMeta) {
+			meta.namespace = disabledNamespaceFixture("ns_123", "raw secret reason password=secret")
+		}},
+		{name: "namespace disabled beats template policy disabled", edit: func(meta *repoTemplateMeta) {
+			meta.namespace = disabledNamespaceFixture("ns_123", "raw secret reason password=secret")
+			meta.binding.TemplatePolicy["namespace_templates_enabled"] = false
+		}},
+		{name: "namespace disabled beats volume mismatch", edit: func(meta *repoTemplateMeta) {
+			meta.namespace = disabledNamespaceFixture("ns_123", "raw secret reason password=secret")
+			meta.repoReader.repos[0].VolumeID = "vol_other01"
+		}},
+		{name: "binding disabled beats template policy disabled", edit: func(meta *repoTemplateMeta) {
+			meta.binding.Status = resources.NamespaceStatusDisabled
+			meta.binding.TemplatePolicy["namespace_templates_enabled"] = false
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeOperationIntakeStore{}
+			meta := repoTemplateMetaFixture()
+			tt.edit(&meta)
+			meta.bindingReader = &fakeNamespaceVolumeBindingReader{binding: meta.binding}
+			sink := &fakeAuditSink{}
+			handler := repoTemplateHandlerForTestWithAudit(store, meta, sink)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, repoTemplateRequest(http.MethodPost, "/internal/v1/repo-templates", "ns_123", `{"namespace_id":"ns_123","source_repo_id":"repo_123","target_template_id":"tmpl_base01","clone_history_mode":"main"}`))
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+			}
+			env := decodeErrorEnvelope(t, rec.Body.Bytes())
+			if env.Error.Code != CodeNamespaceDisabled {
+				t.Fatalf("error code = %s, want %s", env.Error.Code, CodeNamespaceDisabled)
+			}
+			if store.calls != 0 {
+				t.Fatalf("intake calls = %d, want rejected before operation create", store.calls)
+			}
+			if store.jvsMutationCalls != 0 {
+				t.Fatalf("mutation gate calls = %d, want disabled namespace rejected before JVS gate", store.jvsMutationCalls)
+			}
+			assertRepoTemplateResponseDoesNotLeak(t, rec.Body.String())
+			assertDisabledNamespaceDenialAuditDoesNotLeak(t, sink)
+		})
 	}
 }
 
@@ -97,6 +150,56 @@ func TestCloneRepoTemplateRejectsCrossVolumeTemplate(t *testing.T) {
 	env := decodeErrorEnvelope(t, rec.Body.Bytes())
 	if env.Error.Code != CodeVolumeMismatchRequiresImport {
 		t.Fatalf("error code = %s, want VOLUME_MISMATCH_REQUIRES_IMPORT", env.Error.Code)
+	}
+}
+
+func TestRepoTemplateCloneRejectsDisabledNamespaceBeforeIntakeAndAudits(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*repoTemplateMeta)
+	}{
+		{name: "namespace disabled", edit: func(meta *repoTemplateMeta) {
+			meta.namespace = disabledNamespaceFixture("ns_123", "raw secret reason password=secret")
+		}},
+		{name: "namespace disabled beats template policy disabled", edit: func(meta *repoTemplateMeta) {
+			meta.namespace = disabledNamespaceFixture("ns_123", "raw secret reason password=secret")
+			meta.binding.TemplatePolicy["namespace_templates_enabled"] = false
+		}},
+		{name: "namespace disabled beats volume mismatch", edit: func(meta *repoTemplateMeta) {
+			meta.namespace = disabledNamespaceFixture("ns_123", "raw secret reason password=secret")
+			meta.template.VolumeID = "vol_other01"
+			meta.repoReader.repos[1] = meta.template
+		}},
+		{name: "binding disabled beats template policy disabled", edit: func(meta *repoTemplateMeta) {
+			meta.binding.Status = resources.NamespaceStatusDisabled
+			meta.binding.TemplatePolicy["namespace_templates_enabled"] = false
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeOperationIntakeStore{}
+			meta := repoTemplateMetaFixture()
+			tt.edit(&meta)
+			meta.bindingReader = &fakeNamespaceVolumeBindingReader{binding: meta.binding}
+			sink := &fakeAuditSink{}
+			handler := repoTemplateHandlerForTestWithAudit(store, meta, sink)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, repoTemplateRequest(http.MethodPost, "/internal/v1/repo-templates/tmpl_base01:clone", "ns_123", `{"namespace_id":"ns_123","template_id":"tmpl_base01","target_repo_id":"repo_clone01"}`))
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+			}
+			env := decodeErrorEnvelope(t, rec.Body.Bytes())
+			if env.Error.Code != CodeNamespaceDisabled {
+				t.Fatalf("error code = %s, want %s", env.Error.Code, CodeNamespaceDisabled)
+			}
+			if store.calls != 0 {
+				t.Fatalf("intake calls = %d, want rejected before operation create", store.calls)
+			}
+			assertRepoTemplateResponseDoesNotLeak(t, rec.Body.String())
+			assertDisabledNamespaceDenialAuditDoesNotLeak(t, sink)
+		})
 	}
 }
 
@@ -184,8 +287,16 @@ func repoTemplateMetaFixture() repoTemplateMeta {
 }
 
 func repoTemplateHandlerForTest(store *fakeOperationIntakeStore, meta repoTemplateMeta) http.Handler {
+	return repoTemplateHandlerForTestWithAudit(store, meta, nil)
+}
+
+func repoTemplateHandlerForTestWithAudit(store *fakeOperationIntakeStore, meta repoTemplateMeta, sink *fakeAuditSink) http.Handler {
 	if meta.bindingReader == nil {
 		meta.bindingReader = &fakeNamespaceVolumeBindingReader{binding: meta.binding}
+	}
+	var auditSink audit.Sink
+	if sink != nil {
+		auditSink = sink
 	}
 	return RepoTemplateHandler(RepoTemplateHandlerConfig{
 		RepoReader:        meta.repoReader,
@@ -199,6 +310,7 @@ func repoTemplateHandlerForTest(store *fakeOperationIntakeStore, meta repoTempla
 		AllowedCallers:    namespaceBindingAllowedPolicy(auth.RoleTemplateAdmin),
 		OperationID:       func() string { return "op_template" },
 		Now:               fixedNamespaceNow,
+		AuditSink:         auditSink,
 	})
 }
 
@@ -227,4 +339,13 @@ func templateOperationRecord(operationID string, typ operations.OperationType, h
 		repoID = "repo_clone01"
 	}
 	return operations.OperationRecord{ID: operationID, Type: typ, State: operations.OperationStateQueued, Phase: phase, IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_123", typ, "idem_template").String(), IdempotencyKey: "idem_template", RequestHash: hash, CorrelationID: "corr_template", CallerService: "agentsmith-api", AuthorizedActor: operations.Actor{Type: "user", ID: "user_123"}, Resource: resource, NamespaceID: "ns_123", RepoID: repoID, TemplateID: "tmpl_base01", ExternalResourceIDs: map[string]string{}, InputSummary: map[string]any{}, CreatedAt: now}
+}
+
+func assertRepoTemplateResponseDoesNotLeak(t *testing.T, body string) {
+	t.Helper()
+	for _, forbidden := range []string{"password=secret", "raw secret reason", "/srv", "control_root", "payload_root", "raw_path", "token=", "bearer "} {
+		if strings.Contains(strings.ToLower(body), forbidden) {
+			t.Fatalf("repo template response leaked %q: %s", forbidden, body)
+		}
+	}
 }

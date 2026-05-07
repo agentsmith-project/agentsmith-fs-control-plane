@@ -205,6 +205,10 @@ func (handler repoTemplateLeafHandler) serveCreate(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
+	if namespace.Status != resources.NamespaceStatusActive || binding.Status != resources.NamespaceStatusActive {
+		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeNamespaceDisabled, http.StatusConflict, false, "namespace or namespace binding is not active", []string{"namespace_disabled"}, handler.sink)
+		return
+	}
 	if !templatePolicyEnabled(binding) {
 		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeCapabilityDenied, http.StatusForbidden, false, "repo templates are disabled for namespace", []string{"template_policy_disabled"}, handler.sink)
 		return
@@ -281,6 +285,10 @@ func (handler repoTemplateLeafHandler) serveClone(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
+	if namespace.Status != resources.NamespaceStatusActive || binding.Status != resources.NamespaceStatusActive {
+		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeNamespaceDisabled, http.StatusConflict, false, "namespace or namespace binding is not active", []string{"namespace_disabled"}, handler.sink)
+		return
+	}
 	if !templatePolicyEnabled(binding) {
 		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeCapabilityDenied, http.StatusForbidden, false, "repo templates are disabled for namespace", []string{"template_policy_disabled"}, handler.sink)
 		return
@@ -289,7 +297,7 @@ func (handler repoTemplateLeafHandler) serveClone(w http.ResponseWriter, r *http
 		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeVolumeMismatchRequiresImport, http.StatusConflict, false, "template volume does not match namespace default volume", []string{"volume_mismatch_requires_import"}, handler.sink)
 		return
 	}
-	if namespace.Status != resources.NamespaceStatusActive || binding.Status != resources.NamespaceStatusActive || template.Kind != resources.RepoKindTemplate || template.Status != resources.RepoStatusActive {
+	if template.Kind != resources.RepoKindTemplate || template.Status != resources.RepoStatusActive {
 		writeRepoTemplateError(w, r, http.StatusConflict, CodeRepoLifecycleInvalidState, "template clone source is not active", false)
 		return
 	}
