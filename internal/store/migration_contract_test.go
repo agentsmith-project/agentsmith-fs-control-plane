@@ -268,12 +268,26 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 			"active_request_count >= 0",
 			"active_write_count >= 0",
 			"active_write_count <= active_request_count",
+			"status not in ('revoked', 'expired', 'failed') or ( active_request_count = 0 and active_write_count = 0 )",
 			"btrim(verifier_algorithm) <> ''",
 			"btrim(verifier_hash) <> ''",
 			"btrim(verifier_salt) <> ''",
 		)
 		table.requireNoSensitiveColumns(t)
 		contract.requireIndex(t, "export_sessions", []string{"repo_id", "created_at", "export_id"})
+	})
+
+	t.Run("export sessions terminal counts upgrade guard", func(t *testing.T) {
+		contract.requireRawFragments(t,
+			"pg_constraint",
+			"conname = 'export_sessions_terminal_zero_counts_check'",
+			"conrelid = 'export_sessions'::regclass",
+			"alter table export_sessions",
+			"add constraint export_sessions_terminal_zero_counts_check",
+			"status not in ('revoked', 'expired', 'failed')",
+			"active_request_count = 0",
+			"active_write_count = 0",
+		)
 	})
 
 	t.Run("workload mount bindings session table", func(t *testing.T) {

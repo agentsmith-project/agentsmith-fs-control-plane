@@ -11,6 +11,9 @@ not implement a store adapter, endpoint handler, or storage-side action.
 
 - `0001_control_plane_persistence.sql`: operation records, atomic idempotency
   uniqueness, audit outbox rows, and repo fence lifecycle fields.
+- `0002_export_sessions_terminal_zero_counts.sql`: backfill/upgrade guard that
+  adds the terminal export-session zero-count check for environments that
+  already applied `0001`.
 
 ## Contract
 

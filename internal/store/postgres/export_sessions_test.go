@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -343,11 +344,9 @@ func TestGatewayCredentialSQLFailsClosedOnInactiveNamespaceBindingOrSession(t *t
 	}
 }
 
-func TestMarkExportTerminalRejectsRevokingAsTerminalInput(t *testing.T) {
-	st := &Store{exec: &fakeExecutor{}}
-	_, err := st.MarkExportTerminal(context.Background(), "export_123", sessionstate.ExportStatusRevoking, time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC))
-	if err == nil {
-		t.Fatal("MarkExportTerminal accepted revoking, want terminal status only")
+func TestStoreDoesNotExposeLegacyExportTerminalHelper(t *testing.T) {
+	if method, ok := reflect.TypeOf((*Store)(nil)).MethodByName("MarkExportTerminal"); ok {
+		t.Fatalf("postgres.Store exposes legacy export terminal helper: %s", method.Name)
 	}
 }
 

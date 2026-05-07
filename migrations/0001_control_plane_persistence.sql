@@ -462,6 +462,13 @@ CREATE TABLE IF NOT EXISTS export_sessions (
         AND active_write_count >= 0
         AND active_write_count <= active_request_count
     ),
+    CONSTRAINT export_sessions_terminal_zero_counts_check CHECK (
+        status NOT IN ('revoked', 'expired', 'failed')
+        OR (
+            active_request_count = 0
+            AND active_write_count = 0
+        )
+    ),
     CONSTRAINT export_sessions_verifier_check CHECK (
         btrim(verifier_algorithm) <> ''
         AND btrim(verifier_hash) <> ''

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
@@ -147,6 +148,29 @@ func TestOperationWorkerCommitStoreContractCommitsSanitizedOperationAndAuditToge
 	if strings.Contains(toStoreContractString(fake.record.InputSummary), "contract-secret") ||
 		strings.Contains(fake.auditEvents[0].Reason, "audit-secret") {
 		t.Fatalf("commit stored unsanitized operation/audit: %#v %#v", fake.record, fake.auditEvents)
+	}
+}
+
+func TestExportAccessStoreContractDoesNotRequireLegacyTerminalHelper(t *testing.T) {
+	fake := &fakeExportAccessStore{}
+	var _ ExportStore = fake
+	var _ ExportAccessStore = fake
+
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	request := exportaccess.ReconcileRequest{
+		ExportID:           "export_alpha01",
+		NamespaceID:        "ns_alpha01",
+		TargetStatus:       sessionstate.ExportStatusRevoked,
+		ObservedAt:         now,
+		ActiveRequestCount: 0,
+		ActiveWriteCount:   0,
+	}
+	result, err := fake.ReconcileExportSessionTerminal(context.Background(), request)
+	if err != nil {
+		t.Fatalf("reconcile terminal through contract fake: %v", err)
+	}
+	if result.Session.ID != request.ExportID || result.Session.Status != sessionstate.ExportStatusRevoked {
+		t.Fatalf("reconciled session = %#v, want revoked export_alpha01", result.Session)
 	}
 }
 
@@ -912,6 +936,62 @@ type fakeOperationStore struct {
 	record      operations.OperationRecord
 	operations  []operations.OperationRecord
 	auditEvents []audit.Event
+}
+
+type fakeExportAccessStore struct {
+	session exportaccess.Session
+}
+
+func (fake *fakeExportAccessStore) CreateOrReuseExport(_ context.Context, request exportaccess.CreateRequest) (exportaccess.CreateResult, error) {
+	fake.session = request.Session
+	return exportaccess.CreateResult{Session: fake.session, Operation: request.Operation}, nil
+}
+
+func (fake *fakeExportAccessStore) GetExportSession(_ context.Context, exportID string) (exportaccess.Session, error) {
+	session := fake.session
+	session.ID = exportID
+	return session, nil
+}
+
+func (fake *fakeExportAccessStore) RevokeExport(_ context.Context, request exportaccess.RevokeRequest) (exportaccess.RevokeResult, error) {
+	fake.session.ID = request.ExportID
+	fake.session.NamespaceID = request.NamespaceID
+	fake.session.Status = sessionstate.ExportStatusRevoking
+	return exportaccess.RevokeResult{Session: fake.session, Operation: request.Operation}, nil
+}
+
+func (fake *fakeExportAccessStore) GetExportGatewayCredential(_ context.Context, exportID string) (exportaccess.GatewayCredential, error) {
+	session := fake.session
+	session.ID = exportID
+	return exportaccess.GatewayCredential{Session: session}, nil
+}
+
+func (fake *fakeExportAccessStore) RecordExportAccess(_ context.Context, _ string, _ time.Time) error {
+	return nil
+}
+
+func (fake *fakeExportAccessStore) RecordExportRuntimeObservation(_ context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error) {
+	fake.session.ID = observation.ExportID
+	fake.session.ActiveRequestCount += observation.ActiveRequestDelta
+	fake.session.ActiveWriteCount += observation.ActiveWriteDelta
+	return fake.session, nil
+}
+
+func (fake *fakeExportAccessStore) ListExportSessionsForTerminalReconcile(_ context.Context, _ time.Time, _ int) ([]exportaccess.Session, error) {
+	if fake.session.ID == "" {
+		return nil, nil
+	}
+	return []exportaccess.Session{fake.session}, nil
+}
+
+func (fake *fakeExportAccessStore) ReconcileExportSessionTerminal(_ context.Context, request exportaccess.ReconcileRequest) (exportaccess.ReconcileResult, error) {
+	fake.session.ID = request.ExportID
+	fake.session.NamespaceID = request.NamespaceID
+	fake.session.Status = request.TargetStatus
+	fake.session.ActiveRequestCount = request.ActiveRequestCount
+	fake.session.ActiveWriteCount = request.ActiveWriteCount
+	fake.session.TerminalObservedAt = &request.ObservedAt
+	return exportaccess.ReconcileResult{Session: fake.session, Operation: request.Operation}, nil
 }
 
 func (fake *fakeOperationStore) GetOperation(_ context.Context, operationID string) (operations.OperationRecord, error) {

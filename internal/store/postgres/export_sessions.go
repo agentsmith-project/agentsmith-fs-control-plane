@@ -262,26 +262,6 @@ func (store *Store) ReconcileExportSessionTerminal(ctx context.Context, request 
 	return exportaccess.ReconcileResult{Session: session, Operation: operation, Reused: !inserted}, nil
 }
 
-// MarkExportTerminal is retained for legacy callers/tests only. GA terminal
-// reconciliation must use ReconcileExportSessionTerminal so the operation,
-// terminal session update, and audit outbox event commit atomically.
-func (store *Store) MarkExportTerminal(ctx context.Context, exportID string, status sessionstate.ExportStatus, observedAt time.Time) (exportaccess.Session, error) {
-	exportID = strings.TrimSpace(exportID)
-	if err := pathresolver.ValidateID(pathresolver.ExportID, exportID); err != nil {
-		return exportaccess.Session{}, err
-	}
-	if observedAt.IsZero() {
-		return exportaccess.Session{}, operationLeaseInvalidRequest("observed_at", "terminal observation time must be set")
-	}
-	switch status {
-	case sessionstate.ExportStatusRevoked, sessionstate.ExportStatusExpired, sessionstate.ExportStatusFailed:
-	default:
-		return exportaccess.Session{}, operationLeaseInvalidRequest("status", "export terminal reconcile requires revoked, expired, or failed")
-	}
-	row := store.exec.QueryRowContext(ctx, exportTerminalSQL(), exportID, string(status), observedAt.UTC())
-	return scanExportAccessSession(row)
-}
-
 func exportCreateArgs(request exportaccess.CreateRequest, record operations.OperationRecord) ([]any, error) {
 	operationArgs, err := operationInsertArgs(record)
 	if err != nil {
@@ -512,10 +492,6 @@ func exportGatewayCredentialSQL() string {
 		"JOIN repos r ON r.namespace_id = s.namespace_id AND r.repo_id = s.repo_id " +
 		"JOIN volumes v ON v.volume_id = r.volume_id AND v.status = 'active' AND COALESCE((v.capabilities->>'webdav_export')::boolean, false) = true " +
 		"WHERE s.export_id = $1 AND s.status = 'active' AND s.protocol = 'webdav' AND r.repo_kind = 'repo' AND r.status = 'active' AND r.lifecycle_status = 'active'"
-}
-
-func exportTerminalSQL() string {
-	return "UPDATE export_sessions SET status = $2, terminal_observed_at = $3, updated_at = $3 WHERE export_id = $1 AND status IN ('active','revoking') RETURNING " + strings.Join(exportSessionPublicColumns, ", ")
 }
 
 func scanExportAccessSession(row rowScanner) (exportaccess.Session, error) {

@@ -226,6 +226,9 @@ func validateExport(session ExportSession) error {
 	if session.ActiveRequestCount < 0 || session.ActiveWriteCount < 0 || session.ActiveWriteCount > session.ActiveRequestCount {
 		return errInvalidSession
 	}
+	if exportTerminal(session.Status) && (session.ActiveRequestCount != 0 || session.ActiveWriteCount != 0) {
+		return errInvalidSession
+	}
 	return nil
 }
 

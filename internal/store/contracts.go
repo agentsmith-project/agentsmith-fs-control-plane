@@ -509,10 +509,6 @@ type ExportAccessStore interface {
 	RecordExportRuntimeObservation(ctx context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error)
 	ListExportSessionsForTerminalReconcile(ctx context.Context, now time.Time, limit int) ([]exportaccess.Session, error)
 	ReconcileExportSessionTerminal(ctx context.Context, request exportaccess.ReconcileRequest) (exportaccess.ReconcileResult, error)
-	// MarkExportTerminal is a legacy helper for pre-GA tests and must not be
-	// used as the GA terminal boundary because it does not commit an operation
-	// and audit event with the session update.
-	MarkExportTerminal(ctx context.Context, exportID string, status sessionstate.ExportStatus, observedAt time.Time) (exportaccess.Session, error)
 }
 
 type ExportSessionReconcileStore interface {

@@ -20,9 +20,9 @@ func TestRestoreRunWriterGateExportSemantics(t *testing.T) {
 		{name: "read only active ignored", session: exportFixture(AccessModeReadOnly, ExportStatusActive, now.Add(time.Hour)), wantAllowed: true},
 		{name: "read write revoking drained allows restore", session: exportDrainedFixture(now, ExportStatusRevoking), wantAllowed: true},
 		{name: "read write expired drained allows restore", session: exportDrainedFixture(now, ExportStatusActive), wantAllowed: true},
-		{name: "terminal revoked ignored", session: exportFixture(AccessModeReadWrite, ExportStatusRevoked, now.Add(-time.Hour)), wantAllowed: true},
-		{name: "terminal expired ignored", session: exportFixture(AccessModeReadWrite, ExportStatusExpired, now.Add(-time.Hour)), wantAllowed: true},
-		{name: "terminal failed ignored", session: exportFixture(AccessModeReadWrite, ExportStatusFailed, now.Add(time.Hour)), wantAllowed: true},
+		{name: "terminal revoked ignored", session: exportTerminalFixture(now, ExportStatusRevoked), wantAllowed: true},
+		{name: "terminal expired ignored", session: exportTerminalFixture(now, ExportStatusExpired), wantAllowed: true},
+		{name: "terminal failed ignored", session: exportTerminalFixture(now, ExportStatusFailed), wantAllowed: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -172,7 +172,7 @@ func TestLifecycleDrainGateRequiresTerminalMountNonAccessingEvidence(t *testing.
 		NamespaceID:    "ns_123",
 		RepoID:         "repo_123",
 		Now:            now,
-		ExportSessions: []ExportSession{exportFixture(AccessModeReadOnly, ExportStatusRevoked, now.Add(-time.Hour))},
+		ExportSessions: []ExportSession{exportTerminalFixture(now, ExportStatusRevoked)},
 		Mounts:         []WorkloadMountBinding{readOnlyConfirmed},
 	})
 	assertDecision(t, decision, true, "")
@@ -270,6 +270,22 @@ func TestGateInvalidSameRepoSessionFailsClosedWithoutSecretLeak(t *testing.T) {
 	}
 }
 
+func TestGateInvalidTerminalExportActiveCountsFailsClosed(t *testing.T) {
+	now := testNow()
+	badExport := exportTerminalFixture(now, ExportStatusRevoked)
+	badExport.ActiveRequestCount = 1
+
+	for _, decision := range []Decision{
+		RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
+		LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
+	} {
+		assertDecision(t, decision, false, ErrorFamilyInternalError)
+		if decision.Reason != "invalid stored session state" {
+			t.Fatalf("reason = %q, want invalid stored session state", decision.Reason)
+		}
+	}
+}
+
 func TestGateInvalidTargetFailsClosed(t *testing.T) {
 	decision := RestoreRunWriterGate(GateRequest{NamespaceID: "namespace", RepoID: "repo_123", Now: testNow()})
 	assertDecision(t, decision, false, ErrorFamilyInternalError)
@@ -313,6 +329,12 @@ func exportDrainedFixture(now time.Time, status ExportStatus) ExportSession {
 	session.ActiveRequestCount = 0
 	session.ActiveWriteCount = 0
 	session.WriteDrainedAt = timePtr(now.Add(-time.Second))
+	return session
+}
+
+func exportTerminalFixture(now time.Time, status ExportStatus) ExportSession {
+	session := exportDrainedFixture(now, status)
+	session.TerminalObservedAt = timePtr(now.Add(-time.Second))
 	return session
 }
 
