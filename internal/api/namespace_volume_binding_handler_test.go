@@ -32,7 +32,7 @@ func TestNamespaceVolumeBindingHandlerCreatesOperationIntake(t *testing.T) {
 		t.Fatalf("intake calls = %d, want 1", store.calls)
 	}
 	spec := store.spec
-	wantScope := operations.NewIdempotencyScope("agentsmith-api", "ns_123", operations.OperationNamespaceVolumeBindingPut, "idem_binding")
+	wantScope := operations.NewIdempotencyScope("product-caller", "ns_123", operations.OperationNamespaceVolumeBindingPut, "idem_binding")
 	if spec.OperationID != "op_binding" || spec.Scope != wantScope {
 		t.Fatalf("spec op/scope = %q/%#v, want op_binding/%#v", spec.OperationID, spec.Scope, wantScope)
 	}
@@ -45,7 +45,7 @@ func TestNamespaceVolumeBindingHandlerCreatesOperationIntake(t *testing.T) {
 	if spec.NamespaceID != "ns_123" || spec.Resource.Type != "namespace_volume_binding" || spec.Resource.ID != "ns_123" {
 		t.Fatalf("namespace/resource = %q/%#v", spec.NamespaceID, spec.Resource)
 	}
-	if spec.CorrelationID != "corr_binding" || spec.CallerService != "agentsmith-api" {
+	if spec.CorrelationID != "corr_binding" || spec.CallerService != "product-caller" {
 		t.Fatalf("correlation/caller = %q/%q", spec.CorrelationID, spec.CallerService)
 	}
 	if spec.AuthorizedActor.Type != "system" || spec.AuthorizedActor.ID != "svc-binding" {
@@ -204,7 +204,7 @@ func TestNamespaceVolumeBindingHandlerReturnsBindingDTO(t *testing.T) {
 		NamespaceID:     "ns_123",
 		DefaultVolumeID: "vol_123",
 		AllowedCallers: []resources.AllowedCaller{{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin, resources.CallerRoleOperationInspector},
 		}},
 		QuotaBytesDefault: 4096,
@@ -235,8 +235,8 @@ func TestNamespaceVolumeBindingHandlerReturnsBindingDTO(t *testing.T) {
 	if !ok {
 		t.Fatal("store context did not include AuthGate request context")
 	}
-	if bound.CallerService != "agentsmith-api" {
-		t.Fatalf("bound CallerService = %q, want canonical agentsmith-api", bound.CallerService)
+	if bound.CallerService != "product-caller" {
+		t.Fatalf("bound CallerService = %q, want canonical product-caller", bound.CallerService)
 	}
 	var got map[string]any
 	mustUnmarshalJSON(t, rec.Body.Bytes(), &got)
@@ -514,7 +514,7 @@ func namespaceBindingRequest(method, path, namespaceID string) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_binding")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	if namespaceID != "" {
 		req.Header.Set(auth.HeaderNamespaceID, namespaceID)
 	}
@@ -525,7 +525,7 @@ func namespaceBindingRequestWithBody(method, path, namespaceID string, body stri
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_binding")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderIdempotencyKey, "idem_binding")
 	req.Header.Set(auth.HeaderActorType, "system")
 	req.Header.Set(auth.HeaderActorID, "svc-binding")
@@ -573,12 +573,12 @@ func namespaceBindingHandlerWithAudit(reader NamespaceVolumeBindingReader, sink 
 }
 
 func namespaceBindingPrincipalResolver() PrincipalResolver {
-	return fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:agentsmith-api", CanonicalCallerService: "agentsmith-api"}}
+	return fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:product-caller", CanonicalCallerService: "product-caller"}}
 }
 
 func namespaceBindingAllowedPolicy(roles ...auth.Role) AllowedCallerPolicy {
 	return fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Kind:          auth.CallerKindProduct,
 		Roles:         roles,
 	}}}
@@ -598,5 +598,5 @@ func namespaceBindingHandlerTestNow() time.Time {
 }
 
 func namespaceBindingRequestBody(namespaceID string) string {
-	return `{"namespace_id":"` + namespaceID + `","default_volume_id":"vol_123","allowed_callers":[{"caller_service":"agentsmith-api","roles":["repo_admin","operation_inspector"]}],"quota_bytes_default":4096,"export_policy":{"webdav_enabled":true,"max_session_seconds":3600},"lifecycle_policy":{"tombstone_retention_seconds":604800,"purge_requires_lifecycle_admin":true,"break_glass_purge_enabled":false},"mount_policy":{"workload_mount_enabled":true,"workload_mount_requires_jvs_external_control_root":true,"allow_privileged_workload":false},"template_policy":{"namespace_templates_enabled":true,"cross_namespace_clone_enabled":false},"status":"active"}`
+	return `{"namespace_id":"` + namespaceID + `","default_volume_id":"vol_123","allowed_callers":[{"caller_service":"product-caller","roles":["repo_admin","operation_inspector"]}],"quota_bytes_default":4096,"export_policy":{"webdav_enabled":true,"max_session_seconds":3600},"lifecycle_policy":{"tombstone_retention_seconds":604800,"purge_requires_lifecycle_admin":true,"break_glass_purge_enabled":false},"mount_policy":{"workload_mount_enabled":true,"workload_mount_requires_jvs_external_control_root":true,"allow_privileged_workload":false},"template_policy":{"namespace_templates_enabled":true,"cross_namespace_clone_enabled":false},"status":"active"}`
 }

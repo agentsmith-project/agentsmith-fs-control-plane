@@ -1664,11 +1664,11 @@ func workerAppOperationRecord(now time.Time) operations.OperationRecord {
 		Type:             operations.OperationNamespaceUpsert,
 		State:            operations.OperationStateQueued,
 		Phase:            operations.OperationPhaseNamespaceUpsertValidate,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationNamespaceUpsert, "idem_namespace").String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationNamespaceUpsert, "idem_namespace").String(),
 		IdempotencyKey:   "idem_namespace",
 		RequestHash:      operations.RequestHash("sha256:namespace"),
 		CorrelationID:    "corr-alpha",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:         operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"},
 		NamespaceID:      "ns_alpha01",
@@ -1681,7 +1681,7 @@ func workerAppNamespaceDisableOperationRecord(now time.Time) operations.Operatio
 	record.ID = "op_namespace_disable"
 	record.Type = operations.OperationNamespaceDisable
 	record.Phase = operations.OperationPhaseNamespaceDisableValidate
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationNamespaceDisable, "idem_namespace_disable").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationNamespaceDisable, "idem_namespace_disable").String()
 	record.IdempotencyKey = "idem_namespace_disable"
 	record.InputSummary = map[string]any{"namespace_id": "ns_alpha01", "reason": "security hold"}
 	return record
@@ -1693,11 +1693,11 @@ func workerAppRepoOperationRecord(operationID string, state operations.Operation
 		Type:             operations.OperationRepoCreate,
 		State:            state,
 		Phase:            "allocate_repo_path",
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRepoCreate, operationID).String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRepoCreate, operationID).String(),
 		IdempotencyKey:   operationID,
 		RequestHash:      operations.RequestHash("sha256:repo"),
 		CorrelationID:    "corr-alpha",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha"},
 		NamespaceID:      "ns_alpha01",
@@ -1721,11 +1721,11 @@ func workerAppRepoLifecycleOperationRecord(operationID string, typ operations.Op
 		Type:             typ,
 		State:            operations.OperationStateQueued,
 		Phase:            operations.OperationPhaseRepoLifecycleValidate,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", typ, operationID).String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", typ, operationID).String(),
 		IdempotencyKey:   operationID,
 		RequestHash:      operations.RequestHash("sha256:lifecycle"),
 		CorrelationID:    "corr-alpha",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:      "ns_alpha01",
@@ -1762,11 +1762,11 @@ func workerAppSavePointCreateOperationRecord(operationID string, now time.Time) 
 		Type:             operations.OperationSavePointCreate,
 		State:            operations.OperationStateQueued,
 		Phase:            operations.OperationPhaseSavePointCreateValidate,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationSavePointCreate, "idem_savepoint").String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationSavePointCreate, "idem_savepoint").String(),
 		IdempotencyKey:   "idem_savepoint",
 		RequestHash:      operations.RequestHash("sha256:savepoint"),
 		CorrelationID:    "corr-alpha",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:      "ns_alpha01",
@@ -1782,11 +1782,11 @@ func workerAppRestorePreviewOperationRecord(operationID string, now time.Time) o
 		Type:             operations.OperationRestorePreview,
 		State:            operations.OperationStateQueued,
 		Phase:            operations.OperationPhaseRestorePreviewValidate,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(),
 		IdempotencyKey:   "idem_preview",
 		RequestHash:      operations.RequestHash("sha256:restore-preview"),
 		CorrelationID:    "corr-alpha",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:      "ns_alpha01",
@@ -1800,7 +1800,7 @@ func workerAppRestorePreviewDiscardOperationRecord(operationID string, now time.
 	record := workerAppRestorePreviewOperationRecord(operationID, now)
 	record.Type = operations.OperationRestorePreviewDiscard
 	record.Phase = operations.OperationPhaseRestorePreviewDiscardValidate
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem_discard").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem_discard").String()
 	record.IdempotencyKey = "idem_discard"
 	record.RequestHash = operations.RequestHash("sha256:restore-preview-discard")
 	record.InputSummary = map[string]any{"preview_operation_id": "op_preview01"}
@@ -1811,7 +1811,7 @@ func workerAppRestoreRunOperationRecord(operationID string, now time.Time) opera
 	record := workerAppRestorePreviewOperationRecord(operationID, now)
 	record.Type = operations.OperationRestoreRun
 	record.Phase = operations.OperationPhaseRestoreRunValidate
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestoreRun, "idem_run").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestoreRun, "idem_run").String()
 	record.IdempotencyKey = "idem_run"
 	record.RequestHash = operations.RequestHash("sha256:restore-run")
 	record.InputSummary = map[string]any{"preview_operation_id": "op_preview01"}
@@ -1890,7 +1890,7 @@ func workerAppExportAccessSession(now time.Time, exportID string, status session
 		Mode:                   sessionstate.AccessModeReadWrite,
 		Status:                 status,
 		ExpiresAt:              expiresAt,
-		CreatedByCallerService: "agentsmith-api",
+		CreatedByCallerService: "product-caller",
 		CreatedByActor:         exportaccess.Actor{Type: "user", ID: "user_alpha"},
 		CreatedAt:              now.Add(-time.Hour),
 		UpdatedAt:              now.Add(-time.Minute),
@@ -1903,11 +1903,11 @@ func workerAppVolumeOperationRecord(operationID string, now time.Time) operation
 		Type:             operations.OperationVolumeEnsure,
 		State:            operations.OperationStateQueued,
 		Phase:            operations.OperationPhaseVolumeEnsureValidate,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "", operations.OperationVolumeEnsure, operationID).String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "", operations.OperationVolumeEnsure, operationID).String(),
 		IdempotencyKey:   operationID,
 		RequestHash:      operations.RequestHash("sha256:volume"),
 		CorrelationID:    "corr-alpha",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:         operations.ResourceRef{Type: "volume", ID: "vol_123"},
 		InputSummary: map[string]any{
@@ -1927,11 +1927,11 @@ func workerAppBindingOperationRecord(operationID string, now time.Time) operatio
 		Type:             operations.OperationNamespaceVolumeBindingPut,
 		State:            operations.OperationStateQueued,
 		Phase:            operations.OperationPhaseNamespaceVolumeBindingPutValidate,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationNamespaceVolumeBindingPut, operationID).String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationNamespaceVolumeBindingPut, operationID).String(),
 		IdempotencyKey:   operationID,
 		RequestHash:      operations.RequestHash("sha256:binding"),
 		CorrelationID:    "corr-alpha",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:         operations.ResourceRef{Type: "namespace_volume_binding", ID: "ns_alpha01"},
 		NamespaceID:      "ns_alpha01",
@@ -1944,7 +1944,7 @@ func workerAppBindingInputSummary(namespaceID string) map[string]any {
 	return map[string]any{
 		"namespace_id":        namespaceID,
 		"default_volume_id":   "vol_123",
-		"allowed_callers":     []any{map[string]any{"caller_service": "agentsmith-api", "roles": []any{"repo_admin", "operation_inspector"}}},
+		"allowed_callers":     []any{map[string]any{"caller_service": "product-caller", "roles": []any{"repo_admin", "operation_inspector"}}},
 		"quota_bytes_default": float64(4096),
 		"export_policy":       map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
 		"lifecycle_policy":    map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
@@ -3138,7 +3138,7 @@ func (store *fakeWorkerAppStore) GetNamespaceVolumeBinding(context.Context, stri
 	return resources.NamespaceVolumeBinding{
 		NamespaceID:       "ns_alpha01",
 		DefaultVolumeID:   "vol_123",
-		AllowedCallers:    []resources.AllowedCaller{{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}}},
+		AllowedCallers:    []resources.AllowedCaller{{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}}},
 		QuotaBytesDefault: 4096,
 		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
 		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},

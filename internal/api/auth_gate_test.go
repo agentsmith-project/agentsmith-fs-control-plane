@@ -24,8 +24,8 @@ func TestAuthGateReturnsEnvelopeForMissingNamespaceWithoutReadingBody(t *testing
 			nextCalled = true
 		}),
 		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-			Subject:                "service-account:agentsmith-api",
-			CanonicalCallerService: "agentsmith-api",
+			Subject:                "service-account:product-caller",
+			CanonicalCallerService: "product-caller",
 		}},
 		fakeRouteClassResolver{route: RouteMetadata{
 			Method:      http.MethodGet,
@@ -127,8 +127,8 @@ func TestAuthGateAllowsVolumeGlobalAndOperationInspectionWithoutNamespace(t *tes
 					w.WriteHeader(http.StatusNoContent)
 				}),
 				fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-					Subject:                "service-account:agentsmith-api",
-					CanonicalCallerService: "agentsmith-api",
+					Subject:                "service-account:product-caller",
+					CanonicalCallerService: "product-caller",
 				}},
 				fakeRouteClassResolver{route: RouteMetadata{
 					Method:      http.MethodGet,
@@ -162,8 +162,8 @@ func TestAuthGateInjectsBoundRequestContextForNextHandler(t *testing.T) {
 		headerCaller string
 		wantCaller   string
 	}{
-		{name: "missing caller header uses canonical principal service", wantCaller: "agentsmith-api"},
-		{name: "caller header whitespace is normalized to canonical principal service", headerCaller: "  agentsmith-api  ", wantCaller: "agentsmith-api"},
+		{name: "missing caller header uses canonical principal service", wantCaller: "product-caller"},
+		{name: "caller header whitespace is normalized to canonical principal service", headerCaller: "  product-caller  ", wantCaller: "product-caller"},
 	}
 
 	for _, tt := range tests {
@@ -189,8 +189,8 @@ func TestAuthGateInjectsBoundRequestContextForNextHandler(t *testing.T) {
 					w.WriteHeader(http.StatusNoContent)
 				}),
 				fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-					Subject:                "service-account:agentsmith-api",
-					CanonicalCallerService: "agentsmith-api",
+					Subject:                "service-account:product-caller",
+					CanonicalCallerService: "product-caller",
 				}},
 				fakeRouteClassResolver{route: RouteMetadata{
 					Method:      http.MethodGet,
@@ -227,8 +227,8 @@ func TestAuthGateCallerServiceMismatchDoesNotInjectOrCallNext(t *testing.T) {
 			nextCalled = true
 		}),
 		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-			Subject:                "service-account:agentsmith-api",
-			CanonicalCallerService: "agentsmith-api",
+			Subject:                "service-account:product-caller",
+			CanonicalCallerService: "product-caller",
 		}},
 		fakeRouteClassResolver{route: RouteMetadata{
 			Method:      http.MethodGet,
@@ -271,8 +271,8 @@ func TestAuthGateFailsClosedForRequiredRoleWithoutAllowedCallerPolicy(t *testing
 			nextCalled = true
 		}),
 		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-			Subject:                "service-account:agentsmith-api",
-			CanonicalCallerService: "agentsmith-api",
+			Subject:                "service-account:product-caller",
+			CanonicalCallerService: "product-caller",
 		}},
 		fakeRouteClassResolver{route: RouteMetadata{
 			Method:       http.MethodGet,
@@ -319,8 +319,8 @@ func TestAuthGateDeniesCallerServiceOutsideAllowlist(t *testing.T) {
 			t.Fatal("next handler was called")
 		}),
 		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-			Subject:                "service-account:agentsmith-api",
-			CanonicalCallerService: "agentsmith-api",
+			Subject:                "service-account:product-caller",
+			CanonicalCallerService: "product-caller",
 		}},
 		fakeRouteClassResolver{route: RouteMetadata{
 			Method:       http.MethodGet,
@@ -370,8 +370,8 @@ func TestAuthGateDeniesProductCallerWithoutRequiredRole(t *testing.T) {
 			t.Fatal("next handler was called")
 		}),
 		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-			Subject:                "service-account:agentsmith-api",
-			CanonicalCallerService: "agentsmith-api",
+			Subject:                "service-account:product-caller",
+			CanonicalCallerService: "product-caller",
 		}},
 		fakeRouteClassResolver{route: RouteMetadata{
 			Method:       http.MethodGet,
@@ -383,7 +383,7 @@ func TestAuthGateDeniesProductCallerWithoutRequiredRole(t *testing.T) {
 		}},
 		fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{
 			{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Kind:          auth.CallerKindProduct,
 				Roles:         []auth.Role{auth.RoleRepoAdmin},
 			},
@@ -431,10 +431,10 @@ func TestAuthGateMapsClassifiedAllowedCallerPolicyErrors(t *testing.T) {
 			req.Header.Set(auth.HeaderAuthorization, "Bearer service-token")
 			req.Header.Set(auth.HeaderCorrelationID, "corr_policy")
 			req.Header.Set(auth.HeaderNamespaceID, "ns_123")
-			req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+			req.Header.Set(auth.HeaderCallerService, "product-caller")
 			handler := AuthGateWithAuditSink(
 				http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("next handler was called") }),
-				fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "service-account:agentsmith-api", CanonicalCallerService: "agentsmith-api"}},
+				fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "service-account:product-caller", CanonicalCallerService: "product-caller"}},
 				fakeRouteClassResolver{route: RouteMetadata{Method: http.MethodGet, Path: "/fake", OperationID: "fakeRepoRead", Class: auth.RouteClassNamespaceBound, RequiredRole: auth.RoleRepoAdmin}},
 				fakeAllowedCallerPolicy{err: errors.Join(tt.err, errors.New("postgres dsn password=secret-password"))},
 				sink,
@@ -477,10 +477,10 @@ func TestAuthGateMapsUnclassifiedAllowedCallerPolicyErrorToInternalError(t *test
 	req.Header.Set(auth.HeaderAuthorization, "Bearer service-token")
 	req.Header.Set(auth.HeaderCorrelationID, "corr_policy")
 	req.Header.Set(auth.HeaderNamespaceID, "ns_123")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	handler := AuthGate(
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("next handler was called") }),
-		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "service-account:agentsmith-api", CanonicalCallerService: "agentsmith-api"}},
+		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "service-account:product-caller", CanonicalCallerService: "product-caller"}},
 		fakeRouteClassResolver{route: RouteMetadata{Method: http.MethodGet, Path: "/fake", OperationID: "fakeRepoRead", Class: auth.RouteClassNamespaceBound, RequiredRole: auth.RoleRepoAdmin}},
 		fakeAllowedCallerPolicy{err: errors.New("postgres dsn password=secret-password")},
 	)
@@ -517,8 +517,8 @@ func TestAuthGateDeniesCallerKindThatCannotUseConfiguredRole(t *testing.T) {
 			t.Fatal("next handler was called")
 		}),
 		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-			Subject:                "service-account:agentsmith-api",
-			CanonicalCallerService: "agentsmith-api",
+			Subject:                "service-account:product-caller",
+			CanonicalCallerService: "product-caller",
 		}},
 		fakeRouteClassResolver{route: RouteMetadata{
 			Method:       http.MethodGet,
@@ -530,7 +530,7 @@ func TestAuthGateDeniesCallerKindThatCannotUseConfiguredRole(t *testing.T) {
 		}},
 		fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{
 			{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Kind:          auth.CallerKindProduct,
 				Roles:         []auth.Role{auth.RoleOrchestratorMount},
 			},
@@ -582,8 +582,8 @@ func TestAuthGateWithAuditSinkEmitsDeniedEventsWithoutSensitiveRequestData(t *te
 		{
 			name: "namespace denial",
 			principalResolver: fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-				Subject:                "service-account:agentsmith-api",
-				CanonicalCallerService: "agentsmith-api",
+				Subject:                "service-account:product-caller",
+				CanonicalCallerService: "product-caller",
 			}},
 			route: RouteMetadata{
 				Method:      http.MethodGet,
@@ -594,13 +594,13 @@ func TestAuthGateWithAuditSinkEmitsDeniedEventsWithoutSensitiveRequestData(t *te
 			},
 			wantStatus:        http.StatusBadRequest,
 			wantCode:          CodeResourceNamespaceMismatch,
-			wantCallerService: "agentsmith-api",
+			wantCallerService: "product-caller",
 		},
 		{
 			name: "caller denial",
 			principalResolver: fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-				Subject:                "service-account:agentsmith-api",
-				CanonicalCallerService: "agentsmith-api",
+				Subject:                "service-account:product-caller",
+				CanonicalCallerService: "product-caller",
 			}},
 			route: RouteMetadata{
 				Method:       http.MethodGet,
@@ -612,17 +612,17 @@ func TestAuthGateWithAuditSinkEmitsDeniedEventsWithoutSensitiveRequestData(t *te
 			},
 			wantStatus:        http.StatusForbidden,
 			wantCode:          CodeCallerNotAllowed,
-			wantCallerService: "agentsmith-api",
+			wantCallerService: "product-caller",
 		},
 		{
 			name: "role denial",
 			principalResolver: fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-				Subject:                "service-account:agentsmith-api",
-				CanonicalCallerService: "agentsmith-api",
+				Subject:                "service-account:product-caller",
+				CanonicalCallerService: "product-caller",
 			}},
 			callerPolicy: fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{
 				{
-					CallerService: "agentsmith-api",
+					CallerService: "product-caller",
 					Kind:          auth.CallerKindProduct,
 					Roles:         []auth.Role{auth.RoleRepoAdmin},
 				},
@@ -637,7 +637,7 @@ func TestAuthGateWithAuditSinkEmitsDeniedEventsWithoutSensitiveRequestData(t *te
 			},
 			wantStatus:        http.StatusForbidden,
 			wantCode:          CodeRoleNotAllowed,
-			wantCallerService: "agentsmith-api",
+			wantCallerService: "product-caller",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -738,8 +738,8 @@ func TestAuthGateAuditSinkFailurePreservesDeniedResponse(t *testing.T) {
 			t.Fatal("next handler was called")
 		}),
 		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-			Subject:                "service-account:agentsmith-api",
-			CanonicalCallerService: "agentsmith-api",
+			Subject:                "service-account:product-caller",
+			CanonicalCallerService: "product-caller",
 		}},
 		fakeRouteClassResolver{route: RouteMetadata{
 			Method:       http.MethodGet,
@@ -785,8 +785,8 @@ func TestAuthGateAllowsRequiredRoleWhenPolicyGrantsCaller(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		}),
 		fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{
-			Subject:                "service-account:agentsmith-api",
-			CanonicalCallerService: "agentsmith-api",
+			Subject:                "service-account:product-caller",
+			CanonicalCallerService: "product-caller",
 		}},
 		fakeRouteClassResolver{route: RouteMetadata{
 			Method:       http.MethodGet,
@@ -798,7 +798,7 @@ func TestAuthGateAllowsRequiredRoleWhenPolicyGrantsCaller(t *testing.T) {
 		}},
 		fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{
 			{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Kind:          auth.CallerKindProduct,
 				Roles:         []auth.Role{auth.RoleRepoAdmin},
 			},
@@ -826,7 +826,7 @@ func TestAuthGateAllowsOperationInspectorAndOperatorAdminForOperationInspection(
 		kind          auth.CallerKind
 		roles         []auth.Role
 	}{
-		{name: "product inspector", callerService: "agentsmith-api", kind: auth.CallerKindProduct, roles: []auth.Role{auth.RoleOperationInspector}},
+		{name: "product inspector", callerService: "product-caller", kind: auth.CallerKindProduct, roles: []auth.Role{auth.RoleOperationInspector}},
 		{name: "operator admin", callerService: "afscp-operator", kind: auth.CallerKindOperator, roles: []auth.Role{auth.RoleOperatorAdmin}},
 		{name: "admin operator admin", callerService: "afscp-admin", kind: auth.CallerKindAdmin, roles: []auth.Role{auth.RoleOperatorAdmin}},
 	} {

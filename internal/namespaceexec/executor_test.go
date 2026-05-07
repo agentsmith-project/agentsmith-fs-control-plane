@@ -438,11 +438,11 @@ func namespaceExecRecord(operationID string) operations.OperationRecord {
 		State:            operations.OperationStateRunning,
 		Phase:            operations.OperationPhaseNamespaceUpsertValidate,
 		Attempt:          1,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationNamespaceUpsert, "idem_namespace").String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationNamespaceUpsert, "idem_namespace").String(),
 		IdempotencyKey:   "idem_namespace",
 		RequestHash:      operations.RequestHash("sha256:namespace"),
 		CorrelationID:    "corr-alpha",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:         operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"},
 		NamespaceID:      "ns_alpha01",
@@ -455,7 +455,7 @@ func namespaceDisableExecRecord(operationID string) operations.OperationRecord {
 	record := namespaceExecRecord(operationID)
 	record.Type = operations.OperationNamespaceDisable
 	record.Phase = operations.OperationPhaseNamespaceDisableValidate
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationNamespaceDisable, "idem_namespace_disable").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationNamespaceDisable, "idem_namespace_disable").String()
 	record.IdempotencyKey = "idem_namespace_disable"
 	record.Resource = operations.ResourceRef{Type: "namespace", ID: "ns_alpha01"}
 	record.InputSummary = map[string]any{"namespace_id": "ns_alpha01", "reason": "security hold"}

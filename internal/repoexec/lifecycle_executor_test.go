@@ -541,7 +541,7 @@ func repoLifecycleLeasedRecord(now time.Time, typ operations.OperationType, atte
 	record.ID = "op_repo_lifecycle"
 	record.Type = typ
 	record.Phase = operations.OperationPhaseRepoLifecycleValidate
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", typ, "idem_lifecycle").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", typ, "idem_lifecycle").String()
 	record.InputSummary = map[string]any{"repo_id": "repo_alpha01", "reason_present": false}
 	return record
 }

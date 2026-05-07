@@ -10,7 +10,7 @@ func TestValidateRequestContextForRouteRequiresNamespaceOnlyForNamespaceBound(t 
 	base := RequestContext{
 		Authorization: "Bearer service-token",
 		CorrelationID: "corr-123",
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 	}
 
 	tests := []struct {
@@ -44,7 +44,7 @@ func TestValidateRequestContextForRouteUsesRouteMutatingMetadata(t *testing.T) {
 	ctx := RequestContext{
 		Authorization: "Bearer service-token",
 		CorrelationID: "corr-123",
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		NamespaceID:   "ns-123",
 	}
 
@@ -70,8 +70,8 @@ func TestValidateAuthenticatedRequestForRouteBindsPrincipalAndClass(t *testing.T
 	req.Header.Set(HeaderCorrelationID, "corr-123")
 
 	ctx, err := ValidateAuthenticatedRequestForRoute(req, AuthenticatedPrincipal{
-		Subject:                "service-account:agentsmith-api",
-		CanonicalCallerService: "agentsmith-api",
+		Subject:                "service-account:product-caller",
+		CanonicalCallerService: "product-caller",
 	}, RouteValidation{
 		Class:    RouteClassOperationInspection,
 		Mutating: false,
@@ -79,7 +79,7 @@ func TestValidateAuthenticatedRequestForRouteBindsPrincipalAndClass(t *testing.T
 	if err != nil {
 		t.Fatalf("operation inspection should not require request namespace: %v", err)
 	}
-	if ctx.CallerService != "agentsmith-api" {
+	if ctx.CallerService != "product-caller" {
 		t.Fatalf("CallerService = %q", ctx.CallerService)
 	}
 }

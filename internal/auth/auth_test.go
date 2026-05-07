@@ -47,7 +47,7 @@ func TestParseRequestContextCanonicalHeaders(t *testing.T) {
 	req.Header.Set(HeaderNamespaceID, "ns-123")
 	req.Header.Set(HeaderActorType, "user")
 	req.Header.Set(HeaderActorID, "user-456")
-	req.Header.Set(HeaderCallerService, "agentsmith-api")
+	req.Header.Set(HeaderCallerService, "product-caller")
 
 	ctx := ParseRequestContext(req)
 
@@ -69,7 +69,7 @@ func TestParseRequestContextCanonicalHeaders(t *testing.T) {
 	if ctx.Actor.ID != "user-456" {
 		t.Fatalf("Actor.ID = %q", ctx.Actor.ID)
 	}
-	if ctx.CallerService != "agentsmith-api" {
+	if ctx.CallerService != "product-caller" {
 		t.Fatalf("CallerService = %q", ctx.CallerService)
 	}
 }
@@ -81,7 +81,7 @@ func TestValidateRequestContextRequiresActorAndIdempotencyForMutations(t *testin
 	}
 	req.Header.Set(HeaderAuthorization, "Bearer service-token")
 	req.Header.Set(HeaderCorrelationID, "corr-123")
-	req.Header.Set(HeaderCallerService, "agentsmith-api")
+	req.Header.Set(HeaderCallerService, "product-caller")
 
 	err = ValidateRequestContext(ParseRequestContext(req), req.Method)
 	if !errors.Is(err, ErrMissingIdempotencyKey) {
@@ -99,7 +99,7 @@ func TestValidateRequestContextAllowsSafeRequestWithoutActorOrIdempotency(t *tes
 	}
 	req.Header.Set(HeaderAuthorization, "Bearer service-token")
 	req.Header.Set(HeaderCorrelationID, "corr-123")
-	req.Header.Set(HeaderCallerService, "agentsmith-api")
+	req.Header.Set(HeaderCallerService, "product-caller")
 
 	if err := ValidateRequestContext(ParseRequestContext(req), req.Method); err != nil {
 		t.Fatalf("safe request validation failed: %v", err)
@@ -112,7 +112,7 @@ func TestValidateRequestContextRequiresAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set(HeaderCorrelationID, "corr-123")
-	req.Header.Set(HeaderCallerService, "agentsmith-api")
+	req.Header.Set(HeaderCallerService, "product-caller")
 
 	err = ValidateRequestContext(ParseRequestContext(req), req.Method)
 	if !errors.Is(err, ErrMissingAuthorization) {
@@ -129,13 +129,13 @@ func TestValidateAuthenticatedRequestBindsCallerServiceFromPrincipal(t *testing.
 	req.Header.Set(HeaderCorrelationID, "corr-123")
 
 	ctx, err := ValidateAuthenticatedRequest(req, AuthenticatedPrincipal{
-		Subject:                "service-account:agentsmith-api",
-		CanonicalCallerService: "agentsmith-api",
+		Subject:                "service-account:product-caller",
+		CanonicalCallerService: "product-caller",
 	})
 	if err != nil {
 		t.Fatalf("authenticated request validation failed: %v", err)
 	}
-	if ctx.CallerService != "agentsmith-api" {
+	if ctx.CallerService != "product-caller" {
 		t.Fatalf("CallerService = %q", ctx.CallerService)
 	}
 }
@@ -150,8 +150,8 @@ func TestValidateAuthenticatedRequestRejectsCallerServiceHeaderMismatch(t *testi
 	req.Header.Set(HeaderCallerService, "afscp-admin")
 
 	_, err = ValidateAuthenticatedRequest(req, AuthenticatedPrincipal{
-		Subject:                "service-account:agentsmith-api",
-		CanonicalCallerService: "agentsmith-api",
+		Subject:                "service-account:product-caller",
+		CanonicalCallerService: "product-caller",
 	})
 	if !errors.Is(err, ErrCallerServiceMismatch) {
 		t.Fatalf("expected ErrCallerServiceMismatch, got %v", err)
@@ -220,7 +220,7 @@ func TestNamespaceBoundMismatchRequiresBothNamespacesToMatch(t *testing.T) {
 func TestCallerNotAllowedRequiresConfiguredCallerAndRole(t *testing.T) {
 	allowed := []AllowedCaller{
 		{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Kind:          CallerKindProduct,
 			Roles:         []Role{RoleRepoAdmin, RoleExportAdmin, RoleMountAdmin},
 		},
@@ -236,10 +236,10 @@ func TestCallerNotAllowedRequiresConfiguredCallerAndRole(t *testing.T) {
 		},
 	}
 
-	if CallerNotAllowed("agentsmith-api", RoleRepoAdmin, allowed) {
-		t.Fatal("expected agentsmith-api repo admin to be allowed")
+	if CallerNotAllowed("product-caller", RoleRepoAdmin, allowed) {
+		t.Fatal("expected product-caller repo admin to be allowed")
 	}
-	if !CallerNotAllowed("agentsmith-api", RoleRestoreAdmin, allowed) {
+	if !CallerNotAllowed("product-caller", RoleRestoreAdmin, allowed) {
 		t.Fatal("expected missing role to be denied")
 	}
 	if !CallerNotAllowed("unknown-service", RoleRepoAdmin, allowed) {
@@ -259,12 +259,12 @@ func TestCallerNotAllowedRequiresConfiguredCallerAndRole(t *testing.T) {
 func TestCallerRoleDenialReasonDistinguishesCallerAndRoleFailures(t *testing.T) {
 	allowed := []AllowedCaller{
 		{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Kind:          CallerKindProduct,
 			Roles:         []Role{RoleRepoAdmin},
 		},
 		{
-			CallerService: "sandbox-manager",
+			CallerService: "runtime-orchestrator",
 			Kind:          CallerKindProduct,
 			Roles:         []Role{RoleOrchestratorMount},
 		},
@@ -276,10 +276,10 @@ func TestCallerRoleDenialReasonDistinguishesCallerAndRoleFailures(t *testing.T) 
 		requiredRole Role
 		want         CallerRoleDenialReason
 	}{
-		{name: "allowed", caller: "agentsmith-api", requiredRole: RoleRepoAdmin, want: CallerRoleAllowed},
+		{name: "allowed", caller: "product-caller", requiredRole: RoleRepoAdmin, want: CallerRoleAllowed},
 		{name: "caller missing", caller: "unknown-service", requiredRole: RoleRepoAdmin, want: CallerServiceNotAllowed},
-		{name: "role missing", caller: "agentsmith-api", requiredRole: RoleExportAdmin, want: CallerRoleNotAllowed},
-		{name: "kind cannot use configured role", caller: "sandbox-manager", requiredRole: RoleOrchestratorMount, want: CallerRoleNotAllowed},
+		{name: "role missing", caller: "product-caller", requiredRole: RoleExportAdmin, want: CallerRoleNotAllowed},
+		{name: "kind cannot use configured role", caller: "runtime-orchestrator", requiredRole: RoleOrchestratorMount, want: CallerRoleNotAllowed},
 	}
 
 	for _, tt := range tests {
@@ -310,7 +310,7 @@ func TestOperatorAdminSatisfiesOperationInspectorForAdminAndOperatorCallers(t *t
 	}
 
 	product := AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Kind:          CallerKindProduct,
 		Roles:         []Role{RoleOperatorAdmin},
 	}
@@ -322,7 +322,7 @@ func TestOperatorAdminSatisfiesOperationInspectorForAdminAndOperatorCallers(t *t
 func TestOrdinaryProductCallerCannotUsePrivilegedCapabilities(t *testing.T) {
 	allowed := []AllowedCaller{
 		{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Kind:          CallerKindProduct,
 			Roles: []Role{
 				RoleRepoAdmin,
@@ -332,7 +332,7 @@ func TestOrdinaryProductCallerCannotUsePrivilegedCapabilities(t *testing.T) {
 			},
 		},
 		{
-			CallerService: "sandbox-manager",
+			CallerService: "runtime-orchestrator",
 			Kind:          CallerKindOrchestrator,
 			Roles:         []Role{RoleOrchestratorMount},
 		},
@@ -343,13 +343,13 @@ func TestOrdinaryProductCallerCannotUsePrivilegedCapabilities(t *testing.T) {
 		},
 	}
 
-	if !CallerNotAllowed("agentsmith-api", RoleOrchestratorMount, allowed) {
+	if !CallerNotAllowed("product-caller", RoleOrchestratorMount, allowed) {
 		t.Fatal("ordinary product caller must not be able to fetch orchestrator plans")
 	}
-	if !CallerNotAllowed("agentsmith-api", RoleBreakGlassAdmin, allowed) {
+	if !CallerNotAllowed("product-caller", RoleBreakGlassAdmin, allowed) {
 		t.Fatal("ordinary product caller must not be able to use break-glass")
 	}
-	if CallerNotAllowed("sandbox-manager", RoleOrchestratorMount, allowed) {
+	if CallerNotAllowed("runtime-orchestrator", RoleOrchestratorMount, allowed) {
 		t.Fatal("orchestrator caller should be allowed orchestrator_mount")
 	}
 	if CallerNotAllowed("afscp-migration", RoleMigrationAdmin, allowed) {
@@ -360,7 +360,7 @@ func TestOrdinaryProductCallerCannotUsePrivilegedCapabilities(t *testing.T) {
 func TestProductCallerRoleAllowlistIgnoresConfiguredPrivilegedRoles(t *testing.T) {
 	allowed := []AllowedCaller{
 		{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Kind:          CallerKindProduct,
 			Roles: []Role{
 				RoleRepoAdmin,
@@ -391,7 +391,7 @@ func TestProductCallerRoleAllowlistIgnoresConfiguredPrivilegedRoles(t *testing.T
 		RoleOperationInspector,
 	}
 	for _, role := range ordinaryRoles {
-		if CallerNotAllowed("agentsmith-api", role, allowed) {
+		if CallerNotAllowed("product-caller", role, allowed) {
 			t.Fatalf("expected product caller to be allowed ordinary role %q", role)
 		}
 	}
@@ -404,7 +404,7 @@ func TestProductCallerRoleAllowlistIgnoresConfiguredPrivilegedRoles(t *testing.T
 		RoleBreakGlassAdmin,
 	}
 	for _, role := range privilegedRoles {
-		if !CallerNotAllowed("agentsmith-api", role, allowed) {
+		if !CallerNotAllowed("product-caller", role, allowed) {
 			t.Fatalf("expected product caller to be denied privileged role %q", role)
 		}
 	}
@@ -413,7 +413,7 @@ func TestProductCallerRoleAllowlistIgnoresConfiguredPrivilegedRoles(t *testing.T
 func TestSpecializedCallerKindsUseExplicitRoleAllowlists(t *testing.T) {
 	allowed := []AllowedCaller{
 		{
-			CallerService: "sandbox-manager",
+			CallerService: "runtime-orchestrator",
 			Kind:          CallerKindOrchestrator,
 			Roles: []Role{
 				RoleOrchestratorMount,
@@ -441,13 +441,13 @@ func TestSpecializedCallerKindsUseExplicitRoleAllowlists(t *testing.T) {
 		},
 	}
 
-	if CallerNotAllowed("sandbox-manager", RoleOrchestratorMount, allowed) {
+	if CallerNotAllowed("runtime-orchestrator", RoleOrchestratorMount, allowed) {
 		t.Fatal("expected orchestrator caller to be allowed orchestrator_mount")
 	}
-	if !CallerNotAllowed("sandbox-manager", RoleRepoAdmin, allowed) {
+	if !CallerNotAllowed("runtime-orchestrator", RoleRepoAdmin, allowed) {
 		t.Fatal("expected orchestrator caller to be denied repo_admin")
 	}
-	if !CallerNotAllowed("sandbox-manager", RoleMigrationAdmin, allowed) {
+	if !CallerNotAllowed("runtime-orchestrator", RoleMigrationAdmin, allowed) {
 		t.Fatal("expected orchestrator caller to be denied migration_admin")
 	}
 	if CallerNotAllowed("afscp-migration", RoleMigrationAdmin, allowed) {

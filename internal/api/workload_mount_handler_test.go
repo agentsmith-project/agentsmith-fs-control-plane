@@ -102,7 +102,7 @@ func TestCreateWorkloadMountBindingRejectsDisabledNamespaceButReleaseStatusStayA
 		t.Fatalf("intake calls = %d, want create rejected before intake", intake.calls)
 	}
 
-	orchestratorConfig := workloadMountHandlerConfig(intake, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "sandbox-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
+	orchestratorConfig := workloadMountHandlerConfig(intake, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
 		config.RepoReader = &fakeRepoReader{repos: []resources.Repo{meta.repo}}
 		config.NamespaceReader = &fakeNamespaceReader{namespace: meta.namespace}
 		config.BindingReader = &fakeNamespaceVolumeBindingReader{binding: meta.binding}
@@ -111,11 +111,11 @@ func TestCreateWorkloadMountBindingRejectsDisabledNamespaceButReleaseStatusStayA
 		config.MountReader = fakeWorkloadMountReader{binding: meta.mount}
 		config.PlanReader = fakeWorkloadMountPlanReader{plan: meta.plan}
 	})
-	orchestratorConfig.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:sandbox-orchestrator", CanonicalCallerService: "sandbox-orchestrator"}}
+	orchestratorConfig.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
 	orchestrator := WorkloadMountHandler(orchestratorConfig)
 
 	rec = httptest.NewRecorder()
-	orchestrator.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPost, "/internal/v1/workload-mount-bindings/wmb_123:release", "", "ns_123", "sandbox-orchestrator"))
+	orchestrator.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPost, "/internal/v1/workload-mount-bindings/wmb_123:release", "", "ns_123", "runtime-orchestrator"))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("release status = %d body = %s, want release intake preserved", rec.Code, rec.Body.String())
 	}
@@ -124,7 +124,7 @@ func TestCreateWorkloadMountBindingRejectsDisabledNamespaceButReleaseStatusStayA
 	}
 
 	rec = httptest.NewRecorder()
-	orchestrator.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", `{"status":"released","observed_at":"2026-05-05T12:00:00Z","reason":"unmounted"}`, "ns_123", "sandbox-orchestrator"))
+	orchestrator.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", `{"status":"released","observed_at":"2026-05-05T12:00:00Z","reason":"unmounted"}`, "ns_123", "runtime-orchestrator"))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status update = %d body = %s, want status intake preserved", rec.Code, rec.Body.String())
 	}
@@ -230,13 +230,13 @@ func TestWorkloadMountGetAndPlanRedactionBoundary(t *testing.T) {
 	}
 
 	planCalls := &fakeWorkloadMountPlanReaderCalls{}
-	orchestratorConfig := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "sandbox-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
+	orchestratorConfig := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
 		config.PlanReader = fakeWorkloadMountPlanReader{plan: workloadMountMetaFixture().plan, calls: planCalls}
 	})
-	orchestratorConfig.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:sandbox-orchestrator", CanonicalCallerService: "sandbox-orchestrator"}}
+	orchestratorConfig.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
 	orchestrator := WorkloadMountHandler(orchestratorConfig)
 	rec = httptest.NewRecorder()
-	orchestrator.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "sandbox-orchestrator"))
+	orchestrator.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "runtime-orchestrator"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("plan status = %d body = %s, want 200", rec.Code, rec.Body.String())
 	}
@@ -282,13 +282,13 @@ func TestWorkloadMountGetAndPlanDenyNamespaceMismatchWithoutPlanLeak(t *testing.
 		t.Fatalf("get status = %d body = %s, want namespace mismatch", rec.Code, rec.Body.String())
 	}
 
-	orchestratorConfig := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "sandbox-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
+	orchestratorConfig := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
 		config.MountReader = fakeWorkloadMountReader{binding: meta.mount}
 		config.PlanReader = fakeWorkloadMountPlanReader{plan: meta.plan}
 	})
-	orchestratorConfig.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:sandbox-orchestrator", CanonicalCallerService: "sandbox-orchestrator"}}
+	orchestratorConfig.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
 	rec = httptest.NewRecorder()
-	WorkloadMountHandler(orchestratorConfig).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "sandbox-orchestrator"))
+	WorkloadMountHandler(orchestratorConfig).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "runtime-orchestrator"))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("plan status = %d body = %s, want namespace mismatch", rec.Code, rec.Body.String())
 	}
@@ -297,14 +297,14 @@ func TestWorkloadMountGetAndPlanDenyNamespaceMismatchWithoutPlanLeak(t *testing.
 
 func TestWorkloadMountPlanAuditUsesMinimalDetails(t *testing.T) {
 	sink := &fakeAuditSink{}
-	config := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "sandbox-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
+	config := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
 		config.AuditSink = sink
 		config.EventID = func() string { return "evt_mount_plan" }
 	})
-	config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:sandbox-orchestrator", CanonicalCallerService: "sandbox-orchestrator"}}
+	config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
 	rec := httptest.NewRecorder()
 
-	WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "sandbox-orchestrator"))
+	WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "runtime-orchestrator"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("plan status = %d body = %s, want 200", rec.Code, rec.Body.String())
@@ -361,18 +361,18 @@ func TestWorkloadMountAdmissionBlocksWriterFenceOnlyForReadWrite(t *testing.T) {
 
 func TestWorkloadMountStatusRequiresObservedAtAndQueuesIt(t *testing.T) {
 	intake := &fakeOperationIntakeStore{}
-	config := workloadMountHandlerConfig(intake, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "sandbox-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}})
-	config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:sandbox-orchestrator", CanonicalCallerService: "sandbox-orchestrator"}}
+	config := workloadMountHandlerConfig(intake, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}})
+	config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
 	handler := WorkloadMountHandler(config)
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", `{"status":"active"}`, "ns_123", "sandbox-orchestrator"))
+	handler.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", `{"status":"active"}`, "ns_123", "runtime-orchestrator"))
 	if rec.Code != http.StatusBadRequest || intake.calls != 0 {
 		t.Fatalf("missing observed_at status/calls = %d/%d, want 400 before intake", rec.Code, intake.calls)
 	}
 
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", `{"status":"active","observed_at":"2026-05-05T12:34:56Z","lease_expires_at":"2026-05-05T13:34:56Z","reason":"mounted"}`, "ns_123", "sandbox-orchestrator"))
+	handler.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", `{"status":"active","observed_at":"2026-05-05T12:34:56Z","lease_expires_at":"2026-05-05T13:34:56Z","reason":"mounted"}`, "ns_123", "runtime-orchestrator"))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("valid status = %d body = %s, want 202", rec.Code, rec.Body.String())
 	}
@@ -385,11 +385,11 @@ func TestWorkloadMountStatusRejectsNonOrchestratorStatuses(t *testing.T) {
 	for _, status := range []string{"issued", "releasing"} {
 		t.Run(status, func(t *testing.T) {
 			intake := &fakeOperationIntakeStore{}
-			config := workloadMountHandlerConfig(intake, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "sandbox-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}})
-			config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:sandbox-orchestrator", CanonicalCallerService: "sandbox-orchestrator"}}
+			config := workloadMountHandlerConfig(intake, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}})
+			config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
 			rec := httptest.NewRecorder()
 
-			WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", `{"status":"`+status+`","observed_at":"2026-05-05T12:34:56Z"}`, "ns_123", "sandbox-orchestrator"))
+			WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", `{"status":"`+status+`","observed_at":"2026-05-05T12:34:56Z"}`, "ns_123", "runtime-orchestrator"))
 
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d body = %s, want 400", rec.Code, rec.Body.String())
@@ -403,12 +403,12 @@ func TestWorkloadMountStatusRejectsNonOrchestratorStatuses(t *testing.T) {
 
 func TestWorkloadMountStatusRejectsReasonOverMaxLength(t *testing.T) {
 	intake := &fakeOperationIntakeStore{}
-	config := workloadMountHandlerConfig(intake, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "sandbox-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}})
-	config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:sandbox-orchestrator", CanonicalCallerService: "sandbox-orchestrator"}}
+	config := workloadMountHandlerConfig(intake, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}})
+	config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
 	rec := httptest.NewRecorder()
 	body := `{"status":"active","observed_at":"2026-05-05T12:34:56Z","reason":"` + strings.Repeat("x", 1025) + `"}`
 
-	WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", body, "ns_123", "sandbox-orchestrator"))
+	WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPatch, "/internal/v1/workload-mount-bindings/wmb_123/status", body, "ns_123", "runtime-orchestrator"))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s, want 400", rec.Code, rec.Body.String())
@@ -472,7 +472,7 @@ func workloadMountMetaFixture() workloadMountMeta {
 	return workloadMountMeta{
 		repo:      repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive),
 		namespace: activeNamespaceFixture("ns_123"),
-		binding:   namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleMountAdmin}}),
+		binding:   namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleMountAdmin}}),
 		volume: resources.Volume{
 			ID:             "vol_123",
 			Backend:        resources.VolumeBackendJuiceFS,
@@ -518,7 +518,7 @@ func (reader fakeWorkloadMountPlanReader) GetOrchestratorMountPlan(_ context.Con
 }
 
 func workloadMountRequest(method, path, body, namespaceID string) *http.Request {
-	return workloadMountRequestForCaller(method, path, body, namespaceID, "agentsmith-api")
+	return workloadMountRequestForCaller(method, path, body, namespaceID, "product-caller")
 }
 
 func workloadMountRequestForCaller(method, path, body, namespaceID, authCaller string) *http.Request {

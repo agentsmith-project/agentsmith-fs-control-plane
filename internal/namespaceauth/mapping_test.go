@@ -10,7 +10,7 @@ import (
 
 func TestMapAllowedCallerMapsOrdinaryNamespaceProductRoles(t *testing.T) {
 	caller := resources.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Roles: []resources.CallerRole{
 			resources.CallerRoleNamespaceAdmin,
 			resources.CallerRoleRepoAdmin,
@@ -37,7 +37,7 @@ func TestMapAllowedCallerMapsOrdinaryNamespaceProductRoles(t *testing.T) {
 		auth.RoleMountAdmin,
 		auth.RoleOperationInspector,
 	}
-	if got.CallerService != "agentsmith-api" || got.Kind != auth.CallerKindProduct || !slices.Equal(got.Roles, wantRoles) {
+	if got.CallerService != "product-caller" || got.Kind != auth.CallerKindProduct || !slices.Equal(got.Roles, wantRoles) {
 		t.Fatalf("mapped caller = %#v, want product caller roles %#v", got, wantRoles)
 	}
 }
@@ -102,7 +102,7 @@ func TestMapAllowedCallerDeniesBlankCallerService(t *testing.T) {
 
 func TestMapAllowedCallerReturnsDefensiveRoleCopy(t *testing.T) {
 	caller := resources.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin, resources.CallerRoleOperationInspector},
 	}
 	got, ok := MapAllowedCaller(caller)
@@ -113,7 +113,7 @@ func TestMapAllowedCallerReturnsDefensiveRoleCopy(t *testing.T) {
 	caller.Roles[0] = resources.CallerRoleMountAdmin
 	got.Roles[0] = auth.RoleMountAdmin
 	gotAgain, ok := MapAllowedCaller(resources.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin, resources.CallerRoleOperationInspector},
 	})
 	if !ok {

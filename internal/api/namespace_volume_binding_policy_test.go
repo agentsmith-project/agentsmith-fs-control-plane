@@ -14,8 +14,8 @@ import (
 
 func TestNamespaceVolumeBindingAllowedCallerPolicyMapsActiveBinding(t *testing.T) {
 	reader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123",
-		resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}},
-		resources.AllowedCaller{CallerService: "sandbox-orchestrator", Roles: []resources.CallerRole{resources.CallerRoleOrchestratorMount}},
+		resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}},
+		resources.AllowedCaller{CallerService: "runtime-orchestrator", Roles: []resources.CallerRole{resources.CallerRoleOrchestratorMount}},
 	)}
 	policy := NamespaceVolumeBindingAllowedCallerPolicy{Reader: reader}
 
@@ -26,7 +26,7 @@ func TestNamespaceVolumeBindingAllowedCallerPolicyMapsActiveBinding(t *testing.T
 	if len(callers) != 2 {
 		t.Fatalf("callers = %#v, want two mapped callers", callers)
 	}
-	if callers[0].CallerService != "agentsmith-api" || callers[0].Kind != auth.CallerKindProduct || callers[0].Roles[0] != auth.RoleRepoAdmin {
+	if callers[0].CallerService != "product-caller" || callers[0].Kind != auth.CallerKindProduct || callers[0].Roles[0] != auth.RoleRepoAdmin {
 		t.Fatalf("product caller = %#v", callers[0])
 	}
 	if callers[1].Kind != auth.CallerKindOrchestrator || callers[1].Roles[0] != auth.RoleOrchestratorMount {
@@ -71,7 +71,7 @@ func TestNamespaceVolumeBindingAllowedCallerPolicyRejectsInvalidAndMismatchWitho
 }
 
 func TestNamespaceVolumeBindingAllowedCallerPolicyDisabledBindingIsRouteAware(t *testing.T) {
-	disabled := namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleNamespaceAdmin}})
+	disabled := namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleNamespaceAdmin}})
 	disabled.Status = resources.NamespaceStatusDisabled
 
 	t.Run("mutating namespace route denied", func(t *testing.T) {
@@ -108,9 +108,9 @@ func TestNamespaceVolumeBindingAllowedCallerPolicyMapsNotFoundOutageAndInternalI
 		{name: "not found", reader: &fakeNamespaceVolumeBindingReader{err: sql.ErrNoRows}, code: CodeNamespaceNotFound, status: http.StatusNotFound},
 		{name: "store outage", reader: &fakeNamespaceVolumeBindingReader{err: errors.New("postgres password=secret failed")}, code: CodeStorageUnavailable, status: http.StatusServiceUnavailable},
 		{name: "nil reader", code: CodeInternalError, status: http.StatusInternalServerError},
-		{name: "returned namespace mismatch", reader: &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_other", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})}, code: CodeInternalError, status: http.StatusInternalServerError},
+		{name: "returned namespace mismatch", reader: &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_other", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})}, code: CodeInternalError, status: http.StatusInternalServerError},
 		{name: "stored binding invalid", reader: &fakeNamespaceVolumeBindingReader{binding: resources.NamespaceVolumeBinding{NamespaceID: "ns_123", DefaultVolumeID: "vol_123", Status: resources.NamespaceStatusActive}}, code: CodeInternalError, status: http.StatusInternalServerError},
-		{name: "stored caller cannot map", reader: &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleVolumeAdmin}})}, code: CodeInternalError, status: http.StatusInternalServerError},
+		{name: "stored caller cannot map", reader: &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleVolumeAdmin}})}, code: CodeInternalError, status: http.StatusInternalServerError},
 	}
 
 	for _, tt := range tests {

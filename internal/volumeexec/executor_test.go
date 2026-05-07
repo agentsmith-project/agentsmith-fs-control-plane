@@ -93,11 +93,11 @@ func volumeRecord(now time.Time) operations.OperationRecord {
 		Type:             operations.OperationVolumeEnsure,
 		State:            operations.OperationStateQueued,
 		Phase:            operations.OperationPhaseVolumeEnsureValidate,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "", operations.OperationVolumeEnsure, "idem_volume").String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "", operations.OperationVolumeEnsure, "idem_volume").String(),
 		IdempotencyKey:   "idem_volume",
 		RequestHash:      "sha256:volume",
 		CorrelationID:    "corr-volume",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-volume"},
 		Resource:         operations.ResourceRef{Type: "volume", ID: "vol_123"},
 		InputSummary: map[string]any{

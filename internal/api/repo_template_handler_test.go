@@ -268,7 +268,7 @@ type repoTemplateMeta struct {
 
 func repoTemplateMetaFixture() repoTemplateMeta {
 	now := fixedNamespaceNow()
-	binding := namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleTemplateAdmin}})
+	binding := namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleTemplateAdmin}})
 	template := resources.Repo{
 		ID:                  "tmpl_base01",
 		NamespaceID:         "ns_123",
@@ -318,7 +318,7 @@ func repoTemplateRequest(method, path, namespaceID, body string) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_template")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderIdempotencyKey, "idem_template")
 	req.Header.Set(auth.HeaderActorType, "user")
 	req.Header.Set(auth.HeaderActorID, "user_123")
@@ -338,7 +338,7 @@ func templateOperationRecord(operationID string, typ operations.OperationType, h
 		resource = operations.ResourceRef{Type: "repo", ID: "repo_clone01"}
 		repoID = "repo_clone01"
 	}
-	return operations.OperationRecord{ID: operationID, Type: typ, State: operations.OperationStateQueued, Phase: phase, IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_123", typ, "idem_template").String(), IdempotencyKey: "idem_template", RequestHash: hash, CorrelationID: "corr_template", CallerService: "agentsmith-api", AuthorizedActor: operations.Actor{Type: "user", ID: "user_123"}, Resource: resource, NamespaceID: "ns_123", RepoID: repoID, TemplateID: "tmpl_base01", ExternalResourceIDs: map[string]string{}, InputSummary: map[string]any{}, CreatedAt: now}
+	return operations.OperationRecord{ID: operationID, Type: typ, State: operations.OperationStateQueued, Phase: phase, IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_123", typ, "idem_template").String(), IdempotencyKey: "idem_template", RequestHash: hash, CorrelationID: "corr_template", CallerService: "product-caller", AuthorizedActor: operations.Actor{Type: "user", ID: "user_123"}, Resource: resource, NamespaceID: "ns_123", RepoID: repoID, TemplateID: "tmpl_base01", ExternalResourceIDs: map[string]string{}, InputSummary: map[string]any{}, CreatedAt: now}
 }
 
 func assertRepoTemplateResponseDoesNotLeak(t *testing.T, body string) {

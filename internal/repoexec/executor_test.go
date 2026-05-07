@@ -665,11 +665,11 @@ func repoCreateLeasedRecord(now time.Time, attempt int) operations.OperationReco
 		Attempt:             attempt,
 		LeaseOwner:          "worker-a",
 		LeaseExpiresAt:      &leaseExpiresAt,
-		IdempotencyScope:    operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRepoCreate, "idem_repo").String(),
+		IdempotencyScope:    operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRepoCreate, "idem_repo").String(),
 		IdempotencyKey:      "idem_repo",
 		RequestHash:         "sha256:repo",
 		CorrelationID:       "corr-alpha",
-		CallerService:       "agentsmith-api",
+		CallerService:       "product-caller",
 		AuthorizedActor:     operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:            operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:         "ns_alpha01",
@@ -686,7 +686,7 @@ func savePointLeasedRecord(now time.Time, phase string) operations.OperationReco
 	record.ID = "op_savepoint"
 	record.Type = operations.OperationSavePointCreate
 	record.Phase = phase
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationSavePointCreate, "idem_savepoint").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationSavePointCreate, "idem_savepoint").String()
 	record.IdempotencyKey = "idem_savepoint"
 	record.RequestHash = "sha256:savepoint"
 	record.InputSummary = map[string]any{"message": "checkpoint"}
@@ -698,7 +698,7 @@ func templateCreateLeasedRecord(now time.Time) operations.OperationRecord {
 	record.ID = "op_template_create"
 	record.Type = operations.OperationTemplateCreate
 	record.Phase = operations.OperationPhaseTemplateCreateValidate
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationTemplateCreate, "idem_template").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationTemplateCreate, "idem_template").String()
 	record.IdempotencyKey = "idem_template"
 	record.RequestHash = "sha256:template-create"
 	record.Resource = operations.ResourceRef{Type: "repo_template", ID: "tmpl_base01"}
@@ -713,7 +713,7 @@ func templateCloneLeasedRecord(now time.Time) operations.OperationRecord {
 	record.ID = "op_template_clone"
 	record.Type = operations.OperationTemplateClone
 	record.Phase = operations.OperationPhaseTemplateCloneValidate
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationTemplateClone, "idem_template_clone").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationTemplateClone, "idem_template_clone").String()
 	record.IdempotencyKey = "idem_template_clone"
 	record.RequestHash = "sha256:template-clone"
 	record.Resource = operations.ResourceRef{Type: "repo", ID: "repo_clone01"}
@@ -770,7 +770,7 @@ func newFakeStore() *fakeRepoCreateStore {
 		binding: resources.NamespaceVolumeBinding{
 			NamespaceID:       "ns_alpha01",
 			DefaultVolumeID:   "vol_123",
-			AllowedCallers:    []resources.AllowedCaller{{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}}},
+			AllowedCallers:    []resources.AllowedCaller{{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}}},
 			QuotaBytesDefault: 4096,
 			ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
 			LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},

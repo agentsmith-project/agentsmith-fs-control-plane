@@ -615,7 +615,7 @@ func repoLifecycleMetaFixture(status resources.RepoStatus) repoLifecycleMeta {
 	repo := repoResourceFixture("ns_123", "repo_123", status)
 	repo.Lifecycle = lifecycleFixture(status)
 	namespace := resources.Namespace{ID: "ns_123", Status: resources.NamespaceStatusActive, CreatedAt: fixedNamespaceNow(), UpdatedAt: fixedNamespaceNow()}
-	binding := namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoLifecycleAdmin}})
+	binding := namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoLifecycleAdmin}})
 	meta := repoLifecycleMeta{repo: repo, namespace: namespace, binding: binding}
 	meta.repoReader = &fakeRepoReader{repos: []resources.Repo{repo}}
 	meta.namespaceRead = &fakeNamespaceReader{namespace: namespace}
@@ -683,7 +683,7 @@ func repoLifecycleHandlerForTestWithPolicies(store OperationIntakeStore, meta re
 
 func repoLifecycleBreakGlassAllowedCallers() []auth.AllowedCaller {
 	return []auth.AllowedCaller{{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Kind:          auth.CallerKindOperator,
 		Roles:         []auth.Role{auth.RoleRepoLifecycleAdmin, auth.RoleBreakGlassAdmin},
 	}}
@@ -697,7 +697,7 @@ func repoLifecycleRequest(path, namespaceID, body string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_lifecycle")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderIdempotencyKey, "idem_lifecycle")
 	req.Header.Set(auth.HeaderActorType, "user")
 	req.Header.Set(auth.HeaderActorID, "user_123")
@@ -742,11 +742,11 @@ func existingLifecycleOperationRecord(operationID string, operationType operatio
 		Type:             operationType,
 		State:            operations.OperationStateQueued,
 		Phase:            operations.OperationPhaseRepoLifecycleValidate,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_123", operationType, "idem_lifecycle").String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_123", operationType, "idem_lifecycle").String(),
 		IdempotencyKey:   "idem_lifecycle",
 		RequestHash:      requestHash,
 		CorrelationID:    "corr_lifecycle",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "user", ID: "user_123"},
 		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_123"},
 		NamespaceID:      "ns_123",

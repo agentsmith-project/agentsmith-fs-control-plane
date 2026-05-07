@@ -1855,11 +1855,11 @@ func queuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
 func repoCreateQueuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
 	return operations.QueuedOperationSpec{
 		OperationID:     "op-repo-create",
-		Scope:           operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRepoCreate, "idem-repo"),
+		Scope:           operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRepoCreate, "idem-repo"),
 		RequestHash:     "sha256:repo-create",
 		Phase:           operations.OperationPhaseRepoCreateValidate,
 		CorrelationID:   "corr-repo",
-		CallerService:   "agentsmith-api",
+		CallerService:   "product-caller",
 		AuthorizedActor: operations.Actor{Type: "user", ID: "user_123"},
 		Resource:        operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:     "ns_alpha01",
@@ -1872,11 +1872,11 @@ func repoCreateQueuedSpecFixture(createdAt time.Time) operations.QueuedOperation
 func restorePreviewQueuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
 	return operations.QueuedOperationSpec{
 		OperationID:     "op_restore_preview",
-		Scope:           operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreview, "idem-preview"),
+		Scope:           operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreview, "idem-preview"),
 		RequestHash:     "sha256:restore-preview",
 		Phase:           operations.OperationPhaseRestorePreviewValidate,
 		CorrelationID:   "corr-preview",
-		CallerService:   "agentsmith-api",
+		CallerService:   "product-caller",
 		AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:        operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:     "ns_alpha01",
@@ -1889,11 +1889,11 @@ func restorePreviewQueuedSpecFixture(createdAt time.Time) operations.QueuedOpera
 func restoreRunQueuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
 	return operations.QueuedOperationSpec{
 		OperationID:     "op_restore_run",
-		Scope:           operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestoreRun, "idem-run"),
+		Scope:           operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestoreRun, "idem-run"),
 		RequestHash:     "sha256:restore-run",
 		Phase:           operations.OperationPhaseRestoreRunValidate,
 		CorrelationID:   "corr-run",
-		CallerService:   "agentsmith-api",
+		CallerService:   "product-caller",
 		AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:        operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:     "ns_alpha01",
@@ -1906,11 +1906,11 @@ func restoreRunQueuedSpecFixture(createdAt time.Time) operations.QueuedOperation
 func restorePreviewDiscardQueuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
 	return operations.QueuedOperationSpec{
 		OperationID:     "op_restore_discard",
-		Scope:           operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem-discard"),
+		Scope:           operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem-discard"),
 		RequestHash:     "sha256:restore-preview-discard",
 		Phase:           operations.OperationPhaseRestorePreviewDiscardValidate,
 		CorrelationID:   "corr-discard",
-		CallerService:   "agentsmith-api",
+		CallerService:   "product-caller",
 		AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:        operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:     "ns_alpha01",

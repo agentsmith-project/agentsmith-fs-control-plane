@@ -212,7 +212,7 @@ func TestCreateRepoHandlerCreatesOperationIntake(t *testing.T) {
 		t.Fatalf("intake calls = %d, want 1", store.calls)
 	}
 	spec := store.spec
-	wantScope := operations.NewIdempotencyScope("agentsmith-api", "ns_123", operations.OperationRepoCreate, "idem_repo")
+	wantScope := operations.NewIdempotencyScope("product-caller", "ns_123", operations.OperationRepoCreate, "idem_repo")
 	if spec.OperationID != "op_repo" || spec.Scope != wantScope {
 		t.Fatalf("spec op/scope = %q/%#v, want op_repo/%#v", spec.OperationID, spec.Scope, wantScope)
 	}
@@ -368,7 +368,7 @@ func createRepoRequest(namespaceID string, body string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/repos", strings.NewReader(body))
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_repo")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderIdempotencyKey, "idem_repo")
 	req.Header.Set(auth.HeaderActorType, "user")
 	req.Header.Set(auth.HeaderActorID, "user_123")
@@ -414,7 +414,7 @@ func repoReadRequest(method, path, namespaceID string) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_repo_read")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	if namespaceID != "" {
 		req.Header.Set(auth.HeaderNamespaceID, namespaceID)
 	}

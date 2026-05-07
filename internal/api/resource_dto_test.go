@@ -103,7 +103,7 @@ func TestNamespaceVolumeBindingResponseJSONShapeAllowedCallersAndPolicyCopies(t 
 		NamespaceID:     "ns_123",
 		DefaultVolumeID: "vol_123",
 		AllowedCallers: []resources.AllowedCaller{{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin, resources.CallerRoleOperationInspector},
 		}},
 		QuotaBytesDefault: 4096,
@@ -141,7 +141,7 @@ func TestNamespaceVolumeBindingResponseJSONShapeAllowedCallersAndPolicyCopies(t 
 	callers := got["allowed_callers"].([]any)
 	caller := callers[0].(map[string]any)
 	roles := caller["roles"].([]any)
-	if caller["caller_service"] != "agentsmith-api" || roles[0] != "repo_admin" || roles[1] != "operation_inspector" {
+	if caller["caller_service"] != "product-caller" || roles[0] != "repo_admin" || roles[1] != "operation_inspector" {
 		t.Fatalf("allowed_callers = %#v, want serialized caller roles from defensive copy", callers)
 	}
 	exportPolicy := got["export_policy"].(map[string]any)

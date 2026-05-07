@@ -30,7 +30,7 @@ func TestEnsureVolumeHandlerCreatesOperationIntake(t *testing.T) {
 		t.Fatalf("intake calls = %d, want 1", store.calls)
 	}
 	spec := store.spec
-	wantScope := operations.NewIdempotencyScope("agentsmith-api", "", operations.OperationVolumeEnsure, "idem_volume")
+	wantScope := operations.NewIdempotencyScope("product-caller", "", operations.OperationVolumeEnsure, "idem_volume")
 	if spec.OperationID != "op_volume" || spec.Scope != wantScope {
 		t.Fatalf("spec op/scope = %q/%#v, want op_volume/%#v", spec.OperationID, spec.Scope, wantScope)
 	}
@@ -172,7 +172,7 @@ func TestVolumeHealthHandlerReturnsMetadataBasedNonSensitiveHealth(t *testing.T)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/volumes/vol_123/health", nil)
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_volume")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -226,7 +226,7 @@ func ensureVolumeRequest(path, body string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_volume")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderIdempotencyKey, "idem_volume")
 	req.Header.Set(auth.HeaderActorType, "system")
 	req.Header.Set(auth.HeaderActorID, "svc-volume")
@@ -239,7 +239,7 @@ func ensureVolumeRequestBody(volumeID string) string {
 
 func volumeAdminAllowedPolicy() AllowedCallerPolicy {
 	return fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Kind:          auth.CallerKindAdmin,
 		Roles:         []auth.Role{auth.RoleVolumeAdmin},
 	}}}

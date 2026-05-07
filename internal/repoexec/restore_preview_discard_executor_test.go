@@ -284,7 +284,7 @@ func restorePreviewDiscardLeasedRecord(now time.Time, phase string) operations.O
 	record.ID = "op_discard"
 	record.Type = operations.OperationRestorePreviewDiscard
 	record.Phase = phase
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem_discard").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem_discard").String()
 	record.IdempotencyKey = "idem_discard"
 	record.RequestHash = "sha256:restore-preview-discard"
 	record.InputSummary = map[string]any{"preview_operation_id": "op_preview01"}

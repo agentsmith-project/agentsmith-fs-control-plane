@@ -30,7 +30,7 @@ func TestCreateOrReuseOperationIntakeCreatesQueuedOperationEnvelope(t *testing.T
 			CorrelationID:  "corr_123",
 			NamespaceID:    "ns_123",
 			Actor:          auth.Actor{Type: "user", ID: "user_123"},
-			CallerService:  "agentsmith-api",
+			CallerService:  "product-caller",
 		},
 		Route:               route,
 		NamespaceID:         "ns_123",
@@ -51,7 +51,7 @@ func TestCreateOrReuseOperationIntakeCreatesQueuedOperationEnvelope(t *testing.T
 	}
 	spec := store.spec
 	wantType := operations.OperationNamespaceVolumeBindingPut
-	wantScope := operations.NewIdempotencyScope("agentsmith-api", "ns_123", wantType, "idem_123")
+	wantScope := operations.NewIdempotencyScope("product-caller", "ns_123", wantType, "idem_123")
 	if spec.OperationID != "op_123" || spec.Scope != wantScope || spec.Scope.ConstraintKey() != wantScope.ConstraintKey() {
 		t.Fatalf("spec operation/scope = %q/%#v, want op_123/%#v", spec.OperationID, spec.Scope, wantScope)
 	}
@@ -65,7 +65,7 @@ func TestCreateOrReuseOperationIntakeCreatesQueuedOperationEnvelope(t *testing.T
 	if spec.RequestHash != wantHash {
 		t.Fatalf("request hash = %q, want canonical request hash %q", spec.RequestHash, wantHash)
 	}
-	if spec.Phase != "validate_binding" || spec.CorrelationID != "corr_123" || spec.CallerService != "agentsmith-api" {
+	if spec.Phase != "validate_binding" || spec.CorrelationID != "corr_123" || spec.CallerService != "product-caller" {
 		t.Fatalf("spec phase/correlation/caller = %q/%q/%q", spec.Phase, spec.CorrelationID, spec.CallerService)
 	}
 	if spec.NamespaceID != "ns_123" || spec.Resource.Type != "namespace_volume_binding" || spec.Resource.ID != "ns_123" {
@@ -101,7 +101,7 @@ func TestCreateOrReuseOperationIntakeReusesExistingOperation(t *testing.T) {
 			CorrelationID:  "corr_123",
 			NamespaceID:    "ns_123",
 			Actor:          auth.Actor{Type: "user", ID: "user_123"},
-			CallerService:  "agentsmith-api",
+			CallerService:  "product-caller",
 		},
 		Route:               route,
 		NamespaceID:         "ns_123",
@@ -164,11 +164,11 @@ func TestCreateOrReuseOperationIntakeReusesFailedOperationWithFlatError(t *testi
 			Type:                operations.OperationRepoCreate,
 			State:               operations.OperationStateFailed,
 			Phase:               "allocate_repo_path",
-			IdempotencyScope:    "agentsmith-api:ns_123:repo_create:idem_123",
+			IdempotencyScope:    "product-caller:ns_123:repo_create:idem_123",
 			IdempotencyKey:      "idem_123",
 			RequestHash:         operations.RequestHash("sha256:secret"),
 			CorrelationID:       "corr_123",
-			CallerService:       "agentsmith-api",
+			CallerService:       "product-caller",
 			AuthorizedActor:     operations.Actor{Type: "user", ID: "user_123"},
 			Resource:            operations.ResourceRef{Type: "repo", ID: "repo_123"},
 			NamespaceID:         "ns_123",
@@ -194,7 +194,7 @@ func TestCreateOrReuseOperationIntakeReusesFailedOperationWithFlatError(t *testi
 			CorrelationID:  "corr_123",
 			NamespaceID:    "ns_123",
 			Actor:          auth.Actor{Type: "user", ID: "user_123"},
-			CallerService:  "agentsmith-api",
+			CallerService:  "product-caller",
 		},
 		Route:               route,
 		NamespaceID:         "ns_123",
@@ -252,7 +252,7 @@ func TestCreateOrReuseOperationIntakeMapsErrors(t *testing.T) {
 				CorrelationID:  "corr_123",
 				NamespaceID:    "ns_123",
 				Actor:          auth.Actor{Type: "user", ID: "user_123"},
-				CallerService:  "agentsmith-api",
+				CallerService:  "product-caller",
 			},
 			Route:               route,
 			NamespaceID:         "ns_123",

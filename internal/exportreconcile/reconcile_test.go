@@ -113,7 +113,7 @@ func exportSessionCandidate(now time.Time, exportID string, status sessionstate.
 		Mode:                   sessionstate.AccessModeReadWrite,
 		Status:                 status,
 		ExpiresAt:              expiresAt,
-		CreatedByCallerService: "agentsmith-api",
+		CreatedByCallerService: "product-caller",
 		CreatedByActor:         exportaccess.Actor{Type: "user", ID: "user_alpha"},
 		CreatedAt:              now.Add(-time.Hour),
 		UpdatedAt:              now.Add(-time.Minute),

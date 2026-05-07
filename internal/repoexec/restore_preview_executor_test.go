@@ -200,7 +200,7 @@ func restorePreviewLeasedRecord(now time.Time, phase string) operations.Operatio
 	record.ID = "op_preview"
 	record.Type = operations.OperationRestorePreview
 	record.Phase = phase
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String()
 	record.IdempotencyKey = "idem_preview"
 	record.RequestHash = "sha256:restore-preview"
 	record.InputSummary = map[string]any{"save_point_id": "sp_001"}

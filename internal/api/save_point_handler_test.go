@@ -127,7 +127,7 @@ func TestSavePointCreateIdempotentReuseBeforeRepoStateChecks(t *testing.T) {
 	handler := SavePointHandler(SavePointHandlerConfig{
 		RepoReader:        repoReader,
 		NamespaceReader:   &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
-		BindingReader:     &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
+		BindingReader:     &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
 		FenceReader:       &fakeRepoFenceReader{},
 		IntakeStore:       intake,
 		PrincipalResolver: namespaceBindingPrincipalResolver(),
@@ -185,7 +185,7 @@ func TestSavePointCreateRejectsDisabledNamespaceBeforeIntakeAndAudits(t *testing
 	handler := SavePointHandler(SavePointHandlerConfig{
 		RepoReader:        &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}},
 		NamespaceReader:   &fakeNamespaceReader{namespace: disabledNamespaceFixture("ns_123", "raw secret reason password=secret")},
-		BindingReader:     &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
+		BindingReader:     &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
 		FenceReader:       &fakeRepoFenceReader{},
 		MutationGate:      &fakeRepoJVSMutationGateReader{},
 		IntakeStore:       intake,
@@ -385,7 +385,7 @@ func savePointTestHandlerWithGate(intake *fakeOperationIntakeStore, history Save
 	return SavePointHandler(SavePointHandlerConfig{
 		RepoReader:        &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", repoStatus)}},
 		NamespaceReader:   &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
-		BindingReader:     &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
+		BindingReader:     &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
 		FenceReader:       &fakeRepoFenceReader{fences: held},
 		HistoryReader:     history,
 		MutationGate:      gate,
@@ -401,7 +401,7 @@ func savePointShellForGateTest(store OperationIntakeStore, history SavePointHist
 	return NewInternalAPIShell(InternalAPIShellConfig{
 		PrincipalResolver:      namespaceBindingPrincipalResolver(),
 		NamespaceReader:        &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
-		NamespaceBindingReader: &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
+		NamespaceBindingReader: &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
 		RepoReader:             &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}},
 		RepoFenceReader:        &fakeRepoFenceReader{},
 		SavePointHistoryReader: history,
@@ -420,7 +420,7 @@ func savePointRequest(method, path, body, namespaceID string) *http.Request {
 	req := httptest.NewRequest(method, path, reader)
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_savepoint")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderIdempotencyKey, "idem_savepoint")
 	req.Header.Set(auth.HeaderActorType, "user")
 	req.Header.Set(auth.HeaderActorID, "user_123")
@@ -443,7 +443,7 @@ func disabledNamespaceFixture(namespaceID, reason string) resources.Namespace {
 
 func savePointOperationRecord(operationID string, hash operations.RequestHash) operations.OperationRecord {
 	now := fixedNamespaceNow()
-	return operations.OperationRecord{ID: operationID, Type: operations.OperationSavePointCreate, State: operations.OperationStateQueued, Phase: operations.OperationPhaseSavePointCreateValidate, IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_123", operations.OperationSavePointCreate, "idem_savepoint").String(), IdempotencyKey: "idem_savepoint", RequestHash: hash, CorrelationID: "corr_savepoint", CallerService: "agentsmith-api", AuthorizedActor: operations.Actor{Type: "user", ID: "user_123"}, Resource: operations.ResourceRef{Type: "repo", ID: "repo_123"}, NamespaceID: "ns_123", RepoID: "repo_123", ExternalResourceIDs: map[string]string{}, InputSummary: map[string]any{"message": "checkpoint"}, CreatedAt: now}
+	return operations.OperationRecord{ID: operationID, Type: operations.OperationSavePointCreate, State: operations.OperationStateQueued, Phase: operations.OperationPhaseSavePointCreateValidate, IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_123", operations.OperationSavePointCreate, "idem_savepoint").String(), IdempotencyKey: "idem_savepoint", RequestHash: hash, CorrelationID: "corr_savepoint", CallerService: "product-caller", AuthorizedActor: operations.Actor{Type: "user", ID: "user_123"}, Resource: operations.ResourceRef{Type: "repo", ID: "repo_123"}, NamespaceID: "ns_123", RepoID: "repo_123", ExternalResourceIDs: map[string]string{}, InputSummary: map[string]any{"message": "checkpoint"}, CreatedAt: now}
 }
 
 func savePointLifecycleFence(operationID string) fences.Fence {

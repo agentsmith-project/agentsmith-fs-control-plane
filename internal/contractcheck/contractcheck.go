@@ -62,13 +62,14 @@ const (
 	CodeDocsQuotaSemanticsMissing             = "docs.quota_semantics_missing"
 	CodeDocsExternalAdoptionEvidenceForbidden = "docs.external_adoption_evidence_forbidden"
 
-	CodeGoOperationsOperationEnvelopeAmbiguous = "go.operations_operation_envelope_ambiguous"
-	CodeGoAPIOperationEnvelopeMissing          = "go.api_operation_envelope_missing"
-	CodeGoAPIOperationEnvelopePropertyMissing  = "go.api_operation_envelope_property_missing"
-	CodeGoAPIOperationEnvelopeNestedOperation  = "go.api_operation_envelope_nested_operation"
-	CodeGoRouteOperationTypeMissing            = "go.route_operation_type_missing"
-	CodeGoRouteOperationTypeUnknownRoute       = "go.route_operation_type_unknown_route"
-	CodeGoRouteOperationTypeNonMutating        = "go.route_operation_type_non_mutating"
+	CodeGoOperationsOperationEnvelopeAmbiguous    = "go.operations_operation_envelope_ambiguous"
+	CodeGoAPIOperationEnvelopeMissing             = "go.api_operation_envelope_missing"
+	CodeGoAPIOperationEnvelopePropertyMissing     = "go.api_operation_envelope_property_missing"
+	CodeGoAPIOperationEnvelopeNestedOperation     = "go.api_operation_envelope_nested_operation"
+	CodeGoRouteOperationTypeMissing               = "go.route_operation_type_missing"
+	CodeGoRouteOperationTypeUnknownRoute          = "go.route_operation_type_unknown_route"
+	CodeGoRouteOperationTypeNonMutating           = "go.route_operation_type_non_mutating"
+	CodeGoCoreTestProductSpecificFixtureForbidden = "go.core_test_product_specific_fixture_forbidden"
 )
 
 // Finding is a machine-readable contract verifier finding.
@@ -119,6 +120,7 @@ func VerifyFiles(openAPIPath, schemaPath, apiContractPath, apiDraftPath string) 
 	if repoRoot, ok := findRepoRoot(schemaPath); ok {
 		findings = append(findings, verifyGoDTOBoundary(repoRoot)...)
 		findings = append(findings, verifyCoreProductDocs(repoRoot)...)
+		findings = append(findings, verifyCoreTestFixtureNames(repoRoot)...)
 	}
 	return findings, nil
 }
@@ -1318,6 +1320,131 @@ func markdownFilesInDir(dir string) []string {
 		paths = append(paths, filepath.Join(dir, entry.Name()))
 	}
 	return paths
+}
+
+func verifyCoreTestFixtureNames(repoRoot string) []Finding {
+	paths := coreTestFixtureGuardPaths(repoRoot)
+	var findings []Finding
+	for _, path := range paths {
+		if isCoreTestFixtureGuardSelfTest(repoRoot, path) {
+			continue
+		}
+		findings = append(findings, forbiddenCoreTestFixturePathFindings(repoRoot, path)...)
+		body, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		findings = append(findings, forbiddenCoreTestFixtureBodyFindings(path, string(body))...)
+	}
+	return findings
+}
+
+func coreTestFixtureGuardPaths(repoRoot string) []string {
+	var paths []string
+	for _, root := range []string{
+		filepath.Join(repoRoot, "internal"),
+		filepath.Join(repoRoot, "cmd"),
+	} {
+		paths = append(paths, goTestFilesInTree(root)...)
+	}
+	paths = append(paths, markdownFilesInTree(filepath.Join(repoRoot, "test"))...)
+	sort.Strings(paths)
+	return paths
+}
+
+func goTestFilesInTree(root string) []string {
+	var paths []string
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	return paths
+}
+
+func markdownFilesInTree(root string) []string {
+	var paths []string
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	return paths
+}
+
+func isCoreTestFixtureGuardSelfTest(repoRoot, path string) bool {
+	rel, err := filepath.Rel(repoRoot, path)
+	if err != nil {
+		return false
+	}
+	return filepath.ToSlash(rel) == "internal/contractcheck/contractcheck_test.go"
+}
+
+func forbiddenCoreTestFixturePathFindings(repoRoot, path string) []Finding {
+	rel, err := filepath.Rel(repoRoot, path)
+	if err != nil {
+		rel = path
+	}
+	var findings []Finding
+	for _, token := range forbiddenCoreTestFixtureTokens() {
+		if !strings.Contains(filepath.ToSlash(rel), token) {
+			continue
+		}
+		findings = append(findings, Finding{
+			Code:    CodeGoCoreTestProductSpecificFixtureForbidden,
+			File:    path,
+			Message: fmt.Sprintf("core Go tests and test references must use generic AFSCP caller/runtime fixture names; path contains forbidden token %q", token),
+		})
+	}
+	return findings
+}
+
+func forbiddenCoreTestFixtureBodyFindings(path, body string) []Finding {
+	var findings []Finding
+	for i, line := range splitLines(body) {
+		for _, token := range forbiddenCoreTestFixtureLineTokens(line) {
+			findings = append(findings, Finding{
+				Code:    CodeGoCoreTestProductSpecificFixtureForbidden,
+				File:    path,
+				Line:    i + 1,
+				Message: fmt.Sprintf("core Go tests and test references must use generic AFSCP caller/runtime fixture names; found forbidden token %q", token),
+			})
+		}
+	}
+	return findings
+}
+
+func forbiddenCoreTestFixtureTokens() []string {
+	return []string{
+		"agentsmith-api",
+		"agentsmith-orchestrator",
+		"sandbox-orchestrator",
+		"sandbox-manager",
+		"agentsmith-gateway",
+		"agentsmith_afscp",
+		"AgentsmithSandbox",
+		"AgentSmithSandbox",
+	}
+}
+
+func forbiddenCoreTestFixtureLineTokens(line string) []string {
+	var tokens []string
+	for _, token := range forbiddenCoreTestFixtureTokens() {
+		if strings.Contains(line, token) {
+			tokens = append(tokens, token)
+		}
+	}
+	if strings.Contains(line, "github.com/agentsmith-project/") {
+		return tokens
+	}
+	if strings.Contains(line, `"agentsmith"`) || strings.Contains(line, "`agentsmith`") {
+		tokens = append(tokens, "agentsmith")
+	}
+	return tokens
 }
 
 func findProductSpecificDocTerms(path, body string) []Finding {

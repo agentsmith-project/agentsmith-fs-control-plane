@@ -23,10 +23,10 @@ func TestOperationInspectionHandlerReturnsRedactedRecordWithoutNamespaceHeader(t
 		"op_secret": operationInspectionRecord("op_secret", "ns_123"),
 	}}
 	authorizer := &fakeStoredInspectionAuthorizer{allowed: map[string]bool{"ns_123": true}}
-	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "agentsmith-api", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), nil)
+	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), nil)
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "agentsmith-api"))
+	handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "product-caller"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
@@ -56,10 +56,10 @@ func TestOperationInspectionHandlerHidesProductNamespaceMismatchAsNotFoundAndAud
 	}}
 	authorizer := &fakeStoredInspectionAuthorizer{allowed: map[string]bool{"ns_123": true}}
 	sink := &fakeAuditSink{}
-	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "agentsmith-api", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), sink)
+	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), sink)
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "ns_other", "agentsmith-api"))
+	handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "ns_other", "product-caller"))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d body = %s, want 404", rec.Code, rec.Body.String())
@@ -83,10 +83,10 @@ func TestOperationInspectionHandlerHidesProductGlobalDeniedAsNotFoundAndAudits(t
 	}}
 	authorizer := &fakeStoredInspectionAuthorizer{allowed: map[string]bool{"ns_123": true}}
 	sink := &fakeAuditSink{}
-	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "agentsmith-api", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), sink)
+	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), sink)
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, operationInspectionRequest("op_global", "ns_123", "agentsmith-api"))
+	handler.ServeHTTP(rec, operationInspectionRequest("op_global", "ns_123", "product-caller"))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d body = %s, want 404", rec.Code, rec.Body.String())
@@ -110,10 +110,10 @@ func TestOperationInspectionHandlerRequiresStoredBindingForProductCaller(t *test
 	}}
 	authorizer := &fakeStoredInspectionAuthorizer{allowed: map[string]bool{"ns_123": false}}
 	sink := &fakeAuditSink{}
-	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "agentsmith-api", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), sink)
+	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), sink)
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "agentsmith-api"))
+	handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "product-caller"))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d body = %s, want 404", rec.Code, rec.Body.String())
@@ -149,7 +149,7 @@ func TestOperationInspectionHandlerMapsStoredBindingAuthorizationErrors(t *testi
 		{
 			name: "invalid stored binding invariant",
 			reader: &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_other", resources.AllowedCaller{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Roles:         []resources.CallerRole{resources.CallerRoleOperationInspector},
 			})},
 			wantHTTP: http.StatusInternalServerError,
@@ -158,7 +158,7 @@ func TestOperationInspectionHandlerMapsStoredBindingAuthorizationErrors(t *testi
 		{
 			name: "invalid stored caller invariant",
 			reader: &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Roles:         []resources.CallerRole{resources.CallerRoleVolumeAdmin},
 			})},
 			wantHTTP: http.StatusInternalServerError,
@@ -176,10 +176,10 @@ func TestOperationInspectionHandlerMapsStoredBindingAuthorizationErrors(t *testi
 			opReader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
 				"op_secret": operationInspectionRecord("op_secret", "ns_123"),
 			}}
-			handler := operationInspectionHandlerForTest(opReader, operationInspectionNamespaceBindingAuthorizer{Reader: tt.reader}, operationInspectionPolicy(auth.AllowedCaller{CallerService: "agentsmith-api", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), nil)
+			handler := operationInspectionHandlerForTest(opReader, operationInspectionNamespaceBindingAuthorizer{Reader: tt.reader}, operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), nil)
 			rec := httptest.NewRecorder()
 
-			handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "agentsmith-api"))
+			handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "product-caller"))
 
 			if rec.Code != tt.wantHTTP {
 				t.Fatalf("status = %d body = %s, want %d", rec.Code, rec.Body.String(), tt.wantHTTP)
@@ -198,10 +198,10 @@ func TestOperationInspectionHandlerAllowsOperatorAdminForGlobalRecord(t *testing
 		"op_global": operationInspectionRecord("op_global", ""),
 	}}
 	authorizer := &fakeStoredInspectionAuthorizer{}
-	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "agentsmith-api", Kind: auth.CallerKindOperator, Roles: []auth.Role{auth.RoleOperatorAdmin}}), nil)
+	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindOperator, Roles: []auth.Role{auth.RoleOperatorAdmin}}), nil)
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, operationInspectionRequest("op_global", "", "agentsmith-api"))
+	handler.ServeHTTP(rec, operationInspectionRequest("op_global", "", "product-caller"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
@@ -228,10 +228,10 @@ func TestOperationInspectionHandlerMapsMissingAndStorageErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := &fakeInspectionOperationReader{err: tt.err}
-			handler := operationInspectionHandlerForTest(reader, &fakeStoredInspectionAuthorizer{}, operationInspectionPolicy(auth.AllowedCaller{CallerService: "agentsmith-api", Kind: auth.CallerKindOperator, Roles: []auth.Role{auth.RoleOperatorAdmin}}), nil)
+			handler := operationInspectionHandlerForTest(reader, &fakeStoredInspectionAuthorizer{}, operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindOperator, Roles: []auth.Role{auth.RoleOperatorAdmin}}), nil)
 			rec := httptest.NewRecorder()
 
-			handler.ServeHTTP(rec, operationInspectionRequest("op_missing", "", "agentsmith-api"))
+			handler.ServeHTTP(rec, operationInspectionRequest("op_missing", "", "product-caller"))
 
 			if rec.Code != tt.wantHTTP {
 				t.Fatalf("status = %d body = %s, want %d", rec.Code, rec.Body.String(), tt.wantHTTP)
@@ -254,14 +254,14 @@ func TestOperationInspectionHandlerValidationAndConfigErrors(t *testing.T) {
 		wantHTTP int
 		wantCode ErrorCode
 	}{
-		{name: "invalid operation id", path: "/internal/v1/operations/bad", reader: &fakeInspectionOperationReader{}, policy: operationInspectionPolicy(auth.AllowedCaller{CallerService: "agentsmith-api", Kind: auth.CallerKindOperator, Roles: []auth.Role{auth.RoleOperatorAdmin}}), wantHTTP: http.StatusBadRequest, wantCode: CodeInvalidID},
-		{name: "missing reader", path: "/internal/v1/operations/op_123", policy: operationInspectionPolicy(auth.AllowedCaller{CallerService: "agentsmith-api", Kind: auth.CallerKindOperator, Roles: []auth.Role{auth.RoleOperatorAdmin}}), wantHTTP: http.StatusInternalServerError, wantCode: CodeInternalError},
+		{name: "invalid operation id", path: "/internal/v1/operations/bad", reader: &fakeInspectionOperationReader{}, policy: operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindOperator, Roles: []auth.Role{auth.RoleOperatorAdmin}}), wantHTTP: http.StatusBadRequest, wantCode: CodeInvalidID},
+		{name: "missing reader", path: "/internal/v1/operations/op_123", policy: operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindOperator, Roles: []auth.Role{auth.RoleOperatorAdmin}}), wantHTTP: http.StatusInternalServerError, wantCode: CodeInternalError},
 		{name: "missing policy", path: "/internal/v1/operations/op_123", reader: &fakeInspectionOperationReader{}, wantHTTP: http.StatusInternalServerError, wantCode: CodeInternalError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := operationInspectionHandlerForTest(tt.reader, &fakeStoredInspectionAuthorizer{}, tt.policy, nil)
-			req := operationInspectionRequest("op_123", "", "agentsmith-api")
+			req := operationInspectionRequest("op_123", "", "product-caller")
 			req.URL.Path = tt.path
 			rec := httptest.NewRecorder()
 
@@ -370,11 +370,11 @@ func operationInspectionRecord(operationID, namespaceID string) operations.Opera
 		State:            operations.OperationStateQueued,
 		Phase:            operations.OperationPhaseRepoCreateValidate,
 		Attempt:          0,
-		IdempotencyScope: "agentsmith-api::repo_create:idem-visible",
+		IdempotencyScope: "product-caller::repo_create:idem-visible",
 		IdempotencyKey:   "idem-visible",
 		RequestHash:      "sha256:visible",
 		CorrelationID:    "corr_operation",
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "user", ID: "user_123"},
 		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_123"},
 		NamespaceID:      namespaceID,

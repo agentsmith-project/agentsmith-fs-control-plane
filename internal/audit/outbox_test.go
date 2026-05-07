@@ -40,7 +40,7 @@ func TestNewOutboxRecordSanitizesPayloadAndStartsPending(t *testing.T) {
 		EventID:       "evt_outbox_1",
 		Type:          EventTypeExportCreate,
 		Time:          eventTime,
-		CallerService: "agentsmith",
+		CallerService: "product-caller",
 		Resource: Resource{
 			Type: "repo",
 			ID:   "repo_alpha",
@@ -525,7 +525,7 @@ func newValidAuditEvent() Event {
 		EventID:       "evt_outbox_valid",
 		Type:          EventTypeRepoPurge,
 		Time:          now.Add(-time.Minute),
-		CallerService: "agentsmith",
+		CallerService: "product-caller",
 		Resource:      Resource{Type: "repo", ID: "repo_alpha", NamespaceID: "ns_alpha"},
 		Outcome:       OutcomeSucceeded,
 		Reason:        "purge queued",

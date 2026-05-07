@@ -27,7 +27,7 @@ func TestInternalAPIShellServesNamespaceVolumeBindingThroughInjectedHandler(t *t
 		NamespaceID:     "ns_123",
 		DefaultVolumeID: "vol_123",
 		AllowedCallers: []resources.AllowedCaller{{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Roles:         []resources.CallerRole{resources.CallerRoleNamespaceAdmin},
 		}},
 		QuotaBytesDefault: 4096,
@@ -58,8 +58,8 @@ func TestInternalAPIShellServesNamespaceVolumeBindingThroughInjectedHandler(t *t
 	if !ok {
 		t.Fatal("reader context did not include AuthGate request context")
 	}
-	if bound.CallerService != "agentsmith-api" {
-		t.Fatalf("bound CallerService = %q, want canonical agentsmith-api", bound.CallerService)
+	if bound.CallerService != "product-caller" {
+		t.Fatalf("bound CallerService = %q, want canonical product-caller", bound.CallerService)
 	}
 	body := rec.Body.String()
 	for _, want := range []string{`"namespace_id":"ns_123"`, `"default_volume_id":"vol_123"`} {
@@ -72,7 +72,7 @@ func TestInternalAPIShellServesNamespaceVolumeBindingThroughInjectedHandler(t *t
 func TestInternalAPIShellLogsImplementedNamespaceVolumeBindingRoute(t *testing.T) {
 	var logs bytes.Buffer
 	reader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Roles:         []resources.CallerRole{resources.CallerRoleNamespaceAdmin},
 	})}
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
@@ -134,7 +134,7 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleNamespaceAdmin}})}
+			reader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleNamespaceAdmin}})}
 			handler := NewInternalAPIShell(InternalAPIShellConfig{
 				PrincipalResolver:      namespaceBindingPrincipalResolver(),
 				NamespaceBindingReader: reader,
@@ -164,7 +164,7 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 func TestInternalAPIShellServesRepoReadRoutesThroughRepoReader(t *testing.T) {
 	repoReader := &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}}
 	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
 	})}
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
@@ -203,7 +203,7 @@ func TestInternalAPIShellServesOperationInspectionThroughInjectedReader(t *testi
 		"op_secret": operationInspectionRecord("op_secret", "ns_123"),
 	}}
 	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Roles:         []resources.CallerRole{resources.CallerRoleOperationInspector},
 	})}
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
@@ -212,7 +212,7 @@ func TestInternalAPIShellServesOperationInspectionThroughInjectedReader(t *testi
 		OperationInspectionReader: fakeOperationInspectionStoreReader{reader: reader},
 	})
 	rec := httptest.NewRecorder()
-	req := operationInspectionRequest("op_secret", "", "agentsmith-api")
+	req := operationInspectionRequest("op_secret", "", "product-caller")
 	req.URL.RawQuery = "token=query-secret"
 	req.Header.Set(auth.HeaderAuthorization, "Bearer auth-secret")
 
@@ -238,7 +238,7 @@ func TestInternalAPIShellOperationInspectionAllowsGlobalOperatorBeforeProductFal
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
 		PrincipalResolver: namespaceBindingPrincipalResolver(),
 		DeploymentGlobalCallers: []auth.AllowedCaller{{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Kind:          auth.CallerKindOperator,
 			Roles:         []auth.Role{auth.RoleOperatorAdmin},
 		}},
@@ -246,7 +246,7 @@ func TestInternalAPIShellOperationInspectionAllowsGlobalOperatorBeforeProductFal
 	})
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, operationInspectionRequest("op_global", "", "agentsmith-api"))
+	handler.ServeHTTP(rec, operationInspectionRequest("op_global", "", "product-caller"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
@@ -284,7 +284,7 @@ func TestInternalAPIShellOperationInspectionOperatorAdminIgnoresNamespaceHeaderF
 			handler := NewInternalAPIShell(InternalAPIShellConfig{
 				PrincipalResolver: namespaceBindingPrincipalResolver(),
 				DeploymentGlobalCallers: []auth.AllowedCaller{{
-					CallerService: "agentsmith-api",
+					CallerService: "product-caller",
 					Kind:          auth.CallerKindOperator,
 					Roles:         []auth.Role{auth.RoleOperatorAdmin},
 				}},
@@ -292,7 +292,7 @@ func TestInternalAPIShellOperationInspectionOperatorAdminIgnoresNamespaceHeaderF
 			})
 			rec := httptest.NewRecorder()
 
-			handler.ServeHTTP(rec, operationInspectionRequest(tt.record.ID, tt.requestNS, "agentsmith-api"))
+			handler.ServeHTTP(rec, operationInspectionRequest(tt.record.ID, tt.requestNS, "product-caller"))
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
@@ -309,7 +309,7 @@ func TestInternalAPIShellOperationInspectionProductStillRequiresStoredBinding(t 
 		"op_secret": operationInspectionRecord("op_secret", "ns_123"),
 	}}
 	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
 	})}
 	sink := &fakeAuditSink{}
@@ -321,7 +321,7 @@ func TestInternalAPIShellOperationInspectionProductStillRequiresStoredBinding(t 
 	})
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "agentsmith-api"))
+	handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "product-caller"))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d body = %s, want 404", rec.Code, rec.Body.String())
@@ -337,7 +337,7 @@ func TestInternalAPIShellOperationInspectionProductStillRequiresStoredBinding(t 
 func TestInternalAPIShellServesCreateRepoThroughOperationIntake(t *testing.T) {
 	store := &fakeOperationIntakeStore{}
 	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
 	})}
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
@@ -411,7 +411,7 @@ func TestInternalAPIShellPurgeOverrideUsesDeploymentBreakGlassPolicy(t *testing.
 		RepoFenceReader:        meta.fenceReader,
 		OperationIntakeStore:   store,
 		DeploymentGlobalCallers: []auth.AllowedCaller{{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Kind:          auth.CallerKindOperator,
 			Roles:         []auth.Role{auth.RoleBreakGlassAdmin},
 		}},
@@ -577,7 +577,7 @@ func TestInternalAPIShellPurgeOverridePreservesClassifiedBreakGlassPolicyError(t
 func TestInternalAPIShellCreateRepoFailsClosedWithoutDedicatedIntakeStore(t *testing.T) {
 	genericStore := &fakeOperationIntakeStore{}
 	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
 	})}
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
@@ -606,14 +606,14 @@ func TestInternalAPIShellCreateRepoFailsClosedWithoutDedicatedIntakeStore(t *tes
 func TestInternalAPIShellServesNamespaceVolumeBindingPutThroughOperationIntake(t *testing.T) {
 	store := &fakeOperationIntakeStore{}
 	reader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Roles:         []resources.CallerRole{resources.CallerRoleNamespaceAdmin},
 	})}
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
 		PrincipalResolver:      namespaceBindingPrincipalResolver(),
 		NamespaceBindingReader: reader,
 		DeploymentNamespaceCallers: []auth.AllowedCaller{{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Kind:          auth.CallerKindProduct,
 			Roles:         []auth.Role{auth.RoleNamespaceAdmin},
 		}},
@@ -647,7 +647,7 @@ func TestInternalAPIShellServesEnsureVolumeThroughOperationIntake(t *testing.T) 
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
 		PrincipalResolver: namespaceBindingPrincipalResolver(),
 		DeploymentGlobalCallers: []auth.AllowedCaller{{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Kind:          auth.CallerKindAdmin,
 			Roles:         []auth.Role{auth.RoleVolumeAdmin},
 		}},
@@ -674,7 +674,7 @@ func TestInternalAPIShellServesEnsureVolumeThroughOperationIntake(t *testing.T) 
 }
 
 func TestInternalAPIShellUnknownRoutePathDenied(t *testing.T) {
-	reader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleNamespaceAdmin}})}
+	reader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleNamespaceAdmin}})}
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
 		PrincipalResolver:      namespaceBindingPrincipalResolver(),
 		NamespaceBindingReader: reader,

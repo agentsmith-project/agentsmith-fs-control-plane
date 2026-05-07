@@ -17,7 +17,7 @@ func TestNamespaceVolumeBindingAuthorizerAllowsActiveStoredOperationInspector(t 
 	reader := &fakeNamespaceVolumeBindingReader{
 		bindings: map[string]resources.NamespaceVolumeBinding{
 			"ns_123": namespaceBindingFixture("ns_123", resources.NamespaceStatusActive, resources.AllowedCaller{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Roles:         []resources.CallerRole{resources.CallerRoleOperationInspector},
 			}),
 		},
@@ -40,7 +40,7 @@ func TestNamespaceVolumeBindingAuthorizerDeniesWhenStoredBindingLacksOperationIn
 	reader := &fakeNamespaceVolumeBindingReader{
 		bindings: map[string]resources.NamespaceVolumeBinding{
 			"ns_123": namespaceBindingFixture("ns_123", resources.NamespaceStatusActive, resources.AllowedCaller{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
 			}),
 		},
@@ -72,7 +72,7 @@ func TestNamespaceVolumeBindingAuthorizerDeniesDisabledBinding(t *testing.T) {
 	reader := &fakeNamespaceVolumeBindingReader{
 		bindings: map[string]resources.NamespaceVolumeBinding{
 			"ns_123": namespaceBindingFixture("ns_123", resources.NamespaceStatusDisabled, resources.AllowedCaller{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Roles:         []resources.CallerRole{resources.CallerRoleOperationInspector},
 			}),
 		},
@@ -88,7 +88,7 @@ func TestNamespaceVolumeBindingAuthorizerDeniesReturnedBindingNamespaceMismatch(
 	reader := &fakeNamespaceVolumeBindingReader{
 		bindings: map[string]resources.NamespaceVolumeBinding{
 			"ns_123": namespaceBindingFixture("ns_456", resources.NamespaceStatusActive, resources.AllowedCaller{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Roles:         []resources.CallerRole{resources.CallerRoleOperationInspector},
 			}),
 		},
@@ -137,14 +137,14 @@ func TestNamespaceVolumeBindingAuthorizerDeniesDedicatedOrchestratorCaller(t *te
 	reader := &fakeNamespaceVolumeBindingReader{
 		bindings: map[string]resources.NamespaceVolumeBinding{
 			"ns_123": namespaceBindingFixture("ns_123", resources.NamespaceStatusActive, resources.AllowedCaller{
-				CallerService: "agentsmith-orchestrator",
+				CallerService: "runtime-orchestrator",
 				Roles:         []resources.CallerRole{resources.CallerRoleOrchestratorMount},
 			}),
 		},
 	}
 	authorizer := NamespaceVolumeBindingAuthorizer{Reader: reader}
 	caller := auth.AllowedCaller{
-		CallerService: "agentsmith-orchestrator",
+		CallerService: "runtime-orchestrator",
 		Kind:          auth.CallerKindOrchestrator,
 		Roles:         []auth.Role{auth.RoleOrchestratorMount},
 	}
@@ -158,7 +158,7 @@ func TestNamespaceVolumeBindingAuthorizerDeniesDedicatedOrchestratorBindingForPr
 	reader := &fakeNamespaceVolumeBindingReader{
 		bindings: map[string]resources.NamespaceVolumeBinding{
 			"ns_123": namespaceBindingFixture("ns_123", resources.NamespaceStatusActive, resources.AllowedCaller{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Roles:         []resources.CallerRole{resources.CallerRoleOrchestratorMount},
 			}),
 		},
@@ -174,7 +174,7 @@ func TestNamespaceVolumeBindingAuthorizerDeniesUnsupportedRole(t *testing.T) {
 	reader := &fakeNamespaceVolumeBindingReader{
 		bindings: map[string]resources.NamespaceVolumeBinding{
 			"ns_123": namespaceBindingFixture("ns_123", resources.NamespaceStatusActive, resources.AllowedCaller{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Roles:         []resources.CallerRole{resources.CallerRole("workspace_owner")},
 			}),
 		},
@@ -198,7 +198,7 @@ func TestNamespaceVolumeBindingAuthorizerWithErrorRejectsInvalidStoredBindingInv
 		{
 			name: "stored caller cannot map",
 			binding: namespaceBindingFixture("ns_123", resources.NamespaceStatusActive, resources.AllowedCaller{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Roles:         []resources.CallerRole{resources.CallerRoleVolumeAdmin},
 			}),
 		},
@@ -235,7 +235,7 @@ func TestNamespaceVolumeBindingAuthorizerWiresIntoInspectOperationAndKeepsRedact
 	bindingReader := &fakeNamespaceVolumeBindingReader{
 		bindings: map[string]resources.NamespaceVolumeBinding{
 			"ns_123": namespaceBindingFixture("ns_123", resources.NamespaceStatusActive, resources.AllowedCaller{
-				CallerService: "agentsmith-api",
+				CallerService: "product-caller",
 				Roles:         []resources.CallerRole{resources.CallerRoleOperationInspector},
 			}),
 		},

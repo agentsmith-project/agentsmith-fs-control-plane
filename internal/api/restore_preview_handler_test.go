@@ -187,7 +187,7 @@ func restorePreviewRequest(body, repoID, namespaceID, idempotencyKey string) *ht
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/repos/"+repoID+"/restore-preview", bytes.NewBufferString(body))
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_restore_preview")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderNamespaceID, namespaceID)
 	req.Header.Set(auth.HeaderIdempotencyKey, idempotencyKey)
 	req.Header.Set(auth.HeaderActorType, "system")
@@ -382,7 +382,7 @@ func apiRestorePreviewQueuedOperation(now time.Time) operations.OperationRecord 
 	if err != nil {
 		panic(err)
 	}
-	return operations.OperationRecord{ID: "op_preview_existing", Type: operations.OperationRestorePreview, State: operations.OperationStateQueued, Phase: operations.OperationPhaseRestorePreviewValidate, IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(), IdempotencyKey: "idem_preview", RequestHash: hash, CorrelationID: "corr_restore_preview", CallerService: "agentsmith-api", AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"}, Resource: operations.ResourceRef{Type: "repo", ID: "repo_alpha01"}, NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", InputSummary: map[string]any{"save_point_id": "sp_001"}, ExternalResourceIDs: map[string]string{}, CreatedAt: now}
+	return operations.OperationRecord{ID: "op_preview_existing", Type: operations.OperationRestorePreview, State: operations.OperationStateQueued, Phase: operations.OperationPhaseRestorePreviewValidate, IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(), IdempotencyKey: "idem_preview", RequestHash: hash, CorrelationID: "corr_restore_preview", CallerService: "product-caller", AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"}, Resource: operations.ResourceRef{Type: "repo", ID: "repo_alpha01"}, NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", InputSummary: map[string]any{"save_point_id": "sp_001"}, ExternalResourceIDs: map[string]string{}, CreatedAt: now}
 }
 
 func assertRestoreHTTPNoRawCommand(t *testing.T, value any) {

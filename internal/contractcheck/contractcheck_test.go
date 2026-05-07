@@ -898,6 +898,58 @@ type OperationEnvelope struct {
 	assertHasFinding(t, findings, CodeGoAPIOperationEnvelopeNestedOperation)
 }
 
+func TestVerifyFilesCatchesCoreTestProductSpecificFixtureNames(t *testing.T) {
+	root := t.TempDir()
+	paths := writeRepoContractFixture(t, root, contractFixture{
+		openapi: validOpenAPI,
+		schema:  validSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+	writeFile(t, filepath.Join(root, "internal", "operations", "types.go"), `package operations
+
+type OperationEnvelope struct {
+	OperationID string `+"`json:\"operation_id\"`"+`
+	OperationType string `+"`json:\"operation_type\"`"+`
+	OperationState string `+"`json:\"operation_state\"`"+`
+}
+`)
+	writeFile(t, filepath.Join(root, "internal", "api", "operation.go"), `package api
+
+type OperationEnvelope struct {
+	OperationID string `+"`json:\"operation_id\"`"+`
+	OperationType string `+"`json:\"operation_type\"`"+`
+	OperationState string `+"`json:\"operation_state\"`"+`
+	Resource any `+"`json:\"resource\"`"+`
+	Result any `+"`json:\"result\"`"+`
+	Error any `+"`json:\"error\"`"+`
+}
+`)
+	writeFile(t, filepath.Join(root, "internal", "api", "boundary_test.go"), `package api
+
+import _ "github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
+
+func TestAgentsmithSandboxFixtureNames(t *testing.T) {
+	_ = "agentsmith-api"
+	_ = "agentsmith-gateway"
+	_ = "agentsmith-orchestrator"
+	_ = "agentsmith"
+	_ = `+"`agentsmith`"+`
+	_ = "sandbox-orchestrator"
+	_ = "sandbox-manager"
+}
+`)
+	writeFile(t, filepath.Join(root, "test", "README.md"), "legacy path: internal/api/agentsmith_afscp_e2e_test.go\nlegacy type: AgentSmithSandbox\n")
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, CodeGoCoreTestProductSpecificFixtureForbidden)
+	assertNoFindingMessageContains(t, findings, "github.com/agentsmith-project", CodeGoCoreTestProductSpecificFixtureForbidden)
+}
+
 func TestVerifyFilesCatchesDocsGuardrailFailures(t *testing.T) {
 	paths := writeContractFixture(t, contractFixture{
 		openapi: validOpenAPI,

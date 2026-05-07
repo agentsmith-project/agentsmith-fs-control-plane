@@ -331,7 +331,7 @@ func restoreRunRequest(body, repoID, namespaceID, idempotencyKey string) *http.R
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/repos/"+repoID+"/restore-run", bytes.NewBufferString(body))
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_restore_run")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderNamespaceID, namespaceID)
 	req.Header.Set(auth.HeaderIdempotencyKey, idempotencyKey)
 	req.Header.Set(auth.HeaderActorType, "system")
@@ -344,7 +344,7 @@ func apiRestoreRunQueuedOperation(now time.Time) operations.OperationRecord {
 	if err != nil {
 		panic(err)
 	}
-	return operations.OperationRecord{ID: "op_run_existing", Type: operations.OperationRestoreRun, State: operations.OperationStateQueued, Phase: operations.OperationPhaseRestoreRunValidate, IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestoreRun, "idem_run").String(), IdempotencyKey: "idem_run", RequestHash: hash, CorrelationID: "corr_restore_run", CallerService: "agentsmith-api", AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"}, Resource: operations.ResourceRef{Type: "repo", ID: "repo_alpha01"}, NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", InputSummary: map[string]any{"preview_operation_id": "op_preview01"}, ExternalResourceIDs: map[string]string{}, CreatedAt: now}
+	return operations.OperationRecord{ID: "op_run_existing", Type: operations.OperationRestoreRun, State: operations.OperationStateQueued, Phase: operations.OperationPhaseRestoreRunValidate, IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestoreRun, "idem_run").String(), IdempotencyKey: "idem_run", RequestHash: hash, CorrelationID: "corr_restore_run", CallerService: "product-caller", AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"}, Resource: operations.ResourceRef{Type: "repo", ID: "repo_alpha01"}, NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", InputSummary: map[string]any{"preview_operation_id": "op_preview01"}, ExternalResourceIDs: map[string]string{}, CreatedAt: now}
 }
 
 func restoreHTTPLifecycleFence(now time.Time) fences.Fence {

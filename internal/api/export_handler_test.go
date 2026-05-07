@@ -407,7 +407,7 @@ func exportMetaFixture() exportMeta {
 	now := fixedNamespaceNow()
 	repo := repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)
 	namespace := activeNamespaceFixture("ns_123")
-	binding := namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleExportAdmin}})
+	binding := namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleExportAdmin}})
 	volume := resources.Volume{
 		ID:             "vol_123",
 		Backend:        resources.VolumeBackendJuiceFS,
@@ -501,7 +501,7 @@ func exportSessionFixture(status sessionstate.ExportStatus) exportaccess.Session
 		Mode:                   sessionstate.AccessModeReadWrite,
 		Status:                 status,
 		ExpiresAt:              now.Add(120 * time.Second),
-		CreatedByCallerService: "agentsmith-api",
+		CreatedByCallerService: "product-caller",
 		CreatedByActor:         exportaccess.Actor{Type: "user", ID: "user_123"},
 		RevokedAt:              revokedAt,
 		CreatedAt:              now,
@@ -515,7 +515,7 @@ func exportRequest(method, path, body, namespaceID string) *http.Request {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set(auth.HeaderAuthorization, "Bearer token")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderIdempotencyKey, "idem_export")
 	req.Header.Set(HeaderCorrelationID, "corr_export")
 	req.Header.Set(auth.HeaderActorType, "user")

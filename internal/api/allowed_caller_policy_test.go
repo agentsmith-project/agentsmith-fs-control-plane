@@ -221,7 +221,7 @@ func (policy *recordingAllowedCallerPolicy) AllowedCallers(r *http.Request) ([]a
 
 func namespaceAllowedCallers(roles ...auth.Role) []auth.AllowedCaller {
 	return []auth.AllowedCaller{{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Kind:          auth.CallerKindProduct,
 		Roles:         roles,
 	}}

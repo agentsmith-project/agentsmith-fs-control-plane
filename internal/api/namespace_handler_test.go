@@ -33,7 +33,7 @@ func TestUpsertNamespaceHandlerCreatesOperationIntake(t *testing.T) {
 		t.Fatalf("intake calls = %d, want 1", store.calls)
 	}
 	spec := store.spec
-	wantScope := operations.NewIdempotencyScope("agentsmith-api", "ns_123", operations.OperationNamespaceUpsert, "idem_namespace")
+	wantScope := operations.NewIdempotencyScope("product-caller", "ns_123", operations.OperationNamespaceUpsert, "idem_namespace")
 	if spec.OperationID != "op_ns_123" || spec.Scope != wantScope {
 		t.Fatalf("spec op/scope = %q/%#v, want op_ns_123/%#v", spec.OperationID, spec.Scope, wantScope)
 	}
@@ -53,7 +53,7 @@ func TestUpsertNamespaceHandlerCreatesOperationIntake(t *testing.T) {
 	if spec.NamespaceID != "ns_123" || spec.Resource.Type != "namespace" || spec.Resource.ID != "ns_123" {
 		t.Fatalf("namespace/resource = %q/%#v", spec.NamespaceID, spec.Resource)
 	}
-	if spec.CorrelationID != "corr_namespace" || spec.CallerService != "agentsmith-api" {
+	if spec.CorrelationID != "corr_namespace" || spec.CallerService != "product-caller" {
 		t.Fatalf("correlation/caller = %q/%q", spec.CorrelationID, spec.CallerService)
 	}
 	if spec.AuthorizedActor.Type != "user" || spec.AuthorizedActor.ID != "user_123" {
@@ -94,7 +94,7 @@ func TestDisableNamespaceHandlerCreatesOperationIntake(t *testing.T) {
 		t.Fatalf("intake calls = %d, want 1", store.calls)
 	}
 	spec := store.spec
-	wantScope := operations.NewIdempotencyScope("agentsmith-api", "ns_123", operations.OperationNamespaceDisable, "idem_namespace")
+	wantScope := operations.NewIdempotencyScope("product-caller", "ns_123", operations.OperationNamespaceDisable, "idem_namespace")
 	if spec.OperationID != "op_ns_disable" || spec.Scope != wantScope {
 		t.Fatalf("spec op/scope = %q/%#v, want op_ns_disable/%#v", spec.OperationID, spec.Scope, wantScope)
 	}
@@ -291,7 +291,7 @@ func upsertNamespaceRequest(path string, namespaceID string, body string) *http.
 	req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_namespace")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderIdempotencyKey, "idem_namespace")
 	req.Header.Set(auth.HeaderActorType, "user")
 	req.Header.Set(auth.HeaderActorID, "user_123")
@@ -331,7 +331,7 @@ func TestInternalAPIShellRoutesUpsertNamespaceAndLogs(t *testing.T) {
 		OperationIntakeStore:       store,
 		GenerateOperationID:        func() string { return "op_shell_ns" },
 		Now:                        fixedNamespaceNow,
-		DeploymentNamespaceCallers: []auth.AllowedCaller{{CallerService: "agentsmith-api", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleNamespaceAdmin}}},
+		DeploymentNamespaceCallers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleNamespaceAdmin}}},
 	})
 	req := upsertNamespaceRequest("/internal/v1/namespaces/ns_123?token=query-secret", "ns_123", `{"namespace_id":"ns_123","body_secret":"x"}`)
 	req.Header.Set(auth.HeaderAuthorization, "Bearer auth-secret")

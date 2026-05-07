@@ -232,7 +232,7 @@ func restorePreviewDiscardRequest(body, repoID, namespaceID string) *http.Reques
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/repos/"+repoID+"/restore-preview:discard", bytes.NewBufferString(body))
 	req.Header.Set(auth.HeaderAuthorization, "Bearer test-token")
 	req.Header.Set(HeaderCorrelationID, "corr_restore_discard")
-	req.Header.Set(auth.HeaderCallerService, "agentsmith-api")
+	req.Header.Set(auth.HeaderCallerService, "product-caller")
 	req.Header.Set(auth.HeaderNamespaceID, namespaceID)
 	req.Header.Set(auth.HeaderIdempotencyKey, "idem_discard")
 	req.Header.Set(auth.HeaderActorType, "system")
@@ -358,11 +358,11 @@ func apiRestorePreviewOperationRecord(now time.Time) operations.OperationRecord 
 		Type:                operations.OperationRestorePreview,
 		State:               operations.OperationStateSucceeded,
 		Phase:               operations.OperationPhaseRestorePreviewCommitted,
-		IdempotencyScope:    operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(),
+		IdempotencyScope:    operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(),
 		IdempotencyKey:      "idem_preview",
 		RequestHash:         operations.RequestHash("sha256:restore-preview"),
 		CorrelationID:       "corr_restore_preview",
-		CallerService:       "agentsmith-api",
+		CallerService:       "product-caller",
 		AuthorizedActor:     operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:            operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:         "ns_alpha01",
@@ -390,11 +390,11 @@ func apiRestorePreviewDiscardQueuedOperation(now time.Time) operations.Operation
 		Type:                operations.OperationRestorePreviewDiscard,
 		State:               operations.OperationStateQueued,
 		Phase:               operations.OperationPhaseRestorePreviewDiscardValidate,
-		IdempotencyScope:    operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem_discard").String(),
+		IdempotencyScope:    operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem_discard").String(),
 		IdempotencyKey:      "idem_discard",
 		RequestHash:         hash,
 		CorrelationID:       "corr_restore_discard",
-		CallerService:       "agentsmith-api",
+		CallerService:       "product-caller",
 		AuthorizedActor:     operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:            operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:         "ns_alpha01",
@@ -406,5 +406,5 @@ func apiRestorePreviewDiscardQueuedOperation(now time.Time) operations.Operation
 }
 
 func resourcesAllowedCallerForRestoreAdmin() resources.AllowedCaller {
-	return resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRestoreAdmin}}
+	return resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRestoreAdmin}}
 }

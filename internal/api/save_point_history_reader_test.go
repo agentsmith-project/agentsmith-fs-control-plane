@@ -86,7 +86,7 @@ func TestInternalAPIShellCanInjectConcreteJVSBackedSavePointHistoryReader(t *tes
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
 		PrincipalResolver:           namespaceBindingPrincipalResolver(),
 		NamespaceReader:             &fakeNamespaceReader{namespace: resources.Namespace{ID: "ns_123", Status: resources.NamespaceStatusActive, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}},
-		NamespaceBindingReader:      &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
+		NamespaceBindingReader:      &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
 		RepoReader:                  &fakeRepoReader{repos: []resources.Repo{repo}},
 		VolumeReader:                &fakeVolumeReader{volume: savePointHistoryVolume(now)},
 		RepoFenceReader:             &fakeRepoFenceReader{},

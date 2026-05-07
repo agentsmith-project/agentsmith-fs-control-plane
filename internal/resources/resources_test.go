@@ -110,7 +110,7 @@ func TestNamespaceVolumeBindingValidateMatchesRoleAndPolicyContract(t *testing.T
 	t.Run("allows dedicated orchestrator mount caller", func(t *testing.T) {
 		binding := validBinding()
 		binding.AllowedCallers[0] = AllowedCaller{
-			CallerService: "sandbox-orchestrator",
+			CallerService: "runtime-orchestrator",
 			Roles:         []CallerRole{CallerRoleOrchestratorMount},
 		}
 		if err := binding.Validate(); err != nil {
@@ -156,8 +156,8 @@ func TestNamespaceVolumeBindingValidateMatchesRoleAndPolicyContract(t *testing.T
 	t.Run("rejects duplicate caller service ordinary entries", func(t *testing.T) {
 		binding := validBinding()
 		binding.AllowedCallers = []AllowedCaller{
-			{CallerService: "agentsmith-api", Roles: []CallerRole{CallerRoleRepoAdmin}},
-			{CallerService: " agentsmith-api ", Roles: []CallerRole{CallerRoleOperationInspector}},
+			{CallerService: "product-caller", Roles: []CallerRole{CallerRoleRepoAdmin}},
+			{CallerService: " product-caller ", Roles: []CallerRole{CallerRoleOperationInspector}},
 		}
 		if err := binding.Validate(); err == nil {
 			t.Fatal("Validate succeeded, want duplicate caller_service rejection")
@@ -167,8 +167,8 @@ func TestNamespaceVolumeBindingValidateMatchesRoleAndPolicyContract(t *testing.T
 	t.Run("rejects duplicate caller service across ordinary and dedicated migration", func(t *testing.T) {
 		binding := validBinding()
 		binding.AllowedCallers = []AllowedCaller{
-			{CallerService: "agentsmith-api", Roles: []CallerRole{CallerRoleRepoAdmin}},
-			{CallerService: "agentsmith-api", Roles: []CallerRole{CallerRoleMigrationAdmin}},
+			{CallerService: "product-caller", Roles: []CallerRole{CallerRoleRepoAdmin}},
+			{CallerService: "product-caller", Roles: []CallerRole{CallerRoleMigrationAdmin}},
 		}
 		if err := binding.Validate(); err == nil {
 			t.Fatal("Validate succeeded, want duplicate ordinary/migration caller_service rejection")
@@ -178,8 +178,8 @@ func TestNamespaceVolumeBindingValidateMatchesRoleAndPolicyContract(t *testing.T
 	t.Run("rejects duplicate caller service across ordinary and dedicated orchestrator", func(t *testing.T) {
 		binding := validBinding()
 		binding.AllowedCallers = []AllowedCaller{
-			{CallerService: "agentsmith-api", Roles: []CallerRole{CallerRoleRepoAdmin}},
-			{CallerService: "agentsmith-api", Roles: []CallerRole{CallerRoleOrchestratorMount}},
+			{CallerService: "product-caller", Roles: []CallerRole{CallerRoleRepoAdmin}},
+			{CallerService: "product-caller", Roles: []CallerRole{CallerRoleOrchestratorMount}},
 		}
 		if err := binding.Validate(); err == nil {
 			t.Fatal("Validate succeeded, want duplicate ordinary/orchestrator caller_service rejection")
@@ -189,9 +189,9 @@ func TestNamespaceVolumeBindingValidateMatchesRoleAndPolicyContract(t *testing.T
 	t.Run("allows distinct ordinary and dedicated caller services", func(t *testing.T) {
 		binding := validBinding()
 		binding.AllowedCallers = []AllowedCaller{
-			{CallerService: "agentsmith-api", Roles: []CallerRole{CallerRoleRepoAdmin, CallerRoleOperationInspector}},
+			{CallerService: "product-caller", Roles: []CallerRole{CallerRoleRepoAdmin, CallerRoleOperationInspector}},
 			{CallerService: "afscp-migration", Roles: []CallerRole{CallerRoleMigrationAdmin}},
-			{CallerService: "sandbox-orchestrator", Roles: []CallerRole{CallerRoleOrchestratorMount}},
+			{CallerService: "runtime-orchestrator", Roles: []CallerRole{CallerRoleOrchestratorMount}},
 		}
 		if err := binding.Validate(); err != nil {
 			t.Fatalf("Validate distinct ordinary/dedicated callers: %v", err)
@@ -368,7 +368,7 @@ func validBinding() NamespaceVolumeBinding {
 		NamespaceID:     "ns_alpha01",
 		DefaultVolumeID: "vol_shared01",
 		AllowedCallers: []AllowedCaller{{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Roles:         []CallerRole{CallerRoleRepoAdmin, CallerRoleOperationInspector},
 		}},
 		QuotaBytesDefault: 1024,

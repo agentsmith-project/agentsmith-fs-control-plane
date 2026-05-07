@@ -16,8 +16,8 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
-func TestAgentsmithSandboxAFSCPProductOperationResponsesDoNotLeakStorageInternals(t *testing.T) {
-	env := newAgentsmithAFSCPE2E(t, nil)
+func TestProductCallerOperationResponsesDoNotLeakStorageInternals(t *testing.T) {
+	env := newCallerRuntimeBoundaryE2E(t, nil)
 
 	tests := []struct {
 		name       string
@@ -73,7 +73,7 @@ func TestAgentsmithSandboxAFSCPProductOperationResponsesDoNotLeakStorageInternal
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := env.serve(agentsmithAFSCPE2ERequest(tt.method, tt.path, tt.body, "agentsmith-api", "ns_123", tt.idem))
+			rec := env.serve(callerRuntimeBoundaryE2ERequest(tt.method, tt.path, tt.body, "product-caller", "ns_123", tt.idem))
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d body = %s, want %d", rec.Code, rec.Body.String(), tt.wantStatus)
@@ -82,7 +82,7 @@ func TestAgentsmithSandboxAFSCPProductOperationResponsesDoNotLeakStorageInternal
 			if envelope.OperationState != tt.wantState || envelope.Resource.Type != tt.wantType {
 				t.Fatalf("operation envelope = %#v, want state %s resource type %s", envelope, tt.wantState, tt.wantType)
 			}
-			assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, rec.Body.String())
+			assertProductCallerResponseDoesNotLeakStorage(t, rec.Body.String())
 			if strings.Contains(rec.Body.String(), "delete-reason-secret-canary") {
 				t.Fatalf("product lifecycle response leaked raw reason: %s", rec.Body.String())
 			}
@@ -90,13 +90,13 @@ func TestAgentsmithSandboxAFSCPProductOperationResponsesDoNotLeakStorageInternal
 	}
 }
 
-func TestAgentsmithSandboxAFSCPMountPlanBoundary(t *testing.T) {
+func TestRuntimeOrchestratorMountPlanBoundary(t *testing.T) {
 	planCalls := &fakeWorkloadMountPlanReaderCalls{}
-	env := newAgentsmithAFSCPE2E(t, func(config *agentsmithAFSCPE2EConfig) {
+	env := newCallerRuntimeBoundaryE2E(t, func(config *callerRuntimeBoundaryE2EConfig) {
 		config.planCalls = planCalls
 	})
 
-	product := env.serve(agentsmithAFSCPE2ERequest(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "agentsmith-api", "ns_123", ""))
+	product := env.serve(callerRuntimeBoundaryE2ERequest(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "product-caller", "ns_123", ""))
 	if product.Code != http.StatusForbidden {
 		t.Fatalf("product plan status = %d body = %s, want 403", product.Code, product.Body.String())
 	}
@@ -106,9 +106,9 @@ func TestAgentsmithSandboxAFSCPMountPlanBoundary(t *testing.T) {
 	if planCalls.mountBindingID != "" || planCalls.namespaceID != "" {
 		t.Fatalf("product caller reached plan reader: %#v", planCalls)
 	}
-	assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, product.Body.String())
+	assertProductCallerResponseDoesNotLeakStorage(t, product.Body.String())
 
-	orchestrator := env.serve(agentsmithAFSCPE2ERequest(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "sandbox-orchestrator", "ns_123", ""))
+	orchestrator := env.serve(callerRuntimeBoundaryE2ERequest(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "runtime-orchestrator", "ns_123", ""))
 	if orchestrator.Code != http.StatusOK {
 		t.Fatalf("orchestrator plan status = %d body = %s, want 200", orchestrator.Code, orchestrator.Body.String())
 	}
@@ -119,7 +119,7 @@ func TestAgentsmithSandboxAFSCPMountPlanBoundary(t *testing.T) {
 	if plan.MountBindingID != "wmb_123" || plan.PayloadVolumeSubdir != "afscp/namespaces/ns_123/repos/repo_123/payload" {
 		t.Fatalf("plan identity/payload = %#v", plan)
 	}
-	if plan.SecretRef.Namespace != "sandbox-secret-namespace" || plan.SecretRef.Name != "sandbox-secret-volume" {
+	if plan.SecretRef.Namespace != "runtime-secret-namespace" || plan.SecretRef.Name != "runtime-secret-volume" {
 		t.Fatalf("plan secret ref = %#v", plan.SecretRef)
 	}
 	if !plan.SecurityPolicy.RunAsNonRoot || plan.SecurityPolicy.AllowPrivileged || !plan.SecurityPolicy.JVSControlOutsidePayload {
@@ -128,12 +128,12 @@ func TestAgentsmithSandboxAFSCPMountPlanBoundary(t *testing.T) {
 	if planCalls.namespaceID != "ns_123" || planCalls.mountBindingID != "wmb_123" {
 		t.Fatalf("plan reader scope = %#v, want ns_123/wmb_123", planCalls)
 	}
-	assertAgentsmithAFSCPOrchestratorPlanDoesNotExposeControlRoot(t, orchestrator.Body.String())
+	assertRuntimeOrchestratorPlanDoesNotExposeControlRoot(t, orchestrator.Body.String())
 }
 
-func TestAgentsmithSandboxAFSCPMountCallbackRoleBoundary(t *testing.T) {
+func TestProductCallerAndRuntimeOrchestratorMountCallbackRoleBoundary(t *testing.T) {
 	t.Run("product caller cannot spoof runtime callbacks", func(t *testing.T) {
-		env := newAgentsmithAFSCPE2E(t, nil)
+		env := newCallerRuntimeBoundaryE2E(t, nil)
 		tests := []struct {
 			name   string
 			method string
@@ -145,7 +145,7 @@ func TestAgentsmithSandboxAFSCPMountCallbackRoleBoundary(t *testing.T) {
 				name:   "status",
 				method: http.MethodPatch,
 				path:   "/internal/v1/workload-mount-bindings/wmb_123/status",
-				body:   `{"status":"active","observed_at":"2026-05-05T12:34:56Z","reason":"runtime callback should stay sandbox-owned"}`,
+				body:   `{"status":"active","observed_at":"2026-05-05T12:34:56Z","reason":"runtime callback should stay runtime-owned"}`,
 				idem:   "idem_product_status_callback_e2e",
 			},
 			{
@@ -164,7 +164,7 @@ func TestAgentsmithSandboxAFSCPMountCallbackRoleBoundary(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				rec := env.serve(agentsmithAFSCPE2ERequest(tt.method, tt.path, tt.body, "agentsmith-api", "ns_123", tt.idem))
+				rec := env.serve(callerRuntimeBoundaryE2ERequest(tt.method, tt.path, tt.body, "product-caller", "ns_123", tt.idem))
 
 				if rec.Code != http.StatusForbidden {
 					t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
@@ -175,14 +175,14 @@ func TestAgentsmithSandboxAFSCPMountCallbackRoleBoundary(t *testing.T) {
 				if env.operationStore.calls != 0 {
 					t.Fatalf("operation intake calls = %d, want product callback denial before intake", env.operationStore.calls)
 				}
-				assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, rec.Body.String())
+				assertProductCallerResponseDoesNotLeakStorage(t, rec.Body.String())
 			})
 		}
 	})
 
 	t.Run("product caller can request revoke", func(t *testing.T) {
-		env := newAgentsmithAFSCPE2E(t, nil)
-		rec := env.serve(agentsmithAFSCPE2ERequest(http.MethodPost, "/internal/v1/workload-mount-bindings/wmb_123:revoke", "", "agentsmith-api", "ns_123", "idem_product_revoke_e2e"))
+		env := newCallerRuntimeBoundaryE2E(t, nil)
+		rec := env.serve(callerRuntimeBoundaryE2ERequest(http.MethodPost, "/internal/v1/workload-mount-bindings/wmb_123:revoke", "", "product-caller", "ns_123", "idem_product_revoke_e2e"))
 
 		if rec.Code != http.StatusAccepted {
 			t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
@@ -194,11 +194,11 @@ func TestAgentsmithSandboxAFSCPMountCallbackRoleBoundary(t *testing.T) {
 		if env.operationStore.calls != 1 || env.operationStore.spec.Scope.OperationType != operations.OperationMountBindingRevoke || env.operationStore.spec.Phase != operations.OperationPhaseMountBindingRevokeValidate {
 			t.Fatalf("operation intake = calls %d spec %#v, want revoke intake", env.operationStore.calls, env.operationStore.spec)
 		}
-		assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, rec.Body.String())
+		assertProductCallerResponseDoesNotLeakStorage(t, rec.Body.String())
 	})
 
-	t.Run("sandbox orchestrator owns runtime callbacks but not product revoke", func(t *testing.T) {
-		env := newAgentsmithAFSCPE2E(t, nil)
+	t.Run("runtime orchestrator owns runtime callbacks but not product revoke", func(t *testing.T) {
+		env := newCallerRuntimeBoundaryE2E(t, nil)
 		tests := []struct {
 			name      string
 			method    string
@@ -237,7 +237,7 @@ func TestAgentsmithSandboxAFSCPMountCallbackRoleBoundary(t *testing.T) {
 
 		for i, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				rec := env.serve(agentsmithAFSCPE2ERequest(tt.method, tt.path, tt.body, "sandbox-orchestrator", "ns_123", tt.idem))
+				rec := env.serve(callerRuntimeBoundaryE2ERequest(tt.method, tt.path, tt.body, "runtime-orchestrator", "ns_123", tt.idem))
 
 				if rec.Code != http.StatusAccepted {
 					t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
@@ -249,11 +249,11 @@ func TestAgentsmithSandboxAFSCPMountCallbackRoleBoundary(t *testing.T) {
 				if env.operationStore.calls != i+1 || env.operationStore.spec.Scope.OperationType != tt.wantType || env.operationStore.spec.Phase != tt.wantPhase {
 					t.Fatalf("operation intake = calls %d spec %#v, want %s/%s", env.operationStore.calls, env.operationStore.spec, tt.wantType, tt.wantPhase)
 				}
-				assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, rec.Body.String())
+				assertProductCallerResponseDoesNotLeakStorage(t, rec.Body.String())
 			})
 		}
 
-		rec := env.serve(agentsmithAFSCPE2ERequest(http.MethodPost, "/internal/v1/workload-mount-bindings/wmb_123:revoke", "", "sandbox-orchestrator", "ns_123", "idem_orchestrator_revoke_e2e"))
+		rec := env.serve(callerRuntimeBoundaryE2ERequest(http.MethodPost, "/internal/v1/workload-mount-bindings/wmb_123:revoke", "", "runtime-orchestrator", "ns_123", "idem_orchestrator_revoke_e2e"))
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
 		}
@@ -263,15 +263,15 @@ func TestAgentsmithSandboxAFSCPMountCallbackRoleBoundary(t *testing.T) {
 		if env.operationStore.calls != len(tests) {
 			t.Fatalf("operation intake calls = %d, want orchestrator revoke denial before intake", env.operationStore.calls)
 		}
-		assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, rec.Body.String())
+		assertProductCallerResponseDoesNotLeakStorage(t, rec.Body.String())
 	})
 }
 
-func TestAgentsmithSandboxAFSCPWorkloadMountRejectsCallerSuppliedStorageFields(t *testing.T) {
-	env := newAgentsmithAFSCPE2E(t, nil)
+func TestProductCallerRuntimeBoundaryWorkloadMountRejectsCallerSuppliedStorageFields(t *testing.T) {
+	env := newCallerRuntimeBoundaryE2E(t, nil)
 	body := `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120,"metadata_url":"redis://metadata-url-secret","volume_id":"vol_attacker"}`
 
-	rec := env.serve(agentsmithAFSCPE2ERequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", body, "agentsmith-api", "ns_123", "idem_bad_mount_e2e"))
+	rec := env.serve(callerRuntimeBoundaryE2ERequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", body, "product-caller", "ns_123", "idem_bad_mount_e2e"))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s, want 400", rec.Code, rec.Body.String())
@@ -286,7 +286,7 @@ func TestAgentsmithSandboxAFSCPWorkloadMountRejectsCallerSuppliedStorageFields(t
 	}
 }
 
-func TestAgentsmithSandboxAFSCPLifecycleDeletePurgeRedactProductSecrets(t *testing.T) {
+func TestProductCallerRuntimeBoundaryLifecycleDeletePurgeRedactProductSecrets(t *testing.T) {
 	tests := []struct {
 		name     string
 		path     string
@@ -312,8 +312,8 @@ func TestAgentsmithSandboxAFSCPLifecycleDeletePurgeRedactProductSecrets(t *testi
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := newAgentsmithAFSCPE2E(t, nil)
-			rec := env.serve(agentsmithAFSCPE2ERequest(http.MethodPost, tt.path, tt.body, "agentsmith-api", "ns_123", tt.idem))
+			env := newCallerRuntimeBoundaryE2E(t, nil)
+			rec := env.serve(callerRuntimeBoundaryE2ERequest(http.MethodPost, tt.path, tt.body, "product-caller", "ns_123", tt.idem))
 
 			if rec.Code != http.StatusAccepted {
 				t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
@@ -341,23 +341,23 @@ func TestAgentsmithSandboxAFSCPLifecycleDeletePurgeRedactProductSecrets(t *testi
 			if tt.wantType == operations.OperationRepoPurge && !strings.Contains(summary, "product_confirmation_present") {
 				t.Fatalf("purge summary missing confirmation presence redaction: %s", summary)
 			}
-			assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, rec.Body.String())
+			assertProductCallerResponseDoesNotLeakStorage(t, rec.Body.String())
 		})
 	}
 }
 
-type agentsmithAFSCPE2E struct {
+type callerRuntimeBoundaryE2E struct {
 	handler        http.Handler
 	operationStore *fakeOperationIntakeStore
 }
 
-type agentsmithAFSCPE2EConfig struct {
+type callerRuntimeBoundaryE2EConfig struct {
 	planCalls *fakeWorkloadMountPlanReaderCalls
 }
 
-func newAgentsmithAFSCPE2E(t *testing.T, edit func(*agentsmithAFSCPE2EConfig)) agentsmithAFSCPE2E {
+func newCallerRuntimeBoundaryE2E(t *testing.T, edit func(*callerRuntimeBoundaryE2EConfig)) callerRuntimeBoundaryE2E {
 	t.Helper()
-	config := agentsmithAFSCPE2EConfig{}
+	config := callerRuntimeBoundaryE2EConfig{}
 	if edit != nil {
 		edit(&config)
 	}
@@ -384,7 +384,7 @@ func newAgentsmithAFSCPE2E(t *testing.T, edit func(*agentsmithAFSCPE2EConfig)) a
 	binding := namespacePolicyBindingFixture(
 		"ns_123",
 		resources.AllowedCaller{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Roles: []resources.CallerRole{
 				resources.CallerRoleRepoAdmin,
 				resources.CallerRoleRepoLifecycleAdmin,
@@ -392,7 +392,7 @@ func newAgentsmithAFSCPE2E(t *testing.T, edit func(*agentsmithAFSCPE2EConfig)) a
 				resources.CallerRoleMountAdmin,
 			},
 		},
-		resources.AllowedCaller{CallerService: "sandbox-orchestrator", Roles: []resources.CallerRole{resources.CallerRoleOrchestratorMount}},
+		resources.AllowedCaller{CallerService: "runtime-orchestrator", Roles: []resources.CallerRole{resources.CallerRoleOrchestratorMount}},
 	)
 	mount := workloadmount.Binding{
 		ID:             "wmb_123",
@@ -413,13 +413,13 @@ func newAgentsmithAFSCPE2E(t *testing.T, edit func(*agentsmithAFSCPE2EConfig)) a
 		PayloadVolumeSubdir: "afscp/namespaces/ns_123/repos/repo_123/payload",
 		MountPath:           "/mnt/repo",
 		ReadOnly:            true,
-		SecretRef:           workloadmount.SecretRef{Namespace: "sandbox-secret-namespace", Name: "sandbox-secret-volume"},
+		SecretRef:           workloadmount.SecretRef{Namespace: "runtime-secret-namespace", Name: "runtime-secret-volume"},
 		SecurityPolicy:      workloadmount.SecurityPolicy{RunAsNonRoot: true, AllowPrivileged: false, JVSControlOutsidePayload: true},
 	}
 	operationStore := &fakeOperationIntakeStore{}
 	operationSeq := 0
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
-		PrincipalResolver:          agentsmithAFSCPE2EPrincipalResolver{},
+		PrincipalResolver:          callerRuntimeBoundaryE2EPrincipalResolver{},
 		NamespaceBindingReader:     &fakeNamespaceVolumeBindingReader{binding: binding},
 		NamespaceReader:            &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
 		RepoReader:                 &fakeRepoReader{repos: []resources.Repo{repoActive, repoDelete, repoPurge}},
@@ -436,23 +436,23 @@ func newAgentsmithAFSCPE2E(t *testing.T, edit func(*agentsmithAFSCPE2EConfig)) a
 		},
 		Now: fixedNamespaceNow,
 	})
-	return agentsmithAFSCPE2E{handler: handler, operationStore: operationStore}
+	return callerRuntimeBoundaryE2E{handler: handler, operationStore: operationStore}
 }
 
-func (env agentsmithAFSCPE2E) serve(req *http.Request) *httptest.ResponseRecorder {
+func (env callerRuntimeBoundaryE2E) serve(req *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	env.handler.ServeHTTP(rec, req)
 	return rec
 }
 
-type agentsmithAFSCPE2EPrincipalResolver struct{}
+type callerRuntimeBoundaryE2EPrincipalResolver struct{}
 
-func (agentsmithAFSCPE2EPrincipalResolver) ResolvePrincipal(r *http.Request) (auth.AuthenticatedPrincipal, error) {
+func (callerRuntimeBoundaryE2EPrincipalResolver) ResolvePrincipal(r *http.Request) (auth.AuthenticatedPrincipal, error) {
 	caller := strings.TrimSpace(r.Header.Get(auth.HeaderCallerService))
 	return auth.AuthenticatedPrincipal{Subject: "svc:" + caller, CanonicalCallerService: caller}, nil
 }
 
-func agentsmithAFSCPE2ERequest(method, path, body, caller, namespaceID, idempotencyKey string) *http.Request {
+func callerRuntimeBoundaryE2ERequest(method, path, body, caller, namespaceID, idempotencyKey string) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -471,7 +471,7 @@ func agentsmithAFSCPE2ERequest(method, path, body, caller, namespaceID, idempote
 	return req
 }
 
-func assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t *testing.T, body string) {
+func assertProductCallerResponseDoesNotLeakStorage(t *testing.T, body string) {
 	t.Helper()
 	for _, forbidden := range []string{
 		"metadata_url",
@@ -492,8 +492,8 @@ func assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t *testing.T, body s
 		"control_root",
 		"afscp/namespaces/ns_123/repos/repo_123/payload",
 		"afscp/namespaces/ns_123/repos/repo_123/control",
-		"sandbox-secret-namespace",
-		"sandbox-secret-volume",
+		"runtime-secret-namespace",
+		"runtime-secret-volume",
 	} {
 		if strings.Contains(strings.ToLower(body), strings.ToLower(forbidden)) {
 			t.Fatalf("product response leaked %q: %s", forbidden, body)
@@ -501,7 +501,7 @@ func assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t *testing.T, body s
 	}
 }
 
-func assertAgentsmithAFSCPOrchestratorPlanDoesNotExposeControlRoot(t *testing.T, body string) {
+func assertRuntimeOrchestratorPlanDoesNotExposeControlRoot(t *testing.T, body string) {
 	t.Helper()
 	for _, forbidden := range []string{
 		"control_volume_subdir",

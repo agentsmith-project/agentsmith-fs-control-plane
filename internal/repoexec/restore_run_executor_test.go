@@ -327,7 +327,7 @@ func restoreRunLeasedRecord(now time.Time, phase string) operations.OperationRec
 	record.ID = "op_run"
 	record.Type = operations.OperationRestoreRun
 	record.Phase = phase
-	record.IdempotencyScope = operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestoreRun, "idem_run").String()
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestoreRun, "idem_run").String()
 	record.IdempotencyKey = "idem_run"
 	record.RequestHash = "sha256:restore-run"
 	record.InputSummary = map[string]any{"preview_operation_id": "op_preview01"}

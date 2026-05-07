@@ -408,7 +408,7 @@ func TestInspectOperationDoesNotLetProductCallerUsePrivilegedConfiguredRole(t *t
 		RouteClass:   auth.RouteClassOperationInspection,
 		RequiredRole: auth.RoleOperatorAdmin,
 		Caller: auth.AllowedCaller{
-			CallerService: "agentsmith-api",
+			CallerService: "product-caller",
 			Kind:          auth.CallerKindProduct,
 			Roles:         []auth.Role{auth.RoleOperatorAdmin},
 		},
@@ -530,7 +530,7 @@ func globalRecord(operationID string) operations.OperationRecord {
 		Type:                operations.OperationExportCreate,
 		State:               operations.OperationStateSucceeded,
 		Phase:               "finished",
-		CallerService:       "agentsmith-api",
+		CallerService:       "product-caller",
 		Resource:            operations.ResourceRef{Type: "volume", ID: "vol_123"},
 		ExternalResourceIDs: map[string]string{"jvs_repo_id": "jvs-secret"},
 		InputSummary: map[string]any{
@@ -544,7 +544,7 @@ type inspectionTestContextKey string
 
 func productCaller() auth.AllowedCaller {
 	return auth.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Kind:          auth.CallerKindProduct,
 		Roles:         []auth.Role{auth.RoleRepoAdmin},
 	}
@@ -552,7 +552,7 @@ func productCaller() auth.AllowedCaller {
 
 func productInspectionCaller() auth.AllowedCaller {
 	return auth.AllowedCaller{
-		CallerService: "agentsmith-api",
+		CallerService: "product-caller",
 		Kind:          auth.CallerKindProduct,
 		Roles:         []auth.Role{auth.RoleOperationInspector},
 	}

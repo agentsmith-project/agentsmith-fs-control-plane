@@ -226,10 +226,10 @@ func TestRestorePreviewOperationRecoveryStoreContractCommitsPlanOperationAndAudi
 		Phase:            operations.OperationPhaseRestorePreviewValidate,
 		LeaseOwner:       "worker-a",
 		LeaseExpiresAt:   &leaseExpiresAt,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(),
 		IdempotencyKey:   "idem_preview",
 		RequestHash:      operations.RequestHash("sha256:restore-preview"),
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		CorrelationID:    "corr-preview",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
@@ -258,7 +258,7 @@ func TestRestorePreviewOperationRecoveryStoreContractCommitsPlanOperationAndAudi
 	terminal.VerificationResult = map[string]any{"preflight_recovery_status_captured": true, "preflight_restore_state": "idle", "preflight_blocking": false, "restore_plan_id": "plan_001", "source_save_point_id": "sp_001"}
 	terminal.FinishedAt = &now
 	plan := restoreplan.Plan{ID: "plan_001", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", PreviewOperationID: "op_preview01", SourceSavePointID: "sp_001", Status: restoreplan.StatusPending, CreatedAt: now, UpdatedAt: now}
-	event := audit.NewEvent(audit.Event{EventID: "audit-preview", Type: audit.EventTypeRestorePreview, Time: now, OperationID: "op_preview01", CallerService: "agentsmith-api", CorrelationID: "corr-preview", AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"}, Resource: audit.Resource{Type: "repo", ID: "repo_alpha01", NamespaceID: "ns_alpha01"}, Outcome: audit.OutcomeSucceeded, Reason: "restore_preview_committed"})
+	event := audit.NewEvent(audit.Event{EventID: "audit-preview", Type: audit.EventTypeRestorePreview, Time: now, OperationID: "op_preview01", CallerService: "product-caller", CorrelationID: "corr-preview", AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"}, Resource: audit.Resource{Type: "repo", ID: "repo_alpha01", NamespaceID: "ns_alpha01"}, Outcome: audit.OutcomeSucceeded, Reason: "restore_preview_committed"})
 
 	gotPlan, gotOperation, err := fake.CommitRestorePreviewSucceededWithLease(context.Background(), plan, terminal.SanitizedForPersistence(), "worker-a", now, event)
 	if err != nil {
@@ -298,10 +298,10 @@ func TestRestoreRunOperationRecoveryStoreContractOwnsFencePlanOperationAndAudit(
 		Type:             operations.OperationRestoreRun,
 		State:            operations.OperationStateQueued,
 		Phase:            operations.OperationPhaseRestoreRunValidate,
-		IdempotencyScope: operations.NewIdempotencyScope("agentsmith-api", "ns_alpha01", operations.OperationRestoreRun, "idem_run").String(),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestoreRun, "idem_run").String(),
 		IdempotencyKey:   "idem_run",
 		RequestHash:      operations.RequestHash("sha256:restore-run"),
-		CallerService:    "agentsmith-api",
+		CallerService:    "product-caller",
 		CorrelationID:    "corr-run",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
 		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
@@ -347,7 +347,7 @@ func TestRestoreRunOperationRecoveryStoreContractOwnsFencePlanOperationAndAudit(
 	success.Phase = operations.OperationPhaseRestoreRunCommitted
 	success.VerificationResult = map[string]any{"restore_plan_id": "plan_001", "restore_plan_status": "consumed"}
 	success.FinishedAt = &now
-	event := audit.NewEvent(audit.Event{EventID: "audit-run", Type: audit.EventTypeRestoreRun, Time: now, OperationID: "op_restore_run01", CallerService: "agentsmith-api", CorrelationID: "corr-run", AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"}, Resource: audit.Resource{Type: "repo", ID: "repo_alpha01", NamespaceID: "ns_alpha01"}, Outcome: audit.OutcomeSucceeded, Reason: "restore_run_committed"})
+	event := audit.NewEvent(audit.Event{EventID: "audit-run", Type: audit.EventTypeRestoreRun, Time: now, OperationID: "op_restore_run01", CallerService: "product-caller", CorrelationID: "corr-run", AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"}, Resource: audit.Resource{Type: "repo", ID: "repo_alpha01", NamespaceID: "ns_alpha01"}, Outcome: audit.OutcomeSucceeded, Reason: "restore_run_committed"})
 
 	finalPlan, finalOperation, err := fake.CommitRestoreRunSucceededWithLease(context.Background(), success.SanitizedForPersistence(), "worker-a", now.Add(2*time.Minute), event)
 	if err != nil {
@@ -726,7 +726,7 @@ func TestResourceStoresContractCoverControlPlaneMetadataOnly(t *testing.T) {
 	binding := resources.NamespaceVolumeBinding{
 		NamespaceID:       "ns_alpha01",
 		DefaultVolumeID:   "vol_shared01",
-		AllowedCallers:    []resources.AllowedCaller{{CallerService: "agentsmith-api", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}}},
+		AllowedCallers:    []resources.AllowedCaller{{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}}},
 		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
 		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
 		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false},
