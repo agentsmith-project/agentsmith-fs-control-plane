@@ -1,6 +1,9 @@
 # Operational Readiness Contract
 
-Status: GA pre-dev handoff artifact.
+Status: active operational acceptance contract for final GA.
+
+Drills and threshold owners are still pending where tracked; this document does
+not mark operational readiness complete.
 
 This document turns the runbook checklist into operator-ready acceptance
 criteria. It does not replace the detailed runbooks; it defines what each
@@ -64,4 +67,3 @@ Each runbook drill must record:
 - audit events checked
 - rollback or recovery outcome
 - gaps and follow-up owner
-

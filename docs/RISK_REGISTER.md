@@ -1,6 +1,9 @@
 # Risk Register
 
-Status: active pre-development risk register.
+Status: active GA implementation-baseline risk register.
+
+Final GA blockers remain open unless they are closed or accepted in this
+register.
 
 Severity uses `critical`, `high`, `medium`, and `low`. `GA blocker` means the
 risk must be closed before GA or accepted through the restricted residual-risk
@@ -28,8 +31,8 @@ ambiguity, or caller-visible contract break are non-waivable for GA.
 
 ## Current Summary
 
-Pre-dev maturity is high for product direction and major security decisions.
-The remaining work is mostly contract acceptance, implementation tests, and
-operational evidence, not feature expansion. R-002 is closed by JVS v0.4.8
-release evidence. This only closes the JVS runner risk; real storage mutation
-still depends on the other gates and guardrails.
+Implementation-baseline maturity is high for product direction and major
+security decisions. The remaining work is mostly contract acceptance,
+implementation tests, and operational evidence, not feature expansion. R-002 is
+closed by JVS v0.4.8 release evidence. This only closes the JVS runner risk;
+real storage mutation still depends on the other gates and guardrails.

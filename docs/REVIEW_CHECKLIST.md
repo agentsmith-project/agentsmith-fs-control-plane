@@ -1,7 +1,8 @@
 # GA Review Checklist
 
-Use this checklist before endpoint handlers or storage mutation logic are
-implemented, and again before GA.
+Use this checklist for final GA acceptance review after the implementation
+baseline. New or changed endpoint handlers and storage mutation logic must also
+be reviewed against this checklist before acceptance.
 
 Each checked item needs an owner role, reviewer role, evidence link or file
 path, and blocking/non-blocking status recorded in `docs/READINESS_EVIDENCE.md`.

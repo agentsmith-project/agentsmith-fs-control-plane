@@ -2,6 +2,11 @@
 
 Status: active evidence ledger.
 
+FINAL GA ACCEPTANCE REMAINS BLOCKED.
+Open blockers include external owner acceptance, generated-client review,
+security review, runbook drills, deployment drills, and human sign-off.
+Implementation-baseline evidence does not close those gates.
+
 This ledger records closure evidence for GA pre-dev admission gates, review
 checklist items, and risk decisions. A gate is open until this document links to
 reviewed evidence.
