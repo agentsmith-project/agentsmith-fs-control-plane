@@ -1158,6 +1158,55 @@ func TestCurrentRepoContractsPass(t *testing.T) {
 	}
 }
 
+func TestPullRequestTemplateGovernanceGuardCatchesMissingOrIncompleteTemplate(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			name: "missing body",
+			body: "",
+			want: prTemplateRequiredGovernanceChecklistLabels(),
+		},
+		{
+			name: "partial body",
+			body: "Team/reviewer IDs or links: TBD\n\nPrecise test commands: TBD\n",
+			want: []string{
+				"worker/subagent ownership",
+				"TDD red/green evidence",
+				"GA baseline verification",
+				"main-agent provenance",
+				"risk/gate impact",
+				"product-agnostic boundary check",
+				"package/module naming review",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := missingPRTemplateGovernanceChecklistItems(tt.body)
+			if !sameStrings(got, tt.want) {
+				t.Fatalf("missingPRTemplateGovernanceChecklistItems() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCurrentRepoPullRequestTemplateHasGovernanceEvidenceChecklist(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	path := filepath.Join(repoRoot, ".github", "pull_request_template.md")
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("PR template must exist at %s: %v", path, err)
+	}
+	if missing := missingPRTemplateGovernanceChecklistItems(string(body)); len(missing) > 0 {
+		t.Fatalf("PR template missing governance/evidence checklist item(s): %s", strings.Join(missing, ", "))
+	}
+}
+
 func TestCurrentRepoCoreTestsDoNotLeakCallerProductFixtureVocabulary(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	forbidden := []struct {
@@ -1257,6 +1306,73 @@ func assertNoFindingMessageContains(t *testing.T, findings []Finding, needle, co
 		if finding.Code == code && contains(finding.Message, needle) {
 			t.Fatalf("did not expect finding code %q mentioning %q: %+v", code, needle, finding)
 		}
+	}
+}
+
+func missingPRTemplateGovernanceChecklistItems(body string) []string {
+	type requiredItem struct {
+		label   string
+		pattern *regexp.Regexp
+	}
+	items := []requiredItem{
+		{
+			label:   "team/reviewer IDs or links",
+			pattern: regexp.MustCompile(`(?is)team.*/.*reviewer.*ids?.*links?|reviewer.*ids?.*links?`),
+		},
+		{
+			label:   "worker/subagent ownership",
+			pattern: regexp.MustCompile(`(?is)worker.*/.*subagent.*ownership|subagent.*ownership|worker.*ownership`),
+		},
+		{
+			label:   "TDD red/green evidence",
+			pattern: regexp.MustCompile(`(?is)tdd.*red.*green|red.*green.*tdd`),
+		},
+		{
+			label:   "precise test commands",
+			pattern: regexp.MustCompile(`(?is)precise.*test.*commands|test.*commands.*precise`),
+		},
+		{
+			label:   "GA baseline verification",
+			pattern: regexp.MustCompile(`(?is)scripts/verify-ga-baseline\.sh`),
+		},
+		{
+			label:   "main-agent provenance",
+			pattern: regexp.MustCompile(`(?is)main agent.*did not directly write.*code.*/.*docs|main agent.*did not directly write.*docs.*/.*code`),
+		},
+		{
+			label:   "risk/gate impact",
+			pattern: regexp.MustCompile(`(?is)risk.*/.*gate.*impact|gate.*/.*risk.*impact`),
+		},
+		{
+			label:   "product-agnostic boundary check",
+			pattern: regexp.MustCompile(`(?is)product-agnostic.*boundary.*check|product agnostic.*boundary.*check`),
+		},
+		{
+			label:   "package/module naming review",
+			pattern: regexp.MustCompile(`(?is)package.*/.*module.*naming.*review|package.*name.*review|module.*name.*review`),
+		},
+	}
+
+	var missing []string
+	for _, item := range items {
+		if !item.pattern.MatchString(body) {
+			missing = append(missing, item.label)
+		}
+	}
+	return missing
+}
+
+func prTemplateRequiredGovernanceChecklistLabels() []string {
+	return []string{
+		"team/reviewer IDs or links",
+		"worker/subagent ownership",
+		"TDD red/green evidence",
+		"precise test commands",
+		"GA baseline verification",
+		"main-agent provenance",
+		"risk/gate impact",
+		"product-agnostic boundary check",
+		"package/module naming review",
 	}
 }
 

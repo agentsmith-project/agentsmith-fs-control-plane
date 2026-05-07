@@ -52,9 +52,13 @@ Deleting an archived repo records that it was archived before deletion.
 Restoring a tombstoned repo returns it to the recorded pre-delete accessibility
 state unless a separate reviewed contract adds an explicit target-state option.
 
-The repo access admission pure model exists in code for shared pre-handler
-decisions across future lifecycle, save/restore, export, mount, and template
-handlers. It is not yet wired to those concrete endpoint handlers.
+The repo access admission model exists in code for shared pre-handler decisions
+across lifecycle, save/restore, export, mount, and template handlers. Concrete
+wired slices already include export admission, WebDAV gateway admission and
+runtime observation, repo lifecycle worker drain checks, restore/template
+writer-fence admission, and read-write export/workload admission through shared
+repo-row serialization. Remaining endpoint coverage and drill evidence are
+still review items.
 The session substrate pure model also exists for restore-run writer gating and
 lifecycle drain gating over export and workload-mount sessions. Export sessions
 are wired to the API create/get/revoke boundary, WebDAV gateway admission and
@@ -82,9 +86,9 @@ cannot prove whether an in-flight mutation has finished safely, the lifecycle
 operation fails closed or enters `operator_intervention_required`.
 Lifecycle operation admission also fails closed when a held writer-session fence
 already exists for the target repo.
-Before wiring this pure admission model to concrete handlers, lifecycle request
-handling must preserve idempotency-first behavior or pass holder-operation
-context so an operation retry is not denied by its own held fence.
+As endpoint coverage is extended or adjusted, lifecycle request handling must
+preserve idempotency-first behavior or pass holder-operation context so an
+operation retry is not denied by its own held fence.
 
 Archive, delete, and purge must wait for all non-terminal exports and workload
 mount bindings, read-only or read-write, to reach a confirmed terminal non-accessing
