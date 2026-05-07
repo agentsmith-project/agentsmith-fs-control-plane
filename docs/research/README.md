@@ -1,23 +1,12 @@
 # Research
 
-This directory contains copied planning material from `/home/percy/works/mbos-v1/improve-agentsmith-fs`.
+This directory is intentionally kept for future product-neutral research notes.
+Historical consumer-named research snapshots were removed from the current repo
+because AFSCP must remain independently gate-reviewed and releasable without
+embedding first-consumer names, methods, business objects, or local sibling
+checkout paths.
 
-The root-level handoff docs are now authoritative. Treat files in this
-directory as research snapshots and historical review notes, not active scope.
-
-Known superseding decisions in the root docs:
-
-- AFSCP core is product-agnostic; AgentSmith-specific notebook task, file library, project, and workspace semantics belong only in integration mapping.
-- `namespace` is the AFSCP isolation concept. AgentSmith may map one workspace to one namespace, but AFSCP does not store AgentSmith workspace semantics.
-- GA repo layout uses JVS external control root mode: AFSCP stores control metadata under a private `control/` root and exposes only the separate `payload/` root.
-- Product callers receive workload mount bindings; only the dedicated orchestrator receives Secret-bearing mount plans.
-- GA restore-run rejects active or uncertain read-write export/workload sessions by default.
-- Repo archive, restore-archived, delete, restore-tombstoned, and purge are GA storage lifecycle APIs. Product display-name rename and catalog detach remain caller-owned metadata operations.
-- Namespace volume binding does not provide an authoritative raw `path_prefix`; AFSCP computes canonical paths from structured IDs and volume configuration.
-- This GitHub repository is the AFSCP implementation home.
-
-- [agentsmith-workspace-storage-technical-design.md](agentsmith-workspace-storage-technical-design.md)
-- [scratch.md](scratch.md)
-- [team-review-summary.md](team-review-summary.md)
-
-`scratch.md` is historical discussion context and may include earlier assumptions that were later revised.
+Active planning lives in the root documentation set, especially
+`docs/GA_PRE_DEV_READINESS.md`, `docs/PRODUCT_REQUIREMENTS.md`,
+`docs/PRODUCT_BOUNDARY.md`, `docs/DEVELOPMENT_GOVERNANCE.md`, and
+`docs/INTEGRATION_GUIDE.md`.

@@ -116,8 +116,8 @@ fences, session drain, operation leases, audit behavior, and focused tests.
 - Do not expose JuiceFS root credentials, metadata URLs, object store
   credentials, Secret references, raw host paths, or control roots to ordinary
   product callers, clients, or workloads.
-- Do not put caller workspace, file library, project, notebook task, or
-  catalog concepts into AFSCP core packages.
+- Do not put caller workspace, catalog object, project, job/task object, or
+  caller-specific catalog concepts into AFSCP core packages.
 - Do not implement storage mutation handlers from narrative docs alone; use the
   schemas/OpenAPI and accepted ADRs/contracts.
 - Do not implement repo delete as raw filesystem delete.

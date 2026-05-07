@@ -1300,6 +1300,7 @@ func verifyCoreProductDocs(repoRoot string) []Finding {
 	paths := coreProductDocPaths(repoRoot)
 	var findings []Finding
 	for _, path := range paths {
+		findings = append(findings, findProductSpecificDocPathTerms(repoRoot, path)...)
 		body, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -1339,41 +1340,9 @@ func verifyCoreGateEvidenceDocs(repoRoot string) []Finding {
 func coreProductDocPaths(repoRoot string) []string {
 	paths := []string{
 		filepath.Join(repoRoot, "README.md"),
-		filepath.Join(repoRoot, "docs", "GA_PRE_DEV_READINESS.md"),
-		filepath.Join(repoRoot, "docs", "PRODUCT_REQUIREMENTS.md"),
-		filepath.Join(repoRoot, "docs", "PRODUCT_BOUNDARY.md"),
-		filepath.Join(repoRoot, "docs", "MVP_PLAN.md"),
-		filepath.Join(repoRoot, "docs", "READINESS_EVIDENCE.md"),
-		filepath.Join(repoRoot, "docs", "RISK_REGISTER.md"),
-		filepath.Join(repoRoot, "docs", "REVIEW_CHECKLIST.md"),
-		filepath.Join(repoRoot, "docs", "DEVELOPER_HANDOFF.md"),
-		filepath.Join(repoRoot, "docs", "ARCHITECTURE.md"),
-		filepath.Join(repoRoot, "docs", "API_CONTRACT_DRAFT.md"),
-		filepath.Join(repoRoot, "docs", "DEVELOPMENT_GOVERNANCE.md"),
-		filepath.Join(repoRoot, "docs", "PRE_DEV_COMPLETION.md"),
-		filepath.Join(repoRoot, "docs", "SECURITY_AND_TENANCY.md"),
-		filepath.Join(repoRoot, "docs", "STORAGE_LAYOUT.md"),
-		filepath.Join(repoRoot, "docs", "runbooks", "README.md"),
-		filepath.Join(repoRoot, "docs", "runbooks", "ga-runbooks.md"),
 	}
-	paths = append(paths, markdownFilesInDir(filepath.Join(repoRoot, "docs", "adr"))...)
-	paths = append(paths, markdownFilesInDir(filepath.Join(repoRoot, "docs", "contracts"))...)
+	paths = append(paths, markdownFilesInTree(filepath.Join(repoRoot, "docs"))...)
 	sort.Strings(paths)
-	return paths
-}
-
-func markdownFilesInDir(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var paths []string
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
-			continue
-		}
-		paths = append(paths, filepath.Join(dir, entry.Name()))
-	}
 	return paths
 }
 
@@ -1510,9 +1479,25 @@ func findProductSpecificDocTerms(path, body string) []Finding {
 				Code:    CodeDocsProductSpecificTermForbidden,
 				File:    path,
 				Line:    i + 1,
-				Message: fmt.Sprintf("core AFSCP document must not mention product-specific term %q; move caller-specific context to integration, external handoff, or adoption recommendation docs", term),
+				Message: fmt.Sprintf("AFSCP markdown must not mention product-specific term %q; keep caller-specific context in consumer-owned material outside this repo or use generic adoption guidance", term),
 			})
 		}
+	}
+	return findings
+}
+
+func findProductSpecificDocPathTerms(repoRoot, path string) []Finding {
+	rel, err := filepath.Rel(repoRoot, path)
+	if err != nil {
+		rel = path
+	}
+	var findings []Finding
+	for _, term := range productSpecificTermsInLine(filepath.ToSlash(rel)) {
+		findings = append(findings, Finding{
+			Code:    CodeDocsProductSpecificTermForbidden,
+			File:    path,
+			Message: fmt.Sprintf("AFSCP markdown file paths must use generic caller/adoption names; path contains product-specific term %q", term),
+		})
 	}
 	return findings
 }
@@ -1522,12 +1507,22 @@ func productSpecificTermsInLine(line string) []string {
 		label string
 		match func(string) bool
 	}
-	lowerLine := strings.ToLower(line)
+	normalizedLine := stripAllowedTechnicalDocTerms(line)
+	lowerLine := strings.ToLower(normalizedLine)
 	terms := []productTerm{
-		{label: "AgentSmith", match: func(line string) bool { return strings.Contains(line, "AgentSmith") }},
-		{label: "agentsmith", match: containsForbiddenLowerAgentsmith},
+		{label: "AgentSmith", match: func(line string) bool { return strings.Contains(normalizedLine, "AgentSmith") }},
+		{label: "agentsmith", match: func(string) bool { return containsForbiddenLowerAgentsmith(lowerLine) }},
 		{label: "sandbox-manager", match: func(string) bool { return strings.Contains(lowerLine, "sandbox-manager") }},
 		{label: "sandbox manager", match: func(string) bool { return strings.Contains(lowerLine, "sandbox manager") }},
+		{label: "mbos-sandbox", match: func(string) bool { return strings.Contains(lowerLine, "mbos-sandbox") }},
+		{label: "agentsmith-desktop", match: func(string) bool { return strings.Contains(lowerLine, "agentsmith-desktop") }},
+		{label: "improve-agentsmith", match: func(string) bool { return strings.Contains(lowerLine, "improve-agentsmith") }},
+		{label: "workspace/file library", match: func(string) bool { return strings.Contains(lowerLine, "workspace/file library") }},
+		{label: "workspace storage", match: func(string) bool { return strings.Contains(lowerLine, "workspace storage") }},
+		{label: "file library", match: func(string) bool { return strings.Contains(lowerLine, "file library") }},
+		{label: "file-library", match: func(string) bool { return strings.Contains(lowerLine, "file-library") }},
+		{label: "notebook task", match: func(string) bool { return strings.Contains(lowerLine, "notebook task") }},
+		{label: "local sibling repo path", match: func(string) bool { return strings.Contains(lowerLine, "/home/percy/works/mbos-v1/") }},
 		{label: "first calling product", match: func(string) bool { return strings.Contains(lowerLine, "first calling product") }},
 		{label: "calling product owner", match: func(string) bool { return strings.Contains(lowerLine, "calling product owner") }},
 		{label: "client connector owner", match: func(string) bool { return strings.Contains(lowerLine, "client connector owner") }},
@@ -1539,11 +1534,27 @@ func productSpecificTermsInLine(line string) []string {
 	}
 	var found []string
 	for _, term := range terms {
-		if term.match(line) {
+		if term.match(normalizedLine) {
 			found = append(found, term.label)
 		}
 	}
 	return found
+}
+
+func stripAllowedTechnicalDocTerms(line string) string {
+	allowed := []string{
+		"github.com/agentsmith-project/agentsmith-fs-control-plane",
+		"github.com/agentsmith-project/jvs",
+		"https://github.com/agentsmith-project/jvs",
+		"agentsmith-fs-control-plane",
+		"agentsmith-project",
+	}
+	normalized := line
+	for _, term := range allowed {
+		normalized = strings.ReplaceAll(normalized, term, "")
+		normalized = strings.ReplaceAll(normalized, strings.ToUpper(term), "")
+	}
+	return normalized
 }
 
 func containsForbiddenLowerAgentsmith(line string) bool {

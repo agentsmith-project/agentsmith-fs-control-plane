@@ -9,11 +9,12 @@ decisions visible before implementation depends on them.
 ## Governance Principles
 
 - Build directly toward the GA contract in `docs/GA_PRE_DEV_READINESS.md`.
-- Keep AFSCP product-agnostic; caller-specific behavior belongs in integration docs or sibling repos.
-- Keep core docs, contracts, tests, and fixtures generic; first/reference
-  consumer names, caller application methods, and caller business logic belong
-  only in external adoption or handoff references and must not become GA gate
-  criteria.
+- Keep AFSCP product-agnostic; caller-specific behavior belongs in
+  consumer-owned repositories or generic adoption guidance, not AFSCP release
+  gates.
+- Keep docs, contracts, tests, and fixtures generic; first/reference consumer
+  names, caller application methods, and caller business logic must not enter
+  this repo or become GA gate criteria.
 - Prefer small, reviewable changes, but do not define staged product semantics unless a contract requires them.
 - Treat security boundaries, idempotency, audit, and recovery as product requirements.
 - Do not implement endpoint handlers or storage mutations from narrative drafts when schemas and OpenAPI are missing.

@@ -2,6 +2,11 @@
 
 This repository is the handoff package for building AFSCP, a product-agnostic file storage control plane.
 
+AFSCP runs, evolves, releases, and passes gates independently from consumer
+applications. Reference consumers may provide functional requirements and
+compatibility feedback, but they cannot become an AFSCP gate or release
+dependency.
+
 AFSCP should manage volumes, namespaces, repos, repo lifecycle, repo templates, exports, workload mount bindings, orchestrator mount plans, durable operations, logs, and audit events. It should not understand product workflows from any one caller.
 
 ## Source Of Truth
@@ -10,14 +15,9 @@ Current active source of truth is the root-level documentation in this repositor
 
 Historical review and research documents may still use P0, P1, or MVP language. For active planning, read those terms through the GA pre-dev readiness document.
 
-The planning work that produced this handoff was committed in:
-
-- Local planning repo: `/home/percy/works/mbos-v1/improve-agentsmith-fs`
-- Planning commit: `9a3e127 docs: plan AgentSmith workspace storage control plane`
-- Research snapshot: `docs/research/agentsmith-workspace-storage-technical-design.md`
-- Discussion scratchpad: `docs/research/scratch.md`
-
-Important: do not use `agentsmith-oss` for current-state analysis. It is an old version and was explicitly excluded.
+Historical consumer-named planning snapshots and local sibling checkout paths
+are intentionally not part of the current repository. Active AFSCP planning is
+the product-neutral documentation set listed above.
 
 ## Pre-Dev Readiness Rules
 
@@ -48,15 +48,17 @@ AFSCP should know:
 
 AFSCP should not know:
 
-- notebook task
-- file library
+- caller job or task object
+- caller catalog object
 - project
-- AgentSmith workspace
+- caller workspace or tenant vocabulary
 - template catalog UX
 - user-facing product permissions
 - business workflow state
 
-Calling products map their own concepts to AFSCP primitives. Product-specific examples belong in `docs/INTEGRATION_GUIDE.md`, not in AFSCP core contracts.
+Calling products map their own concepts to AFSCP primitives outside this repo.
+Generic consumer adoption guidance lives in `docs/INTEGRATION_GUIDE.md`; AFSCP
+core contracts stay neutral.
 
 ## Module Shape
 
@@ -71,7 +73,9 @@ GA deployment shape:
 - Persistent operation store.
 - Internal API reachable by trusted application control planes, privileged admin jobs, migration jobs, operator tools, and the dedicated orchestrator service only.
 
-Integration adapters and compatibility changes may land in sibling repositories. The AFSCP runtime, operation store, path resolver, JVS runner, and export gateway should live here.
+Integration adapters and compatibility changes may land in consumer-owned
+repositories. The AFSCP runtime, operation store, path resolver, JVS runner,
+and export gateway should live here.
 
 ## Authority Boundaries
 
@@ -114,8 +118,8 @@ Client/desktop connector owns:
 
 - product workflow engine
 - product authorization service
-- notebook task lifecycle
-- file-library catalog
+- caller job or task lifecycle
+- caller catalog
 - global template marketplace
 - Git remote workflows
 - merge/conflict resolution

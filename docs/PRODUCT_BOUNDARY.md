@@ -24,7 +24,7 @@ AFSCP should expose:
 
 AFSCP should not expose or depend on:
 
-- notebook task
+- caller job or task object
 - caller catalog object
 - project
 - caller workspace

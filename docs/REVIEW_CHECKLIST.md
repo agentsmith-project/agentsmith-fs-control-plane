@@ -19,7 +19,7 @@ for GA.
 ## Product Boundary
 
 - [ ] AFSCP core docs use generic storage concepts: volume, namespace, repo, save point, restore, template, export, mount, operation.
-- [ ] Caller-specific concepts stay in external adoption notes only.
+- [ ] This repo contains only generic adoption guidance; caller-specific adoption and handoff material lives outside this repo in consumer-owned repositories.
 - [ ] Direct and indirect caller model is accepted.
 - [ ] Cross-namespace template clone remains rejected by default.
 - [ ] Ordinary concurrent read/write behavior is accepted without merge semantics.

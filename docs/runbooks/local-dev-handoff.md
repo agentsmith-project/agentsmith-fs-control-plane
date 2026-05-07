@@ -1,20 +1,14 @@
 # Local Dev Handoff
 
-This repository has no implementation yet.
+This runbook records product-neutral local development assumptions for AFSCP.
+Consumer-specific checkouts, adapters, and compatibility work are maintained
+outside this repository.
 
-Suggested local development assumptions once implementation begins:
+Suggested local targets:
 
 - AFSCP API: `http://localhost:8090/internal/v1`
 - AFSCP WebDAV dev base: `http://localhost:8091/exports/{exportId}/`
-- optional orchestrator adapter local target: `http://localhost:8080`
-
-## Local Paths
-
-- Planning repo: `/home/percy/works/mbos-v1/improve-agentsmith-fs`
-- First caller integration reference: `/home/percy/works/mbos-v1/agentsmith`
-- Client connector reference: `/home/percy/works/mbos-v1/agentsmith-desktop`
-- Orchestrator reference: `/home/percy/works/mbos-v1/mbos-sandbox-v1`
-- JVS: `/home/percy/works/mbos-v1/jvs`
+- optional workload orchestrator adapter target: `http://localhost:8080`
 
 ## Before Writing Code
 
@@ -26,5 +20,7 @@ Suggested local development assumptions once implementation begins:
 6. Confirm export session and access credential fields.
 7. Confirm writer-session fence behavior.
 8. Confirm JVS external-control/payload-only mount plan.
-9. Confirm AFSCP core uses product-agnostic `volume`, `namespace`, `repo`, `template`, `export`, and `mount` terms.
-10. Confirm that `agentsmith-oss` is not used for current-state analysis.
+9. Confirm AFSCP core uses product-agnostic `volume`, `namespace`, `repo`,
+   `template`, `export`, and `mount` terms.
+10. Confirm consumer-specific business objects and local sibling paths stay out
+    of AFSCP docs, contracts, tests, and implementation.

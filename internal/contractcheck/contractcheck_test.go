@@ -1100,28 +1100,46 @@ func TestVerifyCoreProductDocsCatchesProductSpecificTerms(t *testing.T) {
 	readmePath := filepath.Join(root, "README.md")
 	gatePath := filepath.Join(root, "docs", "DEVELOPMENT_GOVERNANCE.md")
 	handoffPath := filepath.Join(root, "docs", "DEVELOPER_HANDOFF.md")
+	agentHandoffPath := filepath.Join(root, "docs", "AGENTSMITH_AFSCP_EXTERNAL_HANDOFF.md")
+	siblingPath := filepath.Join(root, "docs", "SIBLING_REPO_AFSCP_ADOPTION_RECOMMENDATIONS.md")
+	researchPath := filepath.Join(root, "docs", "research", "agentsmith-workspace-storage-technical-design.md")
+	localDevPath := filepath.Join(root, "docs", "runbooks", "local-dev-handoff.md")
 	writeFile(t, readmePath, "AFSCP core must not bind GA to AgentSmith or Sandbox Manager.\n")
 	writeFile(t, gatePath, "Required reviewer: Client Connector Owner. The orchestrator v2 contract is accepted.\n")
 	writeFile(t, handoffPath, "External owner review is required.\n")
-	writeFile(t, filepath.Join(root, "docs", "AGENTSMITH_AFSCP_EXTERNAL_HANDOFF.md"), "AgentSmith handoff remains caller-specific.\n")
-	writeFile(t, filepath.Join(root, "docs", "SIBLING_REPO_AFSCP_ADOPTION_RECOMMENDATIONS.md"), "sandbox-manager adoption remains external.\n")
+	writeFile(t, agentHandoffPath, "AgentSmith handoff remains caller-specific.\n")
+	writeFile(t, siblingPath, "sandbox-manager adoption remains external.\n")
+	writeFile(t, researchPath, "workspace storage and file library research copied from /home/percy/works/mbos-v1/improve-agentsmith-fs.\n")
+	writeFile(t, localDevPath, "sandbox manager local handoff for /home/percy/works/mbos-v1/mbos-sandbox-v1.\n")
 	writeFile(t, filepath.Join(root, "docs", "adr", "0001-create-afscp.md"), "GitHub org path github.com/agentsmith-project/agentsmith-fs-control-plane is allowed.\n")
+	writeFile(t, filepath.Join(root, "docs", "JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md"), "Release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8\n")
 
 	findings := verifyCoreProductDocs(root)
 
-	assertFindingCount(t, findings, CodeDocsProductSpecificTermForbidden, 5)
 	assertHasFindingInFile(t, findings, CodeDocsProductSpecificTermForbidden, readmePath)
 	assertHasFindingInFile(t, findings, CodeDocsProductSpecificTermForbidden, gatePath)
 	assertHasFindingInFile(t, findings, CodeDocsProductSpecificTermForbidden, handoffPath)
+	assertHasFindingInFile(t, findings, CodeDocsProductSpecificTermForbidden, agentHandoffPath)
+	assertHasFindingInFile(t, findings, CodeDocsProductSpecificTermForbidden, siblingPath)
+	assertHasFindingInFile(t, findings, CodeDocsProductSpecificTermForbidden, researchPath)
+	assertHasFindingInFile(t, findings, CodeDocsProductSpecificTermForbidden, localDevPath)
+	assertNoFindingMessageContains(t, findings, "github.com/agentsmith-project/agentsmith-fs-control-plane", CodeDocsProductSpecificTermForbidden)
+	assertNoFindingMessageContains(t, findings, "github.com/agentsmith-project/jvs", CodeDocsProductSpecificTermForbidden)
 	for _, finding := range findings {
 		if finding.File == "" {
 			t.Fatalf("finding should include file path, got %+v", finding)
 		}
 		if !strings.Contains(finding.Message, "AgentSmith") &&
+			!strings.Contains(finding.Message, "agentsmith") &&
 			!strings.Contains(finding.Message, "sandbox manager") &&
+			!strings.Contains(finding.Message, "sandbox-manager") &&
+			!strings.Contains(finding.Message, "mbos-sandbox") &&
 			!strings.Contains(finding.Message, "client connector owner") &&
 			!strings.Contains(finding.Message, "external owner review") &&
-			!strings.Contains(finding.Message, "orchestrator v2 contract") {
+			!strings.Contains(finding.Message, "orchestrator v2 contract") &&
+			!strings.Contains(finding.Message, "file library") &&
+			!strings.Contains(finding.Message, "workspace storage") &&
+			!strings.Contains(finding.Message, "local sibling repo path") {
 			t.Fatalf("finding message should name the product-specific term, got %+v", finding)
 		}
 	}

@@ -8,7 +8,7 @@ Superseded by accepted v0.4.8 evidence in
 ## Environment
 
 ```text
-AFSCP repo: /home/percy/works/mbos-v1/agentsmith-fs-control-plane
+AFSCP repo: agentsmith-fs-control-plane
 JVS release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.7
 JVS version: v0.4.7
 JVS asset: jvs-linux-amd64
@@ -22,9 +22,9 @@ The release page publishes binaries, matching `.bundle` files, `SHA256SUMS`,
 and `SHA256SUMS.bundle`. The smoke test downloaded the release asset directly
 from GitHub and verified the `jvs-linux-amd64` checksum above before execution.
 
-The local `/home/percy/works/mbos-v1/jvs` source tree and any local binaries are
-not the AFSCP handoff pin. They may be useful for reading JVS docs, but release
-binary evidence is authoritative for GA handoff.
+Local source trees and local binaries are not the AFSCP handoff pin. They may
+be useful for reading JVS docs, but release binary evidence is authoritative
+for GA handoff.
 
 ## Passing Observations
 

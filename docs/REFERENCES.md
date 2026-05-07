@@ -1,71 +1,14 @@
 # References
 
-## Local Planning Material
-
-- `/home/percy/works/mbos-v1/improve-agentsmith-fs`
-- `/home/percy/works/mbos-v1/improve-agentsmith-fs/agentsmith-workspace-storage-technical-design.md`
-- `/home/percy/works/mbos-v1/improve-agentsmith-fs/scratch.md`
-
-Copied into this repo:
-
-- `docs/research/agentsmith-workspace-storage-technical-design.md`
-- `docs/research/scratch.md`
-
-## AgentSmith Integration Reference Paths
-
-Do not use `agentsmith-oss`.
-
-These paths are references for the first expected caller integration. They are not AFSCP core dependencies.
-
-- `/home/percy/works/mbos-v1/agentsmith/packages/contracts/src/index.ts`
-- `/home/percy/works/mbos-v1/agentsmith/packages/api-entry-node/src/internal-agent-workspace-provisioner.ts`
-- `/home/percy/works/mbos-v1/agentsmith/packages/api-entry-node/src/file-library-model.ts`
-- `/home/percy/works/mbos-v1/agentsmith/packages/api-entry-node/src/file-library-runtime.ts`
-- `/home/percy/works/mbos-v1/agentsmith/packages/api-entry-node/src/project-file-library-routes.ts`
-- `/home/percy/works/mbos-v1/agentsmith/packages/api-entry-node/src/sandbox-manager-client.ts`
-- `/home/percy/works/mbos-v1/agentsmith/docs/contracts/juicefs-file-libraries-architecture.md`
-
-## Current Desktop Paths
-
-- `/home/percy/works/mbos-v1/agentsmith-desktop/src/lib/mounts/service.ts`
-- `/home/percy/works/mbos-v1/agentsmith-desktop/src/lib/mounts/tauri-backend.ts`
-- `/home/percy/works/mbos-v1/agentsmith-desktop/src/lib/mounts/api.ts`
-- `/home/percy/works/mbos-v1/agentsmith-desktop/src/types.ts`
-
-## Current Sandbox Paths
-
-- `/home/percy/works/mbos-v1/mbos-sandbox-v1/manager-service/internal/workspacebinding/handler.go`
-- `/home/percy/works/mbos-v1/mbos-sandbox-v1/docs/JUICEFS_CSI_WORKSPACE_MODEL.md`
-- `/home/percy/works/mbos-v1/mbos-sandbox-v1/docs/contracts/agentsmith-integration-contract-v2.md`
-
-## Current And Proposed Local API Paths
-
-Existing AgentSmith routes to replace or restrict for ordinary users:
-
-- `POST /api/v1/workspaces/{workspaceId}/projects/{projectId}/file-libraries/{libraryId}/desktop-mount-access`
-- `POST /api/v1/workspaces/{workspaceId}/projects/{projectId}/file-libraries/{libraryId}/storage-credential-exchange`
-
-Existing sandbox-manager local target:
-
-- `http://localhost:8080`
-- `PUT /v1/workspaces/{wsId}/projects/{projId}/workspace-bindings/{bindingId}`
-- `PUT /v1/workspaces/{wsId}/projects/{projId}/workloads/{wlId}`
-
-Suggested AFSCP local targets:
-
-- `http://localhost:8090/internal/v1`
-- `http://localhost:8091/exports/{exportId}/`
+This page keeps product-neutral references used by AFSCP planning and contract
+verification. Consumer-specific source paths and local sibling checkout paths do
+not belong in this repository.
 
 ## JVS
 
 - GitHub: https://github.com/agentsmith-project/jvs
 - Release binary used for accepted handoff smoke: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8
 - `jvs-linux-amd64` SHA-256: `f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521`
-- `/home/percy/works/mbos-v1/jvs/docs/02_CLI_SPEC.md`
-- `/home/percy/works/mbos-v1/jvs/docs/06_RESTORE_SPEC.md`
-- `/home/percy/works/mbos-v1/jvs/docs/09_SECURITY_MODEL.md`
-- `/home/percy/works/mbos-v1/jvs/docs/24_REPO_CLONE_PRODUCT_PLAN.md`
-- `/home/percy/works/mbos-v1/jvs/docs/25_REPO_WORKSPACE_LIFECYCLE_PRODUCT_PLAN.md`
 
 ## JuiceFS
 

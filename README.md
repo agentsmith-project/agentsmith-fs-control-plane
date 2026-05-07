@@ -5,13 +5,14 @@ and implementation is proceeding from accepted contracts.
 
 This repository hosts AFSCP: an independent shared filesystem control plane for
 managed volumes, JVS repos, repo lifecycle, repo templates, exports, workload
-mounts, and durable storage operations.
+mounts, and durable storage operations. AFSCP runs, evolves, releases, and
+passes gates independently of any reference consumer.
 
-AFSCP itself should not know about any caller's business objects. Product
-concepts belong in caller-owned integration code or external adoption notes.
-Those notes may be useful compatibility references, but they are not the AFSCP
-core model or release gate. AFSCP exposes robust filesystem primitives and
-enforces storage boundaries.
+AFSCP itself should not know about any caller's business objects. This repo may
+keep generic adoption guidance, but caller-specific adoption or handoff material
+belongs outside this repo in consumer-owned repositories. Those materials are
+not the AFSCP core model, release gate, or source of business logic. AFSCP
+exposes robust filesystem primitives and enforces storage boundaries.
 
 ## Current Decision
 
@@ -55,7 +56,7 @@ enforces storage boundaries.
 - [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md): product-agnostic requirements.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): component boundaries and target architecture.
 - [docs/API_CONTRACT_DRAFT.md](docs/API_CONTRACT_DRAFT.md): draft internal API and data contracts.
-- [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md): external adoption notes, kept outside the core model and release gates.
+- [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md): generic adoption guidance; caller-specific adoption and handoff material belongs outside this repo in consumer-owned repositories.
 - [docs/SECURITY_AND_TENANCY.md](docs/SECURITY_AND_TENANCY.md): credential, namespace, path, export, and JVS control metadata protection model.
 - [docs/MVP_PLAN.md](docs/MVP_PLAN.md): historical delivery plan; use the GA readiness document for active scope.
 - [docs/OPERATIONS_AND_MIGRATION.md](docs/OPERATIONS_AND_MIGRATION.md): operations, migration, and rollout strategy.
@@ -66,9 +67,9 @@ enforces storage boundaries.
 - [docs/EXPORT_WEBDAV.md](docs/EXPORT_WEBDAV.md): WebDAV export model.
 - [docs/contracts/](docs/contracts): focused contract documents for partner teams.
 - [docs/runbooks/](docs/runbooks): initial operator and local handoff notes.
-- [docs/REFERENCES.md](docs/REFERENCES.md): local source paths and external references.
+- [docs/REFERENCES.md](docs/REFERENCES.md): product-neutral external references.
 - [docs/adr/](docs/adr): architecture decision records.
-- [docs/research/](docs/research): historical planning material.
+- [docs/research/](docs/research): placeholder for product-neutral research notes.
 
 ## Implementation Rule
 

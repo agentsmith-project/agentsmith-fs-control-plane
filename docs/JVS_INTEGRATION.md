@@ -38,10 +38,9 @@ See:
 - [contracts/jvs-runner-contract-v1.md](contracts/jvs-runner-contract-v1.md)
   for the self-contained AFSCP command matrix and fail-closed behavior.
 
-Local checkouts such as `/home/percy/works/mbos-v1/jvs` are development-machine
-references only. They are not a handoff dependency for AFSCP worker
-implementation; use the pinned release/tag documentation and asset checksums as
-the authority.
+Local source checkouts are development-machine references only. They are not a
+handoff dependency for AFSCP worker implementation; use the pinned release/tag
+documentation and asset checksums as the authority.
 
 ## External Control Root Mode
 

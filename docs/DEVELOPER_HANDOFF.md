@@ -34,8 +34,10 @@ consumers. It manages:
 - audit events
 
 Reference consumers may map their own product objects to AFSCP repo IDs, but
-their business concepts stay outside AFSCP. Consumer-specific adoption notes are
-external references and must not become core AFSCP GA/release gates.
+their business concepts stay outside AFSCP. This repo may keep generic adoption
+guidance; caller-specific adoption or handoff material must live outside this
+repo in consumer-owned repositories and must not become core AFSCP GA/release
+gates.
 
 ## Start Here
 

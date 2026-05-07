@@ -40,7 +40,8 @@ after their external-control-root behavior is pinned to the same contract.
 
 Positive:
 
-- Supports complete file library lifecycle without leaking raw storage details.
+- Supports complete caller-owned storage lifecycle without leaking raw storage
+  details.
 - Makes permanent deletion auditable and policy-gated.
 - Keeps product catalog semantics outside AFSCP.
 
