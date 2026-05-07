@@ -116,6 +116,38 @@ func TestGatewayStoreFailClosedDeniesDisabledNamespaceCredential(t *testing.T) {
 	}
 }
 
+func TestWebDAVMethodPolicyMatchesContract(t *testing.T) {
+	tests := []struct {
+		method        string
+		readOnlyWant  bool
+		readWriteWant bool
+	}{
+		{method: http.MethodOptions, readOnlyWant: true, readWriteWant: true},
+		{method: http.MethodHead, readOnlyWant: true, readWriteWant: true},
+		{method: http.MethodGet, readOnlyWant: true, readWriteWant: true},
+		{method: "PROPFIND", readOnlyWant: true, readWriteWant: true},
+		{method: http.MethodPut, readOnlyWant: false, readWriteWant: true},
+		{method: http.MethodDelete, readOnlyWant: false, readWriteWant: true},
+		{method: "MKCOL", readOnlyWant: false, readWriteWant: true},
+		{method: "MOVE", readOnlyWant: false, readWriteWant: true},
+		{method: "COPY", readOnlyWant: false, readWriteWant: true},
+		{method: "PROPPATCH", readOnlyWant: false, readWriteWant: true},
+		{method: "LOCK", readOnlyWant: false, readWriteWant: true},
+		{method: "UNLOCK", readOnlyWant: false, readWriteWant: true},
+		{method: "BREW", readOnlyWant: false, readWriteWant: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			if got := methodAllowed(tt.method, sessionstate.AccessModeReadOnly); got != tt.readOnlyWant {
+				t.Fatalf("read-only methodAllowed(%q) = %v, want %v", tt.method, got, tt.readOnlyWant)
+			}
+			if got := methodAllowed(tt.method, sessionstate.AccessModeReadWrite); got != tt.readWriteWant {
+				t.Fatalf("read-write methodAllowed(%q) = %v, want %v", tt.method, got, tt.readWriteWant)
+			}
+		})
+	}
+}
+
 func TestReadOnlyMethodPolicy(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
 	env.writePayload(t, "hello.txt", "hello")
@@ -129,13 +161,17 @@ func TestReadOnlyMethodPolicy(t *testing.T) {
 		})
 	}
 
-	for _, method := range []string{http.MethodPut, http.MethodDelete, "MOVE", "COPY"} {
+	for _, method := range []string{http.MethodPut, http.MethodDelete, "MKCOL", "MOVE", "COPY", "PROPPATCH", "LOCK", "UNLOCK"} {
 		t.Run(method+" denied", func(t *testing.T) {
+			env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+			env.writePayload(t, "hello.txt", "hello")
+
 			body := strings.NewReader("mutate")
 			rec := env.request(method, "/e/"+testExportID+"/hello.txt", body, "http://files.example.test/e/"+testExportID+"/copy.txt")
 			if rec.Code != http.StatusForbidden && rec.Code != http.StatusMethodNotAllowed {
 				t.Fatalf("status = %d, want deny, body %q", rec.Code, rec.Body.String())
 			}
+			requireNoRuntimeObservation(t, env)
 		})
 	}
 }
@@ -405,10 +441,16 @@ func TestDeniedRequestsEmitAuditWithoutRuntimeObservation(t *testing.T) {
 		}
 	})
 
-	for _, method := range []string{http.MethodPut, "BREW"} {
+	for _, method := range []string{http.MethodPut, "BREW", "LOCK"} {
 		t.Run("capability "+method, func(t *testing.T) {
 			env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
-			rec := env.request(method, "/e/"+testExportID+"/hello.txt", strings.NewReader("mutate"), "")
+			req := httptest.NewRequest(method, "http://files.example.test/e/"+testExportID+"/", strings.NewReader("body-secret-lock-material"))
+			req.SetBasicAuth(testExportID, testPassword)
+			req.Header.Set("X-Secret-Header", "header-secret-lock-material")
+			rec := httptest.NewRecorder()
+
+			env.handler.ServeHTTP(rec, req)
+
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("status = %d, want 403", rec.Code)
 			}
@@ -419,6 +461,18 @@ func TestDeniedRequestsEmitAuditWithoutRuntimeObservation(t *testing.T) {
 			}
 			if event.Details["deny_class"] != "capability_denied" {
 				t.Fatalf("deny_class = %#v, want capability_denied", event.Details["deny_class"])
+			}
+			rendered := renderAuditEvent(t, event)
+			for _, forbidden := range []string{
+				testPassword,
+				"header-secret-lock-material",
+				"body-secret-lock-material",
+				env.volumeRoot,
+				env.payloadRoot,
+			} {
+				if strings.Contains(rendered, forbidden) {
+					t.Fatalf("audit event leaked %q in %s", forbidden, rendered)
+				}
 			}
 		})
 	}
