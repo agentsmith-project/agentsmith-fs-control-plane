@@ -2,6 +2,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,243 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
+
+const workloadMountPlanPayloadSubdirForTest = "afscp/namespaces/ns_123/repos/repo_123/payload"
+
+func TestWorkloadMountPlanStoreContractBehaviorMatrix(t *testing.T) {
+	// This is a store-level contract/behavior matrix, not a real Postgres
+	// integration test: the repo currently has migrations but no reusable
+	// migration-driven Postgres test harness in this package.
+	fragments := workloadMountPlanSQLFragmentsForTest(t)
+
+	tests := []struct {
+		name         string
+		row          fakeRow
+		wantPlan     workloadmount.Plan
+		wantErr      error
+		sqlContracts map[string][]string
+		sqlForbidden map[string][]string
+	}{
+		{
+			name: "active issued binding returns plan and derives runtime secret",
+			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", true, true)},
+			wantPlan: workloadmount.Plan{
+				MountBindingID:      "wmb_123",
+				VolumeID:            "vol_payload01",
+				PayloadVolumeSubdir: workloadMountPlanPayloadSubdirForTest,
+				MountPath:           "/mnt/repo",
+				ReadOnly:            true,
+				SecretRef:           workloadmount.SecretRef{Namespace: "afscp-runtime", Name: "afscp-volume-payload01"},
+				SecurityPolicy:      workloadmount.SecurityPolicy{RunAsNonRoot: true, AllowPrivileged: true, JVSControlOutsidePayload: true},
+			},
+			sqlContracts: map[string][]string{
+				"candidate":      {"namespace_id = $1", "mount_binding_id = $2", "status IN ('issued','pending','active','releasing')"},
+				"activeBinding":  {"b.status IN ('issued','pending','active')", "nvb.status = 'active'", "workload_mount_enabled", "workload_mount_requires_jvs_external_control_root"},
+				"activeRepo":     {"r.repo_kind = 'repo'", "r.status = 'active'", "r.lifecycle_status = 'active'"},
+				"activeVolume":   {"v.status = 'active'", "workload_mount", "jvs_external_control_root"},
+				"issuanceTrack":  {"b.mount_binding_id, b.volume_id, r.repo_id, r.payload_volume_subdir", "allow_privileged_workload", "EXISTS (SELECT 1 FROM active_namespace)", "EXISTS (SELECT 1 FROM active_volume)", "NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)"},
+				"teardownTrack":  {"b.mount_binding_id, b.volume_id, r.repo_id, r.payload_volume_subdir", "false AS allow_privileged_workload"},
+				"fullPlanSelect": {"SELECT * FROM issuance_track UNION ALL SELECT * FROM teardown_track"},
+			},
+		},
+		{
+			name:    "disabled namespace with active binding is denied by issuance namespace gate",
+			row:     fakeRow{err: sql.ErrNoRows},
+			wantErr: sql.ErrNoRows,
+			sqlContracts: map[string][]string{
+				"activeNamespace":   {"ns.status = 'active'", "b.status IN ('issued','pending','active')"},
+				"teardownNamespace": {"ns.status IN ('active','disabled')", "b.status = 'releasing'"},
+				"issuanceTrack":     {"b.status IN ('issued','pending','active')", "EXISTS (SELECT 1 FROM active_namespace)"},
+			},
+		},
+		{
+			name: "disabled namespace with releasing binding returns unprivileged teardown plan",
+			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", false, false)},
+			wantPlan: workloadmount.Plan{
+				MountBindingID:      "wmb_123",
+				VolumeID:            "vol_payload01",
+				PayloadVolumeSubdir: workloadMountPlanPayloadSubdirForTest,
+				MountPath:           "/mnt/repo",
+				ReadOnly:            false,
+				SecretRef:           workloadmount.SecretRef{Namespace: "afscp-runtime", Name: "afscp-volume-payload01"},
+				SecurityPolicy:      workloadmount.SecurityPolicy{RunAsNonRoot: true, AllowPrivileged: false, JVSControlOutsidePayload: true},
+			},
+			sqlContracts: map[string][]string{
+				"teardownNamespace": {"ns.status IN ('active','disabled')", "b.status = 'releasing'"},
+				"repoIdentity":      {"b.status = 'releasing'", "r.repo_kind = 'repo'"},
+				"teardownTrack":     {"false AS allow_privileged_workload", "b.status = 'releasing'", "EXISTS (SELECT 1 FROM teardown_namespace)"},
+			},
+			sqlForbidden: map[string][]string{
+				"teardownTrack": {"active_binding", "active_volume", "held_lifecycle_fence", "mount_policy", "workload_mount_enabled", "jvs_external_control_root"},
+			},
+		},
+		{
+			name:    "held lifecycle fence with active binding is denied by issuance fence",
+			row:     fakeRow{err: sql.ErrNoRows},
+			wantErr: sql.ErrNoRows,
+			sqlContracts: map[string][]string{
+				"heldLifecycleFence": {"fence_kind = 'lifecycle'", "status IN ('active','expired','recovery_required')", "released_at IS NULL", "recovered_at IS NULL"},
+				"issuanceTrack":      {"b.status IN ('issued','pending','active')", "NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)"},
+			},
+		},
+		{
+			name: "held lifecycle fence with releasing binding returns unprivileged teardown plan",
+			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", false, false)},
+			wantPlan: workloadmount.Plan{
+				MountBindingID:      "wmb_123",
+				VolumeID:            "vol_payload01",
+				PayloadVolumeSubdir: workloadMountPlanPayloadSubdirForTest,
+				MountPath:           "/mnt/repo",
+				ReadOnly:            false,
+				SecretRef:           workloadmount.SecretRef{Namespace: "afscp-runtime", Name: "afscp-volume-payload01"},
+				SecurityPolicy:      workloadmount.SecurityPolicy{RunAsNonRoot: true, AllowPrivileged: false, JVSControlOutsidePayload: true},
+			},
+			sqlContracts: map[string][]string{
+				"repoIdentity":  {"b.status = 'releasing'", "r.repo_kind = 'repo'"},
+				"teardownTrack": {"false AS allow_privileged_workload", "b.status = 'releasing'", "EXISTS (SELECT 1 FROM teardown_namespace)"},
+			},
+			sqlForbidden: map[string][]string{
+				"teardownTrack": {"held_lifecycle_fence", "active_repo", "active_volume", "active_binding"},
+			},
+		},
+		{
+			name:    "terminal binding statuses are not plan candidates",
+			row:     fakeRow{err: sql.ErrNoRows},
+			wantErr: sql.ErrNoRows,
+			sqlContracts: map[string][]string{
+				"candidate": {"status IN ('issued','pending','active','releasing')"},
+			},
+			sqlForbidden: map[string][]string{
+				"candidate": {"released", "revoked", "expired", "failed"},
+			},
+		},
+		{
+			name:    "template repo identity is denied for issuance and teardown",
+			row:     fakeRow{err: sql.ErrNoRows},
+			wantErr: sql.ErrNoRows,
+			sqlContracts: map[string][]string{
+				"activeRepo":    {"r.repo_kind = 'repo'", "r.status = 'active'", "r.lifecycle_status = 'active'"},
+				"repoIdentity":  {"r.repo_kind = 'repo'", "r.volume_id = b.volume_id"},
+				"teardownTrack": {"FROM candidate_binding b, repo_identity r"},
+			},
+		},
+		{
+			name:    "missing jvs external control root volume capability is denied for issuance",
+			row:     fakeRow{err: sql.ErrNoRows},
+			wantErr: sql.ErrNoRows,
+			sqlContracts: map[string][]string{
+				"activeVolume":  {"COALESCE((v.capabilities->>'workload_mount')::boolean, false) = true", "COALESCE((v.capabilities->>'jvs_external_control_root')::boolean, false) = true"},
+				"issuanceTrack": {"EXISTS (SELECT 1 FROM active_volume)"},
+			},
+		},
+		{
+			name:    "disabled workload mount policy is denied for issuance",
+			row:     fakeRow{err: sql.ErrNoRows},
+			wantErr: sql.ErrNoRows,
+			sqlContracts: map[string][]string{
+				"activeBinding": {"COALESCE((nvb.mount_policy->>'workload_mount_enabled')::boolean, false) = true", "COALESCE((nvb.mount_policy->>'workload_mount_requires_jvs_external_control_root')::boolean, false) = true"},
+				"issuanceTrack": {"FROM candidate_binding b, active_repo r, active_binding nvb"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{row: tt.row}
+			store := &Store{exec: exec}
+
+			got, err := store.GetOrchestratorMountPlan(context.Background(), "ns_123", "wmb_123")
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("GetOrchestratorMountPlan err = %v, want %v", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("GetOrchestratorMountPlan: %v", err)
+			} else if got != tt.wantPlan {
+				t.Fatalf("plan = %#v, want %#v", got, tt.wantPlan)
+			}
+
+			if exec.queryRowCalls != 1 || exec.execCalls != 0 || exec.queryCalls != 0 {
+				t.Fatalf("calls queryRow/exec/query = %d/%d/%d, want 1/0/0", exec.queryRowCalls, exec.execCalls, exec.queryCalls)
+			}
+			if len(exec.args) != 2 || exec.args[0] != "ns_123" || exec.args[1] != "wmb_123" {
+				t.Fatalf("args = %#v, want namespace and mount binding ids", exec.args)
+			}
+			if exec.query != workloadMountPlanSelectSQL() {
+				t.Fatalf("query = %s, want workload mount plan SQL", exec.query)
+			}
+
+			for fragmentName, wantParts := range tt.sqlContracts {
+				fragment, ok := fragments[fragmentName]
+				if !ok {
+					t.Fatalf("unknown SQL fragment %q", fragmentName)
+				}
+				for _, want := range wantParts {
+					if !strings.Contains(fragment, want) {
+						t.Fatalf("contract %q missing %q in fragment %s", fragmentName, want, fragment)
+					}
+				}
+			}
+			for fragmentName, forbiddenParts := range tt.sqlForbidden {
+				fragment, ok := fragments[fragmentName]
+				if !ok {
+					t.Fatalf("unknown SQL fragment %q", fragmentName)
+				}
+				for _, forbidden := range forbiddenParts {
+					if strings.Contains(fragment, forbidden) {
+						t.Fatalf("contract %q contains forbidden %q in fragment %s", fragmentName, forbidden, fragment)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestWorkloadMountPlanFailsClosedOnScannedIdentityMismatch(t *testing.T) {
+	tests := []struct {
+		name string
+		row  fakeRow
+	}{
+		{
+			name: "mismatched mount binding id",
+			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_other01", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", true, false)},
+		},
+		{
+			name: "bad volume id",
+			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", true, false)},
+		},
+		{
+			name: "non canonical payload subdir",
+			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", "payload/repo-alpha", "/mnt/repo", true, false)},
+		},
+		{
+			name: "other repo payload subdir",
+			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", "afscp/namespaces/ns_123/repos/repo_other01/payload", "/mnt/repo", true, false)},
+		},
+		{
+			name: "bad mount path",
+			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "relative/path", true, false)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{row: tt.row}
+			store := &Store{exec: exec}
+
+			got, err := store.GetOrchestratorMountPlan(context.Background(), "ns_123", "wmb_123")
+			if err == nil {
+				t.Fatalf("GetOrchestratorMountPlan err = nil, want fail-closed error with plan %#v", got)
+			}
+			if !reflect.DeepEqual(got, workloadmount.Plan{}) {
+				t.Fatalf("plan = %#v, want zero plan on fail-closed error", got)
+			}
+			if exec.queryRowCalls != 1 || len(exec.args) != 2 || exec.args[0] != "ns_123" || exec.args[1] != "wmb_123" {
+				t.Fatalf("query calls/args = %d/%#v, want scoped plan query", exec.queryRowCalls, exec.args)
+			}
+		})
+	}
+}
 
 func TestWorkloadMountCreateCommitSQLHasDurableAdmissionGates(t *testing.T) {
 	sql := workloadMountBindingCreateCommitSQL()
@@ -159,7 +399,7 @@ func TestWorkloadMountPlanSQLHasDurableAdmissionGates(t *testing.T) {
 		"released_at IS NULL",
 		"recovered_at IS NULL",
 		"issuance_track AS (",
-		"SELECT b.mount_binding_id, b.volume_id, r.payload_volume_subdir",
+		"SELECT b.mount_binding_id, b.volume_id, r.repo_id, r.payload_volume_subdir",
 		"allow_privileged_workload",
 		"FROM candidate_binding b, active_repo r, active_binding nvb",
 		"b.status IN ('issued','pending','active')",
@@ -167,7 +407,7 @@ func TestWorkloadMountPlanSQLHasDurableAdmissionGates(t *testing.T) {
 		"EXISTS (SELECT 1 FROM active_volume)",
 		"NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)",
 		"teardown_track AS (",
-		"SELECT b.mount_binding_id, b.volume_id, r.payload_volume_subdir",
+		"SELECT b.mount_binding_id, b.volume_id, r.repo_id, r.payload_volume_subdir",
 		"false AS allow_privileged_workload",
 		"FROM candidate_binding b, repo_identity r",
 		"b.status = 'releasing'",
@@ -512,6 +752,28 @@ func TestWorkloadMountStatusCommitRejectsReasonOverMaxLengthBeforeSQL(t *testing
 	}
 	if exec.queryRowCalls != 0 {
 		t.Fatalf("query row calls = %d, want no SQL before reason validation passes", exec.queryRowCalls)
+	}
+}
+
+func workloadMountPlanRowForTest(mountBindingID, volumeID, repoID, payloadVolumeSubdir, mountPath string, readOnly, allowPrivileged bool) []any {
+	return []any{mountBindingID, volumeID, repoID, payloadVolumeSubdir, mountPath, readOnly, allowPrivileged}
+}
+
+func workloadMountPlanSQLFragmentsForTest(t *testing.T) map[string]string {
+	t.Helper()
+	sql := workloadMountPlanSelectSQL()
+	return map[string]string{
+		"fullPlanSelect":     sql,
+		"candidate":          sqlBetween(t, sql, "candidate_binding AS (", "), active_namespace AS ("),
+		"activeNamespace":    sqlBetween(t, sql, "active_namespace AS (", "), teardown_namespace AS ("),
+		"teardownNamespace":  sqlBetween(t, sql, "teardown_namespace AS (", "), active_binding AS ("),
+		"activeBinding":      sqlBetween(t, sql, "active_binding AS (", "), active_repo AS ("),
+		"activeRepo":         sqlBetween(t, sql, "active_repo AS (", "), repo_identity AS ("),
+		"repoIdentity":       sqlBetween(t, sql, "repo_identity AS (", "), active_volume AS ("),
+		"activeVolume":       sqlBetween(t, sql, "active_volume AS (", "), held_lifecycle_fence AS ("),
+		"heldLifecycleFence": sqlBetween(t, sql, "held_lifecycle_fence AS (", "), issuance_track AS ("),
+		"issuanceTrack":      sqlBetween(t, sql, "issuance_track AS (", "), teardown_track AS ("),
+		"teardownTrack":      sqlBetween(t, sql, "teardown_track AS (", ") SELECT * FROM issuance_track"),
 	}
 }
 

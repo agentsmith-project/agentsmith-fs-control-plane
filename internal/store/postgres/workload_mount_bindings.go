@@ -78,9 +78,29 @@ func (store *Store) GetOrchestratorMountPlan(ctx context.Context, namespaceID, m
 		return workloadmount.Plan{}, err
 	}
 	var plan workloadmount.Plan
+	var repoID string
 	var readOnly, allowPrivileged bool
 	row := store.exec.QueryRowContext(ctx, workloadMountPlanSelectSQL(), namespaceID, mountBindingID)
-	if err := row.Scan(&plan.MountBindingID, &plan.VolumeID, &plan.PayloadVolumeSubdir, &plan.MountPath, &readOnly, &allowPrivileged); err != nil {
+	if err := row.Scan(&plan.MountBindingID, &plan.VolumeID, &repoID, &plan.PayloadVolumeSubdir, &plan.MountPath, &readOnly, &allowPrivileged); err != nil {
+		return workloadmount.Plan{}, err
+	}
+	if plan.MountBindingID != mountBindingID {
+		return workloadmount.Plan{}, fmt.Errorf("workload mount plan identity mismatch")
+	}
+	if err := pathresolver.ValidateID(pathresolver.VolumeID, plan.VolumeID); err != nil {
+		return workloadmount.Plan{}, err
+	}
+	if err := pathresolver.ValidateID(pathresolver.RepoID, repoID); err != nil {
+		return workloadmount.Plan{}, err
+	}
+	repoPaths, err := pathresolver.ResolveRepoPaths(namespaceID, repoID)
+	if err != nil {
+		return workloadmount.Plan{}, err
+	}
+	if plan.PayloadVolumeSubdir != repoPaths.PayloadVolumeSubdir {
+		return workloadmount.Plan{}, fmt.Errorf("workload mount plan payload root mismatch")
+	}
+	if err := workloadmount.ValidateMountPath(plan.MountPath); err != nil {
 		return workloadmount.Plan{}, err
 	}
 	plan.ReadOnly = readOnly
@@ -324,11 +344,11 @@ func workloadMountPlanSelectSQL() string {
 		"SELECT fence_id FROM repo_fences, active_repo WHERE repo_fences.repo_id = active_repo.repo_id " +
 		"AND fence_kind = 'lifecycle' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL" +
 		"), issuance_track AS (" +
-		"SELECT b.mount_binding_id, b.volume_id, r.payload_volume_subdir, b.mount_path, b.read_only, COALESCE((nvb.mount_policy->>'allow_privileged_workload')::boolean, false) AS allow_privileged_workload " +
+		"SELECT b.mount_binding_id, b.volume_id, r.repo_id, r.payload_volume_subdir, b.mount_path, b.read_only, COALESCE((nvb.mount_policy->>'allow_privileged_workload')::boolean, false) AS allow_privileged_workload " +
 		"FROM candidate_binding b, active_repo r, active_binding nvb " +
 		"WHERE b.status IN ('issued','pending','active') AND EXISTS (SELECT 1 FROM active_namespace) AND EXISTS (SELECT 1 FROM active_volume) AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)" +
 		"), teardown_track AS (" +
-		"SELECT b.mount_binding_id, b.volume_id, r.payload_volume_subdir, b.mount_path, b.read_only, false AS allow_privileged_workload " +
+		"SELECT b.mount_binding_id, b.volume_id, r.repo_id, r.payload_volume_subdir, b.mount_path, b.read_only, false AS allow_privileged_workload " +
 		"FROM candidate_binding b, repo_identity r " +
 		"WHERE b.status = 'releasing' AND EXISTS (SELECT 1 FROM teardown_namespace)" +
 		") SELECT * FROM issuance_track UNION ALL SELECT * FROM teardown_track"
