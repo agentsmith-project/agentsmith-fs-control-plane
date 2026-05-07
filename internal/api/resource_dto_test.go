@@ -21,6 +21,7 @@ func TestVolumeResponseJSONShapeAndDefensiveCopy(t *testing.T) {
 			"workload_mount":            true,
 			"jvs_external_control_root": true,
 			"directory_quota":           false,
+			"quota_enforced":            true,
 			"filtered_mount":            true,
 			"csi_driver":                "csi.juicefs.example",
 			"credential_ref":            "secret-capability-ref",
@@ -44,7 +45,7 @@ func TestVolumeResponseJSONShapeAndDefensiveCopy(t *testing.T) {
 	}
 	capabilities := got["capabilities"].(map[string]any)
 	assertMapHasKeys(t, capabilities, "webdav_export", "workload_mount", "jvs_external_control_root", "directory_quota", "filtered_mount", "csi_driver")
-	assertMapLacksKeys(t, capabilities, "credential_ref")
+	assertMapLacksKeys(t, capabilities, "credential_ref", "quota_enforced")
 	if capabilities["workload_mount"] != true {
 		t.Fatalf("capabilities = %#v, want defensive copy before source mutation", capabilities)
 	}
@@ -106,7 +107,7 @@ func TestNamespaceVolumeBindingResponseJSONShapeAllowedCallersAndPolicyCopies(t 
 			Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin, resources.CallerRoleOperationInspector},
 		}},
 		QuotaBytesDefault: 4096,
-		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600), "credential_ref": "secret-export-ref"},
+		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600), "quota_enforced": true, "credential_ref": "secret-export-ref"},
 		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false, "secret_path": "/secret/lifecycle"},
 		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false, "credential_ref": "secret-mount-ref"},
 		TemplatePolicy:    map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false, "secret_path": "/secret/template"},
@@ -122,7 +123,7 @@ func TestNamespaceVolumeBindingResponseJSONShapeAllowedCallersAndPolicyCopies(t 
 	binding.MountPolicy["workload_mount_enabled"] = false
 	binding.TemplatePolicy["cross_namespace_clone_enabled"] = true
 	body := mustMarshalJSON(t, dto)
-	assertJSONDoesNotLeakFields(t, body, "CreatedAt", "UpdatedAt", "created_at", "updated_at", "NamespaceID", "DefaultVolumeID", "credential_ref", "secret_path", "secret-export-ref", "secret-mount-ref", "/secret/lifecycle", "/secret/template")
+	assertJSONDoesNotLeakFields(t, body, "CreatedAt", "UpdatedAt", "created_at", "updated_at", "NamespaceID", "DefaultVolumeID", "quota_enforced", "credential_ref", "secret_path", "secret-export-ref", "secret-mount-ref", "/secret/lifecycle", "/secret/template")
 
 	var got map[string]any
 	mustUnmarshalJSON(t, body, &got)

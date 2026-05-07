@@ -28,6 +28,14 @@ GA statuses:
 
 `namespace_id` may be supplied by a trusted caller, but AFSCP owns the binding, status, allowed caller policy, and canonical storage root.
 
+## Quota Semantics
+
+AFSCP manages and validates namespace volume bindings, but `quota_bytes_default`
+is a policy record and enforcement hook, not enforced as a capacity limit by
+itself. Callers may treat quota as enforced only when the selected volume
+capability `directory_quota=true` and the corresponding volume integration
+explicitly enables directory quota enforcement.
+
 ## Caller Policy
 
 Each binding lists service principals that may act in the namespace.

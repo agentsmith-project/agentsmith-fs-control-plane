@@ -44,7 +44,7 @@ AFSCP should provide a generic storage control plane that manages shared or dedi
 - Repo delete may apply to active or archived repos. Restore-from-tombstone returns the repo to the recorded pre-delete accessibility state unless a separate reviewed contract adds an explicit target-state option.
 - Repo purge is irreversible and must require an explicit request, retention-policy check, operation record, and audit event.
 - Purge requests must include a caller-side confirmation or approval reference and reason; retention override requires an approved break-glass policy.
-- Quota fields are GA policy records and enforcement hooks. Directory quota enforcement is active only when the selected volume capability says it is enforced.
+- `quota_bytes_default` is a GA policy record and enforcement hook. It is not enforced unless the selected volume capability `directory_quota` supports directory quota enforcement and the corresponding volume integration explicitly enables directory quota enforcement.
 - Version merge and conflict resolution are out of scope.
 
 ## Non-Goals

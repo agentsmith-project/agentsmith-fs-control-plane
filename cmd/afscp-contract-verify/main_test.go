@@ -406,4 +406,6 @@ The flat ` + "`OperationEnvelope`" + ` API response is separate from the durable
 | ` + "`migration_admin`" + ` | migration tooling |
 | ` + "`operator_admin`" + ` | global/operator inspection and repair |
 | ` + "`break_glass_admin`" + ` | approved break-glass flows |
+
+` + "`quota_bytes_default`" + ` is a policy record and enforcement hook, not enforced unless the selected volume capability ` + "`directory_quota`" + ` supports directory quota enforcement and the volume integration explicitly enables it.
 `

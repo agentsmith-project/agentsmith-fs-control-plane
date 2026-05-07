@@ -588,6 +588,63 @@ func TestVerifyFilesCatchesNamespaceBindingCallerRoleForbiddenRoles(t *testing.T
 	assertHasFinding(t, findings, CodeSchemaNamespaceBindingCallerRoleEnumGoDrift)
 }
 
+func TestVerifyFilesCatchesQuotaSchemaSemanticsMissing(t *testing.T) {
+	for _, tt := range []struct {
+		name                   string
+		directoryQuotaProperty string
+		quotaDefaultProperty   string
+	}{
+		{
+			name:                   "descriptions missing",
+			directoryQuotaProperty: `"directory_quota": { "type": "boolean" }`,
+			quotaDefaultProperty:   `"quota_bytes_default": { "type": "integer", "minimum": 0 }`,
+		},
+		{
+			name:                   "integration enables semantics missing",
+			directoryQuotaProperty: `"directory_quota": { "type": "boolean", "description": "directory_quota is a selected volume capability for directory quota enforcement; quota_bytes_default remains a policy record and enforcement hook and is not enforced unless this selected volume capability supports directory quota enforcement." }`,
+			quotaDefaultProperty:   `"quota_bytes_default": { "type": "integer", "minimum": 0, "description": "quota_bytes_default is a namespace binding policy record and enforcement hook, not enforced unless the selected volume capability directory_quota supports directory quota enforcement." }`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := validSchemaWithQuotaDefs(tt.directoryQuotaProperty, tt.quotaDefaultProperty)
+			paths := writeContractFixture(t, contractFixture{
+				openapi: validOpenAPI,
+				schema:  schema,
+				docs:    validDocsWithQuotaSemantics,
+				draft:   validDocsWithQuotaSemantics,
+			})
+
+			findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+			if err != nil {
+				t.Fatalf("VerifyFiles returned error: %v", err)
+			}
+
+			assertFindingCount(t, findings, CodeSchemaQuotaSemanticsMissing, 2)
+		})
+	}
+}
+
+func TestVerifyFilesCatchesQuotaEnforcedSchemaField(t *testing.T) {
+	schema := validSchemaWithQuotaDefs(
+		`"directory_quota": { "type": "boolean", "description": "directory_quota is a selected volume capability for directory quota enforcement; quota_bytes_default remains a policy record and enforcement hook and is not enforced unless this selected volume capability supports directory quota enforcement." },
+            "quota_enforced": { "type": "boolean" }`,
+		`"quota_bytes_default": { "type": "integer", "minimum": 0, "description": "quota_bytes_default is a namespace binding policy record and enforcement hook, not enforced unless the selected volume capability directory_quota supports directory quota enforcement." }`,
+	)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: validOpenAPI,
+		schema:  schema,
+		docs:    validDocsWithQuotaSemantics,
+		draft:   validDocsWithQuotaSemantics,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertHasFinding(t, findings, CodeSchemaQuotaEnforcedForbidden)
+}
+
 func TestVerifyRouteOperationTypeMappingCatchesMissingMutatingRoute(t *testing.T) {
 	routes := []api.RouteMetadata{
 		{Method: "POST", Path: "/internal/v1/repos", OperationID: "createRepo", Class: auth.RouteClassNamespaceBound, Mutating: true},
@@ -756,6 +813,44 @@ The flat ` + "`OperationEnvelope`" + ` API response is separate from the durable
 	assertHasFinding(t, findings, CodeDocsOperatorAdminScopeMissing)
 }
 
+func TestVerifyFilesCatchesDocsQuotaSemanticsMissing(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		docs            string
+		draft           string
+		wantFindingPath func(contractPaths) string
+	}{
+		{
+			name:            "api contract missing",
+			docs:            validDocs,
+			draft:           validDocsWithQuotaSemantics,
+			wantFindingPath: func(paths contractPaths) string { return paths.docs },
+		},
+		{
+			name:            "api draft missing",
+			docs:            validDocsWithQuotaSemantics,
+			draft:           "# Draft\n\n`quota_bytes_default` is shown near `directory_quota`.\n",
+			wantFindingPath: func(paths contractPaths) string { return paths.draft },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			paths := writeContractFixture(t, contractFixture{
+				openapi: validOpenAPI,
+				schema:  validSchemaWithQuotaDefs(quotaDirectoryDescription, quotaDefaultDescription),
+				docs:    tt.docs,
+				draft:   tt.draft,
+			})
+
+			findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+			if err != nil {
+				t.Fatalf("VerifyFiles returned error: %v", err)
+			}
+
+			assertHasFindingInFile(t, findings, CodeDocsQuotaSemanticsMissing, tt.wantFindingPath(paths))
+		})
+	}
+}
+
 func TestCurrentRepoContractsPass(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 
@@ -773,6 +868,32 @@ func TestCurrentRepoContractsPass(t *testing.T) {
 	}
 }
 
+func TestCurrentRepoEntryDocsHaveQuotaSemantics(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	paths := []string{
+		filepath.Join(repoRoot, "docs", "PRODUCT_REQUIREMENTS.md"),
+		filepath.Join(repoRoot, "docs", "GA_PRE_DEV_READINESS.md"),
+		filepath.Join(repoRoot, "docs", "PRODUCT_BOUNDARY.md"),
+		filepath.Join(repoRoot, "docs", "RISK_REGISTER.md"),
+	}
+
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile returned error: %v", err)
+			}
+			text := string(body)
+			if !hasQuotaSemantics(text) {
+				t.Fatalf("%s must state quota_bytes_default/directory_quota policy record, enforcement hook, not enforced, and integration enables semantics", path)
+			}
+			if !strings.Contains(text, "corresponding volume integration explicitly enables directory quota enforcement") {
+				t.Fatalf("%s must require the corresponding volume integration to explicitly enable directory quota enforcement", path)
+			}
+		})
+	}
+}
+
 func assertHasFinding(t *testing.T, findings []Finding, code string) {
 	t.Helper()
 
@@ -782,6 +903,17 @@ func assertHasFinding(t *testing.T, findings []Finding, code string) {
 		}
 	}
 	t.Fatalf("expected finding code %q in %+v", code, findings)
+}
+
+func assertHasFindingInFile(t *testing.T, findings []Finding, code, file string) {
+	t.Helper()
+
+	for _, finding := range findings {
+		if finding.Code == code && finding.File == file {
+			return
+		}
+	}
+	t.Fatalf("expected finding code %q in file %q in %+v", code, file, findings)
 }
 
 func assertFindingCount(t *testing.T, findings []Finding, code string, want int) {
@@ -877,6 +1009,60 @@ func writeFile(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func validSchemaWithQuotaDefs(directoryQuotaProperty, quotaDefaultProperty string) string {
+	return strings.Replace(validSchema, `
+    "AllowedCaller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller_service", "roles"],
+      "properties": {
+        "caller_service": { "type": "string" },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/NamespaceBindingCallerRole" }
+        }
+      }
+    }
+`, `
+    "AllowedCaller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller_service", "roles"],
+      "properties": {
+        "caller_service": { "type": "string" },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/NamespaceBindingCallerRole" }
+        }
+      }
+    },
+    "Volume": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            `+directoryQuotaProperty+`
+          }
+        }
+      }
+    },
+    "NamespaceVolumeBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        `+quotaDefaultProperty+`
+      }
+    }
+`, 1)
 }
 
 var validOpenAPI = validRouteParityOpenAPI()
@@ -1116,4 +1302,15 @@ The durable ` + "`OperationRecord`" + ` is stored internally and returned only b
 | ` + "`migration_admin`" + ` | migration tooling |
 | ` + "`operator_admin`" + ` | global/operator inspection and repair |
 | ` + "`break_glass_admin`" + ` | approved break-glass flows |
+`
+
+const quotaDirectoryDescription = `"directory_quota": { "type": "boolean", "description": "directory_quota is a selected volume capability for directory quota enforcement; quota_bytes_default remains a policy record and enforcement hook and is not enforced unless this selected volume capability supports directory quota enforcement and the volume integration explicitly enables it." }`
+
+const quotaDefaultDescription = `"quota_bytes_default": { "type": "integer", "minimum": 0, "description": "quota_bytes_default is a namespace binding policy record and enforcement hook, not enforced unless the selected volume capability directory_quota supports directory quota enforcement and the volume integration explicitly enables it." }`
+
+const validDocsWithQuotaSemantics = validDocs + `
+
+## Quota Semantics
+
+` + "`quota_bytes_default`" + ` is a policy record and enforcement hook, not enforced unless the selected volume capability ` + "`directory_quota`" + ` supports directory quota enforcement and the volume integration explicitly enables it.
 `

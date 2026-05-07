@@ -48,12 +48,15 @@ const (
 	CodeSchemaAllowedCallerRoleRefInvalid                  = "schema.allowed_caller_role_ref_invalid"
 	CodeSchemaOperationTypeEnumGoDrift                     = "schema.operation_type_enum_go_drift"
 	CodeSchemaInvalidJSON                                  = "schema.invalid_json"
+	CodeSchemaQuotaSemanticsMissing                        = "schema.quota_semantics_missing"
+	CodeSchemaQuotaEnforcedForbidden                       = "schema.quota_enforced_forbidden"
 
 	CodeDocsOperationBoundaryMissing       = "docs.operation_boundary_missing"
 	CodeDocsNamespaceHeaderMissing         = "docs.namespace_header_missing"
 	CodeDocsCallerRoleMissing              = "docs.caller_role_missing"
 	CodeDocsOperationInspectorScopeMissing = "docs.operation_inspector_scope_missing"
 	CodeDocsOperatorAdminScopeMissing      = "docs.operator_admin_scope_missing"
+	CodeDocsQuotaSemanticsMissing          = "docs.quota_semantics_missing"
 
 	CodeGoOperationsOperationEnvelopeAmbiguous = "go.operations_operation_envelope_ambiguous"
 	CodeGoAPIOperationEnvelopeMissing          = "go.api_operation_envelope_missing"
@@ -382,6 +385,7 @@ func verifySchema(path, body string) []Finding {
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "NamespaceBindingCallerRole", namespaceBindingCallerRoleStrings(), CodeSchemaNamespaceBindingCallerRoleEnumGoDrift)...)
 	findings = append(findings, verifyNamespaceBindingAllowedCallerRoles(path, body, defs)...)
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "OperationType", operationTypeStrings(), CodeSchemaOperationTypeEnumGoDrift)...)
+	findings = append(findings, verifySchemaQuotaSemantics(path, body, root)...)
 
 	exportSession, _ := defs["ExportSession"].(map[string]any)
 	exportSessionFields := []string{
@@ -553,6 +557,82 @@ func verifySchema(path, body string) []Finding {
 	}
 
 	return findings
+}
+
+func verifySchemaQuotaSemantics(path, body string, root map[string]any) []Finding {
+	var findings []Finding
+
+	for _, field := range findSchemaProperties(root, "quota_enforced") {
+		findings = append(findings, Finding{
+			Code:    CodeSchemaQuotaEnforcedForbidden,
+			File:    path,
+			Line:    findLine(body, `"`+field.Name+`"`),
+			Message: "GA schema must not expose quota_enforced; quota enforcement is inferred only from selected volume capability and integration behavior",
+		})
+	}
+
+	for _, fieldName := range []string{"quota_bytes_default", "directory_quota"} {
+		for _, field := range findSchemaProperties(root, fieldName) {
+			description, _ := field.Schema["description"].(string)
+			if hasQuotaSemantics(description) {
+				continue
+			}
+			findings = append(findings, Finding{
+				Code:    CodeSchemaQuotaSemanticsMissing,
+				File:    path,
+				Line:    findLine(body, `"`+field.Name+`"`),
+				Message: field.Name + " description must state quota_bytes_default/directory_quota policy record, enforcement hook, not enforced, and integration enables semantics",
+			})
+		}
+	}
+
+	return findings
+}
+
+type schemaProperty struct {
+	Name   string
+	Schema map[string]any
+}
+
+func findSchemaProperties(value any, name string) []schemaProperty {
+	var found []schemaProperty
+	findSchemaPropertiesInto(value, name, &found)
+	return found
+}
+
+func findSchemaPropertiesInto(value any, name string, found *[]schemaProperty) {
+	switch typed := value.(type) {
+	case map[string]any:
+		if properties, _ := typed["properties"].(map[string]any); properties != nil {
+			if property, _ := properties[name].(map[string]any); property != nil {
+				*found = append(*found, schemaProperty{Name: name, Schema: property})
+			}
+			for _, property := range properties {
+				findSchemaPropertiesInto(property, name, found)
+			}
+		}
+		for key, child := range typed {
+			if key == "properties" {
+				continue
+			}
+			findSchemaPropertiesInto(child, name, found)
+		}
+	case []any:
+		for _, child := range typed {
+			findSchemaPropertiesInto(child, name, found)
+		}
+	}
+}
+
+func hasQuotaSemantics(text string) bool {
+	lower := strings.ToLower(text)
+	for _, phrase := range []string{"quota_bytes_default", "directory_quota", "policy record", "enforcement hook", "not enforced"} {
+		if !strings.Contains(lower, phrase) {
+			return false
+		}
+	}
+	return strings.Contains(lower, "integration") &&
+		(strings.Contains(lower, "enables") || strings.Contains(lower, "enabled") || strings.Contains(lower, "explicitly enables"))
 }
 
 func verifySchemaEnumParity(path, body string, defs map[string]any, defName string, want []string, code string) []Finding {
@@ -860,6 +940,22 @@ func verifyDocs(apiContractPath, apiDraftPath, apiContract, apiDraft string) []F
 			Code:    CodeDocsOperatorAdminScopeMissing,
 			File:    apiContractPath + "," + apiDraftPath,
 			Message: "docs must distinguish operator_admin as global/operator inspection and repair",
+		})
+	}
+	for _, doc := range []struct {
+		path string
+		body string
+	}{
+		{path: apiContractPath, body: apiContract},
+		{path: apiDraftPath, body: apiDraft},
+	} {
+		if hasQuotaSemantics(doc.body) {
+			continue
+		}
+		findings = append(findings, Finding{
+			Code:    CodeDocsQuotaSemanticsMissing,
+			File:    doc.path,
+			Message: "docs must state quota_bytes_default/directory_quota policy record, enforcement hook, not enforced, and integration enables semantics",
 		})
 	}
 	return findings

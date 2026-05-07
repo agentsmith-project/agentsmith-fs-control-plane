@@ -84,6 +84,10 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
   equivalent.
 - Mutations create operation records before executing external effects.
 - Ordinary product caller responses never include JuiceFS root credentials, raw root paths, or Secret references.
+- `quota_bytes_default` is a policy record and enforcement hook, not enforced as
+  a capacity limit unless the selected volume capability `directory_quota`
+  supports directory quota enforcement and the volume integration explicitly
+  enables it.
 - Errors are stable enough for callers to render product-facing messages.
 
 ## Response Shape Boundary

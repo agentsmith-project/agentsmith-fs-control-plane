@@ -387,7 +387,10 @@
             "workload_mount": { "type": "boolean" },
             "jvs_external_control_root": { "type": "boolean" },
             "filtered_mount": { "type": "boolean" },
-            "directory_quota": { "type": "boolean" },
+            "directory_quota": {
+              "type": "boolean",
+              "description": "directory_quota is the selected volume capability that can support directory quota enforcement. quota_bytes_default remains a namespace binding policy record and enforcement hook, and is not enforced unless the selected volume capability supports directory quota enforcement and the integration enables it."
+            },
             "csi_driver": { "type": "string" },
             "storage_class": { "type": "string" },
             "permission_model": { "type": "string" }
@@ -464,7 +467,11 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/AllowedCaller" }
         },
-        "quota_bytes_default": { "type": "integer", "minimum": 0 },
+        "quota_bytes_default": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "quota_bytes_default is a namespace binding policy record and enforcement hook. It is not enforced as a capacity limit unless the selected volume capability directory_quota supports directory quota enforcement and the integration enables it."
+        },
         "export_policy": {
           "type": "object",
           "additionalProperties": false,

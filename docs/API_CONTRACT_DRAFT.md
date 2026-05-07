@@ -216,6 +216,8 @@ Credential references, secrets, metadata URLs, and raw/root storage paths are de
 }
 ```
 
+`quota_bytes_default` is a policy record and enforcement hook, not enforced as a capacity limit unless the selected volume capability `directory_quota` supports directory quota enforcement and the volume integration explicitly enables it.
+
 Calling products must not provide authoritative raw filesystem paths. AFSCP computes canonical namespace roots from `namespace_id`, `volume_id`, and its own volume configuration.
 
 `mount_policy.workload_mount_enabled=true` is a namespace permission, not proof that the selected volume/runtime can mount JVS repos safely. AFSCP must also check `Volume.capabilities.workload_mount`, require JVS external control roots for new repos, and issue only payload-root mount plans.

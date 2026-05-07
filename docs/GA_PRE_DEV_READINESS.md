@@ -75,7 +75,7 @@ AFSCP audit records must always distinguish the authenticated
 - Restore-run is a version mutation. It must acquire the writer-session fence, block new read-write sessions, and reject active or uncertain read-write export/workload sessions.
 - Dirty restore-run behavior is fail-closed unless a reviewed API option explicitly models and audits a supported JVS dirty-state choice.
 - Namespace disable rejects new mutating operations, new exports, and new mount bindings. Existing read-write sessions must be revoked or allowed to expire according to a documented operator action before destructive or restore activity proceeds.
-- Quota fields are policy records and enforcement hooks for GA. Directory quota automation is not implied unless the volume capability explicitly says it is enforced.
+- `quota_bytes_default` is a policy record and enforcement hook for GA. It is not enforced unless the selected volume capability `directory_quota` supports directory quota enforcement and the corresponding volume integration explicitly enables directory quota enforcement.
 - Product deletion or archive workflows call AFSCP repo lifecycle APIs for storage state changes. Product display names and catalog detach remain caller-owned metadata.
 - Repo IDs are stable and immutable. AFSCP does not provide a display-name rename API because display names belong to the calling product.
 - Repo delete is not a raw filesystem unlink. It is an auditable lifecycle operation that blocks new sessions, drains or revokes existing exports and mounts, tombstones retained data, and purges only after the accepted retention or purge policy permits it.

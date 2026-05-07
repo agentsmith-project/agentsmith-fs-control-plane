@@ -56,7 +56,7 @@ AFSCP also validates whether the calling service principal is allowed to operate
 - Purge additionally requires lifecycle policy approval, product confirmation, and audited authorization because it permanently removes storage.
 - Ordinary client access uses controlled exports, initially WebDAV.
 - Product display-name rename and catalog detach remain caller-owned metadata changes; AFSCP repo IDs are stable and immutable.
-- Quota fields are policy records and enforcement hooks unless the selected volume capability explicitly reports enforcement.
+- `quota_bytes_default` is a policy record and enforcement hook. It is not enforced unless the selected volume capability `directory_quota` supports directory quota enforcement and the corresponding volume integration explicitly enables directory quota enforcement.
 
 ## GA Guardrails
 

@@ -61,6 +61,7 @@ func TestEnsureVolumeHandlerValidationDeniesBeforeIntake(t *testing.T) {
 		{name: "body mismatch", path: "/internal/v1/volumes/vol_123:ensure", body: ensureVolumeRequestBody("vol_456"), wantCode: CodeInvalidID},
 		{name: "unknown field", path: "/internal/v1/volumes/vol_123:ensure", body: strings.Replace(ensureVolumeRequestBody("vol_123"), `"status":"active"`, `"status":"active","raw_path":"/secret"`, 1), wantCode: CodeInvalidID},
 		{name: "secret capability", path: "/internal/v1/volumes/vol_123:ensure", body: strings.Replace(ensureVolumeRequestBody("vol_123"), `"directory_quota":false`, `"directory_quota":false,"metadata_url":"secret"`, 1), wantCode: CodeInvalidID},
+		{name: "quota enforced is not GA capability", path: "/internal/v1/volumes/vol_123:ensure", body: strings.Replace(ensureVolumeRequestBody("vol_123"), `"directory_quota":false`, `"directory_quota":false,"quota_enforced":true`, 1), wantCode: CodeInvalidID},
 		{name: "malformed", path: "/internal/v1/volumes/vol_123:ensure", body: `{"volume_id":`, wantCode: CodeInvalidID},
 	}
 	for _, tt := range tests {
