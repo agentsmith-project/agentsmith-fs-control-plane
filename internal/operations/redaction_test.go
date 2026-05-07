@@ -225,6 +225,86 @@ func TestSanitizedForPersistenceRedactsQueuedRecordBeforeStoreWrite(t *testing.T
 	}
 }
 
+func TestSanitizedForPersistenceRedactsStorageInternalAndCommandFields(t *testing.T) {
+	record := OperationRecord{
+		ID:    "op-storage-internal",
+		Type:  OperationRestoreRun,
+		State: OperationStateRunning,
+		InputSummary: map[string]any{
+			"safe":                     "kept",
+			"control_root":             "/srv/afscp/namespaces/ns_123/repos/repo_123/control",
+			"payload_root_path":        "/srv/afscp/namespaces/ns_123/repos/repo_123/payload",
+			"control_volume_subdir":    "afscp/namespaces/ns_123/repos/repo_123/control",
+			"payload_volume_subdir":    "afscp/namespaces/ns_123/repos/repo_123/payload",
+			"recommended_next_command": "jvs restore --run plan_123",
+			"nested": map[string]any{
+				"repo_root":      "/srv/afscp/namespaces/ns_123/repos/repo_123",
+				"run_command":    "jvs restore --run nested",
+				"safe_nested_id": "repo_123",
+			},
+			"commands": []any{
+				map[string]any{"restore_command": "jvs restore --run array"},
+				map[string]string{"command": "jvs doctor /srv/afscp/namespaces/ns_123/repos/repo_123/control"},
+			},
+		},
+		JVSJSONOutput: map[string]any{
+			"control_root_path": "/srv/afscp/namespaces/ns_123/repos/repo_123/control/.jvs",
+			"stdout":            "jvs restore --run output",
+			"safe":              "visible-output",
+		},
+		VerificationResult: map[string]any{
+			"healthy":             true,
+			"target_control_root": "/srv/afscp/namespaces/ns_123/repos/repo_456/control",
+			"restore_command":     "jvs restore --run verify",
+		},
+		Error: &OperationError{
+			Code:    "FAILED",
+			Message: "restore failed",
+			Details: map[string]any{
+				"command": "jvs restore --run error",
+			},
+		},
+	}
+
+	sanitized := record.SanitizedForPersistence().Record()
+
+	if got := sanitized.InputSummary["safe"]; got != "kept" {
+		t.Fatalf("safe input field was not preserved: %#v", sanitized.InputSummary)
+	}
+	output, ok := sanitized.JVSJSONOutput.(map[string]any)
+	if !ok {
+		t.Fatalf("jvs output = %#v, want object", sanitized.JVSJSONOutput)
+	}
+	if got := output["safe"]; got != "visible-output" {
+		t.Fatalf("safe output field was not preserved: %#v", output)
+	}
+	verify, ok := sanitized.VerificationResult.(map[string]any)
+	if !ok {
+		t.Fatalf("verification result = %#v, want object", sanitized.VerificationResult)
+	}
+	if got := verify["healthy"]; got != true {
+		t.Fatalf("safe verification field was not preserved: %#v", verify)
+	}
+
+	rendered := strings.ToLower(toTestString(sanitized))
+	for _, forbidden := range []string{
+		"/srv/afscp",
+		"afscp/namespaces/ns_123/repos/repo_123/control",
+		"afscp/namespaces/ns_123/repos/repo_123/payload",
+		"afscp/namespaces/ns_123/repos/repo_456/control",
+		"jvs restore --run",
+		"jvs doctor",
+		".jvs",
+	} {
+		if strings.Contains(rendered, strings.ToLower(forbidden)) {
+			t.Fatalf("storage-internal material %q leaked in %s", forbidden, rendered)
+		}
+	}
+	if !sanitized.Redaction.Redacted {
+		t.Fatalf("expected persistence record to carry redaction report")
+	}
+}
+
 func TestSanitizedForPersistencePreservesSafeSavePointMessage(t *testing.T) {
 	record := OperationRecord{
 		ID:    "op-savepoint",

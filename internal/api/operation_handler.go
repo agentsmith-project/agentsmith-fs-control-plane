@@ -264,7 +264,21 @@ func operationInspectionSensitiveKey(key string) bool {
 	}
 	normalized := normalizeSensitiveKey(key)
 	switch normalized {
-	case "rawpath", "stdout", "stderr":
+	case "rawpath",
+		"stdout",
+		"stderr",
+		"controlroot",
+		"payloadroot",
+		"controlrootpath",
+		"payloadrootpath",
+		"reporoot",
+		"targetcontrolroot",
+		"controlvolumesubdir",
+		"payloadvolumesubdir",
+		"runcommand",
+		"recommendednextcommand",
+		"restorecommand",
+		"command":
 		return true
 	default:
 		return false

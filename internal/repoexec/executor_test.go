@@ -1201,7 +1201,7 @@ func assertNoRepoExecLeak(t *testing.T, operation operations.OperationRecord, ev
 		}
 		return out
 	}(), " ")), "\n", " "), "\t", " "))
-	for _, leaked := range []string{"/srv/afscp", "secret", "password", "payload_root", "control_root"} {
+	for _, leaked := range []string{"/srv/afscp", "secret", "password", "payload_root", "control_root", "payload_volume_subdir", "control_volume_subdir"} {
 		if strings.Contains(rendered, leaked) {
 			t.Fatalf("repoexec leaked %q in operation/events: %#v %#v", leaked, operation, events)
 		}

@@ -386,17 +386,86 @@ func operationInspectionRecord(operationID, namespaceID string) operations.Opera
 			"safe":     "visible",
 			"password": "super-secret-password",
 			"raw_path": "/srv/afscp/secret",
+			"nested_storage": map[string]any{
+				"control_root":             "/srv/afscp/namespaces/ns_123/repos/repo_123/control",
+				"payload_root":             "/srv/afscp/namespaces/ns_123/repos/repo_123/payload",
+				"control_root_path":        "/srv/afscp/namespaces/ns_123/repos/repo_123/control/.jvs",
+				"payload_root_path":        "/srv/afscp/namespaces/ns_123/repos/repo_123/payload",
+				"repo_root":                "/srv/afscp/namespaces/ns_123/repos/repo_123",
+				"target_control_root":      "afscp/namespaces/ns_123/repos/repo_456/control",
+				"control_volume_subdir":    "afscp/namespaces/ns_123/repos/repo_123/control",
+				"payload_volume_subdir":    "afscp/namespaces/ns_123/repos/repo_123/payload",
+				"run_command":              "jvs restore --run plan-secret",
+				"recommended_next_command": "jvs restore --run recommended-secret",
+				"restore_command":          "jvs restore --run restore-secret",
+				"command":                  "jvs init /srv/afscp/namespaces/ns_123/repos/repo_123/payload",
+			},
+			"array_storage": []any{
+				map[string]any{
+					"control_root":          "/srv/afscp/namespaces/ns_123/repos/repo_123/control",
+					"control_volume_subdir": "afscp/namespaces/ns_123/repos/repo_123/control",
+					"run_command":           "jvs restore --run array-secret",
+				},
+			},
+			"string_storage": map[string]string{
+				"payload_root":          "/srv/afscp/namespaces/ns_123/repos/repo_123/payload",
+				"payload_volume_subdir": "afscp/namespaces/ns_123/repos/repo_123/payload",
+				"command":               "jvs doctor /srv/afscp/namespaces/ns_123/repos/repo_123/control",
+			},
 		},
-		JVSJSONOutput:      map[string]any{"stdout": "token secret", "repo_id": "jvs_repo_alpha"},
-		VerificationResult: map[string]any{"healthy": true, "stderr": "password secret"},
-		Error:              &operations.OperationError{Code: "FAILED", Message: "failed with password secret", CorrelationID: "corr-secret", OperationID: operationID, Details: map[string]any{"token": "secret-token"}},
-		CreatedAt:          now,
+		JVSJSONOutput: map[string]any{
+			"stdout":     "token secret",
+			"repo_id":    "jvs_repo_alpha",
+			"repo_root":  "/srv/afscp/namespaces/ns_123/repos/repo_123",
+			"command":    "jvs restore --run output-secret",
+			"output_map": map[string]string{"control_root": "/srv/afscp/namespaces/ns_123/repos/repo_123/control"},
+		},
+		VerificationResult: map[string]any{
+			"healthy":               true,
+			"stderr":                "password secret",
+			"control_volume_subdir": "afscp/namespaces/ns_123/repos/repo_123/control",
+			"payload_volume_subdir": "afscp/namespaces/ns_123/repos/repo_123/payload",
+		},
+		Error: &operations.OperationError{Code: "FAILED", Message: "failed with password secret", CorrelationID: "corr-secret", OperationID: operationID, Details: map[string]any{
+			"token":             "secret-token",
+			"restore_command":   "jvs restore --run error-secret",
+			"target_root_paths": []any{map[string]any{"target_control_root": "/srv/afscp/namespaces/ns_123/repos/repo_456/control"}},
+		}},
+		CreatedAt: now,
 	}
 }
 
 func assertOperationInspectionResponseDoesNotLeak(t *testing.T, body string) {
 	t.Helper()
-	for _, forbidden := range []string{"super-secret-password", "/srv/afscp", "token secret", "password secret", "secret-token", "postgres", "raw_path", "stdout", "stderr"} {
+	for _, forbidden := range []string{
+		"super-secret-password",
+		"/srv/afscp",
+		"afscp/namespaces/ns_123/repos/repo_123/control",
+		"afscp/namespaces/ns_123/repos/repo_123/payload",
+		"jvs restore --run",
+		"jvs init",
+		"jvs doctor",
+		".jvs",
+		"token secret",
+		"password secret",
+		"secret-token",
+		"postgres",
+		"raw_path",
+		"stdout",
+		"stderr",
+		"control_root",
+		"payload_root",
+		"control_root_path",
+		"payload_root_path",
+		"repo_root",
+		"target_control_root",
+		"control_volume_subdir",
+		"payload_volume_subdir",
+		"run_command",
+		"recommended_next_command",
+		"restore_command",
+		"command",
+	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("operation inspection response leaked %q: %s", forbidden, body)
 		}

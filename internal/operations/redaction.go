@@ -140,6 +140,11 @@ func (redactor *valueRedactor) redactString(value, path string) string {
 
 func containsSensitiveText(value string) bool {
 	normalized := strings.ToLower(value)
+	for _, fragment := range []string{"/srv/afscp", "afscp/namespaces/", ".jvs", "jvs restore --run"} {
+		if strings.Contains(normalized, fragment) {
+			return true
+		}
+	}
 	for _, fragment := range []string{"password", "passwd", "secret", "token", "credential"} {
 		if strings.Contains(normalized, fragment) {
 			return true
@@ -169,6 +174,10 @@ func isSensitiveKey(key string) bool {
 	normalized := strings.ToLower(key)
 	normalized = strings.NewReplacer("_", "", "-", "", ".", "", " ", "").Replace(normalized)
 
+	if isStorageInternalOrCommandKey(normalized) {
+		return true
+	}
+
 	sensitiveFragments := []string{
 		"password",
 		"passwd",
@@ -190,6 +199,26 @@ func isSensitiveKey(key string) bool {
 		}
 	}
 	return false
+}
+
+func isStorageInternalOrCommandKey(normalized string) bool {
+	switch normalized {
+	case "controlroot",
+		"payloadroot",
+		"controlrootpath",
+		"payloadrootpath",
+		"reporoot",
+		"targetcontrolroot",
+		"controlvolumesubdir",
+		"payloadvolumesubdir",
+		"runcommand",
+		"recommendednextcommand",
+		"restorecommand",
+		"command":
+		return true
+	default:
+		return false
+	}
 }
 
 func joinPath(prefix, name string) string {

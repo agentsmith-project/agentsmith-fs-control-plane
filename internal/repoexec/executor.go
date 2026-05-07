@@ -202,7 +202,7 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 	operation.Phase = operations.OperationPhaseRepoCreateCommitted
 	operation.ExternalResourceIDs = map[string]string{"jvs_repo_id": jvsRepoID}
 	operation.JVSJSONOutput = map[string]any{"repo_id": jvsRepoID, "workspace": "main"}
-	operation.VerificationResult = map[string]any{"repo_id": jvsRepoID, "workspace": "main", "healthy": true, "adopted": adopted, "volume_id": repo.VolumeID, "control_volume_subdir": repo.ControlVolumeSubdir, "payload_volume_subdir": repo.PayloadVolumeSubdir}
+	operation.VerificationResult = map[string]any{"repo_id": jvsRepoID, "workspace": "main", "healthy": true, "adopted": adopted, "volume_id": repo.VolumeID}
 	operation.Error = nil
 	operation.FinishedAt = &now
 	event, err := executor.auditEvent(operation, now, audit.OutcomeSucceeded, "repo_create_committed", map[string]any{"repo_id": record.RepoID, "volume_id": repo.VolumeID, "jvs_repo_id": jvsRepoID, "adopted": adopted})
