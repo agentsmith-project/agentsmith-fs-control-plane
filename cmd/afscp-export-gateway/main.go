@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportgateway"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
@@ -124,8 +125,10 @@ func serveGateway(ctx context.Context, cfg exportgateway.ServerConfig) error {
 	}
 	defer db.Close()
 
+	store := postgres.New(db)
 	handler, err := exportgateway.NewHandler(exportgateway.Config{
-		Store:       postgres.New(db),
+		Store:       store,
+		AuditSink:   auditOutboxSink{store: store},
 		VolumeRoots: cfg.VolumeRoots,
 		Prefix:      cfg.Prefix,
 	})
@@ -143,6 +146,21 @@ func serveGateway(ctx context.Context, cfg exportgateway.ServerConfig) error {
 		return err
 	}
 	return nil
+}
+
+type auditAppendStore interface {
+	AppendAuditEvent(context.Context, audit.Event) error
+}
+
+type auditOutboxSink struct {
+	store auditAppendStore
+}
+
+func (sink auditOutboxSink) Emit(ctx context.Context, event audit.Event) error {
+	if sink.store == nil {
+		return nil
+	}
+	return sink.store.AppendAuditEvent(ctx, event)
 }
 
 func redacted(value string) string {

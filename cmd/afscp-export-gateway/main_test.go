@@ -6,7 +6,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportgateway"
 )
@@ -162,4 +164,32 @@ func TestRunServeErrorIsRedacted(t *testing.T) {
 	if !strings.Contains(stderr.String(), "[REDACTED]") {
 		t.Fatalf("stderr = %q, want redaction marker", stderr.String())
 	}
+}
+
+func TestAuditOutboxSinkAppendsAuditEvent(t *testing.T) {
+	store := &fakeAuditAppendStore{}
+	event := audit.NewEvent(audit.Event{
+		EventID:  "evt_exportgateway_cmd_test",
+		Type:     audit.EventTypePathDenied,
+		Time:     time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC),
+		Resource: audit.Resource{Type: "export", ID: "export_123"},
+		Outcome:  audit.OutcomeDenied,
+		Reason:   "path_denied",
+	})
+
+	if err := (auditOutboxSink{store: store}).Emit(context.Background(), event); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	if len(store.events) != 1 || store.events[0].EventID != event.EventID {
+		t.Fatalf("events = %#v", store.events)
+	}
+}
+
+type fakeAuditAppendStore struct {
+	events []audit.Event
+}
+
+func (store *fakeAuditAppendStore) AppendAuditEvent(ctx context.Context, event audit.Event) error {
+	store.events = append(store.events, event)
+	return nil
 }

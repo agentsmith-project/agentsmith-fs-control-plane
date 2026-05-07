@@ -10,8 +10,11 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
@@ -23,6 +26,8 @@ const (
 	defaultHeartbeatTTL = 15 * time.Second
 )
 
+var auditEventCounter uint64
+
 type Store interface {
 	GetExportGatewayCredential(ctx context.Context, exportID string) (exportaccess.GatewayCredential, error)
 	RecordExportRuntimeObservation(ctx context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error)
@@ -30,6 +35,8 @@ type Store interface {
 
 type Config struct {
 	Store        Store
+	AuditSink    audit.Sink
+	AuditEventID func() string
 	VolumeRoots  map[string]string
 	Prefix       string
 	Now          func() time.Time
@@ -45,6 +52,8 @@ type ServerConfig struct {
 
 type Handler struct {
 	store        Store
+	auditSink    audit.Sink
+	auditEventID func() string
 	volumeRoots  map[string]string
 	prefix       string
 	now          func() time.Time
@@ -58,6 +67,24 @@ type gatewayPath struct {
 	RawChild string
 	Segments []string
 }
+
+const (
+	denyClassAuthzDenied                = "authz_denied"
+	denyClassCapabilityDenied           = "capability_denied"
+	denyClassSourceInvalid              = "source_invalid"
+	denyClassSourceJVSDenied            = "source_jvs_denied"
+	denyClassSourceTraversalDenied      = "source_traversal_denied"
+	denyClassSourcePolicyDenied         = "source_policy_denied"
+	denyClassSourceSymlinkDenied        = "source_symlink_denied"
+	denyClassDestinationMissing         = "destination_missing"
+	denyClassDestinationHostMismatch    = "destination_host_mismatch"
+	denyClassDestinationExportMismatch  = "destination_export_mismatch"
+	denyClassDestinationInvalid         = "destination_invalid"
+	denyClassDestinationJVSDenied       = "destination_jvs_denied"
+	denyClassDestinationTraversalDenied = "destination_traversal_denied"
+	denyClassDestinationPolicyDenied    = "destination_policy_denied"
+	denyClassDestinationSymlinkDenied   = "destination_symlink_denied"
+)
 
 func NewHandler(cfg Config) (http.Handler, error) {
 	if cfg.Store == nil {
@@ -91,8 +118,14 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	if heartbeatTTL <= 0 {
 		heartbeatTTL = defaultHeartbeatTTL
 	}
+	auditEventID := cfg.AuditEventID
+	if auditEventID == nil {
+		auditEventID = newAuditEventID
+	}
 	return &Handler{
 		store:        cfg.Store,
+		auditSink:    cfg.AuditSink,
+		auditEventID: auditEventID,
 		volumeRoots:  roots,
 		prefix:       prefix,
 		now:          now,
@@ -102,60 +135,163 @@ func NewHandler(cfg Config) (http.Handler, error) {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	source, ok := h.parseSourcePath(rawRequestPath(r))
+	rawSourcePath := rawRequestPath(r)
+	source, ok := h.parseSourcePath(rawSourcePath)
 	if !ok {
+		if exportID, ok := exportIDFromRawPath(rawSourcePath, h.prefix); ok {
+			h.emitDeniedAudit(r, deniedAudit{
+				eventType: audit.EventTypePathDenied,
+				status:    http.StatusNotFound,
+				reason:    "path_denied",
+				denyClass: classifyRawChildDenyClass(rawSourcePath, h.prefix, exportID, "source"),
+				exportID:  exportID,
+			})
+		}
 		http.NotFound(w, r)
 		return
 	}
 
 	username, password, ok := r.BasicAuth()
 	if !ok {
+		h.emitDeniedAudit(r, deniedAudit{
+			eventType: audit.EventTypeAuthzDenied,
+			status:    http.StatusUnauthorized,
+			reason:    "authz_denied",
+			denyClass: denyClassAuthzDenied,
+			exportID:  source.ExportID,
+			source:    source,
+		})
 		w.Header().Set("WWW-Authenticate", `Basic realm="afscp-export"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if username != source.ExportID {
+		h.emitDeniedAudit(r, deniedAudit{
+			eventType: audit.EventTypeAuthzDenied,
+			status:    http.StatusForbidden,
+			reason:    "authz_denied",
+			denyClass: denyClassAuthzDenied,
+			exportID:  source.ExportID,
+			source:    source,
+		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
 	credential, err := h.store.GetExportGatewayCredential(r.Context(), source.ExportID)
 	if err != nil || !credential.Verifier.Verify(password) {
+		denied := deniedAudit{
+			eventType: audit.EventTypeAuthzDenied,
+			status:    http.StatusForbidden,
+			reason:    "authz_denied",
+			denyClass: denyClassAuthzDenied,
+			exportID:  source.ExportID,
+			source:    source,
+		}
+		if err == nil {
+			denied.credential = &credential
+		}
+		h.emitDeniedAudit(r, denied)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if !credentialUsable(credential, h.now()) {
+		h.emitDeniedAudit(r, deniedAudit{
+			eventType:   audit.EventTypeAuthzDenied,
+			status:      http.StatusForbidden,
+			reason:      "authz_denied",
+			denyClass:   denyClassAuthzDenied,
+			exportID:    source.ExportID,
+			source:      source,
+			credential:  &credential,
+			extraDetail: map[string]any{"session_status": string(credential.Session.Status)},
+		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if credential.Session.ID != source.ExportID {
+		h.emitDeniedAudit(r, deniedAudit{
+			eventType:  audit.EventTypeAuthzDenied,
+			status:     http.StatusForbidden,
+			reason:     "authz_denied",
+			denyClass:  denyClassAuthzDenied,
+			exportID:   source.ExportID,
+			source:     source,
+			credential: &credential,
+		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if !methodAllowed(r.Method, credential.Session.Mode) {
+		h.emitDeniedAudit(r, deniedAudit{
+			eventType:  audit.EventTypeCapabilityDenied,
+			status:     http.StatusForbidden,
+			reason:     "capability_denied",
+			denyClass:  denyClassCapabilityDenied,
+			exportID:   source.ExportID,
+			source:     source,
+			credential: &credential,
+		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
 	payloadRoot, err := h.payloadRoot(credential)
 	if err != nil {
+		h.emitDeniedAudit(r, deniedAudit{
+			eventType:  audit.EventTypePathDenied,
+			status:     http.StatusForbidden,
+			reason:     "path_denied",
+			denyClass:  denyClassSourcePolicyDenied,
+			exportID:   source.ExportID,
+			source:     source,
+			credential: &credential,
+		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if err := h.validatePath(payloadRoot, credential.PayloadVolumeSubdir, source); err != nil {
+		h.emitDeniedAudit(r, deniedAudit{
+			eventType:  audit.EventTypePathDenied,
+			status:     http.StatusForbidden,
+			reason:     "path_denied",
+			denyClass:  classifyPolicyDenyClass(err, "source"),
+			exportID:   source.ExportID,
+			source:     source,
+			credential: &credential,
+		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
 	dest := gatewayPath{Root: true}
 	if methodNeedsDestination(r.Method) {
-		parsedDest, ok := h.parseDestination(r, source.ExportID)
+		parsedDest, denyClass, ok := h.parseDestination(r, source.ExportID)
 		if !ok {
+			h.emitDeniedAudit(r, deniedAudit{
+				eventType:  audit.EventTypePathDenied,
+				status:     http.StatusForbidden,
+				reason:     "path_denied",
+				denyClass:  denyClass,
+				exportID:   source.ExportID,
+				source:     source,
+				credential: &credential,
+			})
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		dest = parsedDest
 		if err := h.validatePath(payloadRoot, credential.PayloadVolumeSubdir, dest); err != nil {
+			h.emitDeniedAudit(r, deniedAudit{
+				eventType:  audit.EventTypePathDenied,
+				status:     http.StatusForbidden,
+				reason:     "path_denied",
+				denyClass:  classifyPolicyDenyClass(err, "destination"),
+				exportID:   source.ExportID,
+				source:     source,
+				dest:       dest,
+				credential: &credential,
+			})
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -163,6 +299,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	fs, err := newNoFollowFileSystem(payloadRoot)
 	if err != nil {
+		h.emitDeniedAudit(r, deniedAudit{
+			eventType:  audit.EventTypePathDenied,
+			status:     http.StatusForbidden,
+			reason:     "path_denied",
+			denyClass:  denyClassSourcePolicyDenied,
+			exportID:   source.ExportID,
+			source:     source,
+			credential: &credential,
+		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -188,6 +333,89 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		LockSystem: h.lockSystem,
 	}
 	backend.ServeHTTP(rec, backendReq)
+}
+
+type deniedAudit struct {
+	eventType   audit.EventType
+	status      int
+	reason      string
+	denyClass   string
+	exportID    string
+	source      gatewayPath
+	dest        gatewayPath
+	credential  *exportaccess.GatewayCredential
+	extraDetail map[string]any
+}
+
+func (h *Handler) emitDeniedAudit(r *http.Request, denied deniedAudit) {
+	if h.auditSink == nil {
+		return
+	}
+	exportID := strings.TrimSpace(denied.exportID)
+	if exportID == "" {
+		exportID = denied.source.ExportID
+	}
+	if exportID == "" {
+		return
+	}
+
+	details := map[string]any{
+		"method":      requestMethod(r),
+		"status":      denied.status,
+		"reason_code": denied.reason,
+	}
+	if denied.denyClass != "" {
+		details["deny_class"] = denied.denyClass
+	}
+	resource := audit.Resource{Type: "export", ID: exportID}
+	var callerService string
+	var actor audit.Actor
+	if denied.credential != nil {
+		session := denied.credential.Session
+		resource.NamespaceID = session.NamespaceID
+		callerService = session.CreatedByCallerService
+		actor = audit.Actor{Type: session.CreatedByActor.Type, ID: session.CreatedByActor.ID}
+		if session.RepoID != "" {
+			details["repo_id"] = session.RepoID
+		}
+		if session.Mode != "" {
+			details["export_mode"] = string(session.Mode)
+		}
+		if session.Status != "" {
+			details["session_status"] = string(session.Status)
+		}
+	}
+	if sourceChild, ok := safeChild(denied.source); ok {
+		details["source_child"] = sourceChild
+	}
+	if destChild, ok := safeChild(denied.dest); ok {
+		details["destination_child"] = destChild
+	}
+	for key, value := range denied.extraDetail {
+		details[key] = value
+	}
+
+	event := audit.NewEvent(audit.Event{
+		EventID:         strings.TrimSpace(h.auditEventID()),
+		Type:            denied.eventType,
+		Time:            h.now().UTC(),
+		CallerService:   callerService,
+		AuthorizedActor: actor,
+		CorrelationID:   correlationIDFromRequest(r),
+		Resource:        resource,
+		Outcome:         audit.OutcomeDenied,
+		Reason:          denied.reason,
+		Details:         details,
+	})
+	if strings.TrimSpace(event.EventID) == "" {
+		event.EventID = newAuditEventID()
+	}
+
+	ctx := context.Background()
+	if r != nil && r.Context() != nil {
+		ctx = r.Context()
+	}
+	_ = h.auditSink.Emit(ctx, event)
 }
 
 func (h *Handler) startRequestObservation(ctx context.Context, exportID string, mutating bool) error {
@@ -264,16 +492,26 @@ func (h *Handler) parseSourcePath(rawPath string) (gatewayPath, bool) {
 	return parseGatewayPath(rawPath, h.prefix, "")
 }
 
-func (h *Handler) parseDestination(r *http.Request, exportID string) (gatewayPath, bool) {
+func (h *Handler) parseDestination(r *http.Request, exportID string) (gatewayPath, string, bool) {
 	raw := strings.TrimSpace(r.Header.Get("Destination"))
 	if raw == "" {
-		return gatewayPath{}, false
+		return gatewayPath{}, denyClassDestinationMissing, false
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" || !sameHost(parsed.Host, r.Host) {
-		return gatewayPath{}, false
+	if err != nil || parsed.Host == "" {
+		return gatewayPath{}, denyClassDestinationInvalid, false
 	}
-	return parseGatewayPath(parsed.EscapedPath(), h.prefix, exportID)
+	if !sameHost(parsed.Host, r.Host) {
+		return gatewayPath{}, denyClassDestinationHostMismatch, false
+	}
+	if destExportID, ok := exportIDFromRawPath(parsed.EscapedPath(), h.prefix); ok && destExportID != exportID {
+		return gatewayPath{}, denyClassDestinationExportMismatch, false
+	}
+	dest, ok := parseGatewayPath(parsed.EscapedPath(), h.prefix, exportID)
+	if !ok {
+		return gatewayPath{}, classifyRawChildDenyClass(parsed.EscapedPath(), h.prefix, exportID, "destination"), false
+	}
+	return dest, "", true
 }
 
 func parseGatewayPath(rawPath, prefix, requiredExportID string) (gatewayPath, bool) {
@@ -465,6 +703,150 @@ func validPrefix(prefix string) bool {
 
 func sameHost(left, right string) bool {
 	return strings.EqualFold(left, right)
+}
+
+func exportIDFromRawPath(rawPath, prefix string) (string, bool) {
+	if !strings.HasPrefix(rawPath, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(rawPath, prefix)
+	exportID, _, ok := strings.Cut(rest, "/")
+	if !ok {
+		return "", false
+	}
+	if err := pathresolver.ValidateID(pathresolver.ExportID, exportID); err != nil {
+		return "", false
+	}
+	return exportID, true
+}
+
+func classifyRawChildDenyClass(rawPath, prefix, exportID, scope string) string {
+	child, ok := rawChildFromGatewayPath(rawPath, prefix, exportID)
+	if !ok {
+		return scopedDenyClass(scope, "invalid")
+	}
+	switch {
+	case containsJVSChild(child):
+		return scopedDenyClass(scope, "jvs_denied")
+	case containsTraversalChild(child):
+		return scopedDenyClass(scope, "traversal_denied")
+	default:
+		return scopedDenyClass(scope, "invalid")
+	}
+}
+
+func rawChildFromGatewayPath(rawPath, prefix, exportID string) (string, bool) {
+	if !strings.HasPrefix(rawPath, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(rawPath, prefix)
+	gotExportID, child, ok := strings.Cut(rest, "/")
+	if !ok || gotExportID != exportID {
+		return "", false
+	}
+	return child, true
+}
+
+func classifyPolicyDenyClass(err error, scope string) string {
+	if err != nil && strings.Contains(err.Error(), "symlink component") {
+		return scopedDenyClass(scope, "symlink_denied")
+	}
+	return scopedDenyClass(scope, "policy_denied")
+}
+
+func scopedDenyClass(scope, class string) string {
+	switch scope {
+	case "source":
+		switch class {
+		case "jvs_denied":
+			return denyClassSourceJVSDenied
+		case "traversal_denied":
+			return denyClassSourceTraversalDenied
+		case "symlink_denied":
+			return denyClassSourceSymlinkDenied
+		case "policy_denied":
+			return denyClassSourcePolicyDenied
+		default:
+			return denyClassSourceInvalid
+		}
+	case "destination":
+		switch class {
+		case "jvs_denied":
+			return denyClassDestinationJVSDenied
+		case "traversal_denied":
+			return denyClassDestinationTraversalDenied
+		case "symlink_denied":
+			return denyClassDestinationSymlinkDenied
+		case "policy_denied":
+			return denyClassDestinationPolicyDenied
+		default:
+			return denyClassDestinationInvalid
+		}
+	default:
+		return class
+	}
+}
+
+func containsJVSChild(child string) bool {
+	for _, candidate := range decodedPathCandidates(child) {
+		for _, segment := range strings.Split(candidate, "/") {
+			if strings.EqualFold(segment, ".jvs") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsTraversalChild(child string) bool {
+	for _, candidate := range decodedPathCandidates(child) {
+		for _, segment := range strings.Split(candidate, "/") {
+			if segment == ".." {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func decodedPathCandidates(value string) []string {
+	candidates := []string{value}
+	current := value
+	for range 2 {
+		decoded, err := url.PathUnescape(current)
+		if err != nil || decoded == current {
+			break
+		}
+		candidates = append(candidates, decoded)
+		current = decoded
+	}
+	return candidates
+}
+
+func safeChild(parsed gatewayPath) (string, bool) {
+	if parsed.Root || len(parsed.Segments) == 0 {
+		return "", false
+	}
+	return path.Join(parsed.Segments...), true
+}
+
+func requestMethod(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return r.Method
+}
+
+func correlationIDFromRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.Header.Get(auth.HeaderCorrelationID))
+}
+
+func newAuditEventID() string {
+	counter := atomic.AddUint64(&auditEventCounter, 1)
+	return fmt.Sprintf("evt_exportgateway_%d_%d", time.Now().UTC().UnixNano(), counter)
 }
 
 type statusRecorder struct {

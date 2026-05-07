@@ -2,6 +2,7 @@ package exportgateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
@@ -372,9 +375,186 @@ func TestDeniedRequestsSkipRuntimeObservation(t *testing.T) {
 	})
 }
 
+func TestDeniedRequestsEmitAuditWithoutRuntimeObservation(t *testing.T) {
+	t.Run("wrong password correct username", func(t *testing.T) {
+		env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+		req := httptest.NewRequest(http.MethodGet, "http://files.example.test/e/"+testExportID+"/hello.txt", nil)
+		req.SetBasicAuth(testExportID, "wrong-secret")
+		req.Header.Set(auth.HeaderCorrelationID, "corr_webdav_denied")
+		rec := httptest.NewRecorder()
+
+		env.handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		requireNoRuntimeObservation(t, env)
+		event := requireAuditEvent(t, env, 0, audit.EventTypeAuthzDenied, http.StatusForbidden, "authz_denied")
+		if event.CorrelationID != "corr_webdav_denied" {
+			t.Fatalf("CorrelationID = %q, want corr_webdav_denied", event.CorrelationID)
+		}
+		if event.Details["deny_class"] != "authz_denied" {
+			t.Fatalf("deny_class = %#v, want authz_denied", event.Details["deny_class"])
+		}
+		if event.Resource.NamespaceID != testNamespace || event.Details["repo_id"] != testRepo {
+			t.Fatalf("event namespace/repo = %q/%#v", event.Resource.NamespaceID, event.Details["repo_id"])
+		}
+		rendered := renderAuditEvent(t, event)
+		if strings.Contains(rendered, "wrong-secret") || strings.Contains(rendered, testPassword) {
+			t.Fatalf("audit event leaked WebDAV password material: %s", rendered)
+		}
+	})
+
+	for _, method := range []string{http.MethodPut, "BREW"} {
+		t.Run("capability "+method, func(t *testing.T) {
+			env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+			rec := env.request(method, "/e/"+testExportID+"/hello.txt", strings.NewReader("mutate"), "")
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+			requireNoRuntimeObservation(t, env)
+			event := requireAuditEvent(t, env, 0, audit.EventTypeCapabilityDenied, http.StatusForbidden, "capability_denied")
+			if event.Details["method"] != method || event.Details["export_mode"] != string(sessionstate.AccessModeReadOnly) {
+				t.Fatalf("details = %#v", event.Details)
+			}
+			if event.Details["deny_class"] != "capability_denied" {
+				t.Fatalf("deny_class = %#v, want capability_denied", event.Details["deny_class"])
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name   string
+		target string
+		want   string
+		setup  func(*testing.T, *gatewayTestEnv)
+	}{
+		{name: "source .jvs", target: "/e/" + testExportID + "/.jvs", want: "source_jvs_denied"},
+		{name: "source traversal", target: "/e/" + testExportID + "/%252e%252e/escape", want: "source_traversal_denied"},
+		{
+			name:   "source symlink",
+			target: "/e/" + testExportID + "/links/out/secret.txt",
+			want:   "source_symlink_denied",
+			setup: func(t *testing.T, env *gatewayTestEnv) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(env.payloadRoot, "links"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(t.TempDir(), filepath.Join(env.payloadRoot, "links", "out")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
+			if tt.setup != nil {
+				tt.setup(t, env)
+			}
+			rec := env.request(http.MethodGet, tt.target, nil, "")
+			if rec.Code < 400 {
+				t.Fatalf("status = %d, want deny", rec.Code)
+			}
+			requireNoRuntimeObservation(t, env)
+			event := requireAuditEvent(t, env, 0, audit.EventTypePathDenied, rec.Code, "path_denied")
+			if event.Details["deny_class"] != tt.want {
+				t.Fatalf("deny_class = %#v, want %s", event.Details["deny_class"], tt.want)
+			}
+		})
+	}
+}
+
+func TestDeniedCopyMoveDestinationEmitsPathAudit(t *testing.T) {
+	tests := []struct {
+		name        string
+		method      string
+		destination string
+		wantClass   string
+	}{
+		{name: "missing", method: "COPY", destination: "", wantClass: "destination_missing"},
+		{name: "cross host", method: "COPY", destination: "http://other.example.test/e/" + testExportID + "/docs/bad.txt", wantClass: "destination_host_mismatch"},
+		{name: "cross export", method: "MOVE", destination: "http://files.example.test/e/export_other123/docs/bad.txt", wantClass: "destination_export_mismatch"},
+		{name: ".jvs", method: "COPY", destination: "http://files.example.test/e/" + testExportID + "/.jvs/config", wantClass: "destination_jvs_denied"},
+		{name: "encoded traversal", method: "MOVE", destination: "http://files.example.test/e/" + testExportID + "/docs/%252e%252e/bad.txt?token=destination-secret", wantClass: "destination_traversal_denied"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
+			env.writePayload(t, "docs/hello.txt", "hello")
+
+			rec := env.request(tt.method, "/e/"+testExportID+"/docs/hello.txt", nil, tt.destination)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+			requireNoRuntimeObservation(t, env)
+			event := requireAuditEvent(t, env, 0, audit.EventTypePathDenied, http.StatusForbidden, "path_denied")
+			if event.Details["method"] != tt.method {
+				t.Fatalf("method detail = %#v", event.Details["method"])
+			}
+			if event.Details["deny_class"] != tt.wantClass {
+				t.Fatalf("deny_class = %#v, want %s", event.Details["deny_class"], tt.wantClass)
+			}
+			rendered := renderAuditEvent(t, event)
+			for _, forbidden := range []string{"other.example.test", "export_other123", "destination-secret", tt.destination} {
+				if forbidden != "" && strings.Contains(rendered, forbidden) {
+					t.Fatalf("audit event leaked destination material %q in %s", forbidden, rendered)
+				}
+			}
+		})
+	}
+}
+
+func TestDeniedAuditSinkFailurePreservesDeniedResponse(t *testing.T) {
+	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+	env.auditSink.err = errors.New("audit outbox unavailable")
+
+	rec := env.request(http.MethodPut, "/e/"+testExportID+"/hello.txt", strings.NewReader("mutate"), "")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "audit outbox unavailable") {
+		t.Fatalf("response leaked audit sink error: %q", rec.Body.String())
+	}
+	requireNoRuntimeObservation(t, env)
+	requireAuditEvent(t, env, 0, audit.EventTypeCapabilityDenied, http.StatusForbidden, "capability_denied")
+}
+
+func TestDeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial(t *testing.T) {
+	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
+	req := httptest.NewRequest("COPY", "http://files.example.test/e/"+testExportID+"/docs/%252e%252e/bad.txt?download_secret=query", strings.NewReader("body-file-content-secret"))
+	req.SetBasicAuth(testExportID, testPassword)
+	req.Header.Set(auth.HeaderAuthorization, "Basic authorization-secret")
+	req.Header.Set("Destination", "http://files.example.test/e/"+testExportID+"/copy.txt?destination_secret=query")
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code < 400 {
+		t.Fatalf("status = %d, want deny", rec.Code)
+	}
+	event := requireAuditEvent(t, env, 0, audit.EventTypePathDenied, rec.Code, "path_denied")
+	rendered := renderAuditEvent(t, event)
+	for _, forbidden := range []string{
+		testPassword,
+		"authorization-secret",
+		env.volumeRoot,
+		env.payloadRoot,
+		filepath.Join(env.payloadRoot, "docs", "bad.txt"),
+		"destination_secret",
+		"body-file-content-secret",
+	} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("audit event leaked %q in %s", forbidden, rendered)
+		}
+	}
+}
+
 type gatewayTestEnv struct {
 	handler     http.Handler
 	store       *fakeGatewayStore
+	auditSink   *fakeAuditSink
 	volumeRoot  string
 	payloadRoot string
 }
@@ -412,8 +592,11 @@ func newGatewayTestEnv(t *testing.T, mode sessionstate.AccessMode, status sessio
 			PayloadVolumeSubdir: payloadSubdir,
 		},
 	}
+	auditSink := &fakeAuditSink{}
 	handler, err := NewHandler(Config{
 		Store:        store,
+		AuditSink:    auditSink,
+		AuditEventID: func() string { return "evt_exportgateway_test" },
 		VolumeRoots:  map[string]string{testVolumeID: volumeRoot},
 		Prefix:       "/e/",
 		Now:          fixedGatewayNow,
@@ -422,7 +605,7 @@ func newGatewayTestEnv(t *testing.T, mode sessionstate.AccessMode, status sessio
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
-	return &gatewayTestEnv{handler: handler, store: store, volumeRoot: volumeRoot, payloadRoot: payloadRoot}
+	return &gatewayTestEnv{handler: handler, store: store, auditSink: auditSink, volumeRoot: volumeRoot, payloadRoot: payloadRoot}
 }
 
 func (env *gatewayTestEnv) request(method, target string, body io.Reader, destination string) *httptest.ResponseRecorder {
@@ -466,6 +649,16 @@ type fakeGatewayStore struct {
 	recordCalls        int
 	lastRecordExportID string
 	lastRecordAt       time.Time
+}
+
+type fakeAuditSink struct {
+	events []audit.Event
+	err    error
+}
+
+func (sink *fakeAuditSink) Emit(ctx context.Context, event audit.Event) error {
+	sink.events = append(sink.events, event)
+	return sink.err
 }
 
 func (store *fakeGatewayStore) GetExportGatewayCredential(ctx context.Context, exportID string) (exportaccess.GatewayCredential, error) {
@@ -541,6 +734,52 @@ func requireObservation(t *testing.T, observations []exportaccess.RuntimeObserva
 	} else if got.SuccessfulRequestAccessedAt != nil {
 		t.Fatalf("observation[%d].SuccessfulRequestAccessedAt = %v, want nil", index, *got.SuccessfulRequestAccessedAt)
 	}
+}
+
+func requireNoRuntimeObservation(t *testing.T, env *gatewayTestEnv) {
+	t.Helper()
+	if len(env.store.observations) != 0 {
+		t.Fatalf("runtime observations = %d, want 0", len(env.store.observations))
+	}
+}
+
+func requireAuditEvent(t *testing.T, env *gatewayTestEnv, index int, wantType audit.EventType, wantStatus int, wantReason string) audit.Event {
+	t.Helper()
+	if len(env.auditSink.events) <= index {
+		t.Fatalf("audit events = %d, want at least %d", len(env.auditSink.events), index+1)
+	}
+	event := env.auditSink.events[index]
+	if event.EventID == "" {
+		t.Fatal("audit event_id is empty")
+	}
+	if event.Type != wantType {
+		t.Fatalf("audit type = %q, want %q", event.Type, wantType)
+	}
+	if !event.Time.Equal(fixedGatewayNow()) {
+		t.Fatalf("audit time = %v, want %v", event.Time, fixedGatewayNow())
+	}
+	if event.Outcome != audit.OutcomeDenied {
+		t.Fatalf("audit outcome = %q, want denied", event.Outcome)
+	}
+	if event.Resource.Type != "export" || event.Resource.ID != testExportID {
+		t.Fatalf("audit resource = %#v", event.Resource)
+	}
+	if event.Reason != wantReason {
+		t.Fatalf("audit reason = %q, want %q", event.Reason, wantReason)
+	}
+	if event.Details["status"] != wantStatus || event.Details["reason_code"] != wantReason {
+		t.Fatalf("audit details = %#v, want status %d reason_code %q", event.Details, wantStatus, wantReason)
+	}
+	return event
+}
+
+func renderAuditEvent(t *testing.T, event audit.Event) string {
+	t.Helper()
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(payload)
 }
 
 func requireTimePtr(t *testing.T, got *time.Time, want time.Time, field string) {
