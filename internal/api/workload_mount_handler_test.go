@@ -40,6 +40,47 @@ func TestCreateWorkloadMountBindingQueuesOperationAndDoesNotLeakPlan(t *testing.
 	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
 }
 
+func TestCreateWorkloadMountBindingRejectsFilteredMountWithoutExternalControlRoot(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		readOnly bool
+	}{
+		{name: "read only", readOnly: true},
+		{name: "read write", readOnly: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := workloadMountMetaFixture()
+			meta.volume.Capabilities = map[string]any{
+				"webdav_export":             true,
+				"workload_mount":            true,
+				"filtered_mount":            true,
+				"jvs_external_control_root": false,
+				"directory_quota":           false,
+			}
+			intake := &fakeOperationIntakeStore{}
+			handler := workloadMountHandlerWithMeta(intake, meta, namespaceBindingAllowedPolicy(auth.RoleMountAdmin))
+			rec := httptest.NewRecorder()
+			body := `{"mount_path":"/mnt/repo","read_only":false,"lease_seconds":120}`
+			if tt.readOnly {
+				body = `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120}`
+			}
+
+			handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", body, "ns_123"))
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+			}
+			if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeRepoLifecycleInvalidState {
+				t.Fatalf("error = %#v, want repo lifecycle invalid state", env.Error)
+			}
+			if intake.calls != 0 {
+				t.Fatalf("intake calls = %d, want rejected before intake", intake.calls)
+			}
+			assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+		})
+	}
+}
+
 func TestCreateWorkloadMountBindingRejectsDisabledNamespaceButReleaseStatusStayAvailable(t *testing.T) {
 	now := fixedNamespaceNow()
 	disabledAt := now
