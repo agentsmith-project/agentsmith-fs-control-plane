@@ -131,6 +131,142 @@ func TestAgentsmithSandboxAFSCPMountPlanBoundary(t *testing.T) {
 	assertAgentsmithAFSCPOrchestratorPlanDoesNotExposeControlRoot(t, orchestrator.Body.String())
 }
 
+func TestAgentsmithSandboxAFSCPMountCallbackRoleBoundary(t *testing.T) {
+	t.Run("product caller cannot spoof runtime callbacks", func(t *testing.T) {
+		env := newAgentsmithAFSCPE2E(t, nil)
+		tests := []struct {
+			name   string
+			method string
+			path   string
+			body   string
+			idem   string
+		}{
+			{
+				name:   "status",
+				method: http.MethodPatch,
+				path:   "/internal/v1/workload-mount-bindings/wmb_123/status",
+				body:   `{"status":"active","observed_at":"2026-05-05T12:34:56Z","reason":"runtime callback should stay sandbox-owned"}`,
+				idem:   "idem_product_status_callback_e2e",
+			},
+			{
+				name:   "heartbeat",
+				method: http.MethodPost,
+				path:   "/internal/v1/workload-mount-bindings/wmb_123:heartbeat",
+				idem:   "idem_product_heartbeat_callback_e2e",
+			},
+			{
+				name:   "release",
+				method: http.MethodPost,
+				path:   "/internal/v1/workload-mount-bindings/wmb_123:release",
+				idem:   "idem_product_release_callback_e2e",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				rec := env.serve(agentsmithAFSCPE2ERequest(tt.method, tt.path, tt.body, "agentsmith-api", "ns_123", tt.idem))
+
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+				}
+				if envelope := decodeErrorEnvelope(t, rec.Body.Bytes()); envelope.Error.Code != CodeRoleNotAllowed {
+					t.Fatalf("error = %#v, want ROLE_NOT_ALLOWED", envelope.Error)
+				}
+				if env.operationStore.calls != 0 {
+					t.Fatalf("operation intake calls = %d, want product callback denial before intake", env.operationStore.calls)
+				}
+				assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, rec.Body.String())
+			})
+		}
+	})
+
+	t.Run("product caller can request revoke", func(t *testing.T) {
+		env := newAgentsmithAFSCPE2E(t, nil)
+		rec := env.serve(agentsmithAFSCPE2ERequest(http.MethodPost, "/internal/v1/workload-mount-bindings/wmb_123:revoke", "", "agentsmith-api", "ns_123", "idem_product_revoke_e2e"))
+
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+		}
+		envelope := decodeOperationEnvelope(t, rec.Body.Bytes())
+		if envelope.OperationState != OperationStateQueued || envelope.Resource.Type != "workload_mount_binding" || envelope.Resource.ID != "wmb_123" {
+			t.Fatalf("operation envelope = %#v, want queued workload mount binding revoke", envelope)
+		}
+		if env.operationStore.calls != 1 || env.operationStore.spec.Scope.OperationType != operations.OperationMountBindingRevoke || env.operationStore.spec.Phase != operations.OperationPhaseMountBindingRevokeValidate {
+			t.Fatalf("operation intake = calls %d spec %#v, want revoke intake", env.operationStore.calls, env.operationStore.spec)
+		}
+		assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, rec.Body.String())
+	})
+
+	t.Run("sandbox orchestrator owns runtime callbacks but not product revoke", func(t *testing.T) {
+		env := newAgentsmithAFSCPE2E(t, nil)
+		tests := []struct {
+			name      string
+			method    string
+			path      string
+			body      string
+			idem      string
+			wantType  operations.OperationType
+			wantPhase string
+		}{
+			{
+				name:      "status",
+				method:    http.MethodPatch,
+				path:      "/internal/v1/workload-mount-bindings/wmb_123/status",
+				body:      `{"status":"active","observed_at":"2026-05-05T12:34:56Z","lease_expires_at":"2026-05-05T13:34:56Z","reason":"mounted"}`,
+				idem:      "idem_orchestrator_status_callback_e2e",
+				wantType:  operations.OperationMountBindingStatusUpdate,
+				wantPhase: operations.OperationPhaseMountBindingStatusValidate,
+			},
+			{
+				name:      "heartbeat",
+				method:    http.MethodPost,
+				path:      "/internal/v1/workload-mount-bindings/wmb_123:heartbeat",
+				idem:      "idem_orchestrator_heartbeat_callback_e2e",
+				wantType:  operations.OperationMountBindingHeartbeat,
+				wantPhase: operations.OperationPhaseMountBindingHeartbeatValidate,
+			},
+			{
+				name:      "release",
+				method:    http.MethodPost,
+				path:      "/internal/v1/workload-mount-bindings/wmb_123:release",
+				idem:      "idem_orchestrator_release_callback_e2e",
+				wantType:  operations.OperationMountBindingRelease,
+				wantPhase: operations.OperationPhaseMountBindingReleaseValidate,
+			},
+		}
+
+		for i, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				rec := env.serve(agentsmithAFSCPE2ERequest(tt.method, tt.path, tt.body, "sandbox-orchestrator", "ns_123", tt.idem))
+
+				if rec.Code != http.StatusAccepted {
+					t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+				}
+				envelope := decodeOperationEnvelope(t, rec.Body.Bytes())
+				if envelope.OperationState != OperationStateQueued || envelope.Resource.Type != "workload_mount_binding" || envelope.Resource.ID != "wmb_123" {
+					t.Fatalf("operation envelope = %#v, want queued workload mount binding callback", envelope)
+				}
+				if env.operationStore.calls != i+1 || env.operationStore.spec.Scope.OperationType != tt.wantType || env.operationStore.spec.Phase != tt.wantPhase {
+					t.Fatalf("operation intake = calls %d spec %#v, want %s/%s", env.operationStore.calls, env.operationStore.spec, tt.wantType, tt.wantPhase)
+				}
+				assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, rec.Body.String())
+			})
+		}
+
+		rec := env.serve(agentsmithAFSCPE2ERequest(http.MethodPost, "/internal/v1/workload-mount-bindings/wmb_123:revoke", "", "sandbox-orchestrator", "ns_123", "idem_orchestrator_revoke_e2e"))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+		}
+		if envelope := decodeErrorEnvelope(t, rec.Body.Bytes()); envelope.Error.Code != CodeRoleNotAllowed {
+			t.Fatalf("error = %#v, want ROLE_NOT_ALLOWED", envelope.Error)
+		}
+		if env.operationStore.calls != len(tests) {
+			t.Fatalf("operation intake calls = %d, want orchestrator revoke denial before intake", env.operationStore.calls)
+		}
+		assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t, rec.Body.String())
+	})
+}
+
 func TestAgentsmithSandboxAFSCPWorkloadMountRejectsCallerSuppliedStorageFields(t *testing.T) {
 	env := newAgentsmithAFSCPE2E(t, nil)
 	body := `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120,"metadata_url":"redis://metadata-url-secret","volume_id":"vol_attacker"}`
@@ -343,6 +479,7 @@ func assertAgentsmithAFSCPProductResponseDoesNotLeakStorage(t *testing.T, body s
 		"juicefs mount",
 		"bucket_access_key",
 		"bucket_secret_key",
+		"raw_mount_command",
 		"aws_access_key_id",
 		"aws_secret_access_key",
 		"secret_ref",
