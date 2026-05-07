@@ -270,14 +270,14 @@ func exportBlocker(kind gateKind, session ExportSession, now time.Time) blockerC
 		}
 		return blockerNone
 	}
+	if kind == gateRestoreRunWriter && exportWriterDrained(session, now) {
+		return blockerNone
+	}
 	if exportObservationStale(session, now) {
 		return blockerStale
 	}
 	if kind == gateLifecycleDrain {
 		return blockerActive
-	}
-	if kind == gateRestoreRunWriter && exportWriterDrained(session, now) {
-		return blockerNone
 	}
 	if session.ExpiresAt.After(now) {
 		return blockerActive
@@ -293,7 +293,7 @@ func exportObservationStale(session ExportSession, now time.Time) bool {
 }
 
 func exportWriterDrained(session ExportSession, now time.Time) bool {
-	if session.Mode != AccessModeReadWrite || session.ActiveWriteCount != 0 || session.WriteDrainedAt == nil {
+	if session.Mode != AccessModeReadWrite || session.ActiveWriteCount != 0 || !nonZeroTimePtr(session.WriteDrainedAt) {
 		return false
 	}
 	if session.ActiveRequestCount < 0 || session.ActiveWriteCount < 0 {

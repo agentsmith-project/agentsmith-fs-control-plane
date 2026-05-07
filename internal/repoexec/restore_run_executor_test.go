@@ -130,6 +130,42 @@ func TestRestoreRunExecutorPreJVSWriterSessionDenialReleasesFenceAndKeepsPlanPen
 	}
 }
 
+func TestRestoreRunExecutorAllowsDrainedExpiredHeartbeatExportBeforeRun(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.previewOperation = restorePreviewSucceededOperationRecord(now)
+	store.restorePlan = restorePreviewPendingPlan(now)
+	export := freshExportSession(now, "export_alpha", sessionstate.AccessModeReadWrite, sessionstate.ExportStatusRevoking, now.Add(time.Hour))
+	export.ActiveRequestCount = 0
+	export.ActiveWriteCount = 0
+	export.WriteDrainedAt = repoExecTimePtr(now.Add(-time.Minute))
+	export.GatewayHeartbeatExpiresAt = repoExecTimePtr(now.Add(-time.Second))
+	store.exports = []sessionstate.ExportSession{export}
+	runner := &fakeJVSRunner{
+		recoveryStatusSummaries: []jvsrunner.RecoveryStatusSummary{
+			{RestoreState: "pending_restore_preview", ActivePlanID: "plan_001", Blocking: true, Workspace: "main"},
+			{RestoreState: "idle", Workspace: "main"},
+		},
+		restoreRunSummary: jvsrunner.RestoreRunSummary{PlanID: "plan_001", SourceSavePointID: "sp_001", RestoredSavePointID: "sp_restored", Workspace: "main"},
+		doctorSummary:     jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
+	}
+	executor := newTestRestoreRunExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), restoreRunLeasedRecord(now, operations.OperationPhaseRestoreRunValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "recovery_status,restore_run,doctor,recovery_status" {
+		t.Fatalf("JVS calls = %#v, want restore-run to pass writer-session gate", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestoreRunCommitted || store.operation.Error != nil {
+		t.Fatalf("operation = %#v, want succeeded restore-run commit without writer-session denial", store.operation)
+	}
+	if store.restorePlan.Status != restoreplan.StatusConsumed || store.restoreRunConsumingMarks != 1 {
+		t.Fatalf("plan/consuming marks = %#v/%d, want consumed after running restore", store.restorePlan, store.restoreRunConsumingMarks)
+	}
+}
+
 func TestRestoreRunExecutorPreflightRecoveryMismatchFailsClosedBeforeFence(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()

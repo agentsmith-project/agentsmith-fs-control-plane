@@ -89,7 +89,7 @@ func TestNewRuntimeFailsClosedWithoutValidTokenMapping(t *testing.T) {
 	}
 }
 
-func TestNewRuntimeFailsClosedWithoutWebDAVExportPublicBaseURL(t *testing.T) {
+func TestInternalRuntimeRejectsMissingWebDAVPublicBaseURLWhenWebDAVAvailable(t *testing.T) {
 	_, err := NewRuntime(Options{
 		Source: config.MapSource{
 			"AFSCP_API_MODE":                                 "internal",
@@ -97,6 +97,8 @@ func TestNewRuntimeFailsClosedWithoutWebDAVExportPublicBaseURL(t *testing.T) {
 			"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
 			"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_api:product:operation_inspector",
 			"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
+			"AFSCP_WEBDAV_ENABLED":                           "true",
+			"AFSCP_WEBDAV_READY":                             "true",
 		},
 		StoreFactory: func(context.Context, string) (StoreHandle, error) {
 			t.Fatal("store factory should not be called without WebDAV export public base URL")
@@ -319,6 +321,7 @@ func TestInternalRuntimeCreateExportCapabilityDeniedWhenWebDAVUnavailable(t *tes
 			source := readyTestRuntimeSource()
 			source["AFSCP_WEBDAV_ENABLED"] = tt.enable
 			source["AFSCP_WEBDAV_READY"] = tt.ready
+			delete(source, "AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL")
 			runtime, err := NewRuntime(Options{
 				Source: source,
 				StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {
@@ -334,6 +337,21 @@ func TestInternalRuntimeCreateExportCapabilityDeniedWhenWebDAVUnavailable(t *tes
 				t.Fatalf("NewRuntime: %v", err)
 			}
 			defer closeRuntime(t, runtime)
+
+			if tt.enable == "false" {
+				rec := httptest.NewRecorder()
+				runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+				}
+				var body api.ReadinessResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+				}
+				if !body.Ready {
+					t.Fatalf("readiness = not ready, want ready with disabled WebDAV")
+				}
+			}
 
 			req := httptest.NewRequest(http.MethodPost, "/internal/v1/repos/repo_alpha/exports", strings.NewReader(`{"mode":"read_only","ttl_seconds":120}`))
 			req.Header.Set("Content-Type", "application/json")

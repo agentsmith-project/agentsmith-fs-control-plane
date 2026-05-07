@@ -237,6 +237,19 @@ func TestLoadAPIWebDAVExportPublicBaseURLRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestNormalizeWebDAVExportPublicBaseURLMissingDescribesCapabilityScope(t *testing.T) {
+	_, err := NormalizeWebDAVExportPublicBaseURL("")
+	if err == nil {
+		t.Fatal("NormalizeWebDAVExportPublicBaseURL succeeded, want missing public base URL error")
+	}
+	if !strings.Contains(err.Error(), "when WebDAV export capability is available") {
+		t.Fatalf("error = %q, want WebDAV capability scope", err)
+	}
+	if strings.Contains(err.Error(), "AFSCP_API_MODE is internal") {
+		t.Fatalf("error = %q, should not imply all internal API runtimes require WebDAV export public base URL", err)
+	}
+}
+
 func TestLoadNeutralAPIDoesNotRequireWebDAVExportPublicBaseURL(t *testing.T) {
 	cfg, err := Load(MapSource{"AFSCP_API_MODE": "neutral"})
 	if err != nil {

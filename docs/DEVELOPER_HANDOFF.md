@@ -92,11 +92,13 @@ API contract verifier. Passing it is local implementation baseline evidence, not
 final production GA acceptance.
 
 Internal API deployments must set
-`AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL`. This is an AFSCP control-plane
-runtime config value, not caller/product-specific config. It must be an
-`http`/`https` absolute URL with no userinfo, query, or fragment, and is used as
-the WebDAV export `access.url` base. Missing or invalid configuration fails
-closed for export access URL issuance.
+`AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL` only when the WebDAV export
+capability is enabled and ready for export issuance. This is an AFSCP
+control-plane runtime config value, not caller/product-specific config. It must
+be an `http`/`https` absolute URL with no userinfo, query, or fragment, and is
+used as the WebDAV export `access.url` base. When WebDAV export is disabled or
+not ready, the runtime may start without this value, but create export remains
+fail-closed until the capability is available with a valid public base URL.
 
 ## Current Status
 

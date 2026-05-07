@@ -64,8 +64,11 @@ func TestRestoreRunWriterGateStaleExportObservationFailsClosed(t *testing.T) {
 	staleHeartbeat.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Second))
 	staleObservation := exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(time.Hour))
 	staleObservation.LastObservedAt = nil
+	notDrained := exportDrainedFixture(now, ExportStatusRevoking)
+	notDrained.WriteDrainedAt = nil
+	notDrained.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Second))
 
-	for _, session := range []ExportSession{staleHeartbeat, staleObservation} {
+	for _, session := range []ExportSession{staleHeartbeat, staleObservation, notDrained} {
 		decision := RestoreRunWriterGate(GateRequest{
 			NamespaceID:    "ns_123",
 			RepoID:         "repo_123",
@@ -74,6 +77,98 @@ func TestRestoreRunWriterGateStaleExportObservationFailsClosed(t *testing.T) {
 		})
 		assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
 	}
+}
+
+func TestRestoreRunWriterGateAllowsExportDrainedWithExpiredHeartbeat(t *testing.T) {
+	now := testNow()
+	tests := []struct {
+		name    string
+		session ExportSession
+	}{
+		{
+			name: "revoking drained heartbeat expired",
+			session: func() ExportSession {
+				session := exportDrainedFixture(now, ExportStatusRevoking)
+				session.ExpiresAt = now.Add(time.Hour)
+				session.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Second))
+				return session
+			}(),
+		},
+		{
+			name: "active expired drained heartbeat expired",
+			session: func() ExportSession {
+				session := exportDrainedFixture(now, ExportStatusActive)
+				session.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Second))
+				return session
+			}(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restore := RestoreRunWriterGate(GateRequest{
+				NamespaceID:    "ns_123",
+				RepoID:         "repo_123",
+				Now:            now,
+				ExportSessions: []ExportSession{tt.session},
+			})
+			assertDecision(t, restore, true, "")
+		})
+	}
+}
+
+func TestRestoreRunWriterGateRejectsWriteDrainedAtZeroWithExpiredHeartbeat(t *testing.T) {
+	now := testNow()
+	zero := time.Time{}
+	tests := []struct {
+		name    string
+		session ExportSession
+	}{
+		{
+			name: "revoking",
+			session: func() ExportSession {
+				session := exportDrainedFixture(now, ExportStatusRevoking)
+				session.ExpiresAt = now.Add(time.Hour)
+				session.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Second))
+				session.WriteDrainedAt = &zero
+				return session
+			}(),
+		},
+		{
+			name: "active expired",
+			session: func() ExportSession {
+				session := exportDrainedFixture(now, ExportStatusActive)
+				session.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Second))
+				session.WriteDrainedAt = &zero
+				return session
+			}(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision := RestoreRunWriterGate(GateRequest{
+				NamespaceID:    "ns_123",
+				RepoID:         "repo_123",
+				Now:            now,
+				ExportSessions: []ExportSession{tt.session},
+			})
+			assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
+		})
+	}
+}
+
+func TestLifecycleDrainGateBlocksDrainedNonTerminalExportWithExpiredHeartbeat(t *testing.T) {
+	now := testNow()
+	session := exportDrainedFixture(now, ExportStatusRevoking)
+	session.ExpiresAt = now.Add(time.Hour)
+	session.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Second))
+
+	decision := LifecycleDrainGate(GateRequest{
+		NamespaceID:    "ns_123",
+		RepoID:         "repo_123",
+		Now:            now,
+		ExportSessions: []ExportSession{session},
+	})
+	assertDecision(t, decision, false, ErrorFamilyStaleSessionsBlockLifecycle)
 }
 
 func TestRestoreRunWriterGateMountSemantics(t *testing.T) {

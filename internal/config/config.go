@@ -514,7 +514,7 @@ func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
 func NormalizeWebDAVExportPublicBaseURL(raw string) (string, error) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
-		return "", fmt.Errorf("AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL is required when AFSCP_API_MODE is internal")
+		return "", fmt.Errorf("AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL is required when WebDAV export capability is available for export issuance")
 	}
 	parsed, err := url.Parse(value)
 	if err != nil {

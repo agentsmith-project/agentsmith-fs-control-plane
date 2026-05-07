@@ -245,7 +245,11 @@ Required GA behavior:
 - restore-run acquires the fence before checking active writer sessions
 - while the fence is held, new read-write exports and workload mount bindings are rejected with `WRITER_SESSION_FENCE_HELD`
 - read-only exports and read-only mount bindings do not count as writer sessions, but still respect namespace status and capability policy
-- read-write exports count as active until revoked, expired and reconciled, or terminal
+- restore-run writer gating treats read-write WebDAV exports as active writers
+  unless the export is terminal/reconciled or has durable write-drained evidence:
+  `active_write_count=0` and nonzero `write_drained_at`. Revoking or
+  heartbeat-expired non-terminal exports with that evidence do not block
+  restore-run writer gating.
 - export runtime accounting uses the durable `export_runtime_requests` ledger.
   Request begin inserts an open runtime request row and increments aggregate
   counts in the same DB boundary; heartbeat refreshes the same row; request end
@@ -273,7 +277,10 @@ Required GA behavior:
 
 - archive, restore-archived, delete, restore-tombstoned, and purge acquire the lifecycle fence before changing repo status
 - while held, new exports, workload mount bindings, save point creation, restore-run, template create, and template clone into the repo are rejected with `REPO_LIFECYCLE_FENCE_HELD`
-- archive, delete, and purge require all export and workload mount sessions, read-only or read-write, to reach confirmed terminal non-accessing state before storage is tombstoned or purged
+- archive, delete, and purge require all export and workload mount sessions,
+  read-only or read-write, to reach confirmed terminal non-accessing state
+  before storage is tombstoned or purged; WebDAV export write-drained evidence
+  accepted by restore-run writer gating is not sufficient for lifecycle drain
 - lifecycle fence acquisition must reject or wait for active storage mutations on the same repo; uncertain in-flight mutations fail closed or require operator intervention
 - uncertain sessions fail closed with `STALE_SESSION_BLOCKS_LIFECYCLE` or enter `operator_intervention_required`
 - purge is irreversible and must verify retention policy or approved break-glass purge before physical removal
