@@ -20,14 +20,15 @@ import (
 )
 
 const (
-	CodeOpenAPINamespaceParameterInvalid     = "openapi.namespace_id_parameter_invalid"
-	CodeOpenAPINamespaceParameterMissing     = "openapi.namespace_id_parameter_missing"
-	CodeOpenAPIMutatingHeaderMissing         = "openapi.mutating_header_missing"
-	CodeOpenAPIOperationsMissing             = "openapi.operations_missing"
-	CodeOpenAPIRawDirectMountAccessForbidden = "openapi.raw_direct_mount_access_forbidden"
-	CodeOpenAPIRouteOperationExtra           = "openapi.route_operation_extra"
-	CodeOpenAPIRouteOperationMissing         = "openapi.route_operation_missing"
-	CodeOpenAPIRouteOperationIDMismatch      = "openapi.route_operation_id_mismatch"
+	CodeOpenAPINamespaceParameterInvalid         = "openapi.namespace_id_parameter_invalid"
+	CodeOpenAPINamespaceParameterMissing         = "openapi.namespace_id_parameter_missing"
+	CodeOpenAPIMutatingHeaderMissing             = "openapi.mutating_header_missing"
+	CodeOpenAPIOperationsMissing                 = "openapi.operations_missing"
+	CodeOpenAPIRawDirectMountAccessForbidden     = "openapi.raw_direct_mount_access_forbidden"
+	CodeOpenAPIRouteOperationExtra               = "openapi.route_operation_extra"
+	CodeOpenAPIRouteOperationMissing             = "openapi.route_operation_missing"
+	CodeOpenAPIRouteOperationIDMismatch          = "openapi.route_operation_id_mismatch"
+	CodeOpenAPISchemaRawCredentialFieldForbidden = "openapi.schema_raw_credential_field_forbidden"
 
 	CodeSchemaExportSessionRequiredMissing                 = "schema.export_session_required_missing"
 	CodeSchemaExportSessionPropertyMissing                 = "schema.export_session_property_missing"
@@ -50,6 +51,7 @@ const (
 	CodeSchemaInvalidJSON                                  = "schema.invalid_json"
 	CodeSchemaQuotaSemanticsMissing                        = "schema.quota_semantics_missing"
 	CodeSchemaQuotaEnforcedForbidden                       = "schema.quota_enforced_forbidden"
+	CodeSchemaRawCredentialFieldForbidden                  = "schema.raw_credential_field_forbidden"
 
 	CodeDocsOperationBoundaryMissing       = "docs.operation_boundary_missing"
 	CodeDocsNamespaceHeaderMissing         = "docs.namespace_header_missing"
@@ -188,6 +190,7 @@ func verifyOpenAPI(path, body string) []Finding {
 	}
 
 	findings = append(findings, verifyOpenAPIRouteParity(path, body, operations)...)
+	findings = append(findings, verifyOpenAPISchemaRawCredentialFields(path, body)...)
 
 	return findings
 }
@@ -386,6 +389,7 @@ func verifySchema(path, body string) []Finding {
 	findings = append(findings, verifyNamespaceBindingAllowedCallerRoles(path, body, defs)...)
 	findings = append(findings, verifySchemaEnumParity(path, body, defs, "OperationType", operationTypeStrings(), CodeSchemaOperationTypeEnumGoDrift)...)
 	findings = append(findings, verifySchemaQuotaSemantics(path, body, root)...)
+	findings = append(findings, verifyJSONSchemaRawCredentialFields(path, body, root)...)
 
 	exportSession, _ := defs["ExportSession"].(map[string]any)
 	exportSessionFields := []string{
@@ -587,6 +591,277 @@ func verifySchemaQuotaSemantics(path, body string, root map[string]any) []Findin
 	}
 
 	return findings
+}
+
+func verifyJSONSchemaRawCredentialFields(path, body string, root map[string]any) []Finding {
+	var findings []Finding
+	for _, field := range findJSONSchemaRawCredentialMachineNames(root) {
+		findings = append(findings, Finding{
+			Code:    CodeSchemaRawCredentialFieldForbidden,
+			File:    path,
+			Line:    findLine(body, `"`+field.Name+`"`),
+			Message: fmt.Sprintf("schema machine contract field %s must not expose raw credentials or direct storage details; forbidden token(s): %s", field.Location, strings.Join(field.Tokens, ", ")),
+		})
+	}
+	return findings
+}
+
+func verifyOpenAPISchemaRawCredentialFields(path, body string) []Finding {
+	var findings []Finding
+	for _, field := range findOpenAPISchemaRawCredentialMachineNames(body) {
+		findings = append(findings, Finding{
+			Code:    CodeOpenAPISchemaRawCredentialFieldForbidden,
+			File:    path,
+			Line:    field.Line,
+			Message: fmt.Sprintf("OpenAPI schema machine contract field %s must not expose raw credentials or direct storage details; forbidden token(s): %s", field.Location, strings.Join(field.Tokens, ", ")),
+		})
+	}
+	return findings
+}
+
+type rawCredentialMachineField struct {
+	Name     string
+	Location string
+	Tokens   []string
+	Line     int
+}
+
+func findJSONSchemaRawCredentialMachineNames(root map[string]any) []rawCredentialMachineField {
+	var found []rawCredentialMachineField
+	seen := make(map[string]bool)
+	scanJSONSchemaMachineNode(root, "#", &found, seen)
+	return found
+}
+
+func scanJSONSchemaMachineNode(value any, location string, found *[]rawCredentialMachineField, seen map[string]bool) {
+	schema, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+
+	for _, defsKey := range []string{"$defs", "definitions"} {
+		defs, _ := schema[defsKey].(map[string]any)
+		for name, child := range defs {
+			childLocation := location + "/" + defsKey + "/" + name
+			appendRawCredentialMachineField(name, childLocation, 0, found, seen)
+			scanJSONSchemaMachineNode(child, childLocation, found, seen)
+		}
+	}
+
+	if components, _ := schema["components"].(map[string]any); components != nil {
+		if schemas, _ := components["schemas"].(map[string]any); schemas != nil {
+			for name, child := range schemas {
+				childLocation := location + "/components/schemas/" + name
+				appendRawCredentialMachineField(name, childLocation, 0, found, seen)
+				scanJSONSchemaMachineNode(child, childLocation, found, seen)
+			}
+		}
+	}
+
+	if properties, _ := schema["properties"].(map[string]any); properties != nil {
+		for name, child := range properties {
+			childLocation := location + "/properties/" + name
+			appendRawCredentialMachineField(name, childLocation, 0, found, seen)
+			scanJSONSchemaMachineNode(child, childLocation, found, seen)
+		}
+	}
+
+	if required, _ := schema["required"].([]any); required != nil {
+		for _, value := range required {
+			name, ok := value.(string)
+			if ok {
+				appendRawCredentialMachineField(name, location+"/required/"+name, 0, found, seen)
+			}
+		}
+	}
+
+	if dependentSchemas, _ := schema["dependentSchemas"].(map[string]any); dependentSchemas != nil {
+		for name, child := range dependentSchemas {
+			childLocation := location + "/dependentSchemas/" + name
+			appendRawCredentialMachineField(name, childLocation, 0, found, seen)
+			scanJSONSchemaMachineNode(child, childLocation, found, seen)
+		}
+	}
+
+	for _, key := range []string{"items", "contains", "additionalProperties", "unevaluatedItems", "unevaluatedProperties", "not", "if", "then", "else"} {
+		if child, ok := schema[key]; ok {
+			scanJSONSchemaMachineNode(child, location+"/"+key, found, seen)
+		}
+	}
+
+	for _, key := range []string{"allOf", "oneOf", "anyOf", "prefixItems"} {
+		children, _ := schema[key].([]any)
+		for i, child := range children {
+			scanJSONSchemaMachineNode(child, fmt.Sprintf("%s/%s/%d", location, key, i), found, seen)
+		}
+	}
+}
+
+func appendRawCredentialMachineField(name, location string, line int, found *[]rawCredentialMachineField, seen map[string]bool) {
+	tokens := forbiddenRawCredentialMachineTokens(name)
+	if len(tokens) == 0 {
+		return
+	}
+	key := fmt.Sprintf("%s:%d:%s", location, line, strings.Join(tokens, ","))
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+	*found = append(*found, rawCredentialMachineField{
+		Name:     name,
+		Location: location,
+		Tokens:   tokens,
+		Line:     line,
+	})
+}
+
+func forbiddenRawCredentialMachineTokens(value string) []string {
+	type forbiddenToken struct {
+		label   string
+		compact string
+	}
+	forbidden := []forbiddenToken{
+		{label: "metadata_url", compact: "metadataurl"},
+		{label: "bucket_secret_key", compact: "bucketsecretkey"},
+		{label: "aws_secret_access_key", compact: "awssecretaccesskey"},
+		{label: "secret_access_key", compact: "secretaccesskey"},
+		{label: "raw_mount_command", compact: "rawmountcommand"},
+		{label: "direct_mount_command", compact: "directmountcommand"},
+		{label: "direct_mount", compact: "directmount"},
+		{label: "mount_command", compact: "mountcommand"},
+		{label: "juicefs", compact: "juicefs"},
+	}
+
+	compact := compactLowerAlnum(value)
+	seen := make(map[string]bool)
+	var found []string
+	for _, token := range forbidden {
+		if !strings.Contains(compact, token.compact) {
+			continue
+		}
+		if seen[token.label] {
+			continue
+		}
+		seen[token.label] = true
+		found = append(found, token.label)
+	}
+	sort.Strings(found)
+	return found
+}
+
+type yamlFrame struct {
+	Key    string
+	Indent int
+}
+
+func findOpenAPISchemaRawCredentialMachineNames(body string) []rawCredentialMachineField {
+	lines := splitLines(body)
+	var stack []yamlFrame
+	var found []rawCredentialMachineField
+	seen := make(map[string]bool)
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := leadingSpaces(line)
+		for len(stack) > 0 && indent <= stack[len(stack)-1].Indent {
+			stack = stack[:len(stack)-1]
+		}
+
+		if requiredName, ok := parseYAMLListScalar(line); ok && yamlParentKey(stack) == "required" && isOpenAPISchemaYAMLContext(stack) {
+			appendRawCredentialMachineField(requiredName, yamlMachineLocation(stack, requiredName), i+1, &found, seen)
+			continue
+		}
+
+		key, value, hasKey := parseYAMLKeyValue(line)
+		if !hasKey {
+			continue
+		}
+
+		parent := yamlParentKey(stack)
+		switch {
+		case parent == "schemas" && isOpenAPIComponentsSchemasYAMLContext(stack):
+			appendRawCredentialMachineField(key, yamlMachineLocation(stack, key), i+1, &found, seen)
+		case parent == "properties" && isOpenAPISchemaYAMLContext(stack):
+			appendRawCredentialMachineField(key, yamlMachineLocation(stack, key), i+1, &found, seen)
+		case key == "$ref" && isOpenAPISchemaYAMLContext(stack):
+			if refName := schemaRefMachineName(yamlScalarValue(value)); refName != "" {
+				appendRawCredentialMachineField(refName, yamlMachineLocation(stack, refName), i+1, &found, seen)
+			}
+		}
+
+		stack = append(stack, yamlFrame{Key: key, Indent: indent})
+	}
+
+	return found
+}
+
+func parseYAMLListScalar(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "- ") {
+		return "", false
+	}
+	value := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+	if value == "" || strings.Contains(value, ":") {
+		return "", false
+	}
+	return yamlScalarValue(value), true
+}
+
+func yamlParentKey(stack []yamlFrame) string {
+	if len(stack) == 0 {
+		return ""
+	}
+	return stack[len(stack)-1].Key
+}
+
+func isOpenAPIComponentsSchemasYAMLContext(stack []yamlFrame) bool {
+	for i := 1; i < len(stack); i++ {
+		if stack[i-1].Key == "components" && stack[i].Key == "schemas" {
+			return true
+		}
+	}
+	return false
+}
+
+func isOpenAPISchemaYAMLContext(stack []yamlFrame) bool {
+	if isOpenAPIComponentsSchemasYAMLContext(stack) {
+		return true
+	}
+	for _, frame := range stack {
+		switch frame.Key {
+		case "schema", "items", "allOf", "oneOf", "anyOf", "not", "additionalProperties", "unevaluatedProperties", "unevaluatedItems":
+			return true
+		}
+	}
+	return false
+}
+
+func yamlMachineLocation(stack []yamlFrame, name string) string {
+	var parts []string
+	for _, frame := range stack {
+		parts = append(parts, frame.Key)
+	}
+	parts = append(parts, name)
+	return strings.Join(parts, ".")
+}
+
+func schemaRefMachineName(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	if hash := strings.LastIndex(ref, "#"); hash >= 0 {
+		ref = ref[hash+1:]
+	}
+	ref = strings.Trim(ref, "/")
+	if ref == "" {
+		return ""
+	}
+	parts := strings.Split(ref, "/")
+	return parts[len(parts)-1]
 }
 
 type schemaProperty struct {

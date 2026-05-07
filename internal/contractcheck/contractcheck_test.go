@@ -516,6 +516,139 @@ func TestVerifyFilesCatchesSchemaPropertyAndAdditionalPropertiesFailures(t *test
 	assertHasFinding(t, findings, CodeSchemaOperationEnvelopeNestedOperation)
 }
 
+func TestVerifyFilesCatchesSchemaRawCredentialMachineFields(t *testing.T) {
+	schema := strings.Replace(validSchema, `
+    "AllowedCaller": {
+`, `
+    "StorageLeak": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metadata_url": { "type": "string" },
+        "nested": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "bucket_secret_key": { "type": "string" }
+            }
+          }
+        },
+        "composed": {
+          "allOf": [
+            {
+              "type": "object",
+              "properties": {
+                "aws_secret_access_key": { "type": "string" }
+              }
+            }
+          ],
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "raw_mount_command": { "type": "string" }
+              }
+            },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "AllowedCaller": {
+`, 1)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: validOpenAPI,
+		schema:  schema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertFindingCount(t, findings, CodeSchemaRawCredentialFieldForbidden, 4)
+}
+
+func TestVerifyFilesCatchesOpenAPISchemaRawCredentialMachineFields(t *testing.T) {
+	openapi := strings.Replace(validOpenAPI, `
+components:
+`, `
+components:
+  schemas:
+    StorageLeak:
+      type: object
+      additionalProperties: false
+      properties:
+        metadata_url:
+          type: string
+        nested:
+          type: array
+          items:
+            type: object
+            properties:
+              bucket_secret_key:
+                type: string
+        composed:
+          allOf:
+            - type: object
+              properties:
+                aws_secret_access_key:
+                  type: string
+          anyOf:
+            - type: object
+              properties:
+                raw_mount_command:
+                  type: string
+            - type: "null"
+`, 1)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: openapi,
+		schema:  validSchema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertFindingCount(t, findings, CodeOpenAPISchemaRawCredentialFieldForbidden, 4)
+}
+
+func TestVerifyFilesAllowsOrchestratorSecretRefAndIgnoresSchemaDescriptions(t *testing.T) {
+	schema := strings.Replace(validSchema, `"export_id": { "type": "string" }`, `"export_id": { "type": "string", "description": "Do not expose metadata_url, bucket_secret_key, aws_secret_access_key, or raw_mount_command here." }`, 1)
+	schema = strings.Replace(schema, `
+    "AllowedCaller": {
+`, `
+    "OrchestratorMountPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["secret_ref"],
+      "properties": {
+        "secret_ref": { "type": "string" }
+      }
+    },
+    "AllowedCaller": {
+`, 1)
+	paths := writeContractFixture(t, contractFixture{
+		openapi: validOpenAPI,
+		schema:  schema,
+		docs:    validDocs,
+		draft:   validDocs,
+	})
+
+	findings, err := VerifyFiles(paths.openapi, paths.schema, paths.docs, paths.draft)
+	if err != nil {
+		t.Fatalf("VerifyFiles returned error: %v", err)
+	}
+
+	assertFindingCount(t, findings, CodeSchemaRawCredentialFieldForbidden, 0)
+}
+
 func TestVerifyFilesCatchesSchemaEnumGoParityDrift(t *testing.T) {
 	driftedSchema := validSchema
 	driftedSchema = strings.Replace(driftedSchema, `        "CALLER_NOT_ALLOWED",`+"\n", "", 1)
