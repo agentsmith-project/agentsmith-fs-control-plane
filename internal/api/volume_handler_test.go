@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -248,6 +249,30 @@ func TestVolumeHealthHandlerBackendProbeFailureIsNotHealthyAndDoesNotLeakDetails
 				}
 			}
 		})
+	}
+}
+
+func TestVolumeHealthHandlerMissingMetadataUsesVolumeNotFound(t *testing.T) {
+	handler := VolumeHealthHandler(VolumeHealthHandlerConfig{
+		Reader:            fakeVolumeHealthReader{err: sql.ErrNoRows},
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		DeploymentPolicy:  volumeAdminAllowedPolicy(),
+		Now:               fixedNamespaceNow,
+	})
+
+	rec := serveVolumeHealth(handler)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s, want 404", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeVolumeNotFound {
+		t.Fatalf("error code = %s, want VOLUME_NOT_FOUND", env.Error.Code)
+	}
+	for _, forbidden := range []string{"sql", "no rows", "ErrNoRows"} {
+		if strings.Contains(strings.ToLower(rec.Body.String()), strings.ToLower(forbidden)) {
+			t.Fatalf("volume health not-found leaked %q in %s", forbidden, rec.Body.String())
+		}
 	}
 }
 

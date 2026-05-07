@@ -103,6 +103,7 @@ GA error families:
 - `IDEMPOTENCY_CONFLICT`
 - `REPO_ALREADY_EXISTS`
 - `REPO_NOT_FOUND`
+- `VOLUME_NOT_FOUND`
 - `OPERATION_NOT_FOUND`
 - `STORAGE_UNAVAILABLE`
 - `INTERNAL_ERROR`
@@ -136,6 +137,8 @@ should map it to HTTP 503 with `retryable=true`. `INTERNAL_ERROR` is reserved
 for otherwise unclassified handler, invariant, serialization, or service bugs;
 handlers should map it to HTTP 500 and default `retryable=false`. Store outages
 must not be disguised as `CAPABILITY_DENIED` or `NAMESPACE_NOT_FOUND`.
+Missing volume metadata on volume-global health uses `VOLUME_NOT_FOUND` with
+HTTP 404 and must not reveal raw store or SQL details.
 `REPO_JVS_MUTATION_IN_PROGRESS` means a same-repo JVS mutation is non-terminal;
 handlers should map it to HTTP 409 with `retryable=true`.
 Restore plan validation must use existing stable codes. A restore-run request
@@ -493,7 +496,9 @@ and an injected backend volume health probe. `status:"healthy"` is allowed only
 when all three pass. If the backend probe is missing, fails, or errors, the
 response is not healthy and uses stable finding codes such as
 `BACKEND_PROBE_MISSING`, `BACKEND_PROBE_FAILED`, or `BACKEND_PROBE_ERROR`
-without returning raw backend paths, secrets, or underlying error text.
+without returning raw backend paths, secrets, or underlying error text. If
+volume metadata for `{volumeId}` is missing, the endpoint returns HTTP 404 with
+`VOLUME_NOT_FOUND` and a generic `volume was not found` message.
 
 ### Namespaces
 

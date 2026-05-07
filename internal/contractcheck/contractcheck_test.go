@@ -1537,6 +1537,7 @@ const validSchema = `
         "IDEMPOTENCY_CONFLICT",
         "REPO_ALREADY_EXISTS",
         "REPO_NOT_FOUND",
+        "VOLUME_NOT_FOUND",
         "OPERATION_NOT_FOUND",
         "ACTIVE_WRITER_SESSIONS",
         "WRITER_SESSION_FENCE_HELD",

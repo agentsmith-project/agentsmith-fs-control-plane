@@ -78,7 +78,8 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
 - AFSCP rejects non-empty `X-AFSCP-Namespace-Id` on volume-global admin operations.
 - Volume health is not metadata-only; healthy requires valid metadata,
   required volume capabilities, and an explicitly passing backend probe. A
-  missing backend probe degrades health with a stable finding code.
+  missing backend probe degrades health with a stable finding code. Missing
+  volume metadata uses `VOLUME_NOT_FOUND`.
 - Cross-namespace template clone is rejected by default.
 - Cross-volume template clone is rejected with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
 - Restore-run and restore-preview discard references to preview operations must
@@ -129,9 +130,10 @@ Deployments may split these roles further, but they must not merge ordinary prod
 
 The internal API must expose a standard error envelope and stable error codes
 for authentication, caller authorization, namespace/resource mismatch,
-capability denial, idempotency conflict, active writer restore rejection, dirty
-restore rejection, JVS failure, export expiry/revoke, mount terminal state, repo
-lifecycle invalid state, lifecycle session drain failure, missing purge
+capability denial, idempotency conflict, missing repo or volume metadata, active
+writer restore rejection, dirty restore rejection, JVS failure, export
+expiry/revoke, mount terminal state, repo lifecycle invalid state, lifecycle
+session drain failure, missing purge
 confirmation, purge retention denial, operation recovery required, durable
 metadata/store unavailability, and unclassified internal service bugs.
 
@@ -167,6 +169,10 @@ idempotency key with a different request body.
 Repo read APIs are namespace-bound. Missing repos, including repos that exist
 under a different namespace than the request namespace, use the stable
 `REPO_NOT_FOUND` response and must not reveal cross-namespace existence.
+
+Volume health is volume-global rather than namespace-bound. Missing volume
+metadata for `GET /internal/v1/volumes/{volumeId}/health` uses HTTP 404 with
+`VOLUME_NOT_FOUND` and must not reveal raw store or SQL details.
 
 Operation inspection returns a redacted `OperationRecord` directly. Missing
 operations use the stable `OPERATION_NOT_FOUND` response. Product caller

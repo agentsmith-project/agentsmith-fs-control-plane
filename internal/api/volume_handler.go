@@ -132,7 +132,7 @@ func (handler volumeHealthLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.
 	volume, err := handler.reader.GetVolume(r.Context(), volumeID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			envelope := NewErrorEnvelope(CodeRepoNotFound, "volume was not found", false, CorrelationIDFromRequest(r), nil, nil)
+			envelope := NewErrorEnvelope(CodeVolumeNotFound, "volume was not found", false, CorrelationIDFromRequest(r), nil, nil)
 			_ = WriteErrorEnvelope(w, http.StatusNotFound, envelope)
 			return
 		}
