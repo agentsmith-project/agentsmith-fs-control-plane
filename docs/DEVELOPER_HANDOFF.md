@@ -168,20 +168,21 @@ Completed:
 - session substrate pure model for export and workload-mount session state,
   restore-run/template writer gating, and repo lifecycle drain gating; export
   sessions are wired into API create/get/revoke, WebDAV gateway admission and
-  runtime observation, terminal reconcile, and repo archive/delete recovery
-  drain checks. Workload mount issuance, orchestrator plans, stale mount
-  scanning, restore-run execution, and template create source dirty-race gates
-  are wired through durable operation and session/fence boundaries.
+  runtime request ledger accounting/recovery, terminal reconcile, and repo
+  archive/delete recovery drain checks. Workload mount issuance, orchestrator
+  plans, stale mount scanning, restore-run execution, and template create
+  source dirty-race gates are wired through durable operation and session/fence
+  boundaries.
 - WebDAV export gateway serving through `afscp-export-gateway --serve`, with
   Basic auth, active/unexpired WebDAV session admission, mode/method policy,
   source and `Destination` path policy, payload no-follow filesystem access,
-  and DB-backed runtime observation
-- durable export runtime observation uses DB atomic deltas: request start
-  records `+1` active request and mutating start also records `+1` active
-  write; request end records matching `-1` deltas; heartbeat records `0/0`
-  without changing active counts. Positive start deltas are admitted only while
-  the session is still `active` and unexpired at the DB boundary, closing the
-  revoke/expiry TOCTOU window.
+  and DB-backed runtime request ledger accounting
+- durable export runtime request accounting uses the dedicated
+  `export_runtime_requests` ledger: request begin inserts an open row and
+  increments active counts in the same DB boundary, heartbeat refreshes that
+  same durable request ID, and end closes only an open row before decrementing
+  counts. Positive begin is admitted only while the session is still `active`
+  and unexpired at the DB boundary, closing the revoke/expiry TOCTOU window.
 - explicit-gated terminal export session reconcile through `afscp-worker
   --run-once` before operation recovery. It is enabled by
   `AFSCP_EXPORT_SESSION_RECONCILE_ENABLED=true`, uses
@@ -189,10 +190,12 @@ Completed:
   `AFSCP_POSTGRES_DSN` and `AFSCP_DATABASE_URL`, and requires
   `AFSCP_EXPORT_SESSION_RECONCILE_OWNER`; batch size is controlled by
   `AFSCP_EXPORT_SESSION_RECONCILE_LIMIT`.
-- terminal export reconcile covers zero-count `revoking -> revoked` and
-  zero-count expired `active -> expired` without requiring a fresh gateway
-  heartbeat. Nonzero counts and stale/uncertain states still fail closed and
-  require operator/runbook follow-up.
+- terminal export reconcile first recovers stale open runtime request rows whose
+  heartbeat expiry has elapsed, verifies aggregate counts can cover those rows,
+  subtracts the recovered counts, then covers zero-count `revoking -> revoked`
+  and zero-count expired `active -> expired` only when no open runtime request
+  rows remain. Drift where aggregate counts cannot cover stale ledger rows
+  fails closed.
 - workload mount issuance and orchestrator-only mount plans are implemented.
   Stale non-terminal workload mounts are scanned by an explicit worker runner;
   the scan reports kept-blocked bindings as operator-visible evidence rather
@@ -267,11 +270,8 @@ Partially completed:
 
 Not implemented:
 
-- complex gateway crash recovery or per-request WebDAV operation records. If a
-  gateway process crashes after a positive start delta commits and before the
-  matching end delta, active request/write counts may conservatively remain
-  positive until an operator/runbook repair or future recovery path resolves
-  the session.
+- per-request WebDAV operation records. Runtime request rows are a dedicated
+  gateway ledger, not operation rows.
 - deployment evidence that the configured external HTTP JSON audit sink dedupes
   by `audit_event_id`
 - generated clients, AFSCP owner/security acceptance, deployment-specific

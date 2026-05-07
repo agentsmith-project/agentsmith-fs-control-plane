@@ -292,7 +292,7 @@ func TestSymlinkComponentRejectedBeforeBackend(t *testing.T) {
 	}
 }
 
-func TestSuccessfulGETRecordsRuntimeObservation(t *testing.T) {
+func TestSuccessfulGETRecordsRuntimeLedger(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
 	env.writePayload(t, "hello.txt", "hello")
 
@@ -303,19 +303,57 @@ func TestSuccessfulGETRecordsRuntimeObservation(t *testing.T) {
 	if env.store.recordCalls != 0 {
 		t.Fatalf("legacy RecordExportAccess calls = %d, want 0", env.store.recordCalls)
 	}
-	requireObservation(t, env.store.observations, 0, observationWant{
+	requireObservation(t, env.store.runtimeApplied, 0, observationWant{
 		requestDelta: 1,
 		writeDelta:   0,
 		success:      false,
 	})
-	requireObservation(t, env.store.observations, 1, observationWant{
+	requireObservation(t, env.store.runtimeApplied, 1, observationWant{
 		requestDelta: -1,
 		writeDelta:   0,
 		success:      true,
 	})
 }
 
-func TestEndRuntimeObservationUsesDetachedContextAfterRequestCancel(t *testing.T) {
+func TestSuccessfulGETUsesSingleDurableRuntimeRequestID(t *testing.T) {
+	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+	env.writePayload(t, "hello.txt", "hello")
+
+	rec := env.request(http.MethodGet, "/e/"+testExportID+"/hello.txt", nil, "")
+	if rec.Code != http.StatusOK || rec.Body.String() != "hello" {
+		t.Fatalf("GET status/body = %d/%q, want 200/hello", rec.Code, rec.Body.String())
+	}
+	if len(env.store.runtimeBegins) != 1 || len(env.store.runtimeEnds) != 1 {
+		t.Fatalf("begin/end calls = %d/%d, want durable begin and end", len(env.store.runtimeBegins), len(env.store.runtimeEnds))
+	}
+	requestID := env.store.runtimeBegins[0].RequestID
+	if requestID == "" || env.store.runtimeEnds[0].RequestID != requestID {
+		t.Fatalf("runtime request IDs begin/end = %q/%q, want same non-empty ID", requestID, env.store.runtimeEnds[0].RequestID)
+	}
+	if len(env.store.observations) != 0 {
+		t.Fatalf("legacy delta observations = %d, want durable ledger calls only", len(env.store.observations))
+	}
+}
+
+func TestReadWritePUTUsesDurableWriteRuntimeRequest(t *testing.T) {
+	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
+	if err := os.MkdirAll(filepath.Join(env.payloadRoot, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := env.request(http.MethodPut, "/e/"+testExportID+"/docs/hello.txt", strings.NewReader("hello"), "")
+	if rec.Code >= 400 {
+		t.Fatalf("PUT status = %d, want success, body %q", rec.Code, rec.Body.String())
+	}
+	if len(env.store.runtimeBegins) != 1 || !env.store.runtimeBegins[0].Write {
+		t.Fatalf("runtime begins = %#v, want one write begin", env.store.runtimeBegins)
+	}
+	if len(env.store.runtimeEnds) != 1 || env.store.runtimeEnds[0].SuccessfulRequestAccessedAt == nil {
+		t.Fatalf("runtime ends = %#v, want successful end", env.store.runtimeEnds)
+	}
+}
+
+func TestEndRuntimeRequestUsesDetachedContextAfterRequestCancel(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
 	env.writePayload(t, "hello.txt", "hello")
 	req := httptest.NewRequest(http.MethodGet, "http://files.example.test/e/"+testExportID+"/hello.txt", nil)
@@ -351,7 +389,7 @@ func TestEndRuntimeObservationUsesDetachedContextAfterRequestCancel(t *testing.T
 	}
 }
 
-func TestReadWritePUTRecordsActiveWriteObservation(t *testing.T) {
+func TestReadWritePUTRecordsActiveWriteRuntimeLedger(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
 	if err := os.MkdirAll(filepath.Join(env.payloadRoot, "docs"), 0o755); err != nil {
 		t.Fatal(err)
@@ -361,38 +399,38 @@ func TestReadWritePUTRecordsActiveWriteObservation(t *testing.T) {
 	if rec.Code >= 400 {
 		t.Fatalf("PUT status = %d, want success, body %q", rec.Code, rec.Body.String())
 	}
-	requireObservation(t, env.store.observations, 0, observationWant{
+	requireObservation(t, env.store.runtimeApplied, 0, observationWant{
 		requestDelta: 1,
 		writeDelta:   1,
 		success:      false,
 	})
-	requireObservation(t, env.store.observations, 1, observationWant{
+	requireObservation(t, env.store.runtimeApplied, 1, observationWant{
 		requestDelta: -1,
 		writeDelta:   -1,
 		success:      true,
 	})
 }
 
-func TestBackendFailureEndsRuntimeObservationWithoutSuccessfulAccess(t *testing.T) {
+func TestBackendFailureEndsRuntimeRequestWithoutSuccessfulAccess(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
 
 	rec := env.request(http.MethodGet, "/e/"+testExportID+"/missing.txt", nil, "")
 	if rec.Code < 400 {
 		t.Fatalf("missing status = %d, want backend failure", rec.Code)
 	}
-	requireObservation(t, env.store.observations, 0, observationWant{
+	requireObservation(t, env.store.runtimeApplied, 0, observationWant{
 		requestDelta: 1,
 		writeDelta:   0,
 		success:      false,
 	})
-	requireObservation(t, env.store.observations, 1, observationWant{
+	requireObservation(t, env.store.runtimeApplied, 1, observationWant{
 		requestDelta: -1,
 		writeDelta:   0,
 		success:      false,
 	})
 }
 
-func TestStartRuntimeObservationFailureFailsClosedBeforeBackend(t *testing.T) {
+func TestBeginRuntimeRequestFailureFailsClosedBeforeBackend(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
 	if err := os.MkdirAll(filepath.Join(env.payloadRoot, "docs"), 0o755); err != nil {
 		t.Fatal(err)
@@ -406,29 +444,27 @@ func TestStartRuntimeObservationFailureFailsClosedBeforeBackend(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(env.payloadRoot, "docs", "blocked.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("backend file stat err = %v, want not exist", err)
 	}
-	requireObservation(t, env.store.observations, 0, observationWant{
-		requestDelta: 1,
-		writeDelta:   1,
-		success:      false,
-	})
+	if len(env.store.runtimeBegins) != 1 || len(env.store.runtimeApplied) != 0 {
+		t.Fatalf("begin/applied = %d/%d, want failed begin without applied count", len(env.store.runtimeBegins), len(env.store.runtimeApplied))
+	}
 
 	rec = env.request(http.MethodPut, "/e/"+testExportID+"/docs/allowed.txt", strings.NewReader("allowed"), "")
 	if rec.Code >= 400 {
 		t.Fatalf("second PUT status = %d, want success, body %q", rec.Code, rec.Body.String())
 	}
-	requireObservation(t, env.store.observations, 1, observationWant{
+	requireObservation(t, env.store.runtimeApplied, 0, observationWant{
 		requestDelta: 1,
 		writeDelta:   1,
 		success:      false,
 	})
-	requireObservation(t, env.store.observations, 2, observationWant{
+	requireObservation(t, env.store.runtimeApplied, 1, observationWant{
 		requestDelta: -1,
 		writeDelta:   -1,
 		success:      true,
 	})
 }
 
-func TestStartRuntimeObservationAdmissionDeniedFailsClosedBeforeBackend(t *testing.T) {
+func TestBeginRuntimeRequestAdmissionDeniedFailsClosedBeforeBackend(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
 	if err := os.MkdirAll(filepath.Join(env.payloadRoot, "docs"), 0o755); err != nil {
 		t.Fatal(err)
@@ -448,11 +484,9 @@ func TestStartRuntimeObservationAdmissionDeniedFailsClosedBeforeBackend(t *testi
 			t.Fatalf("response leaked store detail %q: %q", forbidden, rec.Body.String())
 		}
 	}
-	requireObservation(t, env.store.observations, 0, observationWant{
-		requestDelta: 1,
-		writeDelta:   1,
-		success:      false,
-	})
+	if len(env.store.runtimeBegins) != 1 || len(env.store.runtimeApplied) != 0 {
+		t.Fatalf("begin/applied = %d/%d, want failed admission begin without applied count", len(env.store.runtimeBegins), len(env.store.runtimeApplied))
+	}
 	event := requireAuditEvent(t, env, 0, audit.EventTypeAuthzDenied, http.StatusForbidden, "authz_denied")
 	if event.Details["deny_class"] != denyClassAuthzDenied {
 		t.Fatalf("deny_class = %#v, want %s", event.Details["deny_class"], denyClassAuthzDenied)
@@ -465,7 +499,45 @@ func TestStartRuntimeObservationAdmissionDeniedFailsClosedBeforeBackend(t *testi
 	}
 }
 
-func TestEndRuntimeObservationFailureDoesNotChangeBackendResponse(t *testing.T) {
+func TestRuntimeRequestIDGenerationFailureFailsClosedBeforeBackend(t *testing.T) {
+	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
+	if err := os.MkdirAll(filepath.Join(env.payloadRoot, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHandler(Config{
+		Store:            env.store,
+		AuditSink:        env.auditSink,
+		AuditEventID:     func() string { return "evt_exportgateway_test" },
+		VolumeRoots:      map[string]string{testVolumeID: env.volumeRoot},
+		Prefix:           "/e/",
+		Now:              fixedGatewayNow,
+		HeartbeatTTL:     testHeartbeatTTL,
+		RuntimeRequestID: func() (string, error) { return "", errors.New("entropy unavailable token=runtime-secret") },
+	})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "http://files.example.test/e/"+testExportID+"/docs/blocked.txt", strings.NewReader("blocked"))
+	req.SetBasicAuth(testExportID, testPassword)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503, body %q", rec.Code, rec.Body.String())
+	}
+	if len(env.store.runtimeBegins) != 0 || len(env.store.runtimeApplied) != 0 {
+		t.Fatalf("runtime begin/applied = %d/%d, want no ledger mutation", len(env.store.runtimeBegins), len(env.store.runtimeApplied))
+	}
+	if _, err := os.Stat(filepath.Join(env.payloadRoot, "docs", "blocked.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backend file stat err = %v, want not exist", err)
+	}
+	if strings.Contains(rec.Body.String(), "runtime-secret") || strings.Contains(rec.Body.String(), "entropy unavailable") {
+		t.Fatalf("response leaked generator error: %q", rec.Body.String())
+	}
+}
+
+func TestEndRuntimeRequestFailureDoesNotChangeBackendResponse(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
 	env.writePayload(t, "hello.txt", "hello")
 	env.store.runtimeErrs = []error{nil, errors.New("runtime observation unavailable")}
@@ -809,6 +881,9 @@ type fakeGatewayStore struct {
 	runtimeContextErrsAtCall   []error
 	runtimeHooks               []func(context.Context, exportaccess.RuntimeObservation)
 	runtimeApplied             []exportaccess.RuntimeObservation
+	runtimeBegins              []exportaccess.RuntimeRequestBegin
+	runtimeHeartbeats          []exportaccess.RuntimeRequestHeartbeat
+	runtimeEnds                []exportaccess.RuntimeRequestEnd
 	failCanceledRuntimeContext bool
 	observations               []exportaccess.RuntimeObservation
 	recordCalls                int
@@ -843,7 +918,7 @@ func (store *fakeGatewayStore) RecordExportAccess(ctx context.Context, exportID 
 	return store.recordErr
 }
 
-func (store *fakeGatewayStore) RecordExportRuntimeObservation(ctx context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error) {
+func (store *fakeGatewayStore) applyLegacyRuntimeObservation(ctx context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error) {
 	store.observations = append(store.observations, observation)
 	store.runtimeContextErrsAtCall = append(store.runtimeContextErrsAtCall, ctx.Err())
 	var err error
@@ -879,6 +954,111 @@ func (store *fakeGatewayStore) RecordExportRuntimeObservation(ctx context.Contex
 	return session, nil
 }
 
+func (store *fakeGatewayStore) BeginExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestBegin) (exportaccess.Session, error) {
+	store.runtimeBegins = append(store.runtimeBegins, request)
+	store.runtimeContextErrsAtCall = append(store.runtimeContextErrsAtCall, ctx.Err())
+	observation := exportaccess.RuntimeObservation{
+		ExportID:                  request.ExportID,
+		ObservedAt:                request.StartedAt,
+		ActiveRequestDelta:        1,
+		GatewayHeartbeatAt:        &request.StartedAt,
+		GatewayHeartbeatExpiresAt: &request.HeartbeatExpiresAt,
+	}
+	if request.Write {
+		observation.ActiveWriteDelta = 1
+	}
+	err := store.nextRuntimeErr(ctx)
+	store.runtimeCallErrs = append(store.runtimeCallErrs, err)
+	if err != nil {
+		return exportaccess.Session{}, err
+	}
+	session := store.applyRuntimeObservation(observation)
+	if call := len(store.runtimeCallErrs) - 1; call < len(store.runtimeHooks) && store.runtimeHooks[call] != nil {
+		store.runtimeHooks[call](ctx, observation)
+	}
+	return session, nil
+}
+
+func (store *fakeGatewayStore) HeartbeatExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestHeartbeat) (exportaccess.Session, error) {
+	store.runtimeHeartbeats = append(store.runtimeHeartbeats, request)
+	store.runtimeContextErrsAtCall = append(store.runtimeContextErrsAtCall, ctx.Err())
+	observation := exportaccess.RuntimeObservation{
+		ExportID:                  request.ExportID,
+		ObservedAt:                request.ObservedAt,
+		GatewayHeartbeatAt:        &request.ObservedAt,
+		GatewayHeartbeatExpiresAt: &request.HeartbeatExpiresAt,
+	}
+	err := store.nextRuntimeErr(ctx)
+	store.runtimeCallErrs = append(store.runtimeCallErrs, err)
+	if err != nil {
+		return exportaccess.Session{}, err
+	}
+	session := store.applyRuntimeObservation(observation)
+	if call := len(store.runtimeCallErrs) - 1; call < len(store.runtimeHooks) && store.runtimeHooks[call] != nil {
+		store.runtimeHooks[call](ctx, observation)
+	}
+	return session, nil
+}
+
+func (store *fakeGatewayStore) EndExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestEnd) (exportaccess.Session, error) {
+	store.runtimeEnds = append(store.runtimeEnds, request)
+	store.runtimeContextErrsAtCall = append(store.runtimeContextErrsAtCall, ctx.Err())
+	writeDelta := 0
+	if len(store.runtimeBegins) > 0 && store.runtimeBegins[len(store.runtimeBegins)-1].RequestID == request.RequestID && store.runtimeBegins[len(store.runtimeBegins)-1].Write {
+		writeDelta = -1
+	}
+	observation := exportaccess.RuntimeObservation{
+		ExportID:                    request.ExportID,
+		ObservedAt:                  request.EndedAt,
+		ActiveRequestDelta:          -1,
+		ActiveWriteDelta:            writeDelta,
+		GatewayHeartbeatAt:          &request.EndedAt,
+		GatewayHeartbeatExpiresAt:   ptrTime(request.EndedAt.Add(testHeartbeatTTL)),
+		SuccessfulRequestAccessedAt: request.SuccessfulRequestAccessedAt,
+	}
+	err := store.nextRuntimeErr(ctx)
+	store.runtimeCallErrs = append(store.runtimeCallErrs, err)
+	if err != nil {
+		return exportaccess.Session{}, err
+	}
+	session := store.applyRuntimeObservation(observation)
+	if call := len(store.runtimeCallErrs) - 1; call < len(store.runtimeHooks) && store.runtimeHooks[call] != nil {
+		store.runtimeHooks[call](ctx, observation)
+	}
+	return session, nil
+}
+
+func (store *fakeGatewayStore) nextRuntimeErr(ctx context.Context) error {
+	var err error
+	if call := len(store.runtimeCallErrs); call < len(store.runtimeErrs) {
+		err = store.runtimeErrs[call]
+	}
+	if err == nil && store.failCanceledRuntimeContext {
+		err = ctx.Err()
+	}
+	return err
+}
+
+func (store *fakeGatewayStore) applyRuntimeObservation(observation exportaccess.RuntimeObservation) exportaccess.Session {
+	session := store.credential.Session
+	session.ActiveRequestCount += observation.ActiveRequestDelta
+	session.ActiveWriteCount += observation.ActiveWriteDelta
+	session.LastObservedAt = ptrTime(observation.ObservedAt)
+	session.LastGatewayHeartbeatAt = cloneTimePtr(observation.GatewayHeartbeatAt)
+	session.GatewayHeartbeatExpiresAt = cloneTimePtr(observation.GatewayHeartbeatExpiresAt)
+	if session.ActiveWriteCount == 0 {
+		session.WriteDrainedAt = ptrTime(observation.ObservedAt)
+	} else {
+		session.WriteDrainedAt = nil
+	}
+	if observation.SuccessfulRequestAccessedAt != nil {
+		session.LastAccessedAt = cloneTimePtr(observation.SuccessfulRequestAccessedAt)
+	}
+	store.credential.Session = session
+	store.runtimeApplied = append(store.runtimeApplied, observation)
+	return session
+}
+
 type observationWant struct {
 	requestDelta int
 	writeDelta   int
@@ -911,8 +1091,8 @@ func requireObservation(t *testing.T, observations []exportaccess.RuntimeObserva
 
 func requireNoRuntimeObservation(t *testing.T, env *gatewayTestEnv) {
 	t.Helper()
-	if len(env.store.observations) != 0 {
-		t.Fatalf("runtime observations = %d, want 0", len(env.store.observations))
+	if len(env.store.observations) != 0 || len(env.store.runtimeBegins) != 0 || len(env.store.runtimeHeartbeats) != 0 || len(env.store.runtimeEnds) != 0 {
+		t.Fatalf("runtime calls observations/begins/heartbeats/ends = %d/%d/%d/%d, want 0", len(env.store.observations), len(env.store.runtimeBegins), len(env.store.runtimeHeartbeats), len(env.store.runtimeEnds))
 	}
 }
 

@@ -55,15 +55,16 @@ state unless a separate reviewed contract adds an explicit target-state option.
 The repo access admission model exists in code for shared pre-handler decisions
 across lifecycle, save/restore, export, mount, and template handlers. Concrete
 wired slices already include export admission, WebDAV gateway admission and
-runtime observation, repo lifecycle worker drain checks, restore/template
-writer-fence admission, and read-write export/workload admission through shared
-repo-row serialization. Remaining endpoint coverage and drill evidence are
-still review items.
+runtime request ledger accounting, repo lifecycle worker drain checks,
+restore/template writer-fence admission, and read-write export/workload
+admission through shared repo-row serialization. Remaining endpoint coverage
+and drill evidence are still review items.
 The session substrate pure model also exists for restore-run writer gating and
 lifecycle drain gating over export and workload-mount sessions. Export sessions
 are wired to the API create/get/revoke boundary, WebDAV gateway admission and
-runtime observation, terminal reconcile, and repo lifecycle worker drain checks.
-Workload-mount plan issuance and restore-run execution remain separate.
+runtime request ledger accounting/recovery, terminal reconcile, and repo
+lifecycle worker drain checks. Workload-mount plan issuance and restore-run
+execution remain separate.
 
 ## Lifecycle Fence
 
@@ -94,10 +95,12 @@ Archive, delete, and purge must wait for all non-terminal exports and workload
 mount bindings, read-only or read-write, to reach a confirmed terminal non-accessing
 state. Uncertain sessions fail closed or move the operation to
 `operator_intervention_required`. For export sessions, the current terminal
-reconcile runner can prove zero-count `revoking -> revoked` and zero-count
-expired `active -> expired` without a fresh gateway heartbeat; nonzero counts
-or stale/uncertain runtime state remain blocking until operator/runbook repair
-or later recovery.
+reconcile runner first recovers stale open runtime request ledger rows whose
+heartbeat expiry has elapsed, verifies aggregate counts can cover those rows,
+then can prove zero-count `revoking -> revoked` and zero-count expired
+`active -> expired` only when no open runtime request rows remain.
+Ledger/aggregate drift or stale/uncertain runtime state remains blocking and
+fails closed.
 
 ## Operation Semantics
 

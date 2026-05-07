@@ -2190,6 +2190,10 @@ func (store *fakeWorkerAppStore) ListExportSessionsForTerminalReconcile(context.
 	return out, nil
 }
 
+func (store *fakeWorkerAppStore) RecoverStaleExportRuntimeRequests(context.Context, exportaccess.StaleRuntimeRequestRecovery) (exportaccess.StaleRuntimeRequestRecoveryResult, error) {
+	return exportaccess.StaleRuntimeRequestRecoveryResult{}, nil
+}
+
 func (store *fakeWorkerAppStore) ReconcileExportSessionTerminal(_ context.Context, request exportaccess.ReconcileRequest) (exportaccess.ReconcileResult, error) {
 	store.exportReconciles = append(store.exportReconciles, request)
 	session := exportaccess.Session{

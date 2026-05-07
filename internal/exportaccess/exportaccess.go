@@ -122,6 +122,38 @@ type RuntimeObservation struct {
 	SuccessfulRequestAccessedAt *time.Time
 }
 
+type RuntimeRequestBegin struct {
+	RequestID          string
+	ExportID           string
+	StartedAt          time.Time
+	HeartbeatExpiresAt time.Time
+	Write              bool
+}
+
+type RuntimeRequestHeartbeat struct {
+	RequestID          string
+	ExportID           string
+	ObservedAt         time.Time
+	HeartbeatExpiresAt time.Time
+}
+
+type RuntimeRequestEnd struct {
+	RequestID                   string
+	ExportID                    string
+	EndedAt                     time.Time
+	SuccessfulRequestAccessedAt *time.Time
+}
+
+type StaleRuntimeRequestRecovery struct {
+	Now   time.Time
+	Limit int
+}
+
+type StaleRuntimeRequestRecoveryResult struct {
+	Recovered       int
+	RecoveredWrites int
+}
+
 type ReconcileRequest struct {
 	ExportID           string
 	NamespaceID        string
@@ -189,6 +221,85 @@ func (session Session) Validate() error {
 func (session Session) MarshalJSON() ([]byte, error) {
 	type sessionJSON Session
 	return json.Marshal(sessionJSON(session))
+}
+
+func (request RuntimeRequestBegin) Validate() error {
+	if err := validateRuntimeRequestID(strings.TrimSpace(request.RequestID)); err != nil {
+		return err
+	}
+	if err := pathresolver.ValidateID(pathresolver.ExportID, strings.TrimSpace(request.ExportID)); err != nil {
+		return err
+	}
+	if request.StartedAt.IsZero() || request.HeartbeatExpiresAt.IsZero() {
+		return errors.New("export runtime request begin timestamps must be set")
+	}
+	if !request.HeartbeatExpiresAt.After(request.StartedAt) {
+		return errors.New("export runtime request heartbeat expiry must be after start")
+	}
+	return nil
+}
+
+func (request RuntimeRequestHeartbeat) Validate() error {
+	if err := validateRuntimeRequestID(strings.TrimSpace(request.RequestID)); err != nil {
+		return err
+	}
+	if err := pathresolver.ValidateID(pathresolver.ExportID, strings.TrimSpace(request.ExportID)); err != nil {
+		return err
+	}
+	if request.ObservedAt.IsZero() || request.HeartbeatExpiresAt.IsZero() {
+		return errors.New("export runtime request heartbeat timestamps must be set")
+	}
+	if !request.HeartbeatExpiresAt.After(request.ObservedAt) {
+		return errors.New("export runtime request heartbeat expiry must be after observation")
+	}
+	return nil
+}
+
+func (request RuntimeRequestEnd) Validate() error {
+	if err := validateRuntimeRequestID(strings.TrimSpace(request.RequestID)); err != nil {
+		return err
+	}
+	if err := pathresolver.ValidateID(pathresolver.ExportID, strings.TrimSpace(request.ExportID)); err != nil {
+		return err
+	}
+	if request.EndedAt.IsZero() {
+		return errors.New("export runtime request end time must be set")
+	}
+	return nil
+}
+
+func (request StaleRuntimeRequestRecovery) Validate() error {
+	if request.Now.IsZero() {
+		return errors.New("export runtime stale recovery time must be set")
+	}
+	if request.Limit <= 0 {
+		return errors.New("export runtime stale recovery limit must be positive")
+	}
+	return nil
+}
+
+func validateRuntimeRequestID(id string) error {
+	const prefix = "errq_"
+	if !strings.HasPrefix(id, prefix) {
+		return fmt.Errorf("invalid export runtime request id")
+	}
+	suffix := id[len(prefix):]
+	if len(suffix) < 2 || len(suffix) > 63 {
+		return fmt.Errorf("invalid export runtime request id")
+	}
+	if !asciiAlnum(suffix[0]) {
+		return fmt.Errorf("invalid export runtime request id")
+	}
+	for i := 1; i < len(suffix); i++ {
+		if !asciiAlnum(suffix[i]) && suffix[i] != '_' && suffix[i] != '-' {
+			return fmt.Errorf("invalid export runtime request id")
+		}
+	}
+	return nil
+}
+
+func asciiAlnum(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
 }
 
 func ResolveTTLSeconds(requested, max int) (int, error) {

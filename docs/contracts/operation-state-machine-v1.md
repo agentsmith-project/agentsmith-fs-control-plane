@@ -236,20 +236,22 @@ Required GA behavior:
 
 - the session substrate pure model exists for restore-run writer gating and
   lifecycle drain decisions. Export sessions are wired to API create/get/revoke,
-  WebDAV gateway admission and DB-backed runtime observation, terminal
+  WebDAV gateway admission and durable runtime request ledger accounting, terminal
   reconcile, and repo lifecycle worker drain checks; workload mount issuance and
   restore-run execution remain separate.
 - restore-run acquires the fence before checking active writer sessions
 - while the fence is held, new read-write exports and workload mount bindings are rejected with `WRITER_SESSION_FENCE_HELD`
 - read-only exports and read-only mount bindings do not count as writer sessions, but still respect namespace status and capability policy
 - read-write exports count as active until revoked, expired and reconciled, or terminal
-- export runtime accounting is aggregate DB delta accounting. Request start is
-  `+1` active request and mutating start is also `+1` active write; request end
-  is `-1`; heartbeat is `0/0`. Positive start deltas require the session to
+- export runtime accounting uses the durable `export_runtime_requests` ledger.
+  Request begin inserts an open runtime request row and increments aggregate
+  counts in the same DB boundary; heartbeat refreshes the same row; request end
+  closes only an open row and decrements counts. Begin requires the session to
   still be `active` and unexpired at the DB admission boundary.
-- if a gateway crashes after a positive start delta commits and before its
-  matching end delta, active counts may remain conservatively positive; current
-  GA docs do not claim per-request operation recovery for that edge.
+- stale open runtime request recovery runs before terminal export reconcile. It
+  closes expired open ledger rows and subtracts their counts only when
+  aggregate counts can cover the recovered rows; aggregate/ledger drift fails
+  closed. Runtime request rows are not per-request WebDAV operation rows.
 - read-write mount bindings in `issued`, `pending`, `active`, or `releasing` count as active when their lease is live
 - expired read-write mount bindings still count as uncertain writers until reconciliation marks a terminal non-writing state
 - restore-run with active or uncertain writers fails closed with `ACTIVE_WRITER_SESSIONS` or `STALE_WRITER_SESSION_UNCERTAIN`

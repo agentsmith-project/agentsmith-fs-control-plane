@@ -78,7 +78,7 @@ func (store *swapAfterValidationStore) GetExportGatewayCredential(ctx context.Co
 	return store.credential, nil
 }
 
-func (store *swapAfterValidationStore) RecordExportRuntimeObservation(ctx context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error) {
+func (store *swapAfterValidationStore) applyRuntimeObservation(ctx context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error) {
 	store.observations = append(store.observations, observation)
 	if len(store.observations) == 1 && store.onFirstObservation != nil {
 		store.onFirstObservation()
@@ -94,4 +94,38 @@ func (store *swapAfterValidationStore) RecordExportRuntimeObservation(ctx contex
 	}
 	store.credential.Session = session
 	return session, nil
+}
+
+func (store *swapAfterValidationStore) BeginExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestBegin) (exportaccess.Session, error) {
+	observation := exportaccess.RuntimeObservation{
+		ExportID:                  request.ExportID,
+		ObservedAt:                request.StartedAt,
+		ActiveRequestDelta:        1,
+		GatewayHeartbeatAt:        &request.StartedAt,
+		GatewayHeartbeatExpiresAt: &request.HeartbeatExpiresAt,
+	}
+	if request.Write {
+		observation.ActiveWriteDelta = 1
+	}
+	return store.applyRuntimeObservation(ctx, observation)
+}
+
+func (store *swapAfterValidationStore) HeartbeatExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestHeartbeat) (exportaccess.Session, error) {
+	observation := exportaccess.RuntimeObservation{
+		ExportID:                  request.ExportID,
+		ObservedAt:                request.ObservedAt,
+		GatewayHeartbeatAt:        &request.ObservedAt,
+		GatewayHeartbeatExpiresAt: &request.HeartbeatExpiresAt,
+	}
+	return store.applyRuntimeObservation(ctx, observation)
+}
+
+func (store *swapAfterValidationStore) EndExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestEnd) (exportaccess.Session, error) {
+	observation := exportaccess.RuntimeObservation{
+		ExportID:                    request.ExportID,
+		ObservedAt:                  request.EndedAt,
+		ActiveRequestDelta:          -1,
+		SuccessfulRequestAccessedAt: request.SuccessfulRequestAccessedAt,
+	}
+	return store.applyRuntimeObservation(ctx, observation)
 }

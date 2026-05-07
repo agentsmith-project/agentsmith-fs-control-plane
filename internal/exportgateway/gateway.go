@@ -2,7 +2,9 @@ package exportgateway
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -32,17 +34,20 @@ var auditEventCounter uint64
 
 type Store interface {
 	GetExportGatewayCredential(ctx context.Context, exportID string) (exportaccess.GatewayCredential, error)
-	RecordExportRuntimeObservation(ctx context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error)
+	BeginExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestBegin) (exportaccess.Session, error)
+	HeartbeatExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestHeartbeat) (exportaccess.Session, error)
+	EndExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestEnd) (exportaccess.Session, error)
 }
 
 type Config struct {
-	Store        Store
-	AuditSink    audit.Sink
-	AuditEventID func() string
-	VolumeRoots  map[string]string
-	Prefix       string
-	Now          func() time.Time
-	HeartbeatTTL time.Duration
+	Store            Store
+	AuditSink        audit.Sink
+	AuditEventID     func() string
+	RuntimeRequestID func() (string, error)
+	VolumeRoots      map[string]string
+	Prefix           string
+	Now              func() time.Time
+	HeartbeatTTL     time.Duration
 }
 
 type ServerConfig struct {
@@ -56,6 +61,7 @@ type Handler struct {
 	store        Store
 	auditSink    audit.Sink
 	auditEventID func() string
+	requestID    func() (string, error)
 	volumeRoots  map[string]string
 	prefix       string
 	now          func() time.Time
@@ -124,10 +130,15 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	if auditEventID == nil {
 		auditEventID = newAuditEventID
 	}
+	requestID := cfg.RuntimeRequestID
+	if requestID == nil {
+		requestID = newRuntimeRequestID
+	}
 	return &Handler{
 		store:        cfg.Store,
 		auditSink:    cfg.AuditSink,
 		auditEventID: auditEventID,
+		requestID:    requestID,
 		volumeRoots:  roots,
 		prefix:       prefix,
 		now:          now,
@@ -315,7 +326,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mutating := methodMutates(r.Method)
-	if err := h.startRequestObservation(r.Context(), source.ExportID, mutating); err != nil {
+	runtimeRequestID, err := h.requestID()
+	if err != nil || strings.TrimSpace(runtimeRequestID) == "" {
+		_ = fs.Close()
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := h.beginRuntimeRequest(r.Context(), runtimeRequestID, source.ExportID, mutating); err != nil {
 		_ = fs.Close()
 		if runtimeObservationAdmissionDenied(err) {
 			h.emitDeniedAudit(r, deniedAudit{
@@ -334,7 +351,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer fs.Close()
-	stopHeartbeat := h.startHeartbeat(r.Context(), source.ExportID)
+	stopHeartbeat := h.startHeartbeat(r.Context(), runtimeRequestID, source.ExportID)
 	defer stopHeartbeat()
 
 	backendReq := cloneForBackend(r, source, dest)
@@ -342,7 +359,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), runtimeObservationTimeout)
 		defer cancel()
-		h.endRequestObservation(ctx, source.ExportID, mutating, rec.status)
+		h.endRuntimeRequest(ctx, runtimeRequestID, source.ExportID, rec.status)
 	}()
 	backend := &webdav.Handler{
 		Prefix:     "/",
@@ -435,55 +452,37 @@ func (h *Handler) emitDeniedAudit(r *http.Request, denied deniedAudit) {
 	_ = h.auditSink.Emit(ctx, event)
 }
 
-func (h *Handler) startRequestObservation(ctx context.Context, exportID string, mutating bool) error {
-	delta := activeDelta{requests: 1}
-	if mutating {
-		delta.writes = 1
-	}
-	if _, err := h.recordRuntimeObservation(ctx, exportID, delta, nil); err != nil {
-		return err
-	}
-	return nil
+func (h *Handler) beginRuntimeRequest(ctx context.Context, requestID, exportID string, mutating bool) error {
+	now := h.now()
+	_, err := h.store.BeginExportRuntimeRequest(ctx, exportaccess.RuntimeRequestBegin{
+		RequestID:          requestID,
+		ExportID:           exportID,
+		StartedAt:          now,
+		HeartbeatExpiresAt: now.Add(h.heartbeatTTL),
+		Write:              mutating,
+	})
+	return err
 }
 
 func runtimeObservationAdmissionDenied(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
 }
 
-func (h *Handler) endRequestObservation(ctx context.Context, exportID string, mutating bool, status int) {
-	delta := activeDelta{requests: -1}
-	if mutating {
-		delta.writes = -1
-	}
+func (h *Handler) endRuntimeRequest(ctx context.Context, requestID, exportID string, status int) {
 	var accessedAt *time.Time
 	if status < 400 {
 		now := h.now()
 		accessedAt = &now
 	}
-	_, _ = h.recordRuntimeObservation(ctx, exportID, delta, accessedAt)
-}
-
-type activeDelta struct {
-	requests int
-	writes   int
-}
-
-func (h *Handler) recordRuntimeObservation(ctx context.Context, exportID string, delta activeDelta, successfulAccessedAt *time.Time) (exportaccess.Session, error) {
-	observedAt := h.now()
-	heartbeatAt := observedAt
-	heartbeatExpiresAt := observedAt.Add(h.heartbeatTTL)
-	return h.store.RecordExportRuntimeObservation(ctx, exportaccess.RuntimeObservation{
+	_, _ = h.store.EndExportRuntimeRequest(ctx, exportaccess.RuntimeRequestEnd{
+		RequestID:                   requestID,
 		ExportID:                    exportID,
-		ObservedAt:                  observedAt,
-		ActiveRequestDelta:          delta.requests,
-		ActiveWriteDelta:            delta.writes,
-		GatewayHeartbeatAt:          &heartbeatAt,
-		GatewayHeartbeatExpiresAt:   &heartbeatExpiresAt,
-		SuccessfulRequestAccessedAt: successfulAccessedAt,
+		EndedAt:                     h.now(),
+		SuccessfulRequestAccessedAt: accessedAt,
 	})
 }
 
-func (h *Handler) startHeartbeat(ctx context.Context, exportID string) func() {
+func (h *Handler) startHeartbeat(ctx context.Context, requestID, exportID string) func() {
 	interval := h.heartbeatTTL / 2
 	if interval <= 0 {
 		interval = h.heartbeatTTL
@@ -499,7 +498,13 @@ func (h *Handler) startHeartbeat(ctx context.Context, exportID string) func() {
 			case <-stop:
 				return
 			case <-timer.C:
-				_, _ = h.recordRuntimeObservation(ctx, exportID, activeDelta{}, nil)
+				now := h.now()
+				_, _ = h.store.HeartbeatExportRuntimeRequest(ctx, exportaccess.RuntimeRequestHeartbeat{
+					RequestID:          requestID,
+					ExportID:           exportID,
+					ObservedAt:         now,
+					HeartbeatExpiresAt: now.Add(h.heartbeatTTL),
+				})
 				timer.Reset(interval)
 			}
 		}
@@ -872,6 +877,14 @@ func correlationIDFromRequest(r *http.Request) string {
 func newAuditEventID() string {
 	counter := atomic.AddUint64(&auditEventCounter, 1)
 	return fmt.Sprintf("evt_exportgateway_%d_%d", time.Now().UTC().UnixNano(), counter)
+}
+
+func newRuntimeRequestID() (string, error) {
+	var b [10]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return "errq_" + hex.EncodeToString(b[:]), nil
 }
 
 type statusRecorder struct {

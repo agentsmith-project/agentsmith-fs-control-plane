@@ -43,12 +43,12 @@ Audit outbox stale recovery plus HTTP JSON delivery is wired as an explicitly
 enabled at-least-once worker path; that is the AFSCP GA audit delivery scope,
 and non-HTTP sink integrations are future extensions rather than GA blockers.
 External sinks must dedupe by `audit_event_id`. WebDAV export create/get/revoke,
-the WebDAV policy gateway, DB-backed runtime delta observation, and
-explicit-gated terminal export session
-reconcile now exist. The WebDAV/export review gate remains in review: current
-runtime accounting is aggregate and conservative, with no per-request operation
-rows or complex gateway crash recovery if a positive start delta is committed
-without a matching end delta. Current implementation evidence also includes
+the WebDAV policy gateway, DB-backed runtime request ledger accounting, stale
+open runtime request recovery, and explicit-gated terminal export session
+reconcile now exist. The WebDAV/export review gate remains in review: runtime
+request rows are a dedicated gateway ledger rather than per-request operation
+rows, and external review/runbook evidence is still pending. Current
+implementation evidence also includes
 repo lifecycle workers, save/restore flows, namespace-scoped template
 create/clone, workload mount issuance and orchestrator plans, writer-session
 fences with shared repo-row serialization against read-write session admission,
@@ -66,7 +66,7 @@ remain incomplete.
 | G-004 | Standard envelopes and stable errors | in_review | AFSCP maintainer | AFSCP product owner, generated-client compatibility owner | `api/schemas/afscp-internal-v1.schema.json`, `docs/API_CONTRACT_DRAFT.md` | operation/error envelope and stable error enum drafted | 2026-05-05 | Error code naming requires AFSCP product and generated-client compatibility acceptance |
 | G-005 | JVS runner pin and smoke evidence | closed | AFSCP maintainer | JVS owner | `docs/adr/0009-jvs-runner-pin.md`, `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md` | JVS v0.4.8 release binary pinned and smoke passed, including clean controlled CWD, restore discard, and pending/idle recovery status; v0.4.7 restore-run recovery plan residual blocker resolved | 2026-05-05 | Only the JVS gate is closed; real storage mutation still requires accepted contracts, fences, session drain, operation leases, audit behavior, and focused tests |
 | G-006 | Path resolver contract and corpus | in_review | AFSCP maintainer | Security owner | `docs/adr/0012-path-resolver-and-fences.md`, `docs/contracts/repo-path-contract-v1.md`, `internal/pathresolver/pathresolver.go`, `internal/pathresolver/pathresolver_test.go`, `internal/pathresolver/testcorpus/corpus.go` | resolver contract plumbing implemented; shared reusable corpus exists, awaiting review/acceptance | 2026-05-05 | Gate remains open until security review accepts corpus coverage |
-| G-007 | WebDAV export contract | in_review | AFSCP maintainer | Security owner, generated-client compatibility owner | `docs/adr/0010-webdav-export-gateway.md`, `docs/contracts/export-access-webdav-v1.md` | AFSCP-controlled gateway required | 2026-05-05 | Implementation evidence now includes export create/get/revoke, `afscp-export-gateway --serve`, DB delta runtime observation, and terminal reconcile; security/generated-client compatibility review and residual crash-count runbook remain pending |
+| G-007 | WebDAV export contract | in_review | AFSCP maintainer | Security owner, generated-client compatibility owner | `docs/adr/0010-webdav-export-gateway.md`, `docs/contracts/export-access-webdav-v1.md` | AFSCP-controlled gateway required | 2026-05-05 | Implementation evidence now includes export create/get/revoke, `afscp-export-gateway --serve`, durable runtime request ledger accounting, stale open request recovery, and terminal reconcile; security/generated-client compatibility review and runbook evidence remain pending |
 | G-008 | Workload orchestrator contract | in_review | Platform/runtime contract owner | AFSCP maintainer, security owner | `docs/adr/0011-workload-orchestrator-contract.md`, `docs/contracts/workload-mount-binding-v1.md` | two-layer mount contract drafted | 2026-05-05 | Requires platform/runtime contract acceptance |
 | G-009 | Writer-session fence contract | in_review | AFSCP maintainer | Operations owner, platform/runtime contract owner, generated-client compatibility owner | `docs/adr/0012-path-resolver-and-fences.md`, `docs/contracts/operation-state-machine-v1.md`, `internal/fences`, `internal/store/postgres` | writer fence and lifecycle fence drafted; handler and recovery integration exists for restore/template writer fences and RW export/workload admission, with shared repo-row serialization before held-fence checks | 2026-05-05 | AFSCP owner/security review, race/drill evidence, and human acceptance remain pending |
 | G-010A | Repo lifecycle state and caller mapping | in_review | AFSCP maintainer | AFSCP product owner, generated-client compatibility owner | `docs/adr/0008-repo-lifecycle-policy.md`, `docs/contracts/repo-lifecycle-v1.md` | transition rules and generic caller mapping drafted | 2026-05-05 | AFSCP product acceptance required |

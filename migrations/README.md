@@ -14,6 +14,9 @@ not implement a store adapter, endpoint handler, or storage-side action.
 - `0002_export_sessions_terminal_zero_counts.sql`: backfill/upgrade guard that
   adds the terminal export-session zero-count check for environments that
   already applied `0001`.
+- `0003_export_runtime_request_ledger.sql`: dedicated WebDAV export runtime
+  request ledger for durable begin/heartbeat/end accounting and stale open
+  request recovery without creating per-request operation rows.
 
 ## Contract
 

@@ -350,73 +350,199 @@ func TestStoreDoesNotExposeLegacyExportTerminalHelper(t *testing.T) {
 	}
 }
 
-func TestRecordExportRuntimeObservationAppliesAtomicDeltasHeartbeatAndWriteDrain(t *testing.T) {
+func TestStoreDoesNotExposeLegacyRuntimeDeltaBypass(t *testing.T) {
+	if method, ok := reflect.TypeOf((*Store)(nil)).MethodByName("RecordExportRuntimeObservation"); ok {
+		t.Fatalf("postgres.Store exposes legacy runtime delta bypass: %s", method.Name)
+	}
+}
+
+func TestBeginExportRuntimeRequestReplayDoesNotIncrementAndConflictsFailClosed(t *testing.T) {
+	sql := exportRuntimeRequestBeginSQL()
+
+	assertSQLContainsAll(t, sql,
+		"existing_request AS (",
+		"compatible_existing_request AS (",
+		"runtime_request_id = $1",
+		"export_id = $2",
+		"write_request = $5",
+		"request_state = 'open'",
+		"NOT EXISTS (SELECT 1 FROM existing_request)",
+		"compatible_existing_request",
+	)
+	if strings.Contains(sql, "ON CONFLICT (runtime_request_id) DO NOTHING") {
+		t.Fatalf("begin SQL silently drops request-id conflicts instead of classifying replay/conflict: %s", sql)
+	}
+}
+
+func TestBeginExportRuntimeRequestUsesLedgerAndPositiveAdmissionAtomically(t *testing.T) {
 	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
 	session := exportSessionFixtureForStore(now, sessionstate.ExportStatusActive)
-	session.ActiveRequestCount = 2
-	session.ActiveWriteCount = 0
-	session.LastObservedAt = &now
-	session.LastGatewayHeartbeatAt = &now
+	session.ActiveRequestCount = 1
+	session.ActiveWriteCount = 1
 	heartbeatExpires := now.Add(time.Minute)
-	session.GatewayHeartbeatExpiresAt = &heartbeatExpires
-	session.WriteDrainedAt = &now
-	accessedAt := now.Add(-time.Second)
 	exec := &fakeExecutor{row: fakeRow{values: exportSessionRowValues(session)}}
 	st := &Store{exec: exec}
 
-	got, err := st.RecordExportRuntimeObservation(context.Background(), exportaccess.RuntimeObservation{
-		ExportID:                    "export_123",
-		ObservedAt:                  now,
-		ActiveRequestDelta:          -1,
-		ActiveWriteDelta:            -1,
-		GatewayHeartbeatAt:          &now,
-		GatewayHeartbeatExpiresAt:   &heartbeatExpires,
-		SuccessfulRequestAccessedAt: &accessedAt,
+	got, err := st.BeginExportRuntimeRequest(context.Background(), exportaccess.RuntimeRequestBegin{
+		RequestID:          "errq_test123",
+		ExportID:           "export_123",
+		StartedAt:          now,
+		HeartbeatExpiresAt: heartbeatExpires,
+		Write:              true,
 	})
 	if err != nil {
-		t.Fatalf("RecordExportRuntimeObservation: %v", err)
+		t.Fatalf("BeginExportRuntimeRequest: %v", err)
 	}
-	if got.ActiveRequestCount != 2 || got.ActiveWriteCount != 0 || got.WriteDrainedAt == nil {
-		t.Fatalf("session runtime = %#v", got)
+	if got.ActiveRequestCount != 1 || got.ActiveWriteCount != 1 {
+		t.Fatalf("session runtime = %#v, want admitted write request counted", got)
 	}
 	assertSQLContainsInOrder(t, exec.query,
-		"UPDATE export_sessions",
-		"active_request_count = active_request_count + $2",
-		"active_write_count = active_write_count + $3",
-		"last_observed_at = GREATEST(COALESCE(last_observed_at, $4), $4)",
-		"last_gateway_heartbeat_at = CASE WHEN $5::timestamptz IS NULL THEN last_gateway_heartbeat_at ELSE GREATEST(COALESCE(last_gateway_heartbeat_at, $5), $5) END",
-		"gateway_heartbeat_expires_at = CASE WHEN $6::timestamptz IS NULL THEN gateway_heartbeat_expires_at ELSE GREATEST(COALESCE(gateway_heartbeat_expires_at, $6), $6) END",
-		"write_drained_at = CASE WHEN active_write_count + $3 = 0 THEN GREATEST(COALESCE(write_drained_at, $4), $4) ELSE NULL END",
-		"last_accessed_at = CASE WHEN $7::timestamptz IS NULL THEN last_accessed_at ELSE GREATEST(COALESCE(last_accessed_at, $7), $7) END",
+		"WITH existing_request AS (",
+		"compatible_existing_request AS (",
+		"eligible_session AS (",
+		"status = 'active'",
+		"expires_at > $3",
+		"INSERT INTO export_runtime_requests",
+		"request_state",
+		"'open'",
+		"UPDATE export_sessions SET",
+		"active_request_count = active_request_count + 1",
+		"active_write_count = active_write_count + CASE WHEN $5 THEN 1 ELSE 0 END",
 		"RETURNING",
 	)
-	assertSQLContainsAll(t, exec.query,
-		"active_request_count + $2 >= 0",
-		"active_write_count + $3 >= 0",
-		"active_write_count + $3 <= active_request_count + $2",
-	)
+	for _, forbidden := range []string{"password", "verifier_hash", "verifier_salt", "raw_path", ".jvs"} {
+		if strings.Contains(strings.ToLower(exec.query), forbidden) {
+			t.Fatalf("BeginExportRuntimeRequest SQL leaked %q: %s", forbidden, exec.query)
+		}
+	}
 }
 
-func TestRecordExportRuntimeObservationPositiveDeltaRequiresActiveUnexpiredAdmission(t *testing.T) {
-	sql := exportRuntimeObservationSQL()
-
-	assertSQLContainsAll(t, sql,
-		"($2 <= 0 AND $3 <= 0) OR (status = 'active' AND expires_at > $4)",
-		"active_request_count + $2 >= 0",
-		"active_write_count + $3 >= 0",
-		"active_write_count + $3 <= active_request_count + $2",
-	)
-}
-
-func TestRecordExportRuntimeObservationRejectsInvalidCountsBeforeSQL(t *testing.T) {
-	st := &Store{exec: &fakeExecutor{}}
+func TestHeartbeatAndEndExportRuntimeRequestUseSameLedgerRequestID(t *testing.T) {
 	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
-	for _, observation := range []exportaccess.RuntimeObservation{
-		{ExportID: "export_123", ObservedAt: now, ActiveRequestDelta: 0, ActiveWriteDelta: 1},
-		{ExportID: "export_123", ObservedAt: now, ActiveRequestDelta: -1, ActiveWriteDelta: 1},
+	session := exportSessionFixtureForStore(now, sessionstate.ExportStatusActive)
+	session.ActiveRequestCount = 0
+	session.ActiveWriteCount = 0
+	heartbeatExpires := now.Add(time.Minute)
+	exec := &exportSequentialQueryRowExecutor{
+		rows: []fakeRow{
+			{values: exportSessionRowValues(session)},
+			{values: exportSessionRowValues(session)},
+		},
+	}
+	st := &Store{exec: exec}
+
+	if _, err := st.HeartbeatExportRuntimeRequest(context.Background(), exportaccess.RuntimeRequestHeartbeat{
+		RequestID:          "errq_test123",
+		ExportID:           "export_123",
+		ObservedAt:         now,
+		HeartbeatExpiresAt: heartbeatExpires,
+	}); err != nil {
+		t.Fatalf("HeartbeatExportRuntimeRequest: %v", err)
+	}
+	if _, err := st.EndExportRuntimeRequest(context.Background(), exportaccess.RuntimeRequestEnd{
+		RequestID:                   "errq_test123",
+		ExportID:                    "export_123",
+		EndedAt:                     now,
+		SuccessfulRequestAccessedAt: &now,
+	}); err != nil {
+		t.Fatalf("EndExportRuntimeRequest: %v", err)
+	}
+	if len(exec.queries) != 2 {
+		t.Fatalf("queries = %d, want heartbeat and end", len(exec.queries))
+	}
+	assertSQLContainsAll(t, exec.queries[0],
+		"UPDATE export_runtime_requests",
+		"runtime_request_id = $1",
+		"export_id = $2",
+		"request_state = 'open'",
+		"heartbeat_expires_at = GREATEST(heartbeat_expires_at, $4)",
+		"updated_at = GREATEST(updated_at, $3)",
+		"updated_at = GREATEST(export_sessions.updated_at, $3)",
+	)
+	if strings.Contains(exec.queries[0], "SET export_sessions.") || strings.Contains(exec.queries[0], ", export_sessions.updated_at =") {
+		t.Fatalf("heartbeat SQL uses qualified SET target unsupported by PostgreSQL: %s", exec.queries[0])
+	}
+	assertSQLContainsAll(t, exec.queries[1],
+		"request_row AS (",
+		"runtime_request_id = $1",
+		"close_eligible AS (",
+		"active_request_count >= 1",
+		"active_write_count >= CASE WHEN request_row.write_request THEN 1 ELSE 0 END",
+		"closed_request AS (",
+		"FROM close_eligible",
+		"request_state = 'open'",
+		"active_request_count = active_request_count - 1",
+		"active_write_count = active_write_count - CASE WHEN closed_request.write_request THEN 1 ELSE 0 END",
+	)
+	if strings.Contains(exec.queries[1], "SET export_sessions.") || strings.Contains(exec.queries[1], ", export_sessions.updated_at =") {
+		t.Fatalf("end SQL uses qualified SET target unsupported by PostgreSQL: %s", exec.queries[1])
+	}
+}
+
+func TestEndExportRuntimeRequestReplayDoesNotMutateSession(t *testing.T) {
+	sql := exportRuntimeRequestEndSQL()
+
+	assertSQLContainsInOrder(t, sql,
+		"request_row AS (",
+		"request_state",
+		"close_eligible AS (",
+		"closed_request AS (",
+		"request_state = 'open'",
+		"mutated_session AS (",
+		"FROM closed_request",
+		"replayed_session AS (",
+		"request_state IN ('closed','recovered')",
+		"UNION ALL",
+	)
+	if strings.Contains(sql, "FROM request_row WHERE export_sessions.export_id = request_row.export_id") {
+		t.Fatalf("end SQL mutates session for closed/recovered replay via request_row: %s", sql)
+	}
+	assertSQLContainsInOrder(t, sql,
+		"close_eligible AS (",
+		"active_request_count >= 1",
+		"active_write_count >= CASE WHEN request_row.write_request THEN 1 ELSE 0 END",
+		"closed_request AS (",
+		"FROM close_eligible",
+	)
+}
+
+func TestRecoverStaleExportRuntimeRequestsClosesOpenLedgerAndAdjustsCounts(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	exec := &fakeExecutor{row: fakeRow{values: []any{int64(2), int64(1)}}}
+	st := &Store{exec: exec}
+
+	got, err := st.RecoverStaleExportRuntimeRequests(context.Background(), exportaccess.StaleRuntimeRequestRecovery{
+		Now:   now,
+		Limit: 25,
+	})
+	if err != nil {
+		t.Fatalf("RecoverStaleExportRuntimeRequests: %v", err)
+	}
+	if got.Recovered != 2 || got.RecoveredWrites != 1 {
+		t.Fatalf("recovery result = %#v, want 2 requests / 1 write", got)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"WITH stale AS (",
+		"FROM export_runtime_requests",
+		"request_state = 'open'",
+		"heartbeat_expires_at <= $1",
+		"FOR UPDATE SKIP LOCKED",
+		"eligible_sessions AS (",
+		"active_request_count >= grouped.request_count",
+		"active_write_count >= grouped.write_count",
+		"all_groups_eligible AS (",
+		"closed AS (",
+		"request_state = 'recovered'",
+		"UPDATE export_sessions",
+		"active_request_count = active_request_count - grouped.request_count",
+		"active_write_count = active_write_count - grouped.write_count",
+	)
+	for _, forbidden := range []string{
+		"GREATEST(active_request_count - grouped.request_count",
+		"LEAST(GREATEST(active_write_count - grouped.write_count",
 	} {
-		if _, err := st.RecordExportRuntimeObservation(context.Background(), observation); err == nil {
-			t.Fatalf("RecordExportRuntimeObservation accepted invalid delta: %#v", observation)
+		if strings.Contains(exec.query, forbidden) {
+			t.Fatalf("stale recovery SQL clamps drift instead of failing closed on %q: %s", forbidden, exec.query)
 		}
 	}
 }
@@ -441,6 +567,8 @@ func TestReconcileExportSessionTerminalSQLCommitsOperationSessionAndAudit(t *tes
 	assertSQLContainsAll(t, sql,
 		"active_request_count = 0",
 		"active_write_count = 0",
+		"NOT EXISTS (SELECT 1 FROM export_runtime_requests",
+		"request_state = 'open'",
 		"$33 = 'revoked' AND status = 'revoking' AND revoked_at IS NOT NULL",
 		"$33 = 'expired' AND status = 'active' AND expires_at <= $35",
 		"$33 = 'failed' AND btrim($36) <> ''",
@@ -477,6 +605,8 @@ func TestListExportSessionsForTerminalReconcileFindsZeroCountRevokingAndExpiredW
 	assertSQLContainsAll(t, exec.query,
 		"FROM export_sessions",
 		"WHERE active_request_count = 0 AND active_write_count = 0",
+		"NOT EXISTS (SELECT 1 FROM export_runtime_requests",
+		"request_state = 'open'",
 		"AND (status = 'revoking' OR (status = 'active' AND expires_at <= $1))",
 		"ORDER BY updated_at, export_id LIMIT $2",
 	)

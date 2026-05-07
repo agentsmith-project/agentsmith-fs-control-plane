@@ -81,7 +81,8 @@ gateway. It enforces Basic auth against durable export credential verifier
 material, admits only active and unexpired WebDAV sessions, applies read-only
 or read-write mode policy per method, validates both source paths and
 `Destination` paths for `MOVE`/`COPY`, serves only the payload root through a
-no-follow filesystem boundary, and records runtime observations durably.
+no-follow filesystem boundary, and records runtime request ledger entries
+durably.
 
 ## Method Policy
 
@@ -116,8 +117,8 @@ Denied mutating method attempts on read-only exports must be audited with export
 - Revoked or expired credentials fail new requests.
 - Revoke moves the session to `revoking` for gateway drain; terminal `revoked`,
   `expired`, or `failed` requires gateway or reconcile confirmation.
-- New request admission is guarded at the DB runtime-observation boundary:
-  positive start deltas are accepted only while the session is still `active`
+- New request admission is guarded at the DB runtime-request boundary:
+  durable request begin is accepted only while the session is still `active`
   and `expires_at` is in the future. This prevents revoke/expiry TOCTOU between
   gateway credential lookup and active-count accounting.
 - Active write-capable requests after revoke must be closed or allowed to reach a terminal state before the export stops counting as an active or uncertain writer.
@@ -126,25 +127,21 @@ Denied mutating method attempts on read-only exports must be audited with export
 - Read-only exports do not block restore-run, but namespace disable and credential revoke/expiry still apply.
 - Read-only exports do block repo archive/delete/purge lifecycle drain until gateway reconciliation confirms there is no ongoing or future access through that export.
 - Gateway runtime state is stored as aggregate active request/write counts plus
-  observation and heartbeat timestamps. Runtime accounting uses DB atomic
-  deltas, not gateway process-local absolute counts: request start records
-  `+1` active request and mutating start also records `+1` active write;
-  request end records matching `-1` deltas; heartbeat records `0/0`. GA does
+  a dedicated `export_runtime_requests` ledger. Each admitted WebDAV request
+  receives one durable runtime request ID; begin inserts an open ledger row and
+  increments aggregate counts atomically, heartbeat refreshes that same row,
+  and end closes only that open row and decrements counts idempotently. GA does
   not persist per-file locks, per-request operation rows, or WebDAV operation
   records.
 - Terminal export reconcile is the GA terminal boundary: it commits the
   `export_session_reconcile` operation, terminal session update, and audit
-  outbox event atomically. The current reconcile runner terminalizes zero-count
-  `revoking -> revoked` and zero-count expired `active -> expired` sessions and
-  does not require a fresh gateway heartbeat for those zero-count cases.
-  Nonzero counts and stale/uncertain runtime state still fail closed and require
-  operator/runbook follow-up. Bare status updates are not the GA terminal
-  boundary.
-- Residual crash edge: if the gateway commits a positive start delta and then
-  crashes before the matching end delta, active request/write counts can remain
-  conservatively positive. The current implementation does not add per-request
-  operations or complex crash recovery for this; operators must use a runbook or
-  future recovery path to resolve the session.
+  outbox event atomically. The current reconcile runner first recovers stale
+  open runtime request rows whose heartbeat expiry has elapsed, verifies the
+  aggregate counts can cover those rows, subtracts the recovered counts, then
+  terminalizes zero-count `revoking -> revoked` and zero-count expired
+  `active -> expired` sessions only when no open runtime request rows remain.
+  Drift where aggregate counts cannot cover the stale ledger rows fails closed.
+  Bare status updates are not the GA terminal boundary.
 - Access logs must include export ID, correlation ID when available, method, normalized path, result, and denial reason without credential material.
 
 ## Future Options

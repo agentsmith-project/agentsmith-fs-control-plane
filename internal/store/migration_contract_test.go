@@ -277,6 +277,43 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		contract.requireIndex(t, "export_sessions", []string{"repo_id", "created_at", "export_id"})
 	})
 
+	t.Run("export runtime request ledger table", func(t *testing.T) {
+		table := contract.requireTable(t, "export_runtime_requests")
+
+		table.requireColumn(t, "runtime_request_id", "text", "primary key")
+		table.requireColumn(t, "export_id", "text", "not null")
+		table.requireColumn(t, "namespace_id", "text", "not null")
+		table.requireColumn(t, "repo_id", "text", "not null")
+		table.requireColumn(t, "request_state", "text", "not null")
+		table.requireColumn(t, "write_request", "boolean", "not null")
+		table.requireColumn(t, "started_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "last_heartbeat_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "heartbeat_expires_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "closed_at", "timestamp with time zone")
+		table.requireColumn(t, "close_reason", "text", "not null")
+		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
+		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
+		table.requireCheckMentions(t, "request_state", "open", "closed", "recovered")
+		table.requireBodyFragments(t,
+			"foreign key (export_id, namespace_id, repo_id) references export_sessions (export_id, namespace_id, repo_id)",
+			"foreign key (namespace_id, repo_id) references repos (namespace_id, repo_id)",
+			"last_heartbeat_at >= started_at",
+			"heartbeat_expires_at >= last_heartbeat_at",
+			"closed_at is null or closed_at >= started_at",
+			"closed_at is null or closed_at >= last_heartbeat_at",
+			"request_state = 'open' and closed_at is null",
+			"request_state in ('closed', 'recovered') and closed_at is not null",
+		)
+		table.requireNoSensitiveColumns(t)
+		contract.requireIndex(t, "export_sessions", []string{"export_id", "namespace_id", "repo_id"})
+		contract.requireIndex(t, "export_runtime_requests", []string{"export_id", "request_state"})
+		contract.requireRawFragments(t,
+			"create index if not exists export_runtime_requests_stale_open_idx",
+			"on export_runtime_requests (heartbeat_expires_at, runtime_request_id)",
+			"where request_state = 'open'",
+		)
+	})
+
 	t.Run("export sessions terminal counts upgrade guard", func(t *testing.T) {
 		contract.requireRawFragments(t,
 			"pg_constraint",

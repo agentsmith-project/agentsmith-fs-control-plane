@@ -34,13 +34,13 @@ together before the response is returned.
 `created_by_actor` uses the common `Actor` object. `revoked_at` and
 `last_accessed_at` are durable fields that are present on every `ExportSession`
 and may be `null` until revocation or first observed gateway access.
-The runtime accounting fields are gateway aggregate observations only; they do
-not create per-request or per-file operation records. Runtime accounting uses
-DB atomic deltas rather than gateway process-local absolute counts: request
-start records `+1` active request and, for mutating methods, `+1` active write;
-request end records matching `-1` deltas; gateway heartbeat records `0/0`.
-Positive start deltas are admitted only when the session is still `active` and
-unexpired at the DB boundary.
+The runtime accounting fields are backed by a dedicated
+`export_runtime_requests` ledger, not by per-request operation rows or per-file
+records. Each admitted WebDAV request uses one durable runtime request ID:
+begin inserts an open ledger row and increments active counts atomically,
+heartbeat refreshes that same row, and end closes only that open row and
+decrements counts idempotently. Positive begins are admitted only when the
+session is still `active` and unexpired at the DB boundary.
 
 ## Credential View
 
@@ -75,7 +75,7 @@ redacted `ExportSession` and never returns the WebDAV password again.
 - The current `afscp-export-gateway --serve` path enforces Basic auth, active
   and unexpired session admission, mode/method policy, source path and
   `Destination` policy for `MOVE`/`COPY`, payload no-follow filesystem access,
-  and durable runtime observation.
+  and durable runtime request ledger accounting.
 - No JuiceFS metadata URL, bucket URL, object store credential, raw mount command, or Secret reference appears in the response.
 - Export create, credential issuance, revoke, expiry, and denied path attempts are audited.
 
@@ -95,15 +95,16 @@ GA freezes:
 - revoke moves the session into `revoking` for gateway drain; terminal
   `revoked`, `expired`, or `failed` requires gateway/reconcile confirmation
 - terminal reconcile atomically commits `export_session_reconcile`, the terminal
-  session update, and the audit outbox event. The current reconcile runner
-  terminalizes zero-count `revoking -> revoked` and zero-count expired
-  `active -> expired` sessions without requiring a fresh gateway heartbeat;
-  nonzero counts and stale/uncertain runtime state fail closed and require
-  operator/runbook follow-up
-- no per-request WebDAV operation rows or complex gateway crash recovery. If a
-  gateway commits a positive start delta and crashes before the matching end
-  delta, active request/write counts can remain conservatively positive until an
-  operator/runbook repair or future recovery path resolves the session
+  session update, and the audit outbox event. The current reconcile runner first
+  recovers stale open runtime request rows whose heartbeat expiry has elapsed,
+  verifies aggregate counts can cover those rows, subtracts the recovered
+  counts, then terminalizes zero-count `revoking -> revoked` and zero-count
+  expired `active -> expired` sessions only when no open runtime request rows
+  remain; drift where aggregate counts cannot cover stale ledger rows fails
+  closed
+- no per-request WebDAV operation rows; runtime request rows are a dedicated
+  gateway ledger and must not store password, verifier, host path, or `.jvs`
+  path material
 - expiration reconciliation behavior
 - access log fields and redaction rules
 

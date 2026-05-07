@@ -60,12 +60,14 @@ type Summary struct {
 }
 
 type ExportSessionReconcileSummary struct {
-	Scanned      int `json:"scanned"`
-	Terminalized int `json:"terminalized"`
-	Reused       int `json:"reused"`
-	Skipped      int `json:"skipped"`
-	RaceLost     int `json:"race_lost"`
-	Failed       int `json:"failed"`
+	RecoveredRuntimeRequests int `json:"recovered_runtime_requests"`
+	RecoveredRuntimeWrites   int `json:"recovered_runtime_writes"`
+	Scanned                  int `json:"scanned"`
+	Terminalized             int `json:"terminalized"`
+	Reused                   int `json:"reused"`
+	Skipped                  int `json:"skipped"`
+	RaceLost                 int `json:"race_lost"`
+	Failed                   int `json:"failed"`
 }
 
 type OperationSummary struct {
@@ -215,12 +217,14 @@ func isContextError(err error) bool {
 func (result Result) Summary() Summary {
 	return Summary{
 		ExportSessionReconcile: ExportSessionReconcileSummary{
-			Scanned:      result.ExportSessionReconcile.Scanned,
-			Terminalized: result.ExportSessionReconcile.Terminalized,
-			Reused:       result.ExportSessionReconcile.Reused,
-			Skipped:      result.ExportSessionReconcile.Skipped,
-			RaceLost:     result.ExportSessionReconcile.RaceLost,
-			Failed:       result.ExportSessionReconcile.Failed,
+			RecoveredRuntimeRequests: result.ExportSessionReconcile.RecoveredRuntimeRequests,
+			RecoveredRuntimeWrites:   result.ExportSessionReconcile.RecoveredRuntimeWrites,
+			Scanned:                  result.ExportSessionReconcile.Scanned,
+			Terminalized:             result.ExportSessionReconcile.Terminalized,
+			Reused:                   result.ExportSessionReconcile.Reused,
+			Skipped:                  result.ExportSessionReconcile.Skipped,
+			RaceLost:                 result.ExportSessionReconcile.RaceLost,
+			Failed:                   result.ExportSessionReconcile.Failed,
 		},
 		Operation: OperationSummary{
 			Scanned:     result.OperationRecovery.Scanned,

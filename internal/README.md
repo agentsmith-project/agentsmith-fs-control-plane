@@ -15,7 +15,7 @@ needed before real handlers and storage mutation work:
   namespaces, namespace volume bindings, and repo/repo lifecycle metadata.
 - `store`: interfaces for durable operation records, idempotency, and audit
   sinks, resource metadata store contracts, WebDAV export create/get/revoke,
-  gateway runtime observation, terminal reconcile, and read-only repo recovery
+  gateway runtime request ledger accounting, terminal reconcile, and read-only repo recovery
   inspection contracts. PostgreSQL schema migration exists; the first
   PostgreSQL adapter slice
   covers operation reader/writer, DB-only operation lease
@@ -27,7 +27,7 @@ needed before real handlers and storage mutation work:
   metadata, lifecycle candidate repo reads, all-held repo fence reads, and
   read-only export session/workload mount binding state as control-plane
   records, WebDAV export session create/get/revoke, gateway credential lookup,
-  atomic runtime delta accounting, and terminal reconcile, including internal
+  durable runtime request ledger accounting, and terminal reconcile, including internal
   template storage identity.
   RepoTemplate create/clone intake, recovery store boundaries, and gated worker
   executors are implemented.
@@ -42,14 +42,14 @@ needed before real handlers and storage mutation work:
 - `sessionstate`: pure export and workload-mount session substrate for
   restore-run writer gating and repo lifecycle drain gating. Export session
   state is now used by API export create/get/revoke, WebDAV gateway admission
-  and runtime observation, terminal reconcile, and opt-in repo archive/delete
+  and runtime request ledger accounting, terminal reconcile, and opt-in repo archive/delete
   recovery drain checks. Workload mount issuance remains separate.
-- `exportaccess`: WebDAV export session, credential, runtime observation, and
-  terminal reconcile request/result models.
+- `exportaccess`: WebDAV export session, credential, durable runtime request
+  models, and terminal reconcile request/result models.
 - `exportgateway`: WebDAV policy gateway handler and no-follow payload
   filesystem boundary. It enforces Basic auth, active/unexpired WebDAV session
   admission, mode/method policy, source and `Destination` path policy, payload
-  no-follow traversal, and DB-backed runtime delta observations.
+  no-follow traversal, and DB-backed runtime request ledger accounting.
 - `exportreconcile`: terminal export session reconcile runner for zero-count
   `revoking -> revoked` and zero-count expired `active -> expired` updates.
 - `operationinspect`: operation-only inspection authorization service used by
@@ -94,9 +94,8 @@ the WebDAV export gateway exist. Still intentionally absent: host/orchestrator
 mount application beyond control-plane workload mount binding issuance, real
 external audit delivery integration beyond the HTTP JSON at-least-once sink,
 repo/template lifecycle mutation beyond the implemented lifecycle workers,
-per-request WebDAV operation records or complex crash recovery for gateway
-runtime counts, and fence enforcement beyond the minimal repo fence adapter
-slice.
+per-request WebDAV operation records outside the dedicated runtime ledger, and
+fence enforcement beyond the minimal repo fence adapter slice.
 The worker app currently wires export session terminal reconcile when
 `AFSCP_EXPORT_SESSION_RECONCILE_ENABLED=true`, workload mount stale lease scans
 when `AFSCP_WORKER_WORKLOAD_MOUNT_STALE_ENABLED=true`, then

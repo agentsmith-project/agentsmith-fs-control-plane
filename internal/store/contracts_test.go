@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +172,12 @@ func TestExportAccessStoreContractDoesNotRequireLegacyTerminalHelper(t *testing.
 	}
 	if result.Session.ID != request.ExportID || result.Session.Status != sessionstate.ExportStatusRevoked {
 		t.Fatalf("reconciled session = %#v, want revoked export_alpha01", result.Session)
+	}
+}
+
+func TestExportAccessStoreContractDoesNotExposeLegacyRuntimeDeltaBypass(t *testing.T) {
+	if method, ok := reflect.TypeOf((*ExportAccessStore)(nil)).Elem().MethodByName("RecordExportRuntimeObservation"); ok {
+		t.Fatalf("ExportAccessStore exposes legacy runtime delta bypass: %s", method.Name)
 	}
 }
 
@@ -970,11 +977,33 @@ func (fake *fakeExportAccessStore) RecordExportAccess(_ context.Context, _ strin
 	return nil
 }
 
-func (fake *fakeExportAccessStore) RecordExportRuntimeObservation(_ context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error) {
-	fake.session.ID = observation.ExportID
-	fake.session.ActiveRequestCount += observation.ActiveRequestDelta
-	fake.session.ActiveWriteCount += observation.ActiveWriteDelta
+func (fake *fakeExportAccessStore) BeginExportRuntimeRequest(_ context.Context, request exportaccess.RuntimeRequestBegin) (exportaccess.Session, error) {
+	fake.session.ID = request.ExportID
+	fake.session.ActiveRequestCount++
+	if request.Write {
+		fake.session.ActiveWriteCount++
+	}
 	return fake.session, nil
+}
+
+func (fake *fakeExportAccessStore) HeartbeatExportRuntimeRequest(_ context.Context, request exportaccess.RuntimeRequestHeartbeat) (exportaccess.Session, error) {
+	fake.session.ID = request.ExportID
+	return fake.session, nil
+}
+
+func (fake *fakeExportAccessStore) EndExportRuntimeRequest(_ context.Context, request exportaccess.RuntimeRequestEnd) (exportaccess.Session, error) {
+	fake.session.ID = request.ExportID
+	if fake.session.ActiveRequestCount > 0 {
+		fake.session.ActiveRequestCount--
+	}
+	if fake.session.ActiveWriteCount > 0 {
+		fake.session.ActiveWriteCount--
+	}
+	return fake.session, nil
+}
+
+func (fake *fakeExportAccessStore) RecoverStaleExportRuntimeRequests(context.Context, exportaccess.StaleRuntimeRequestRecovery) (exportaccess.StaleRuntimeRequestRecoveryResult, error) {
+	return exportaccess.StaleRuntimeRequestRecoveryResult{}, nil
 }
 
 func (fake *fakeExportAccessStore) ListExportSessionsForTerminalReconcile(_ context.Context, _ time.Time, _ int) ([]exportaccess.Session, error) {

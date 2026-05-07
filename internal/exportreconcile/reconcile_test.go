@@ -58,6 +58,37 @@ func TestRunOnceReconcilesZeroCountRevokingAndExpiredSessions(t *testing.T) {
 	}
 }
 
+func TestRunOnceRecoversStaleRuntimeRequestsBeforeTerminalList(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{
+		candidates: []exportaccess.Session{exportSessionCandidate(now, "export_revoke01", sessionstate.ExportStatusRevoking, now.Add(time.Hour))},
+		staleRecovery: exportaccess.StaleRuntimeRequestRecoveryResult{
+			Recovered:       1,
+			RecoveredWrites: 1,
+		},
+	}
+	runner := New(Config{
+		Store: store,
+		Owner: "export-worker",
+		Limit: 10,
+		Clock: func() time.Time { return now },
+	})
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if got := strings.Join(store.callOrder, ","); got != "recover_stale_runtime_requests,list_terminal_reconcile,reconcile_terminal" {
+		t.Fatalf("call order = %q, want stale recovery before terminal reconcile", got)
+	}
+	if result.RecoveredRuntimeRequests != 1 || result.RecoveredRuntimeWrites != 1 || result.Terminalized != 1 {
+		t.Fatalf("result = %#v, want stale runtime recovery evidence and terminal reconcile", result)
+	}
+	if !store.staleRecoveryNow.Equal(now) || store.staleRecoveryLimit != 10 {
+		t.Fatalf("stale recovery args = %v/%d, want %v/10", store.staleRecoveryNow, store.staleRecoveryLimit, now)
+	}
+}
+
 func TestRunOnceTreatsNoRowsAsRaceLost(t *testing.T) {
 	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
 	store := &fakeStore{
@@ -83,18 +114,31 @@ func TestRunOnceValidatesConfig(t *testing.T) {
 }
 
 type fakeStore struct {
-	candidates []exportaccess.Session
-	requests   []exportaccess.ReconcileRequest
-	err        error
+	candidates         []exportaccess.Session
+	requests           []exportaccess.ReconcileRequest
+	err                error
+	callOrder          []string
+	staleRecovery      exportaccess.StaleRuntimeRequestRecoveryResult
+	staleRecoveryNow   time.Time
+	staleRecoveryLimit int
+}
+
+func (store *fakeStore) RecoverStaleExportRuntimeRequests(_ context.Context, request exportaccess.StaleRuntimeRequestRecovery) (exportaccess.StaleRuntimeRequestRecoveryResult, error) {
+	store.callOrder = append(store.callOrder, "recover_stale_runtime_requests")
+	store.staleRecoveryNow = request.Now
+	store.staleRecoveryLimit = request.Limit
+	return store.staleRecovery, nil
 }
 
 func (store *fakeStore) ListExportSessionsForTerminalReconcile(context.Context, time.Time, int) ([]exportaccess.Session, error) {
+	store.callOrder = append(store.callOrder, "list_terminal_reconcile")
 	out := make([]exportaccess.Session, len(store.candidates))
 	copy(out, store.candidates)
 	return out, nil
 }
 
 func (store *fakeStore) ReconcileExportSessionTerminal(_ context.Context, request exportaccess.ReconcileRequest) (exportaccess.ReconcileResult, error) {
+	store.callOrder = append(store.callOrder, "reconcile_terminal")
 	store.requests = append(store.requests, request)
 	if store.err != nil {
 		return exportaccess.ReconcileResult{}, store.err

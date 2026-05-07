@@ -325,38 +325,40 @@ Terminal evidence:
 
 - exports terminal, affected paths audited, incident outcome recorded.
 
-## WebDAV Positive Runtime Count Repair
+## WebDAV Runtime Request Recovery
 
 Symptoms:
 
-- export runtime accounting shows a positive aggregate access count after a
+- export runtime accounting shows open runtime request ledger rows after a
   gateway crash or restart.
-- lifecycle drain or revoke remains blocked because no matching negative delta
-  or terminal observation has been committed.
-- gateway logs, process state, or heartbeat evidence cannot prove the active
-  request count is still nonzero.
+- lifecycle drain or revoke remains blocked because one or more open runtime
+  request rows have not closed.
+- gateway logs, process state, or heartbeat evidence cannot prove an open
+  runtime request is still active.
 
 Actions:
 
 - Keep the export session non-terminal and keep lifecycle drain blocked until
   no-access evidence is recorded.
-- Inspect the export session, runtime aggregate count, last observation time,
-  revoke state, gateway process identity, and redacted gateway logs.
-- Prefer the normal revoke and terminal reconcile path when the gateway is
-  healthy enough to report a fresh zero-count observation.
-- If the gateway process that held the positive count is gone, record operator,
-  reason, correlation ID, export ID, repo ID, namespace ID, observed count,
-  process evidence, and audit event IDs before applying a repair.
-- Repair the aggregate count to zero only after independent evidence proves no
-  future access can be served for the credential and no request from the crashed
-  process remains active.
-- If that proof is unavailable, leave the session blocking and move the owning
-  operation to `operator_intervention_required`.
+- Inspect the export session, open `export_runtime_requests` rows, heartbeat
+  expiry, revoke state, gateway process identity, and redacted gateway logs.
+- Prefer the normal stale open runtime request recovery path. The worker
+  recovery closes expired open ledger rows and subtracts their counts only when
+  aggregate counts can cover the recovered rows.
+- Terminal reconcile must not proceed while any open runtime request row remains
+  for the export.
+- Do not manually set aggregate counts to zero and do not write negative runtime
+  deltas. If ledger/aggregate drift exists or the stale row cannot be proven
+  inactive, leave the export blocking and mark the owning operation or incident
+  as `operator_intervention_required`.
+- Record operator, reason, correlation ID, export ID, repo ID, namespace ID,
+  stale runtime request IDs, process evidence, and audit event IDs for any
+  intervention decision.
 
 Terminal evidence:
 
-- aggregate count repaired to zero with audit evidence and terminal reconcile
-  completed, or intervention record with owner and lifecycle drain still
+- stale runtime request ledger rows recovered followed by terminal export
+  reconcile, or intervention record with owner and lifecycle drain still
   blocked.
 
 ## WebDAV Credential Leak

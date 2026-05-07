@@ -160,27 +160,62 @@ func (store *Store) RecordExportAccess(ctx context.Context, exportID string, acc
 	return err
 }
 
-func (store *Store) RecordExportRuntimeObservation(ctx context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error) {
-	observation.ExportID = strings.TrimSpace(observation.ExportID)
-	if err := pathresolver.ValidateID(pathresolver.ExportID, observation.ExportID); err != nil {
+func (store *Store) BeginExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestBegin) (exportaccess.Session, error) {
+	request.RequestID = strings.TrimSpace(request.RequestID)
+	request.ExportID = strings.TrimSpace(request.ExportID)
+	if err := request.Validate(); err != nil {
 		return exportaccess.Session{}, err
 	}
-	if observation.ObservedAt.IsZero() {
-		return exportaccess.Session{}, operationLeaseInvalidRequest("observed_at", "runtime observation time must be set")
-	}
-	if observation.ActiveWriteDelta > 0 && observation.ActiveWriteDelta > observation.ActiveRequestDelta {
-		return exportaccess.Session{}, operationLeaseInvalidRequest("active_deltas", "positive active_write_delta requires matching active_request_delta")
-	}
-	row := store.exec.QueryRowContext(ctx, exportRuntimeObservationSQL(),
-		observation.ExportID,
-		observation.ActiveRequestDelta,
-		observation.ActiveWriteDelta,
-		observation.ObservedAt.UTC(),
-		timePtrArg(observation.GatewayHeartbeatAt),
-		timePtrArg(observation.GatewayHeartbeatExpiresAt),
-		timePtrArg(observation.SuccessfulRequestAccessedAt),
+	row := store.exec.QueryRowContext(ctx, exportRuntimeRequestBeginSQL(),
+		request.RequestID,
+		request.ExportID,
+		request.StartedAt.UTC(),
+		request.HeartbeatExpiresAt.UTC(),
+		request.Write,
 	)
 	return scanExportAccessSession(row)
+}
+
+func (store *Store) HeartbeatExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestHeartbeat) (exportaccess.Session, error) {
+	request.RequestID = strings.TrimSpace(request.RequestID)
+	request.ExportID = strings.TrimSpace(request.ExportID)
+	if err := request.Validate(); err != nil {
+		return exportaccess.Session{}, err
+	}
+	row := store.exec.QueryRowContext(ctx, exportRuntimeRequestHeartbeatSQL(),
+		request.RequestID,
+		request.ExportID,
+		request.ObservedAt.UTC(),
+		request.HeartbeatExpiresAt.UTC(),
+	)
+	return scanExportAccessSession(row)
+}
+
+func (store *Store) EndExportRuntimeRequest(ctx context.Context, request exportaccess.RuntimeRequestEnd) (exportaccess.Session, error) {
+	request.RequestID = strings.TrimSpace(request.RequestID)
+	request.ExportID = strings.TrimSpace(request.ExportID)
+	if err := request.Validate(); err != nil {
+		return exportaccess.Session{}, err
+	}
+	row := store.exec.QueryRowContext(ctx, exportRuntimeRequestEndSQL(),
+		request.RequestID,
+		request.ExportID,
+		request.EndedAt.UTC(),
+		timePtrArg(request.SuccessfulRequestAccessedAt),
+	)
+	return scanExportAccessSession(row)
+}
+
+func (store *Store) RecoverStaleExportRuntimeRequests(ctx context.Context, request exportaccess.StaleRuntimeRequestRecovery) (exportaccess.StaleRuntimeRequestRecoveryResult, error) {
+	if err := request.Validate(); err != nil {
+		return exportaccess.StaleRuntimeRequestRecoveryResult{}, err
+	}
+	row := store.exec.QueryRowContext(ctx, exportRuntimeRequestRecoverStaleSQL(), request.Now.UTC(), request.Limit)
+	var recovered, recoveredWrites int64
+	if err := row.Scan(&recovered, &recoveredWrites); err != nil {
+		return exportaccess.StaleRuntimeRequestRecoveryResult{}, err
+	}
+	return exportaccess.StaleRuntimeRequestRecoveryResult{Recovered: int(recovered), RecoveredWrites: int(recoveredWrites)}, nil
 }
 
 func (store *Store) ListExportSessionsForTerminalReconcile(ctx context.Context, now time.Time, limit int) (sessions []exportaccess.Session, err error) {
@@ -437,25 +472,99 @@ func exportRevokeSQL() string {
 		"UNION ALL SELECT " + prefixedColumns("updated_session", exportSessionPublicColumns) + ", " + prefixedColumns("inserted_operation", operationSelectColumns) + ", inserted FROM updated_session, inserted_operation WHERE EXISTS (SELECT 1 FROM inserted_audit) LIMIT 1"
 }
 
-func exportRuntimeObservationSQL() string {
-	return "UPDATE export_sessions SET " +
-		"active_request_count = active_request_count + $2, " +
-		"active_write_count = active_write_count + $3, " +
-		"last_observed_at = GREATEST(COALESCE(last_observed_at, $4), $4), " +
-		"last_gateway_heartbeat_at = CASE WHEN $5::timestamptz IS NULL THEN last_gateway_heartbeat_at ELSE GREATEST(COALESCE(last_gateway_heartbeat_at, $5), $5) END, " +
-		"gateway_heartbeat_expires_at = CASE WHEN $6::timestamptz IS NULL THEN gateway_heartbeat_expires_at ELSE GREATEST(COALESCE(gateway_heartbeat_expires_at, $6), $6) END, " +
-		"write_drained_at = CASE WHEN active_write_count + $3 = 0 THEN GREATEST(COALESCE(write_drained_at, $4), $4) ELSE NULL END, " +
-		"last_accessed_at = CASE WHEN $7::timestamptz IS NULL THEN last_accessed_at ELSE GREATEST(COALESCE(last_accessed_at, $7), $7) END, " +
-		"updated_at = $4 " +
-		"WHERE export_id = $1 " +
-		"AND active_request_count + $2 >= 0 AND active_write_count + $3 >= 0 AND active_write_count + $3 <= active_request_count + $2 " +
-		"AND (($2 <= 0 AND $3 <= 0) OR (status = 'active' AND expires_at > $4)) " +
-		"RETURNING " + strings.Join(exportSessionPublicColumns, ", ")
+func exportRuntimeRequestBeginSQL() string {
+	return "WITH existing_request AS (" +
+		"SELECT runtime_request_id, export_id, write_request, request_state FROM export_runtime_requests WHERE runtime_request_id = $1 FOR UPDATE" +
+		"), compatible_existing_request AS (" +
+		"SELECT export_id FROM existing_request WHERE export_id = $2 AND write_request = $5 AND request_state = 'open'" +
+		"), eligible_session AS (" +
+		"SELECT export_id, namespace_id, repo_id FROM export_sessions WHERE export_id = $2 AND status = 'active' AND expires_at > $3 AND NOT EXISTS (SELECT 1 FROM existing_request) FOR UPDATE" +
+		"), inserted_request AS (" +
+		"INSERT INTO export_runtime_requests (runtime_request_id, export_id, namespace_id, repo_id, request_state, write_request, started_at, last_heartbeat_at, heartbeat_expires_at, created_at, updated_at) " +
+		"SELECT $1, export_id, namespace_id, repo_id, 'open', $5, $3, $3, $4, $3, $3 FROM eligible_session " +
+		"RETURNING export_id, write_request" +
+		"), incremented_session AS (" +
+		"UPDATE export_sessions SET " +
+		"active_request_count = active_request_count + 1, " +
+		"active_write_count = active_write_count + CASE WHEN $5 THEN 1 ELSE 0 END, " +
+		"last_observed_at = GREATEST(COALESCE(last_observed_at, $3), $3), " +
+		"last_gateway_heartbeat_at = GREATEST(COALESCE(last_gateway_heartbeat_at, $3), $3), " +
+		"gateway_heartbeat_expires_at = GREATEST(COALESCE(gateway_heartbeat_expires_at, $4), $4), " +
+		"write_drained_at = CASE WHEN active_write_count + CASE WHEN $5 THEN 1 ELSE 0 END = 0 THEN GREATEST(COALESCE(write_drained_at, $3), $3) ELSE NULL END, " +
+		"updated_at = $3 FROM inserted_request WHERE export_sessions.export_id = inserted_request.export_id " +
+		"RETURNING " + prefixedColumns("export_sessions", exportSessionPublicColumns) +
+		"), replayed_session AS (" +
+		"SELECT " + prefixedColumns("export_sessions", exportSessionPublicColumns) + " FROM export_sessions JOIN compatible_existing_request ON export_sessions.export_id = compatible_existing_request.export_id" +
+		") SELECT " + strings.Join(exportSessionPublicColumns, ", ") + " FROM replayed_session UNION ALL SELECT " + strings.Join(exportSessionPublicColumns, ", ") + " FROM incremented_session LIMIT 1"
+}
+
+func exportRuntimeRequestHeartbeatSQL() string {
+	return "WITH touched_request AS (" +
+		"UPDATE export_runtime_requests SET last_heartbeat_at = GREATEST(last_heartbeat_at, $3), heartbeat_expires_at = GREATEST(heartbeat_expires_at, $4), updated_at = GREATEST(updated_at, $3) " +
+		"WHERE runtime_request_id = $1 AND export_id = $2 AND request_state = 'open' RETURNING export_id" +
+		"), updated_session AS (" +
+		"UPDATE export_sessions SET " +
+		"last_observed_at = GREATEST(COALESCE(last_observed_at, $3), $3), " +
+		"last_gateway_heartbeat_at = GREATEST(COALESCE(last_gateway_heartbeat_at, $3), $3), " +
+		"gateway_heartbeat_expires_at = GREATEST(COALESCE(gateway_heartbeat_expires_at, $4), $4), " +
+		"updated_at = GREATEST(export_sessions.updated_at, $3) FROM touched_request WHERE export_sessions.export_id = touched_request.export_id " +
+		"RETURNING " + prefixedColumns("export_sessions", exportSessionPublicColumns) +
+		") SELECT " + strings.Join(exportSessionPublicColumns, ", ") + " FROM updated_session"
+}
+
+func exportRuntimeRequestEndSQL() string {
+	writeDelta := "CASE WHEN closed_request.write_request THEN 1 ELSE 0 END"
+	return "WITH request_row AS (" +
+		"SELECT runtime_request_id, export_id, write_request, request_state FROM export_runtime_requests WHERE runtime_request_id = $1 AND export_id = $2 FOR UPDATE" +
+		"), close_eligible AS (" +
+		"SELECT request_row.runtime_request_id, request_row.export_id, request_row.write_request FROM request_row JOIN export_sessions ON export_sessions.export_id = request_row.export_id " +
+		"WHERE request_row.request_state = 'open' AND active_request_count >= 1 AND active_write_count >= CASE WHEN request_row.write_request THEN 1 ELSE 0 END " +
+		"AND active_write_count - CASE WHEN request_row.write_request THEN 1 ELSE 0 END <= active_request_count - 1 FOR UPDATE OF export_sessions" +
+		"), closed_request AS (" +
+		"UPDATE export_runtime_requests SET request_state = 'closed', closed_at = $3, close_reason = 'request_finished', updated_at = GREATEST(export_runtime_requests.updated_at, $3) " +
+		"FROM close_eligible WHERE export_runtime_requests.runtime_request_id = close_eligible.runtime_request_id AND export_runtime_requests.request_state = 'open' RETURNING close_eligible.export_id, close_eligible.write_request" +
+		"), mutated_session AS (" +
+		"UPDATE export_sessions SET " +
+		"active_request_count = active_request_count - 1, " +
+		"active_write_count = active_write_count - " + writeDelta + ", " +
+		"last_observed_at = GREATEST(COALESCE(last_observed_at, $3), $3), " +
+		"write_drained_at = CASE WHEN active_write_count - " + writeDelta + " = 0 THEN GREATEST(COALESCE(write_drained_at, $3), $3) ELSE NULL END, " +
+		"last_accessed_at = CASE WHEN $4::timestamptz IS NULL THEN last_accessed_at ELSE GREATEST(COALESCE(last_accessed_at, $4), $4) END, " +
+		"updated_at = GREATEST(export_sessions.updated_at, $3) FROM closed_request WHERE export_sessions.export_id = closed_request.export_id " +
+		"AND active_request_count - 1 >= 0 AND active_write_count - " + writeDelta + " >= 0 AND active_write_count - " + writeDelta + " <= active_request_count - 1 " +
+		"RETURNING " + prefixedColumns("export_sessions", exportSessionPublicColumns) +
+		"), replayed_session AS (" +
+		"SELECT " + prefixedColumns("export_sessions", exportSessionPublicColumns) + " FROM export_sessions JOIN request_row ON export_sessions.export_id = request_row.export_id WHERE request_row.request_state IN ('closed','recovered')" +
+		") SELECT " + strings.Join(exportSessionPublicColumns, ", ") + " FROM mutated_session UNION ALL SELECT " + strings.Join(exportSessionPublicColumns, ", ") + " FROM replayed_session LIMIT 1"
+}
+
+func exportRuntimeRequestRecoverStaleSQL() string {
+	return "WITH stale AS (" +
+		"SELECT runtime_request_id, export_id, write_request FROM export_runtime_requests WHERE request_state = 'open' AND heartbeat_expires_at <= $1 ORDER BY heartbeat_expires_at, runtime_request_id LIMIT $2 FOR UPDATE SKIP LOCKED" +
+		"), grouped AS (" +
+		"SELECT export_id, count(*)::integer AS request_count, count(*) FILTER (WHERE write_request)::integer AS write_count FROM stale GROUP BY export_id" +
+		"), eligible_sessions AS (" +
+		"SELECT export_sessions.export_id FROM export_sessions JOIN grouped ON export_sessions.export_id = grouped.export_id " +
+		"WHERE active_request_count >= grouped.request_count AND active_write_count >= grouped.write_count FOR UPDATE" +
+		"), all_groups_eligible AS (" +
+		"SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM grouped WHERE NOT EXISTS (SELECT 1 FROM eligible_sessions WHERE eligible_sessions.export_id = grouped.export_id))" +
+		"), closed AS (" +
+		"UPDATE export_runtime_requests SET request_state = 'recovered', closed_at = $1, close_reason = 'stale_gateway_heartbeat', updated_at = $1 " +
+		"FROM stale, all_groups_eligible WHERE export_runtime_requests.runtime_request_id = stale.runtime_request_id RETURNING stale.export_id, stale.write_request" +
+		"), updated_sessions AS (" +
+		"UPDATE export_sessions SET " +
+		"active_request_count = active_request_count - grouped.request_count, " +
+		"active_write_count = active_write_count - grouped.write_count, " +
+		"last_observed_at = GREATEST(COALESCE(last_observed_at, $1), $1), " +
+		"write_drained_at = CASE WHEN active_write_count - grouped.write_count = 0 THEN GREATEST(COALESCE(write_drained_at, $1), $1) ELSE NULL END, " +
+		"updated_at = $1 FROM grouped, all_groups_eligible WHERE export_sessions.export_id = grouped.export_id RETURNING export_sessions.export_id" +
+		") SELECT COALESCE((SELECT count(*) FROM closed), 0)::bigint, COALESCE((SELECT count(*) FROM closed WHERE write_request), 0)::bigint FROM all_groups_eligible"
 }
 
 func exportTerminalReconcileListSQL() string {
 	return exportSessionPublicSelectSQL() +
 		" WHERE active_request_count = 0 AND active_write_count = 0 " +
+		"AND NOT EXISTS (SELECT 1 FROM export_runtime_requests WHERE export_runtime_requests.export_id = export_sessions.export_id AND request_state = 'open') " +
 		"AND (status = 'revoking' OR (status = 'active' AND expires_at <= $1)) " +
 		"ORDER BY updated_at, export_id LIMIT $2"
 }
@@ -466,6 +575,7 @@ func exportReconcileTerminalSQL() string {
 		"), eligible_session AS (" +
 		"SELECT export_id FROM export_sessions WHERE export_id = $34 AND namespace_id = $17 " +
 		"AND active_request_count = 0 AND active_write_count = 0 AND $37 = 0 AND $38 = 0 " +
+		"AND NOT EXISTS (SELECT 1 FROM export_runtime_requests WHERE export_runtime_requests.export_id = export_sessions.export_id AND request_state = 'open') " +
 		"AND (($33 = 'revoked' AND status = 'revoking' AND revoked_at IS NOT NULL) OR ($33 = 'expired' AND status = 'active' AND expires_at <= $35) OR ($33 = 'failed' AND btrim($36) <> '')) FOR UPDATE" +
 		"), inserted_operation AS (" +
 		"INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") SELECT " + placeholders(1, len(operationColumns)) + " WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +

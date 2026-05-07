@@ -19,6 +19,7 @@ import (
 const defaultLimit = 10
 
 type Store interface {
+	RecoverStaleExportRuntimeRequests(ctx context.Context, request exportaccess.StaleRuntimeRequestRecovery) (exportaccess.StaleRuntimeRequestRecoveryResult, error)
 	ListExportSessionsForTerminalReconcile(ctx context.Context, now time.Time, limit int) ([]exportaccess.Session, error)
 	ReconcileExportSessionTerminal(ctx context.Context, request exportaccess.ReconcileRequest) (exportaccess.ReconcileResult, error)
 }
@@ -37,12 +38,14 @@ type Runner struct {
 }
 
 type Result struct {
-	Scanned      int
-	Terminalized int
-	Reused       int
-	Skipped      int
-	RaceLost     int
-	Failed       int
+	RecoveredRuntimeRequests int
+	RecoveredRuntimeWrites   int
+	Scanned                  int
+	Terminalized             int
+	Reused                   int
+	Skipped                  int
+	RaceLost                 int
+	Failed                   int
 }
 
 func New(config Config) Runner {
@@ -58,11 +61,19 @@ func (runner Runner) RunOnce(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 
+	recovered, err := config.Store.RecoverStaleExportRuntimeRequests(ctx, exportaccess.StaleRuntimeRequestRecovery{
+		Now:   now,
+		Limit: config.Limit,
+	})
+	if err != nil {
+		return Result{Failed: 1}, fmt.Errorf("recover stale export runtime requests: %w", err)
+	}
+
 	sessions, err := config.Store.ListExportSessionsForTerminalReconcile(ctx, now, config.Limit)
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{Scanned: len(sessions)}
+	result := Result{RecoveredRuntimeRequests: recovered.Recovered, RecoveredRuntimeWrites: recovered.RecoveredWrites, Scanned: len(sessions)}
 	if result.Scanned > config.Limit {
 		result.Scanned = config.Limit
 	}
