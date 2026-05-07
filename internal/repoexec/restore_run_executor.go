@@ -138,7 +138,7 @@ func (executor *RestoreRunExecutor) ExecuteOperationRecovery(ctx context.Context
 		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_PLAN_NOT_CONSUMING", "restore run plan is not consuming", map[string]any{"restore_plan_id": durablePlan.ID, "restore_plan_status": durablePlan.Status.String()})
 	}
 	if record.Phase == operations.OperationPhaseRestoreRunConsuming {
-		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_CONSUMING_RECOVERY_REQUIRES_OPERATOR", "restore run consuming recovery requires operator intervention", map[string]any{"restore_plan_id": durablePlan.ID, "restore_plan_status": durablePlan.Status.String()})
+		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_CONSUMING_RECOVERY_REQUIRES_OPERATOR", "restore run consuming recovery requires durable applied evidence", map[string]any{"restore_plan_id": durablePlan.ID, "restore_plan_status": durablePlan.Status.String(), "missing_evidence": "restore_run_applied"})
 	}
 
 	repo, err := executor.store.GetRepoInNamespace(ctx, record.NamespaceID, record.RepoID)

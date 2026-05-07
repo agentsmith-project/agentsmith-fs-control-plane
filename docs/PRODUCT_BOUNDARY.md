@@ -28,7 +28,7 @@ AFSCP should not expose or depend on:
 - caller catalog object
 - project
 - caller workspace
-- Desktop product UX
+- caller desktop connector UX
 - product template catalog UX
 - product display names
 - user-facing product permission model

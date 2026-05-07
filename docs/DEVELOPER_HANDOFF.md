@@ -233,8 +233,9 @@ Partially completed:
   inspection. The explicit-gated workers cover metadata recovery, repo create,
   repo lifecycle and purge, save/restore, template create/clone, export terminal
   reconcile, workload mount stale-lease scanning, and audit outbox HTTP JSON
-  delivery. External acceptance, generated-client review, deployment drills,
-  and human GA sign-off remain open where tracked.
+  delivery. AFSCP owner/security acceptance, generated-client review,
+  deployment drills, and human GA sign-off remain open where tracked by
+  AFSCP-owned readiness gates.
 - Operation, idempotency, audit, inspection, and store boundaries exist, with
   pure operation lease, repo fence, audit outbox, and recovery classification
   models. The first PostgreSQL adapter slice implements operation read/write,
@@ -265,8 +266,9 @@ Partially completed:
   explicitly configured HTTP JSON outbox delivery worker is the GA audit
   delivery implementation; other sink kinds remain future extensions.
 - Path resolver guardrails exist and are used by repo create/recovery,
-  save/restore, template, WebDAV export gateway, and workload mount paths. File
-  API integration remains outside this handoff scope.
+  save/restore, template, WebDAV export gateway, and workload mount paths.
+  Caller-side file API adoption remains outside this handoff scope and is not
+  an AFSCP GA gate.
 
 Not implemented:
 
@@ -275,7 +277,7 @@ Not implemented:
 - deployment evidence that the configured external HTTP JSON audit sink dedupes
   by `audit_event_id`
 - generated clients, AFSCP owner/security acceptance, deployment-specific
-  observability thresholds, runbook drills, and human GA acceptance evidence
+  observability thresholds, AFSCP runbook drills, and human GA acceptance evidence
 
 ## Contract Implementation Order
 

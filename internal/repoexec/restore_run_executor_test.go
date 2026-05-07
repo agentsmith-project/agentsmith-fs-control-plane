@@ -176,7 +176,7 @@ func TestRestoreRunExecutorRejectsDisabledNamespaceBeforeJVSOrFence(t *testing.T
 	}
 }
 
-func TestRestoreRunExecutorConsumingRecoveryDoesNotRerunJVSAndRequiresOperator(t *testing.T) {
+func TestRestoreRunExecutorConsumingRecoveryDoctorHealthyIdleStillRequiresAppliedEvidence(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = activeRepoResource(now)
@@ -184,7 +184,10 @@ func TestRestoreRunExecutorConsumingRecoveryDoesNotRerunJVSAndRequiresOperator(t
 	store.restorePlan = restorePreviewPendingPlan(now)
 	store.restorePlan.Status = restoreplan.StatusConsuming
 	store.fences = []fences.Fence{restoreRunWriterFence(now, "op_run")}
-	runner := &fakeJVSRunner{}
+	runner := &fakeJVSRunner{
+		doctorSummary:         jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
+		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "idle", Workspace: "main"},
+	}
 	executor := newTestRestoreRunExecutor(t, store, runner, now)
 
 	err := executor.ExecuteOperationRecovery(context.Background(), restoreRunLeasedRecord(now, operations.OperationPhaseRestoreRunConsuming), recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim})
@@ -192,14 +195,22 @@ func TestRestoreRunExecutorConsumingRecoveryDoesNotRerunJVSAndRequiresOperator(t
 		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
 	}
 	if len(runner.calls) != 0 {
-		t.Fatalf("JVS calls = %#v, want no rerun from consuming recovery", runner.calls)
+		t.Fatalf("JVS calls = %#v, want no rerun or read-only evidence calls from consuming recovery", runner.calls)
 	}
-	if store.restorePlan.Status != restoreplan.StatusOperatorInterventionRequired || activeWriterFenceCount(store.fences, "op_run") != 1 {
-		t.Fatalf("plan/fences = %#v/%#v, want plan OIR and retained writer fence", store.restorePlan, store.fences)
+	if store.restorePlan.Status != restoreplan.StatusOperatorInterventionRequired || activeWriterFenceCount(store.fences, "op_run") != 1 || store.releasedFenceID != "" {
+		t.Fatalf("plan/fences/released = %#v/%#v/%q, want OIR and retained writer fence", store.restorePlan, store.fences, store.releasedFenceID)
 	}
 	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.operation.Phase != operations.OperationPhaseRestoreRunConsuming {
 		t.Fatalf("operation = %#v, want consuming operator intervention", store.operation)
 	}
+	verification, _ := store.operation.VerificationResult.(map[string]any)
+	if verification["missing_evidence"] != "restore_run_applied" || verification["restore_plan_status"] != restoreplan.StatusConsuming.String() {
+		t.Fatalf("verification = %#v, want missing applied evidence", store.operation.VerificationResult)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Outcome != audit.OutcomeFailed || store.auditEvents[0].Reason != "restore_run_operator_intervention_required" {
+		t.Fatalf("audit events = %#v, want restore run OIR audit", store.auditEvents)
+	}
+	assertNoRestoreRunCommandLeak(t, store.operation, store.auditEvents)
 }
 
 func TestRestoreRunExecutorConsumingRecoverySkipsMetadataAndJVSWhenRepoUnavailable(t *testing.T) {
@@ -217,7 +228,7 @@ func TestRestoreRunExecutorConsumingRecoverySkipsMetadataAndJVSWhenRepoUnavailab
 		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
 	}
 	if len(runner.calls) != 0 {
-		t.Fatalf("JVS calls = %#v, want no JVS from consuming recovery", runner.calls)
+		t.Fatalf("JVS calls = %#v, want no JVS when metadata is unverifiable", runner.calls)
 	}
 	if store.restorePlan.Status != restoreplan.StatusOperatorInterventionRequired || activeWriterFenceCount(store.fences, "op_run") != 1 {
 		t.Fatalf("plan/fences = %#v/%#v, want plan OIR and retained writer fence", store.restorePlan, store.fences)
