@@ -11,9 +11,9 @@ AFSCP GA gates are internal to the shared filesystem control plane. Reference
 consumer adoption notes can inform compatibility work, but no first consumer or
 sibling repository acceptance is an AFSCP gate or release blocker.
 
-This ledger records closure evidence for GA pre-dev admission gates, review
-checklist items, and risk decisions. A gate is open until this document links to
-reviewed evidence.
+This ledger records closure evidence for GA implementation-baseline admission
+gates, review checklist items, and risk decisions. A gate is open until this
+document links to reviewed evidence.
 
 Status values:
 

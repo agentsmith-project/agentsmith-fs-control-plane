@@ -1295,6 +1295,112 @@ func TestCurrentRepoInternalREADMEImplementationStatusIsCurrent(t *testing.T) {
 	}
 }
 
+func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	paths := []string{
+		filepath.Join(repoRoot, "api", "schemas", "README.md"),
+		filepath.Join(repoRoot, "api", "openapi", "README.md"),
+		filepath.Join(repoRoot, "docs", "API_CONTRACT_DRAFT.md"),
+		filepath.Join(repoRoot, "docs", "HANDOFF.md"),
+		filepath.Join(repoRoot, "docs", "JVS_INTEGRATION.md"),
+		filepath.Join(repoRoot, "docs", "REVIEW_CHECKLIST.md"),
+		filepath.Join(repoRoot, "docs", "PRE_DEV_COMPLETION.md"),
+		filepath.Join(repoRoot, "docs", "runbooks", "ga-runbooks.md"),
+		filepath.Join(repoRoot, "docs", "OPERATIONS_AND_MIGRATION.md"),
+	}
+	contractPaths, err := filepath.Glob(filepath.Join(repoRoot, "docs", "contracts", "*.md"))
+	if err != nil {
+		t.Fatalf("Glob returned error: %v", err)
+	}
+	if len(contractPaths) == 0 {
+		t.Fatal("expected active contract docs under docs/contracts/*.md")
+	}
+	paths = append(paths, contractPaths...)
+	forbidden := []string{
+		"GA pre-dev",
+		"GA pre-dev narrative draft",
+		"GA pre-dev review draft",
+		"pre-dev runbook draft for implementation handoff",
+		"Service skeleton work may start",
+		"Before endpoint handlers depend",
+		"before endpoint handlers",
+		"before endpoint implementation",
+		"Endpoint implementation must wait",
+		"before service implementation begins",
+		"before service implementation",
+		"service implementation begins",
+	}
+	currentBaselinePhrases := []string{
+		"GA implementation-baseline",
+		"GA implementation baseline",
+		"current implementation baseline",
+		"after the implementation baseline",
+	}
+
+	for _, path := range paths {
+		t.Run(filepath.ToSlash(path), func(t *testing.T) {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile returned error: %v", err)
+			}
+			text := string(body)
+			normalizedText := strings.Join(strings.Fields(text), " ")
+			for _, phrase := range forbidden {
+				if strings.Contains(text, phrase) {
+					t.Fatalf("%s has stale current implementation status phrase %q", path, phrase)
+				}
+			}
+			if !strings.Contains(text, "docs/READINESS_EVIDENCE.md") {
+				t.Fatalf("%s must cite docs/READINESS_EVIDENCE.md for current readiness governance", path)
+			}
+			hasCurrentBaseline := false
+			for _, phrase := range currentBaselinePhrases {
+				if strings.Contains(normalizedText, phrase) {
+					hasCurrentBaseline = true
+					break
+				}
+			}
+			if !hasCurrentBaseline {
+				t.Fatalf("%s must describe GA implementation-baseline or current implementation baseline status", path)
+			}
+		})
+	}
+}
+
+func TestCurrentRepoReadinessEvidenceHasCurrentImplementationStatus(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	path := filepath.Join(repoRoot, "docs", "READINESS_EVIDENCE.md")
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("readiness evidence must exist at %s: %v", path, err)
+	}
+	text := string(body)
+	normalizedText := strings.Join(strings.Fields(text), " ")
+
+	if !strings.Contains(text, "FINAL GA ACCEPTANCE REMAINS BLOCKED") {
+		t.Fatalf("%s must keep final GA acceptance blocked status", path)
+	}
+	if !strings.Contains(normalizedText, "GA implementation-baseline") &&
+		!strings.Contains(normalizedText, "implementation-baseline") {
+		t.Fatalf("%s must describe GA implementation-baseline status", path)
+	}
+	forbidden := []string{
+		"GA pre-dev",
+		"GA pre-dev narrative draft",
+		"GA pre-dev review draft",
+	}
+	for _, phrase := range forbidden {
+		if strings.Contains(text, phrase) {
+			t.Fatalf("%s has stale readiness status phrase %q", path, phrase)
+		}
+	}
+	boundary := "Reference consumer adoption notes can inform compatibility work, but no first consumer or sibling repository acceptance is an AFSCP gate or release blocker."
+	if !strings.Contains(normalizedText, boundary) {
+		t.Fatalf("%s must state first/reference consumer adoption is not an AFSCP gate or release blocker", path)
+	}
+}
+
 func TestCurrentRepoEntryDocsHaveQuotaSemantics(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	paths := []string{

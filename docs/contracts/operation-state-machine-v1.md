@@ -1,6 +1,9 @@
 # Contract: Operation State Machine V1
 
-Status: GA pre-dev review draft
+Status: GA implementation-baseline contract. FINAL GA acceptance remains
+governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
+operations, runbook drill, and human sign-off entries must be complete before
+the applicable readiness gate is closed.
 
 AFSCP mutations are durable operations. The operation store is the recovery source of truth after process restart.
 

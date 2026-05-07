@@ -1,11 +1,13 @@
 # Pre-Dev Completion Package
 
-Status: prepared for development handoff.
+Status: GA implementation-baseline package; FINAL GA remains pending recorded
+acceptance, runbook drills, and human sign-off.
 
-This package completes the documentation, contract, and decision work that can
-be finished inside this repository before service implementation begins. The
-JVS upstream blocker found during evidence gathering is now closed by v0.4.8
-smoke evidence.
+This package records the documentation, contract, and decision work that
+admitted the current implementation baseline. The JVS upstream blocker found
+during evidence gathering is now closed by v0.4.8 smoke evidence, but final GA
+remains governed by `docs/READINESS_EVIDENCE.md` owner, security,
+generated-client, operations, runbook drill, and human sign-off entries.
 
 ## Completed Artifacts
 
@@ -102,9 +104,9 @@ control-plane state. API/runtime implementation now includes repo/JVS lifecycle,
 save/restore, namespace-scoped template create/clone, WebDAV export
 create/get/revoke plus gateway serving, workload mount issuance and
 orchestrator plans, writer fences, and durable operation-backed storage
-mutation. Continue directly toward GA by finishing guardrail review, external
-owner acceptance, generated-client review, security review, runbook drills, and
-human acceptance for the remaining open readiness gates.
+mutation. Continue directly toward GA by finishing guardrail review, owner
+acceptance, generated-client review, security review, runbook drills, and human
+acceptance for the remaining open readiness gates.
 
 G-005 is closed by JVS v0.4.8 evidence in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`. This only closes the JVS gate.

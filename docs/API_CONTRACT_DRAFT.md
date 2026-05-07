@@ -1,8 +1,15 @@
 # API Contract Draft
 
-Status: GA pre-dev narrative draft. This document is the product-agnostic narrative source for the first internal OpenAPI spec.
+Status: GA implementation-baseline API narrative. This document is the
+product-agnostic narrative source for the internal OpenAPI spec.
 
-The implementation team may start service skeleton work before this draft is frozen. Endpoint handlers and generated clients must wait until request, response, and error schemas are written under `api/schemas/` and the internal OpenAPI file exists under `api/openapi/`.
+The implementation baseline, request/response/error schemas under
+`api/schemas/`, and internal OpenAPI under `api/openapi/` now exist. Changes to
+schemas, endpoint handlers, generated clients, or storage behavior must keep
+this narrative, generated artifacts, and contract verification aligned. FINAL
+GA remains governed by `docs/READINESS_EVIDENCE.md`; owner, security,
+generated-client, operations, runbook drill, and human sign-off entries must be
+complete before GA acceptance is treated as closed.
 
 ## Service Access
 

@@ -1,6 +1,9 @@
 # Contract: Repo Lifecycle V1
 
-Status: GA pre-dev review draft
+Status: GA implementation-baseline contract. FINAL GA acceptance remains
+governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
+operations, runbook drill, and human sign-off entries must be complete before
+the applicable readiness gate is closed.
 
 AFSCP owns storage lifecycle for repos. Calling products own product catalog
 state, display names, user-facing deletion UX, and permission checks.

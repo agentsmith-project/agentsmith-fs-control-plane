@@ -1,5 +1,12 @@
 # Operations And Migration
 
+Status: GA implementation-baseline operations and migration guidance. FINAL GA
+remains governed by `docs/READINESS_EVIDENCE.md`; owner, security,
+generated-client, operations, runbook drill, and human sign-off entries must be
+complete before GA acceptance is treated as closed. New or breaking endpoint
+handler and storage behavior must pass the applicable readiness evidence review
+before acceptance.
+
 ## Operation Store
 
 AFSCP should not rely on in-memory state for mutating operations.

@@ -1,8 +1,13 @@
 # Schemas
 
-`afscp-internal-v1.schema.json` is the first GA pre-dev JSON Schema bundle for
-the internal API. It is intentionally product-agnostic and must stay aligned
-with `api/openapi/internal-v1.openapi.yaml` and `docs/API_CONTRACT_DRAFT.md`.
+`afscp-internal-v1.schema.json` is the GA implementation-baseline JSON Schema
+bundle for the internal API. It is intentionally product-agnostic and must stay
+aligned with `api/openapi/internal-v1.openapi.yaml` and
+`docs/API_CONTRACT_DRAFT.md`.
+
+FINAL GA acceptance remains governed by `docs/READINESS_EVIDENCE.md`; owner,
+security, generated-client, operations, runbook drill, and human sign-off
+entries must be complete before the applicable readiness gate is closed.
 
 Schema coverage:
 
@@ -23,5 +28,6 @@ Schema coverage:
 - save point and restore request/response
 - export session status
 
-Before endpoint handlers depend on these schemas, reviewers must confirm schema
-names, stable error enums, secret-bearing fields, and generated client behavior.
+New or changed endpoint handlers that depend on these schemas must keep schema
+names, stable error enums, secret-bearing fields, generated client behavior,
+and readiness evidence aligned.

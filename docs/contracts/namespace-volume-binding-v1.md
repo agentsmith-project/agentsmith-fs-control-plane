@@ -1,6 +1,9 @@
 # Contract: Namespace Volume Binding V1
 
-Status: GA pre-dev review draft
+Status: GA implementation-baseline contract. FINAL GA acceptance remains
+governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
+operations, runbook drill, and human sign-off entries must be complete before
+the applicable readiness gate is closed.
 
 Namespace volume binding is owned and enforced by AFSCP. Trusted callers may request or configure bindings according to deployment policy, but they do not provide authoritative raw filesystem paths.
 

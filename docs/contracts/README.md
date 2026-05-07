@@ -1,6 +1,8 @@
 # Contracts
 
-These documents are GA pre-dev contracts for cross-repo review before endpoint implementation.
+These documents are GA implementation-baseline contracts for current review,
+contract verification, generated artifacts, endpoint handlers, and storage
+behavior.
 
 - [afscp-internal-api-v1.md](afscp-internal-api-v1.md)
 - [namespace-volume-binding-v1.md](namespace-volume-binding-v1.md)
@@ -11,11 +13,19 @@ These documents are GA pre-dev contracts for cross-repo review before endpoint i
 - [workload-mount-binding-v1.md](workload-mount-binding-v1.md)
 - [operation-state-machine-v1.md](operation-state-machine-v1.md)
 
-Service skeleton work may begin while contracts are reviewed. Endpoint implementation must wait until:
+The implementation baseline, generated JSON schemas, and internal OpenAPI now
+exist. Continue new or changed endpoint handler and storage behavior only when
+the relevant contract, generated artifact, and readiness evidence remain
+aligned. FINAL GA acceptance remains governed by `docs/READINESS_EVIDENCE.md`;
+owner, security, generated-client, operations, runbook drill, and human
+sign-off entries must be complete before the applicable readiness gate is
+closed.
+
+Relevant acceptance evidence includes:
 
 - internal auth and caller-service authorization are accepted
-- request/response/error schemas are added under `api/schemas/`
-- internal OpenAPI is generated under `api/openapi/`
+- request/response/error schemas under `api/schemas/` remain aligned
+- internal OpenAPI under `api/openapi/` remains aligned with generated clients
 - workload mount binding/orchestrator plan split is accepted by platform/runtime contract reviewers
 - JVS external-control/payload-only mount gate is accepted
 - repo lifecycle transition, session drain, tombstone, restore, retention, purge approval-reference, and recovery semantics are accepted
@@ -32,4 +42,5 @@ Service skeleton work may begin while contracts are reviewed. Endpoint implement
 - Generated JSON schemas and OpenAPI must match these narrative contracts.
 - Stable error codes are part of the contract.
 - Orchestrator-only examples may include Secret references; ordinary product caller examples must not.
-- Contract review evidence is required before storage handlers depend on a contract.
+- Contract review evidence is required when storage handlers add or change
+  behavior that depends on a contract.

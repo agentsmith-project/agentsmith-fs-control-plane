@@ -1,6 +1,8 @@
 # GA Runbooks
 
-Status: pre-dev runbook draft for implementation handoff.
+Status: GA implementation-baseline runbook set. FINAL GA still requires drill
+evidence, operations/security/owner acceptance where applicable, and human
+sign-off recorded in `docs/READINESS_EVIDENCE.md`.
 
 Every incident action must record operator, reason, correlation ID, affected
 namespace/repo/export/mount/operation IDs, and audit event IDs.

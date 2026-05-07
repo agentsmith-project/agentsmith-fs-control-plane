@@ -13,18 +13,26 @@ AFSCP should manage volumes, namespaces, repos, repo lifecycle, repo templates, 
 
 Current active source of truth is the root-level documentation in this repository, especially `docs/DEVELOPER_HANDOFF.md`, `docs/PRE_DEV_COMPLETION.md`, `docs/GA_PRE_DEV_READINESS.md`, `docs/DEVELOPMENT_GOVERNANCE.md`, `docs/RISK_REGISTER.md`, `docs/READINESS_EVIDENCE.md`, `docs/HANDOFF.md`, `docs/PRODUCT_REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/STORAGE_LAYOUT.md`, `docs/API_CONTRACT_DRAFT.md`, `api/openapi/internal-v1.openapi.yaml`, `api/schemas/afscp-internal-v1.schema.json`, and `docs/contracts/`.
 
-Historical review and research documents may still use P0, P1, or MVP language. For active planning, read those terms through the GA pre-dev readiness document.
+Historical review and research documents may still use P0, P1, or MVP
+language. For active planning, read those terms through the GA implementation
+baseline and readiness evidence documents.
 
 Historical consumer-named planning snapshots and local sibling checkout paths
 are intentionally not part of the current repository. Active AFSCP planning is
 the product-neutral documentation set listed above.
 
-## Pre-Dev Readiness Rules
+## GA Implementation Baseline Rules
 
-1. Record the runtime language/framework in a new ADR before adding application code.
-2. Runtime is now recorded in ADR 0005, and the pre-dev handoff has entered the GA implementation baseline. Implementation may continue against accepted package layout, health endpoint, config loading, logging, test harness, generated contract plumbing, route registration, and handler/operation contracts.
+1. ADR 0005 records the runtime language/framework; any new runtime decision
+   needs ADR review before it changes the baseline.
+2. The handoff has entered the GA implementation baseline. Implementation may
+   continue against accepted package layout, health endpoint, config loading,
+   logging, test harness, generated contract plumbing, route registration, and
+   handler/operation contracts.
 3. Keep internal auth, caller-service authorization, schemas, OpenAPI, JVS runner, operation/audit, WebDAV, workload mount, writer-session fence, and namespace policy changes aligned with accepted contracts. Contract-breaking changes need review and evidence before implementation proceeds.
-4. Keep all implementation choices aligned with `docs/GA_PRE_DEV_READINESS.md`.
+4. FINAL GA remains governed by `docs/READINESS_EVIDENCE.md`; owner, security,
+   generated-client, operations, runbook drill, and human sign-off evidence
+   must be complete before GA acceptance is treated as closed.
 
 ## Revised Boundary
 
@@ -131,7 +139,8 @@ Client/desktop connector owns:
 
 ## First Engineering Checkpoints
 
-1. Bootstrap Go service skeleton from `docs/DEVELOPER_HANDOFF.md`.
+1. Use the existing Go service skeleton and `docs/DEVELOPER_HANDOFF.md` as the
+   implementation baseline.
 2. Continue or modify storage mutation handlers only through accepted contracts,
    gate evidence, owner acceptance where required, and focused tests; baseline
    implementation does not by itself close the relevant gate in

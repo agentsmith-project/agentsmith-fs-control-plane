@@ -1,11 +1,15 @@
 # OpenAPI
 
-`internal-v1.openapi.yaml` is the first GA pre-dev internal OpenAPI draft. The
-spec is private/internal, product-agnostic, and must not be exposed as a
-user-facing API.
+`internal-v1.openapi.yaml` is the GA implementation-baseline internal OpenAPI
+artifact. The spec is private/internal, product-agnostic, and must not be
+exposed as a user-facing API.
 
-Service skeleton work may start from this file, but storage handlers still need
-the relevant readiness gates in `docs/READINESS_EVIDENCE.md` to close.
+Endpoint handler and storage behavior changes may continue from this artifact
+only while the relevant contracts, generated clients, and readiness evidence
+remain aligned. FINAL GA acceptance remains governed by
+`docs/READINESS_EVIDENCE.md`; owner, security, generated-client, operations,
+runbook drill, and human sign-off entries must be complete before the
+applicable readiness gate is closed.
 
 The OpenAPI includes the standard operation envelope, standard error envelope,
 stable error families, caller context headers, orchestrator-only response

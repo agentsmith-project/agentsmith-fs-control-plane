@@ -1,14 +1,17 @@
 # Contract: JVS Runner V1
 
-Status: GA pre-dev review draft
+Status: GA implementation-baseline contract. FINAL GA acceptance remains
+governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
+operations, runbook drill, and human sign-off entries must be complete before
+the applicable readiness gate is closed.
 
 AFSCP integrates with JVS through CLI JSON output for GA.
 
 ## Version Pin
 
-Before endpoint implementation, the team must pin the supported JVS release
-version, binary asset name, checksum, and tested CLI spec. The runner contract
-should be updated whenever JVS JSON schemas or exit codes change.
+The implementation baseline pins the supported JVS release version, binary
+asset name, checksum, and tested CLI spec. The runner contract should be
+updated whenever JVS JSON schemas or exit codes change.
 
 The accepted handoff pin is `v0.4.8` from
 `https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8`. For
@@ -74,8 +77,8 @@ their external-control-root behavior is pinned to this contract.
 
 ## GA Freeze Matrix
 
-Before storage handlers depend on JVS, this contract must record for each
-required command:
+Storage handlers that depend on JVS must keep this required-command freeze
+matrix recorded and aligned:
 
 | Command | Required Freeze |
 | --- | --- |
@@ -89,7 +92,8 @@ required command:
 | `doctor --strict` | argv template, `ok` field, failure mapping, post-operation verification expectations |
 
 The JVS release version, asset names, checksums, and packaged binary paths must
-be recorded in an ADR or in this contract before endpoint implementation.
+remain recorded in an ADR or in this contract as part of endpoint and worker
+acceptance.
 
 ## JVS v0.4.8 Command Matrix
 

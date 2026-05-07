@@ -4,6 +4,11 @@ Use this checklist for final GA acceptance review after the implementation
 baseline. New or changed endpoint handlers and storage mutation logic must also
 be reviewed against this checklist before acceptance.
 
+This checklist does not close any readiness gate by itself. FINAL GA remains
+governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
+operations, runbook drill, and human sign-off entries must be complete before
+GA acceptance is treated as closed.
+
 AFSCP GA is reviewed as an independent shared filesystem control-plane release.
 Reference consumers can provide adoption feedback, but their acceptance is not
 the final AFSCP GA gate.

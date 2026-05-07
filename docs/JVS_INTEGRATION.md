@@ -1,10 +1,19 @@
 # JVS Integration
 
+Status: GA implementation-baseline JVS integration guidance. FINAL GA remains
+governed by `docs/READINESS_EVIDENCE.md`; owner, security, generated-client,
+operations, runbook drill, and human sign-off entries must still be complete
+before GA acceptance is treated as closed.
+
 AFSCP is the only ordinary JVS executor in the storage-control path.
 
 ## Integration Mode
 
-GA should integrate through the JVS CLI with JSON output.
+The GA implementation baseline integrates through the JVS CLI with JSON output.
+The JVS `v0.4.8` release pin, asset, checksum, and smoke evidence are accepted
+as G-005 in `docs/READINESS_EVIDENCE.md`; that acceptance covers the JVS pin
+gate only and does not close FINAL GA or the remaining storage, security,
+generated-client, operations, runbook, or human acceptance gates.
 
 Do not reimplement JVS save, version restore, or clone semantics inside AFSCP.
 Repo availability, archive, tombstone, and purge semantics are owned by the
@@ -12,7 +21,7 @@ AFSCP repo lifecycle contract.
 
 ## Required Commands
 
-AFSCP should support:
+The baseline command expectations include:
 
 - `jvs init`
 - save point creation
@@ -69,10 +78,12 @@ External control root rules accepted for AFSCP:
   `--control-root <control_root_path> --workspace main`. The process CWD must
   be clean and controlled, must not be inside another JVS repo, and must never
   be used to discover the target repo.
-- The current internal runner abstraction is intentionally limited to
-  `init` and `doctor --strict`. `repo_create` recovery may use those commands
-  behind its explicit worker gate; save/restore, clone, WebDAV, and mount flows
-  remain separate future slices.
+- Repo create, save/restore, and template clone have explicit-gated worker
+  paths that use this JVS external-control-root contract and the command matrix
+  in [contracts/jvs-runner-contract-v1.md](contracts/jvs-runner-contract-v1.md).
+  WebDAV and workload mount behavior are AFSCP features that depend on the same
+  external-control-root and payload/control path separation; they are not JVS
+  runner commands or deferred JVS runner slices.
 - JVS has repo/workspace lifecycle commands for ordinary repos, but AFSCP GA
   lifecycle does not depend on them. If AFSCP later uses those commands, their
   external-control-root behavior must first be pinned and tested against the
@@ -93,14 +104,16 @@ External control root rules accepted for AFSCP:
   `truncated:true`, AFSCP must fail closed instead of returning a partial list.
 - `doctor --strict` should be run after repo create, restore, and clone in GA smoke paths.
 - `doctor --strict` should be run before reactivating archived or tombstoned repos when retained JVS metadata is expected to remain usable.
-- The supported JVS release version, binary asset name, checksum, and signature bundle must be pinned before endpoint implementation.
+- The supported JVS release version, binary asset name, checksum, and signature
+  bundle are pinned by G-005 evidence and must remain aligned with the runner
+  contract and packaged binary.
 - The packaged JVS binary must come from the pinned GitHub release asset; CI should verify the checksum, verify Sigstore/cosign bundles where supported, and smoke-test the required commands instead of trusting a stale local artifact.
 - AFSCP should run JVS commands from a clean working directory outside another JVS repo; explicit `--control-root --workspace main` is the target selector and CWD must not affect target resolution.
 - Cross-resource operations must use deterministic lock ordering.
 
 ## Required Separation Smoke Test
 
-Before enabling workload mounts, CI should prove the pinned JVS binary can:
+Workload mount readiness should keep CI evidence that the pinned JVS binary can:
 
 1. `jvs init <payload> --control-root <control> --workspace main --json`.
 2. Create a save point from the separated repo.
