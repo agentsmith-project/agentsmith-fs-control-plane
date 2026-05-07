@@ -3,9 +3,15 @@
 Status: GA implementation baseline; the pre-development handoff is complete,
 and implementation is proceeding from accepted contracts.
 
-`agentsmith-fs-control-plane` hosts AFSCP: a product-agnostic file storage control plane for managed volumes, JVS repos, repo lifecycle, repo templates, exports, workload mounts, and durable storage operations.
+This repository hosts AFSCP: an independent shared filesystem control plane for
+managed volumes, JVS repos, repo lifecycle, repo templates, exports, workload
+mounts, and durable storage operations.
 
-AgentSmith is expected to be the first consumer, but AFSCP itself should not know about any caller's business objects. Product concepts belong in the calling product and integration guide. AFSCP should expose robust functional primitives and enforce storage boundaries.
+AFSCP itself should not know about any caller's business objects. Product
+concepts belong in caller-owned integration code or external adoption notes.
+Those notes may be useful compatibility references, but they are not the AFSCP
+core model or release gate. AFSCP exposes robust filesystem primitives and
+enforces storage boundaries.
 
 ## Current Decision
 
@@ -49,7 +55,7 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 - [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md): product-agnostic requirements.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): component boundaries and target architecture.
 - [docs/API_CONTRACT_DRAFT.md](docs/API_CONTRACT_DRAFT.md): draft internal API and data contracts.
-- [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md): AgentSmith integration mapping, kept outside the core model.
+- [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md): external adoption notes, kept outside the core model and release gates.
 - [docs/SECURITY_AND_TENANCY.md](docs/SECURITY_AND_TENANCY.md): credential, namespace, path, export, and JVS control metadata protection model.
 - [docs/MVP_PLAN.md](docs/MVP_PLAN.md): historical delivery plan; use the GA readiness document for active scope.
 - [docs/OPERATIONS_AND_MIGRATION.md](docs/OPERATIONS_AND_MIGRATION.md): operations, migration, and rollout strategy.

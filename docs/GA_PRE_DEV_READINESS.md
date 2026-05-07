@@ -7,7 +7,9 @@ documents. Historical review and research documents may still say P0, P1, or
 MVP; read those terms as historical scope notes unless this document says
 otherwise.
 
-AFSCP is being prepared for one GA target, not a staged product rollout. The
+AFSCP is being prepared for one independently releasable GA target, not a
+staged product rollout for any first consumer. It must run, evolve, release,
+and gate GA as a product-agnostic shared filesystem control plane. The
 pre-development handoff is complete and the repository is now in the GA
 implementation baseline: service skeleton, handlers, workers, generated
 contracts, and focused package tests may exist and continue to evolve. Final GA
@@ -17,7 +19,8 @@ before they are merged as accepted GA behavior.
 
 ## GA Product Scope
 
-GA proves AFSCP as a product-agnostic storage control plane.
+GA proves AFSCP as a product-agnostic shared filesystem control plane with no
+release dependency on first or reference consumers.
 
 GA includes:
 
@@ -36,7 +39,7 @@ GA includes:
 GA excludes:
 
 - product authorization or product workflow decisions
-- AgentSmith-specific workspace, file-library, notebook task, project, or catalog concepts
+- caller-specific workspace, catalog object, task, project, or workflow concepts
 - global template marketplace or ordinary cross-namespace template sharing
 - version merge, conflict resolution, or ordinary single-writer enforcement
 - raw JuiceFS direct mount for ordinary users or workloads
@@ -101,9 +104,9 @@ behavior must pass the corresponding gate before it is accepted for GA.
 | JVS runner | JVS release binary/version/checksum is pinned; argv, JSON success/error shapes, exit-code mapping, dirty-state behavior, and clean-CWD smoke tests are recorded |
 | Path resolver | ID grammar, decode rules, symlink policy, `.jvs` denial, and shared resolver test corpus are accepted |
 | WebDAV export | credential storage, TTL/reissue, revoke behavior, active session accounting, method policy, and audit redaction are frozen |
-| Workload mount | orchestrator v2 contract, payload-only subdir mapping, Secret RBAC, heartbeat/release/revoke, and confirmed-unmounted semantics are accepted |
+| Workload mount | workload mount platform/runtime contract, payload-only subdir mapping, Secret RBAC, heartbeat/release/revoke, and confirmed-unmounted semantics are accepted |
 | Writer-session fence | acquisition, release, recovery, stale lease behavior, read-only treatment, and operator-intervention behavior are a shared contract |
-| Repo lifecycle | archive, restore-archived, delete, restore-tombstoned, purge, transition rules, lifecycle fence, session drain, retention, purge confirmation, and recovery semantics are accepted |
+| Repo lifecycle | archive, restore-archived, delete, restore-tombstoned, purge, transition rules, lifecycle fence, session drain, retention, purge approval-reference, and recovery semantics are accepted |
 | Operation/audit | state machine, idempotency, recovery matrix, audit outbox, retention, redaction, replay, and operator intervention are accepted |
 | Namespace policy | disable and policy-change behavior for new and existing sessions is frozen |
 | Governance | review approvers, evidence requirements, waiver policy, risk register, and contract versioning are active |
@@ -119,7 +122,7 @@ GA readiness requires evidence, not just implementation completion.
 - JVS smoke tests prove external control root init/save/history/restore/clone/doctor behavior with no `.jvs` under payload roots.
 - WebDAV tests prove payload-root chroot, root-level `.jvs` denial, encoded traversal denial, symlink escape denial, TTL, revoke, and credential redaction.
 - Workload mount tests prove product callers do not receive Secret refs, orchestrator plans contain only payload subdirs, leases are reconciled, and restore-run treats uncertain writers as active.
-- Repo lifecycle tests prove archive/delete block new sessions, drain or revoke existing read-only and read-write exports and mounts, tombstone retained data, honor purge policy and product confirmation requirements, and recover correctly after process restart.
+- Repo lifecycle tests prove archive/delete block new sessions, drain or revoke existing read-only and read-write exports and mounts, tombstone retained data, honor purge policy and generic caller approval-reference requirements, and recover correctly after process restart.
 - Operation recovery tests cover process restart during repo create, save, restore-run, template create/clone, export create/revoke, and mount binding create/revoke.
 - Audit events are emitted for success, failure, denied authz, denied path, credential issue/revoke, mount plan issue, restore rejection, and operator intervention.
 - Operators have documented, rehearsed runbooks for the GA incident and recovery cases listed in `docs/runbooks/README.md`.

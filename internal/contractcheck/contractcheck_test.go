@@ -984,6 +984,52 @@ func TestVerifyFilesCatchesDocsQuotaSemanticsMissing(t *testing.T) {
 	}
 }
 
+func TestVerifyCoreProductDocsCatchesProductSpecificTerms(t *testing.T) {
+	root := t.TempDir()
+	readmePath := filepath.Join(root, "README.md")
+	gatePath := filepath.Join(root, "docs", "DEVELOPMENT_GOVERNANCE.md")
+	handoffPath := filepath.Join(root, "docs", "DEVELOPER_HANDOFF.md")
+	writeFile(t, readmePath, "AFSCP core must not bind GA to AgentSmith or Sandbox Manager.\n")
+	writeFile(t, gatePath, "Required reviewer: Client Connector Owner. The orchestrator v2 contract is accepted.\n")
+	writeFile(t, handoffPath, "External owner review is required.\n")
+	writeFile(t, filepath.Join(root, "docs", "AGENTSMITH_AFSCP_EXTERNAL_HANDOFF.md"), "AgentSmith handoff remains caller-specific.\n")
+	writeFile(t, filepath.Join(root, "docs", "SIBLING_REPO_AFSCP_ADOPTION_RECOMMENDATIONS.md"), "sandbox-manager adoption remains external.\n")
+	writeFile(t, filepath.Join(root, "docs", "adr", "0001-create-afscp.md"), "GitHub org path github.com/agentsmith-project/agentsmith-fs-control-plane is allowed.\n")
+
+	findings := verifyCoreProductDocs(root)
+
+	assertFindingCount(t, findings, CodeDocsProductSpecificTermForbidden, 5)
+	assertHasFindingInFile(t, findings, CodeDocsProductSpecificTermForbidden, readmePath)
+	assertHasFindingInFile(t, findings, CodeDocsProductSpecificTermForbidden, gatePath)
+	assertHasFindingInFile(t, findings, CodeDocsProductSpecificTermForbidden, handoffPath)
+	for _, finding := range findings {
+		if finding.File == "" {
+			t.Fatalf("finding should include file path, got %+v", finding)
+		}
+		if !strings.Contains(finding.Message, "AgentSmith") &&
+			!strings.Contains(finding.Message, "sandbox manager") &&
+			!strings.Contains(finding.Message, "client connector owner") &&
+			!strings.Contains(finding.Message, "external owner review") &&
+			!strings.Contains(finding.Message, "orchestrator v2 contract") {
+			t.Fatalf("finding message should name the product-specific term, got %+v", finding)
+		}
+	}
+}
+
+func TestVerifyCoreProductDocsRejectsExternalAdoptionEvidence(t *testing.T) {
+	root := t.TempDir()
+	readinessPath := filepath.Join(root, "docs", "READINESS_EVIDENCE.md")
+	riskPath := filepath.Join(root, "docs", "RISK_REGISTER.md")
+	writeFile(t, readinessPath, "| G-001 | closed | `docs/INTEGRATION_GUIDE.md` |\n")
+	writeFile(t, riskPath, "| R-012 | risk | `docs/INTEGRATION_GUIDE.md` |\n")
+
+	findings := verifyCoreProductDocs(root)
+
+	assertFindingCount(t, findings, CodeDocsExternalAdoptionEvidenceForbidden, 2)
+	assertHasFindingInFile(t, findings, CodeDocsExternalAdoptionEvidenceForbidden, readinessPath)
+	assertHasFindingInFile(t, findings, CodeDocsExternalAdoptionEvidenceForbidden, riskPath)
+}
+
 func TestCurrentRepoContractsPass(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 

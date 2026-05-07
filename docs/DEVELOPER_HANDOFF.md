@@ -6,9 +6,9 @@ save/restore flows, namespace-scoped template create/clone, WebDAV export
 create/get/revoke plus gateway serving, workload mount issuance/orchestrator
 plans, writer fences with shared repo-row serialization, workload mount
 stale-lease scanning, and explicit-gated audit outbox HTTP JSON delivery are in
-place. Non-HTTP audit sink integrations, external owner/security acceptance,
-generated-client review, runbook drills, and human GA acceptance remain open
-where tracked by readiness gates.
+place. Non-HTTP audit sink integrations, AFSCP owner/security acceptance,
+generated-client compatibility review, runbook drills, and human GA acceptance
+remain open where tracked by readiness gates.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -16,7 +16,9 @@ continue from the existing skeleton instead of restarting it.
 
 ## What AFSCP Is
 
-AFSCP is an internal, product-agnostic storage control plane. It manages:
+AFSCP is an internal, product-agnostic shared filesystem control plane. It runs,
+evolves, releases, and gate-reviews independently from first or reference
+consumers. It manages:
 
 - JuiceFS-backed volumes
 - namespaces and namespace policies
@@ -30,9 +32,9 @@ AFSCP is an internal, product-agnostic storage control plane. It manages:
 - durable operations
 - audit events
 
-AgentSmith is the first expected caller, but AgentSmith product concepts stay
-outside AFSCP. AgentSmith maps file libraries to AFSCP repo IDs and keeps its
-own display names, catalog state, permissions, and user-facing workflows.
+Reference consumers may map their own product objects to AFSCP repo IDs, but
+their business concepts stay outside AFSCP. Consumer-specific adoption notes are
+external references and must not become core AFSCP GA/release gates.
 
 ## Start Here
 
@@ -202,8 +204,8 @@ Completed:
   PostgreSQL SELECT-only readers for lifecycle candidate repos and all held repo
   fences
 - repo recovery inspection now has durable session surfaces for exports and
-  workload mounts where implemented; external owner review and runbook drills
-  still decide whether evidence is sufficient for GA closure
+  workload mounts where implemented; AFSCP owner/platform-runtime review and
+  runbook drills still decide whether evidence is sufficient for GA closure
 - path resolver guardrails and shared corpus
 - denied audit coverage in the neutral shell and AuthGate paths
 - contract verifier covering selected OpenAPI, schema, docs, and Go DTO drift
@@ -262,7 +264,7 @@ Not implemented:
   the session.
 - audit delivery sinks beyond the minimal HTTP JSON at-least-once worker; the
   external sink must dedupe by `audit_event_id`
-- generated clients, external owner/security acceptance, deployment-specific
+- generated clients, AFSCP owner/security acceptance, deployment-specific
   observability thresholds, runbook drills, and human GA acceptance evidence
 
 ## Contract Implementation Order
@@ -317,7 +319,7 @@ Important behavior:
   operations, and lifecycle mutations.
 - Archive/delete/purge drain existing read-only and read-write exports/mounts
   before storage state changes that require no further access.
-- Purge is permanent and requires retention policy, product confirmation,
+- Purge is permanent and requires retention policy, caller approval reference,
   lifecycle role authorization, operation record, and audit.
 - Delete is a metadata tombstone and not physical deletion.
 - Restore tombstoned uses the accepted operation time and exclusive
@@ -356,7 +358,7 @@ Every boundary package needs tests before handler work depends on it:
 - mount heartbeat/release/revoke terminal semantics
 - writer-session fence with uncertain sessions
 - lifecycle fence and session drain
-- purge confirmation and retention denial
+- purge approval-reference and retention denial
 - operation restart recovery
 - audit redaction
 

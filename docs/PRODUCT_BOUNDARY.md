@@ -1,6 +1,9 @@
 # Product Boundary
 
-AFSCP is an internal storage control plane. It is not a user-facing product application and should not become a caller-specific authorization layer.
+AFSCP is an internal shared filesystem control plane. It is independently run,
+evolved, released, and gate-reviewed from any consumer product. It is not a
+user-facing product application and should not become a caller-specific
+authorization layer.
 
 ## AFSCP Concepts
 
@@ -22,9 +25,9 @@ AFSCP should expose:
 AFSCP should not expose or depend on:
 
 - notebook task
-- file library
+- caller catalog object
 - project
-- AgentSmith workspace
+- caller workspace
 - Desktop product UX
 - product template catalog UX
 - product display names
@@ -53,7 +56,7 @@ AFSCP also validates whether the calling service principal is allowed to operate
 - Restore-run rejects active or uncertain read-write export/workload sessions.
 - Repo lifecycle operations are storage-control operations in GA. Archive, restore-from-archive, delete request, restore-from-tombstone, and purge are owned by AFSCP because they affect storage availability and retention.
 - Repo lifecycle operations must drain or revoke all existing export and workload mount sessions, read-only or read-write, before tombstone or purge.
-- Purge additionally requires lifecycle policy approval, product confirmation, and audited authorization because it permanently removes storage.
+- Purge additionally requires lifecycle policy approval, a caller approval reference, and audited authorization because it permanently removes storage.
 - Ordinary client access uses controlled exports, initially WebDAV.
 - Product display-name rename and catalog detach remain caller-owned metadata changes; AFSCP repo IDs are stable and immutable.
 - `quota_bytes_default` is a policy record and enforcement hook. It is not enforced unless the selected volume capability `directory_quota` supports directory quota enforcement and the corresponding volume integration explicitly enables directory quota enforcement.

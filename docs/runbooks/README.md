@@ -23,7 +23,7 @@ Required before GA:
 - repo delete blocked by active or uncertain export/mount sessions
 - repo tombstone restore failed
 - repo purge denied or failed
-- repo purge requested without valid product confirmation or retention approval
+- repo purge requested without valid caller approval reference or retention approval
 - WebDAV export incident
 - WebDAV credential leak and revoke
 - stale workload mount lease reconciliation

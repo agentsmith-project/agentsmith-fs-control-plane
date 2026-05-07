@@ -4,7 +4,7 @@ Status: accepted for development handoff
 
 ## Context
 
-AgentSmith file libraries expose complete lifecycle management, including
+Calling product resources may expose complete lifecycle management, including
 delete. AFSCP is the storage execution authority for the backing repo, so it
 must support storage lifecycle operations rather than requiring callers to
 manipulate raw paths or leave retained storage orphaned.
@@ -27,7 +27,7 @@ Lifecycle rules:
 - Archive keeps storage retained but unavailable for ordinary access.
 - Delete is recoverable tombstone/trash while retention policy allows.
 - Purge is permanent deletion and requires namespace lifecycle policy approval,
-  product confirmation/approval reference, role authorization, and audit.
+  caller approval reference, role authorization, and audit.
 - Delete may apply to `active` or `archived` repos.
 - Restore tombstoned returns to the recorded pre-delete accessibility state.
 - Tombstoned catalog mapping remains a calling-product responsibility.
@@ -50,4 +50,3 @@ Tradeoffs:
   operation recovery, and retention.
 - Purge cannot be a simple filesystem unlink.
 - Calling products must keep repo ID mapping while tombstoned data is restorable.
-

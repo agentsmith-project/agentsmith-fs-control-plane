@@ -1,6 +1,8 @@
 # Integration Guide
 
-This document describes how the first expected caller, AgentSmith, can integrate with AFSCP without coupling AFSCP to AgentSmith business concepts.
+Status: external adoption notes, not an AFSCP release gate.
+
+This document describes how the first expected caller, AgentSmith, can integrate with AFSCP without coupling AFSCP to AgentSmith business concepts. These notes are consumer guidance only: they may inform compatibility work, but AgentSmith, sandbox-manager, and sibling-repo changes are not final AFSCP GA or release blockers.
 
 Core rule: AgentSmith owns product workflow and authorization. AFSCP owns generic storage primitives.
 
@@ -134,7 +136,10 @@ Current paths to inspect:
 - `/home/percy/works/mbos-v1/jvs/docs/24_REPO_CLONE_PRODUCT_PLAN.md`
 - `/home/percy/works/mbos-v1/jvs/docs/25_REPO_WORKSPACE_LIFECYCLE_PRODUCT_PLAN.md`
 
-## Integration Sequence
+## External Adoption Sequence
+
+This sequence is for the sibling repositories. It is not an AFSCP core GA
+closure checklist.
 
 1. Add AFSCP service skeleton and operation store.
 2. Add AgentSmith mapping from workspace to AFSCP namespace.

@@ -4,7 +4,7 @@
 
 Applications need durable filesystem repos with versioned save/restore, cloneable templates, workload mounts, and controlled client exports. Existing product-specific storage flows tend to leak backend details, duplicate storage infrastructure, and couple business workflows to low-level storage credentials.
 
-AFSCP should provide a generic storage control plane that manages shared or dedicated volumes, namespaces, JVS repos, repo templates, exports, workload mount bindings, and orchestrator mount plans without knowing any caller's business model.
+AFSCP should provide an independently runnable, independently releasable shared filesystem control plane that manages shared or dedicated volumes, namespaces, JVS repos, repo templates, exports, workload mount bindings, and orchestrator mount plans without knowing any caller's business model.
 
 ## Actors And Access Model
 
@@ -46,6 +46,7 @@ AFSCP should provide a generic storage control plane that manages shared or dedi
 - Purge requests must include a caller-side confirmation or approval reference and reason; retention override requires an approved break-glass policy.
 - `quota_bytes_default` is a GA policy record and enforcement hook. It is not enforced unless the selected volume capability `directory_quota` supports directory quota enforcement and the corresponding volume integration explicitly enables directory quota enforcement.
 - Version merge and conflict resolution are out of scope.
+- First or reference consumer adoption is out of scope for AFSCP GA release gates. Consumers may provide requirements and compatibility feedback, but AFSCP GA is closed by AFSCP product, security, platform/runtime, operations, and generated-client compatibility evidence.
 
 ## Non-Goals
 
@@ -87,7 +88,7 @@ AFSCP should provide a generic storage control plane that manages shared or dedi
 17. Workload mounts do not contain root-level `.jvs` for AFSCP-managed repos; legacy embedded-control repos are rejected until migrated or protected by a verified filtered view.
 18. All mutating operations produce durable operation records and audit events.
 19. Workload mount is available only when the orchestrator contract supports payload-only mount plans, heartbeat, release, revoke, and confirmed-unmounted terminal semantics; otherwise AFSCP returns a stable capability error instead of issuing unsafe bindings.
-20. Export sessions define TTL default/max, credential reissue rules, revoke behavior, active read-write session accounting, and client connector responsibilities.
+20. Export sessions define TTL default/max, credential reissue rules, revoke behavior, active read-write session accounting, and generic client connector responsibilities.
 21. Restore-run returns stable errors for active writer sessions, dirty-state rejection, JVS failure, doctor failure, idempotency conflict, and namespace/capability denial.
 22. Operators can inspect operations, audit events, repo lifecycle projections, volume/namespace health, stale leases, held lifecycle fences, and operator-intervention records without accessing forbidden credentials.
 23. Namespace disable behavior is defined for new operations and active or uncertain sessions.

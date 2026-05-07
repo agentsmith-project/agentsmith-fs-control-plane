@@ -43,13 +43,13 @@ operational impact, contract impact, and rollback or supersession conditions.
 
 | Contract Area | Required Reviewers |
 | --- | --- |
-| Product boundary and GA scope | AFSCP product owner, first calling product owner |
-| Internal API and schemas | AFSCP maintainer, calling product owner, operator/tooling owner |
-| Service auth and caller roles | AFSCP maintainer, security owner, calling product owner |
+| Product boundary and GA scope | AFSCP product owner, API consumer-contract/generated-client compatibility reviewer |
+| Internal API and schemas | AFSCP maintainer, API consumer-contract/generated-client compatibility reviewer, operator/tooling owner |
+| Service auth and caller roles | AFSCP maintainer, security owner, API consumer-contract/generated-client compatibility reviewer |
 | JVS runner | AFSCP maintainer, JVS owner |
-| Repo lifecycle | AFSCP maintainer, first calling product owner, operations owner, security owner |
-| WebDAV export | AFSCP maintainer, security owner, client connector owner |
-| Workload mount plan | AFSCP maintainer, orchestrator owner, security owner |
+| Repo lifecycle | AFSCP maintainer, AFSCP product owner, operations owner, security owner |
+| WebDAV export | AFSCP maintainer, security owner, API consumer-contract/generated-client compatibility reviewer |
+| Workload mount plan | AFSCP maintainer, platform/runtime contract reviewer, security owner |
 | Operation/audit/recovery | AFSCP maintainer, operations owner, security owner |
 | Deployment and Secret access | AFSCP maintainer, platform owner, security owner |
 
@@ -64,7 +64,7 @@ logic:
 - standard error envelope and stable error families are reviewed
 - credential boundary review passes
 - JVS runner pin and smoke evidence are present
-- orchestrator v2 contract is accepted for workload mounts
+- workload mount platform/runtime contract is accepted
 - repo lifecycle contract is accepted for archive/delete/restore/purge storage state
 - WebDAV gateway contract is accepted for exports
 - writer-session fence contract is accepted for restore/export/mount interactions
@@ -116,7 +116,8 @@ Every implementation PR that touches a GA boundary must state:
 - whether generated schemas/OpenAPI changed
 - whether docs need to change
 
-PRs must not introduce AgentSmith-specific model names into AFSCP core packages.
+PRs must not introduce caller-specific product model names into AFSCP core
+packages.
 
 ## Risk Governance
 

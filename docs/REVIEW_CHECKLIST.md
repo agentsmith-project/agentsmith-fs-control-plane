@@ -4,6 +4,10 @@ Use this checklist for final GA acceptance review after the implementation
 baseline. New or changed endpoint handlers and storage mutation logic must also
 be reviewed against this checklist before acceptance.
 
+AFSCP GA is reviewed as an independent shared filesystem control-plane release.
+Reference consumers can provide adoption feedback, but their acceptance is not
+the final AFSCP GA gate.
+
 Each checked item needs an owner role, reviewer role, evidence link or file
 path, and blocking/non-blocking status recorded in `docs/READINESS_EVIDENCE.md`.
 The evidence entry should name the related gate or risk ID where one exists.
@@ -15,7 +19,7 @@ for GA.
 ## Product Boundary
 
 - [ ] AFSCP core docs use generic storage concepts: volume, namespace, repo, save point, restore, template, export, mount, operation.
-- [ ] Caller-specific concepts stay in integration docs only.
+- [ ] Caller-specific concepts stay in external adoption notes only.
 - [ ] Direct and indirect caller model is accepted.
 - [ ] Cross-namespace template clone remains rejected by default.
 - [ ] Ordinary concurrent read/write behavior is accepted without merge semantics.
@@ -33,7 +37,7 @@ for GA.
 - [ ] Calling products remain product authorization authorities.
 - [ ] AFSCP owns storage execution and operation records.
 - [ ] External orchestrators remain runtime mount execution layers and do not decide product authorization.
-- [ ] No direct dependency on `agentsmith-oss` exists.
+- [ ] No direct dependency on a caller product package exists.
 - [ ] Namespace volume binding does not contain an authoritative raw filesystem path supplied by a caller.
 - [ ] Namespace binding includes caller-service authorization policy.
 - [ ] Namespace disable semantics for new and existing sessions are accepted.
@@ -64,13 +68,13 @@ for GA.
 - [ ] Internal service auth and caller identity model are accepted.
 - [ ] JSON schemas and internal OpenAPI exist and match narrative contracts.
 - [ ] Standard operation envelope and standard error envelope are accepted.
-- [ ] Stable error families are accepted by first calling product.
+- [ ] Stable error families are accepted by AFSCP product and generated-client compatibility reviewers.
 - [ ] JVS release binary/version/checksum is pinned, required command smoke tests pass, and runner CWD cannot affect repo resolution.
 - [ ] JVS argv, JSON success/error, exit-code mapping, dirty-state behavior, and recovery mapping are frozen.
-- [ ] Workload mount binding/orchestrator plan split is accepted by orchestrator owners.
-- [ ] Writer-session fence is accepted by export and orchestrator owners.
-- [ ] Repo lifecycle contract is accepted by calling product, operations, and security owners.
-- [ ] Export session/access credential contract is accepted by client connector owners.
+- [ ] Workload mount binding/orchestrator plan split is accepted by platform/runtime contract reviewers.
+- [ ] Writer-session fence is accepted by operations, platform/runtime contract, and generated-client compatibility reviewers.
+- [ ] Repo lifecycle contract is accepted by AFSCP product, operations, and security owners.
+- [ ] Export session/access credential contract is accepted by generated-client compatibility reviewers.
 - [ ] Operation recovery matrix and audit delivery semantics are accepted.
 
 ## GA Operations

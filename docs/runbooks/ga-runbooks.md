@@ -291,7 +291,7 @@ Symptoms:
 
 Actions:
 
-- Verify product confirmation/approval reference and reason.
+- Verify caller approval reference and reason.
 - Verify namespace lifecycle policy.
 - Verify lifecycle role and break-glass approval when retention override is
   requested.

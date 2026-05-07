@@ -4,7 +4,9 @@ Status: historical filename retained; active plan targets GA directly.
 
 This repository previously used MVP/P0 language. The active target is one GA
 readiness line defined by `docs/GA_PRE_DEV_READINESS.md`. This document is a
-compact delivery readiness view, not a staged rollout plan.
+compact delivery readiness view, not a staged rollout plan. AFSCP GA is gated
+as an independent shared filesystem control-plane release; first consumers are
+requirements sources and compatibility references, not AFSCP release blockers.
 
 ## GA Scope
 
@@ -76,5 +78,5 @@ bound to accepted contracts:
 - JVS `doctor --strict` passes after repo create, save, restore, and clone.
 - Calling products can map their own business objects to AFSCP primitives without AFSCP knowing those business object types.
 - Operators can inspect and recover GA operation failures using documented runbooks.
-- Repo lifecycle operations support AgentSmith file library archive/delete/restore/purge without exposing raw storage paths or credentials.
+- Repo lifecycle operations support generic archive/delete/restore/purge storage-state changes without exposing raw storage paths or credentials.
 - GA-blocking risks in `docs/RISK_REGISTER.md` are closed or have approved residual-risk acceptance under `docs/DEVELOPMENT_GOVERNANCE.md`.

@@ -147,7 +147,7 @@ Calling products must:
 - treat lifecycle operations as asynchronous durable operations
 - keep product display names and catalog state outside AFSCP
 - keep the product catalog to AFSCP repo ID mapping while tombstoned storage remains restorable
-- provide a product confirmation or approval reference and reason for purge requests
+- provide a caller approval reference and reason for purge requests
 - handle stable lifecycle errors in user-facing UX
 
 AFSCP must:

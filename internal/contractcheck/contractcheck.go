@@ -53,12 +53,14 @@ const (
 	CodeSchemaQuotaEnforcedForbidden                       = "schema.quota_enforced_forbidden"
 	CodeSchemaRawCredentialFieldForbidden                  = "schema.raw_credential_field_forbidden"
 
-	CodeDocsOperationBoundaryMissing       = "docs.operation_boundary_missing"
-	CodeDocsNamespaceHeaderMissing         = "docs.namespace_header_missing"
-	CodeDocsCallerRoleMissing              = "docs.caller_role_missing"
-	CodeDocsOperationInspectorScopeMissing = "docs.operation_inspector_scope_missing"
-	CodeDocsOperatorAdminScopeMissing      = "docs.operator_admin_scope_missing"
-	CodeDocsQuotaSemanticsMissing          = "docs.quota_semantics_missing"
+	CodeDocsOperationBoundaryMissing          = "docs.operation_boundary_missing"
+	CodeDocsNamespaceHeaderMissing            = "docs.namespace_header_missing"
+	CodeDocsCallerRoleMissing                 = "docs.caller_role_missing"
+	CodeDocsOperationInspectorScopeMissing    = "docs.operation_inspector_scope_missing"
+	CodeDocsOperatorAdminScopeMissing         = "docs.operator_admin_scope_missing"
+	CodeDocsProductSpecificTermForbidden      = "docs.product_specific_term_forbidden"
+	CodeDocsQuotaSemanticsMissing             = "docs.quota_semantics_missing"
+	CodeDocsExternalAdoptionEvidenceForbidden = "docs.external_adoption_evidence_forbidden"
 
 	CodeGoOperationsOperationEnvelopeAmbiguous = "go.operations_operation_envelope_ambiguous"
 	CodeGoAPIOperationEnvelopeMissing          = "go.api_operation_envelope_missing"
@@ -116,6 +118,7 @@ func VerifyFiles(openAPIPath, schemaPath, apiContractPath, apiDraftPath string) 
 	findings = append(findings, verifyDocs(apiContractPath, apiDraftPath, string(apiContract), string(apiDraft))...)
 	if repoRoot, ok := findRepoRoot(schemaPath); ok {
 		findings = append(findings, verifyGoDTOBoundary(repoRoot)...)
+		findings = append(findings, verifyCoreProductDocs(repoRoot)...)
 	}
 	return findings, nil
 }
@@ -1234,6 +1237,147 @@ func verifyDocs(apiContractPath, apiDraftPath, apiContract, apiDraft string) []F
 		})
 	}
 	return findings
+}
+
+func verifyCoreProductDocs(repoRoot string) []Finding {
+	paths := coreProductDocPaths(repoRoot)
+	var findings []Finding
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		findings = append(findings, findProductSpecificDocTerms(path, string(body))...)
+	}
+	findings = append(findings, verifyCoreGateEvidenceDocs(repoRoot)...)
+	return findings
+}
+
+func verifyCoreGateEvidenceDocs(repoRoot string) []Finding {
+	paths := []string{
+		filepath.Join(repoRoot, "docs", "READINESS_EVIDENCE.md"),
+		filepath.Join(repoRoot, "docs", "RISK_REGISTER.md"),
+	}
+	var findings []Finding
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for i, line := range splitLines(string(body)) {
+			if !strings.Contains(line, "`docs/INTEGRATION_GUIDE.md`") {
+				continue
+			}
+			findings = append(findings, Finding{
+				Code:    CodeDocsExternalAdoptionEvidenceForbidden,
+				File:    path,
+				Line:    i + 1,
+				Message: "`docs/INTEGRATION_GUIDE.md` is external adoption notes and must not be used as GA gate or risk evidence",
+			})
+		}
+	}
+	return findings
+}
+
+func coreProductDocPaths(repoRoot string) []string {
+	paths := []string{
+		filepath.Join(repoRoot, "README.md"),
+		filepath.Join(repoRoot, "docs", "GA_PRE_DEV_READINESS.md"),
+		filepath.Join(repoRoot, "docs", "PRODUCT_REQUIREMENTS.md"),
+		filepath.Join(repoRoot, "docs", "PRODUCT_BOUNDARY.md"),
+		filepath.Join(repoRoot, "docs", "MVP_PLAN.md"),
+		filepath.Join(repoRoot, "docs", "READINESS_EVIDENCE.md"),
+		filepath.Join(repoRoot, "docs", "RISK_REGISTER.md"),
+		filepath.Join(repoRoot, "docs", "REVIEW_CHECKLIST.md"),
+		filepath.Join(repoRoot, "docs", "DEVELOPER_HANDOFF.md"),
+		filepath.Join(repoRoot, "docs", "ARCHITECTURE.md"),
+		filepath.Join(repoRoot, "docs", "API_CONTRACT_DRAFT.md"),
+		filepath.Join(repoRoot, "docs", "DEVELOPMENT_GOVERNANCE.md"),
+		filepath.Join(repoRoot, "docs", "PRE_DEV_COMPLETION.md"),
+		filepath.Join(repoRoot, "docs", "SECURITY_AND_TENANCY.md"),
+		filepath.Join(repoRoot, "docs", "STORAGE_LAYOUT.md"),
+		filepath.Join(repoRoot, "docs", "runbooks", "README.md"),
+		filepath.Join(repoRoot, "docs", "runbooks", "ga-runbooks.md"),
+	}
+	paths = append(paths, markdownFilesInDir(filepath.Join(repoRoot, "docs", "adr"))...)
+	paths = append(paths, markdownFilesInDir(filepath.Join(repoRoot, "docs", "contracts"))...)
+	sort.Strings(paths)
+	return paths
+}
+
+func markdownFilesInDir(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+		paths = append(paths, filepath.Join(dir, entry.Name()))
+	}
+	return paths
+}
+
+func findProductSpecificDocTerms(path, body string) []Finding {
+	var findings []Finding
+	for i, line := range splitLines(body) {
+		for _, term := range productSpecificTermsInLine(line) {
+			findings = append(findings, Finding{
+				Code:    CodeDocsProductSpecificTermForbidden,
+				File:    path,
+				Line:    i + 1,
+				Message: fmt.Sprintf("core AFSCP document must not mention product-specific term %q; move caller-specific context to integration, external handoff, or adoption recommendation docs", term),
+			})
+		}
+	}
+	return findings
+}
+
+func productSpecificTermsInLine(line string) []string {
+	type productTerm struct {
+		label string
+		match func(string) bool
+	}
+	lowerLine := strings.ToLower(line)
+	terms := []productTerm{
+		{label: "AgentSmith", match: func(line string) bool { return strings.Contains(line, "AgentSmith") }},
+		{label: "agentsmith", match: containsForbiddenLowerAgentsmith},
+		{label: "sandbox-manager", match: func(string) bool { return strings.Contains(lowerLine, "sandbox-manager") }},
+		{label: "sandbox manager", match: func(string) bool { return strings.Contains(lowerLine, "sandbox manager") }},
+		{label: "first calling product", match: func(string) bool { return strings.Contains(lowerLine, "first calling product") }},
+		{label: "calling product owner", match: func(string) bool { return strings.Contains(lowerLine, "calling product owner") }},
+		{label: "client connector owner", match: func(string) bool { return strings.Contains(lowerLine, "client connector owner") }},
+		{label: "external owner review", match: func(string) bool { return strings.Contains(lowerLine, "external owner review") }},
+		{label: "orchestrator owners", match: func(string) bool { return strings.Contains(lowerLine, "orchestrator owners") }},
+		{label: "orchestrator v2 contract", match: func(string) bool { return strings.Contains(lowerLine, "orchestrator v2 contract") }},
+		{label: "sandbox v2", match: func(string) bool { return strings.Contains(lowerLine, "sandbox v2") }},
+		{label: "product confirmation", match: func(string) bool { return strings.Contains(lowerLine, "product confirmation") }},
+	}
+	var found []string
+	for _, term := range terms {
+		if term.match(line) {
+			found = append(found, term.label)
+		}
+	}
+	return found
+}
+
+func containsForbiddenLowerAgentsmith(line string) bool {
+	for offset := 0; ; {
+		index := strings.Index(line[offset:], "agentsmith")
+		if index < 0 {
+			return false
+		}
+		start := offset + index
+		after := line[start+len("agentsmith"):]
+		before := line[:start]
+		if !strings.HasPrefix(after, "-project") && !strings.HasSuffix(before, "agentsmith-project/") {
+			return true
+		}
+		offset = start + len("agentsmith")
+	}
 }
 
 func missingDocRoles(body string, roles []auth.Role) []string {

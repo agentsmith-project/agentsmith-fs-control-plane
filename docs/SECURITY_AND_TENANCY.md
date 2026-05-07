@@ -133,5 +133,5 @@ Repo archive, restore-archived, delete, restore-tombstoned, and purge must
 acquire the repo lifecycle fence. Archive, delete, and purge must block new
 sessions and drain or revoke existing exports and workload mounts, read-only or
 read-write, before changing retained storage state. Purge is irreversible and
-requires namespace lifecycle-policy approval, product confirmation, and explicit
+requires namespace lifecycle-policy approval, caller approval reference, and explicit
 operator break-glass approval when retention is overridden.

@@ -53,9 +53,8 @@ Positive:
 
 Tradeoffs:
 
-- AgentSmith integration code will still be TypeScript-side in the calling
-  product.
+- Caller integration code may still live in the calling product's language and
+  repo.
 - Product teams need generated clients instead of importing AFSCP packages.
 - WebDAV gateway behavior must be carefully tested because Go libraries alone do
   not provide the AFSCP policy boundary.
-

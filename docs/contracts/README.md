@@ -16,9 +16,9 @@ Service skeleton work may begin while contracts are reviewed. Endpoint implement
 - internal auth and caller-service authorization are accepted
 - request/response/error schemas are added under `api/schemas/`
 - internal OpenAPI is generated under `api/openapi/`
-- workload mount binding/orchestrator plan split is accepted by orchestrator owners
+- workload mount binding/orchestrator plan split is accepted by platform/runtime contract reviewers
 - JVS external-control/payload-only mount gate is accepted
-- repo lifecycle transition, session drain, tombstone, restore, retention, purge confirmation, and recovery semantics are accepted
+- repo lifecycle transition, session drain, tombstone, restore, retention, purge approval-reference, and recovery semantics are accepted
 - WebDAV gateway policy boundary is accepted; stock `juicefs webdav` alone is not the GA policy gate
 - JVS release binary/version/checksum pin, required command smoke tests, and clean-CWD runner behavior are accepted
 - writer-session fence and mount binding lifecycle are accepted

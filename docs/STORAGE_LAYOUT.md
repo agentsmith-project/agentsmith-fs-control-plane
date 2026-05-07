@@ -134,5 +134,5 @@ Lifecycle rules:
 - archive keeps control and payload storage retained but unavailable for ordinary access
 - delete moves or marks both control and payload storage as tombstoned after all export and workload mount sessions are confirmed terminal
 - restore-tombstoned returns retained control and payload storage to the canonical repo location only while retention policy allows
-- purge permanently removes both control and payload storage only after retention, product confirmation, and authorization checks pass
+- purge permanently removes both control and payload storage only after retention, caller approval reference, and authorization checks pass
 - raw paths for trash or tombstone locations remain internal and are never returned to ordinary product callers
