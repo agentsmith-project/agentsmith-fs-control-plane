@@ -45,13 +45,14 @@ GA 的核心边界是：AgentSmith 不再直接分发存储连接信息，sandbo
 - 新增 AFSCP orchestrator v2 接入面：接收或解析 `mount_binding_id`，使用 orchestrator service identity 从 AFSCP 拉取 mount plan。
 - 对 AFSCP-backed workload，停止接收来自 AgentSmith 或普通产品调用方的 `metadata_url`、storage endpoint、bucket credential、Secret value、source subdir。
 - runtime mount 只能来自 AFSCP plan，包括 `mount_binding_id`、`volume_id`、`payload_volume_subdir`、`mount_path`、`read_only`、`secret_ref`、`security_policy` 等受控字段。
-- 补齐 lease/release/revoke/confirmed-unmounted 语义。AFSCP 只有在 sandbox-manager 确认 workload 不再可写后，才能把 write-capable binding 视为 terminal。
+- 补齐 lease/release/revoke/confirmed-unmounted 语义。AFSCP 只有在 sandbox-manager 确认 runtime mount 已 unmounted/non-accessing 后，才能把 write-capable binding 视为 terminal；这同时证明 workload 不再可写。
+- `released`/`revoked` 是 evidence-bearing non-accessing terminal statuses，必须只在确认 unmounted/non-accessing 后使用；`expired`/`failed` 只是 observed terminal statuses，不证明 unmounted/non-accessing，也不证明 unable-to-write，不能放行 lifecycle，必须 fail closed。
 - 强制 read-only 语义，并保证 runtime 只挂载 payload root，不暴露 JVS control metadata。
 - 增加 collision guard。Kubernetes Secret/PV/PVC/Pod mount 资源名经过规范化和截断后仍必须抗碰撞，不能只依赖可预测前缀。
 
 ### P1
 
-- 将 active、released、revoked、expired、failed、uncertain writer state 的状态回报做成稳定契约，便于 AFSCP lifecycle fencing 和审计消费。
+- 将 active、released、revoked、expired、failed、uncertain writer state 的状态回报做成稳定契约，并明确 `released`/`revoked` 承载 confirmed-unmounted/non-accessing 语义，`expired`/`failed` 承载 observed/uncertain 语义。未来如果要支持 unable-to-write-but-still-mounted/readable 作为 restore-run 放行证据，必须新增显式 evidence 字段/状态，不能复用 `released`/`revoked`。
 - 对 revoke 后仍可写、Pod 已删但 mount 未确认、read-only 被绕过等失败模式建立回归验收。
 - 对外错误信息默认 redacted，只返回可诊断的稳定错误码和 correlation 信息。
 

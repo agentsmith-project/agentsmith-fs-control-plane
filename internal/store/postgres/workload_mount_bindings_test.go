@@ -387,6 +387,34 @@ func TestWorkloadMountStatusCommitSQLPreservesRevokeIntent(t *testing.T) {
 	)
 }
 
+func TestWorkloadMountStatusCommitSQLContractTreatsReleasedRevokedAsEvidenceOnly(t *testing.T) {
+	sql := workloadMountBindingStatusCommitSQL()
+	terminalObserved := sqlBetween(t, sql, "terminal_observed_at = ", ", confirmed_unmounted_at = ")
+	confirmedUnmounted := sqlBetween(t, sql, "confirmed_unmounted_at = ", ", unable_to_write_at = ")
+	unableToWrite := sqlBetween(t, sql, "unable_to_write_at = ", ", status_reason = ")
+
+	assertSQLContainsInOrder(t, terminalObserved,
+		"$15 IN ('released','revoked','expired','failed')",
+		"THEN $17",
+		"ELSE terminal_observed_at END",
+	)
+	assertSQLContainsInOrder(t, confirmedUnmounted,
+		"$15 IN ('released','revoked')",
+		"THEN $17",
+		"ELSE confirmed_unmounted_at END",
+	)
+	assertSQLContainsInOrder(t, unableToWrite,
+		"$15 IN ('released','revoked')",
+		"THEN $17",
+		"ELSE unable_to_write_at END",
+	)
+	for name, fragment := range map[string]string{"confirmed_unmounted_at": confirmedUnmounted, "unable_to_write_at": unableToWrite} {
+		if strings.Contains(fragment, "$15 IN ('released','revoked','expired','failed')") {
+			t.Fatalf("%s clause must not write evidence for bare expired/failed status: %s", name, fragment)
+		}
+	}
+}
+
 func TestWorkloadMountPlanSQLExcludesTerminalBindings(t *testing.T) {
 	sql := workloadMountPlanSelectSQL()
 

@@ -112,6 +112,23 @@ func TestRepoPurgeSuccessCommitSQLIsDedicatedAtomicBoundary(t *testing.T) {
 	}
 }
 
+func TestRepoPurgeSuccessCommitSQLRequiresConfirmedUnmountedMountEvidence(t *testing.T) {
+	sql := repoPurgeSuccessCommitWithLeaseSQL()
+	noSessions := sqlBetween(t, sql, "), no_sessions AS (", "), no_earlier_lifecycle AS (")
+
+	assertSQLContainsInOrder(t, noSessions,
+		"workload_mount_bindings",
+		"status NOT IN ('released','revoked','expired','failed')",
+		"confirmed_unmounted_at IS NULL",
+	)
+	if strings.Contains(noSessions, "AND NOT EXISTS (SELECT 1 FROM workload_mount_bindings WHERE repo_id = $15 AND status NOT IN ('released','revoked','expired','failed'))") {
+		t.Fatalf("purge no_sessions allows terminal mounts without confirmed non-accessing evidence: %s", noSessions)
+	}
+	if strings.Contains(noSessions, "unable_to_write_at") {
+		t.Fatalf("purge no_sessions must not accept unable_to_write_at as non-accessing evidence: %s", noSessions)
+	}
+}
+
 func TestRepoPurgeValidatorsRejectNonPurgeTypes(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	repo, record := repoLifecycleCommitFixtures(now, operations.OperationRepoArchive, resources.RepoStatusArchived)

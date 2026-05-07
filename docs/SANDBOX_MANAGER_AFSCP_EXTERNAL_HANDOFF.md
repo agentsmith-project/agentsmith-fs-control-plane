@@ -68,10 +68,13 @@ This is not acceptable for new AFSCP-backed repositories because ordinary produc
    - release result
    - revoke result
    - failed state with redacted error details
+   - terminal status with evidence-bearing meaning: use `released`/`revoked` only after the runtime mount is confirmed unmounted or non-accessing; use `expired`/`failed` for observed terminal or uncertain outcomes without unmount proof. Future callback extensions may add explicit evidence for unable-to-write-but-still-mounted states.
 
 6. Implement confirmed-unmounted semantics.
 
-   AFSCP may only treat a write-capable binding as terminal when sandbox-manager confirms the workload can no longer write. Deleting or patching a Secret/PV/PVC is not enough if a running pod can still write through an existing mount.
+   AFSCP may only treat a write-capable binding as terminal when sandbox-manager confirms the runtime mount is unmounted or otherwise non-accessing. This also proves the workload can no longer write. Deleting or patching a Secret/PV/PVC is not enough if a running pod can still access an existing mount.
+
+   Bare terminal status alone is not sufficient evidence. In the current GA callback contract, `released` and `revoked` are evidence-bearing non-accessing terminal statuses, while `expired` and `failed` are observed terminal statuses without proof of unmount, non-access, or unable-to-write. Restore-run can proceed past a read-write binding only after `released`/`revoked`; archive, delete, and purge require the same confirmed non-accessing evidence. If a future runtime needs restore-run evidence for unable-to-write-but-still-mounted/readable, it must add an explicit evidence field or status rather than reusing `released`/`revoked`.
 
 7. Enforce read-only and runtime policy.
 

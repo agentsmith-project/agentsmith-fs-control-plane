@@ -408,6 +408,31 @@ func TestLifecycleExecutorActiveSessionWaitsWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestLifecycleExecutorTerminalMountWithoutNonAccessingEvidenceRequiresIntervention(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = repoLifecycleResource(now, resources.RepoStatusActive)
+	store.mounts = []sessionstate.WorkloadMountBinding{{
+		ID:                 "wmb_alpha",
+		NamespaceID:        "ns_alpha01",
+		RepoID:             "repo_alpha01",
+		ReadOnly:           true,
+		Status:             sessionstate.MountStatusReleased,
+		LeaseExpiresAt:     now.Add(-time.Minute),
+		TerminalObservedAt: repoExecTimePtr(now.Add(-time.Minute)),
+		CreatedAt:          now.Add(-time.Hour),
+		UpdatedAt:          now.Add(-time.Minute),
+	}}
+	executor := newTestLifecycleExecutor(t, store, &fakeJVSRunner{}, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), repoLifecycleLeasedRecord(now, operations.OperationRepoArchive, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); !errors.Is(err, recovery.ErrOperationManualIntervention) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.repo.Status != resources.RepoStatusActive || store.releasedFenceID != "" {
+		t.Fatalf("operation/repo/release = %#v/%s/%q, want intervention without archive commit", store.operation, store.repo.Status, store.releasedFenceID)
+	}
+}
+
 func TestLifecycleExecutorRestoreArchivedWithNonTerminalSessionRequiresInterventionBeforeDoctor(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()

@@ -383,7 +383,7 @@ func workloadMountBindingStatusCommitSQL() string {
 			"ELSE lease_expires_at END, "+
 			"terminal_observed_at = CASE WHEN $15 IN ('released','revoked','expired','failed') AND status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE terminal_observed_at END, "+
 			"confirmed_unmounted_at = CASE WHEN $15 IN ('released','revoked') AND status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE confirmed_unmounted_at END, "+
-			"unable_to_write_at = CASE WHEN $15 IN ('released','revoked','expired','failed') AND status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE unable_to_write_at END, "+
+			"unable_to_write_at = CASE WHEN $15 IN ('released','revoked') AND status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE unable_to_write_at END, "+
 			"status_reason = CASE "+
 			"WHEN status IN ('released','revoked','expired','failed') THEN status_reason "+
 			"WHEN status = 'releasing' AND $15 IN ('pending','active') THEN status_reason "+

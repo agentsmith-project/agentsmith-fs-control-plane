@@ -102,10 +102,12 @@ Rules:
 - The orchestrator updates status when it starts, completes, releases, or fails a runtime mount.
 - The orchestrator heartbeats before `lease_expires_at`.
 - A read-write binding in `issued`, `pending`, `active`, or `releasing` with a live lease counts as an active writer session.
-- An expired read-write binding still blocks restore-run until reconciliation marks it `expired`, `released`, confirmed-unmounted `revoked`, or `failed`.
+- A terminal read-write binding blocks restore-run until current GA durable evidence shows the runtime mount is unmounted or otherwise non-accessing. `released`/`revoked` set that evidence; `terminal_observed_at` alone is not sufficient.
 - Any binding, read-only or read-write, blocks repo archive/delete/purge lifecycle drain until AFSCP has a confirmed terminal non-accessing state.
 - AFSCP can revoke a binding; the orchestrator must unmount or stop using it and report final status.
-- `revoked` is terminal only after the orchestrator confirms that the runtime can no longer write. A revoke request waiting for runtime teardown remains `releasing` and continues to block restore-run.
+- `released`/`revoked` are terminal only after the orchestrator confirms that the runtime mount is unmounted or otherwise non-accessing, which also proves unable-to-write. A revoke request waiting for runtime teardown remains `releasing` and continues to block restore-run.
+- `expired`/`failed` are observed or uncertain terminal statuses. They do not prove unmounted, non-accessing, or unable-to-write, and they do not unblock restore-run or lifecycle by themselves.
+- Future support for unable-to-write-but-still-mounted/readable as restore-run evidence requires an explicit evidence field or status; it must not reuse `released`/`revoked`.
 
 ## JVS Control Metadata Protection
 
@@ -131,7 +133,7 @@ orchestrator contract supports:
 - Secret RBAC that excludes ordinary product callers and workloads
 - heartbeat before lease expiry
 - idempotent release
-- revoke request followed by confirmed-unmounted or confirmed-unable-to-write terminal status
+- revoke request followed by confirmed-unmounted or otherwise non-accessing terminal status
 - stale lease reconciliation
 
 If any requirement is missing, AFSCP returns a stable capability error instead

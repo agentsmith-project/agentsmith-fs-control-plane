@@ -56,10 +56,13 @@ func TestListExportSessionsByRepoReadsSafeSessionFields(t *testing.T) {
 
 func TestListWorkloadMountBindingsByRepoReadsSafeSessionFields(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	confirmedUnmountedAt := now.Add(2 * time.Minute)
+	unableToWriteAt := now.Add(3 * time.Minute)
+	terminalObservedAt := now.Add(4 * time.Minute)
 	exec := &fakeExecutor{
 		rows: fakeRows{rows: []fakeRow{
-			{values: []any{"wmb_alpha", "ns_123", "repo_123", false, "active", now.Add(time.Hour), now, now.Add(time.Minute)}},
-			{values: []any{"wmb_beta", "ns_123", "repo_123", true, "released", now.Add(-time.Hour), now.Add(time.Minute), now.Add(2 * time.Minute)}},
+			{values: []any{"wmb_alpha", "ns_123", "repo_123", false, "active", now.Add(time.Hour), nil, nil, nil, now, now.Add(time.Minute)}},
+			{values: []any{"wmb_beta", "ns_123", "repo_123", true, "released", now.Add(-time.Hour), confirmedUnmountedAt, unableToWriteAt, terminalObservedAt, now.Add(time.Minute), now.Add(5 * time.Minute)}},
 		}},
 	}
 	st := &Store{exec: exec}
@@ -70,7 +73,7 @@ func TestListWorkloadMountBindingsByRepoReadsSafeSessionFields(t *testing.T) {
 	}
 
 	assertSQLContainsInOrder(t, exec.query,
-		"SELECT mount_binding_id, namespace_id, repo_id, read_only, status, lease_expires_at, created_at, updated_at FROM workload_mount_bindings",
+		"SELECT mount_binding_id, namespace_id, repo_id, read_only, status, lease_expires_at, confirmed_unmounted_at, unable_to_write_at, terminal_observed_at, created_at, updated_at FROM workload_mount_bindings",
 		"WHERE repo_id = $1",
 		"ORDER BY created_at, mount_binding_id",
 	)
@@ -88,6 +91,11 @@ func TestListWorkloadMountBindingsByRepoReadsSafeSessionFields(t *testing.T) {
 	}
 	if !got[1].ReadOnly || got[1].Status != sessionstate.MountStatusReleased {
 		t.Fatalf("second mount binding = %#v", got[1])
+	}
+	if got[1].ConfirmedUnmountedAt == nil || !got[1].ConfirmedUnmountedAt.Equal(confirmedUnmountedAt) ||
+		got[1].UnableToWriteAt == nil || !got[1].UnableToWriteAt.Equal(unableToWriteAt) ||
+		got[1].TerminalObservedAt == nil || !got[1].TerminalObservedAt.Equal(terminalObservedAt) {
+		t.Fatalf("second mount evidence = confirmed:%v unable:%v terminal:%v", got[1].ConfirmedUnmountedAt, got[1].UnableToWriteAt, got[1].TerminalObservedAt)
 	}
 }
 

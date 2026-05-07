@@ -87,6 +87,13 @@ func TestRestoreRunExecutorPreJVSWriterSessionDenialReleasesFenceAndKeepsPlanPen
 			wantState: operations.OperationStateFailed,
 		},
 		{
+			name: "terminal rw workload mount without write evidence",
+			edit: func(store *fakeRepoCreateStore) {
+				store.mounts = []sessionstate.WorkloadMountBinding{{ID: "wmb_alpha", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", ReadOnly: false, Status: sessionstate.MountStatusFailed, LeaseExpiresAt: now.Add(-time.Minute), TerminalObservedAt: repoExecTimePtr(now.Add(-time.Minute)), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute)}}
+			},
+			wantState: operations.OperationStateFailed,
+		},
+		{
 			name: "invalid same repo session state",
 			edit: func(store *fakeRepoCreateStore) {
 				session := freshExportSession(now, "export_alpha", sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(time.Hour))

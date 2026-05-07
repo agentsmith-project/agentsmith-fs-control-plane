@@ -116,7 +116,7 @@ func repoPurgeSuccessCommitWithLeaseSQL() string {
 		"), held_fence AS (" +
 		"SELECT fence_id FROM repo_fences WHERE repo_id = $15 AND fence_id = $34 AND fence_kind = 'lifecycle' AND holder_operation_id = $12 AND status = 'active' AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
 		"), no_sessions AS (" +
-		"SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM export_sessions WHERE repo_id = $15 AND status NOT IN ('revoked','expired','failed')) AND NOT EXISTS (SELECT 1 FROM workload_mount_bindings WHERE repo_id = $15 AND status NOT IN ('released','revoked','expired','failed'))" +
+		"SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM export_sessions WHERE repo_id = $15 AND status NOT IN ('revoked','expired','failed')) AND NOT EXISTS (SELECT 1 FROM workload_mount_bindings WHERE repo_id = $15 AND (status NOT IN ('released','revoked','expired','failed') OR confirmed_unmounted_at IS NULL))" +
 		"), no_earlier_lifecycle AS (" +
 		"SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM operations earlier WHERE earlier.repo_id = $15 AND (earlier.created_at < (SELECT created_at FROM eligible_operation) OR (earlier.created_at = (SELECT created_at FROM eligible_operation) AND earlier.operation_id < $12)) AND earlier.operation_type IN ('repo_archive','repo_restore_archived','repo_delete','repo_restore_tombstoned','repo_purge') AND earlier.operation_state NOT IN ('succeeded','failed','cancelled'))" +
 		"), updated_repo AS (" +

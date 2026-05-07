@@ -67,9 +67,14 @@ func TestRestoreRunWriterGateMountSemantics(t *testing.T) {
 		{name: "read write active live", mount: mountFixture(false, MountStatusActive, now.Add(time.Hour)), wantFamily: ErrorFamilyActiveWriterSessions},
 		{name: "read write releasing expired", mount: mountFixture(false, MountStatusReleasing, now.Add(-time.Minute)), wantFamily: ErrorFamilyStaleWriterSessionUncertain},
 		{name: "read only active ignored", mount: mountFixture(true, MountStatusActive, now.Add(time.Hour)), wantAllowed: true},
-		{name: "terminal released ignored", mount: mountFixture(false, MountStatusReleased, now.Add(-time.Hour)), wantAllowed: true},
-		{name: "terminal revoked ignored", mount: mountFixture(false, MountStatusRevoked, now.Add(-time.Hour)), wantAllowed: true},
-		{name: "terminal failed ignored", mount: mountFixture(false, MountStatusFailed, now.Add(time.Hour)), wantAllowed: true},
+		{name: "terminal released without evidence stale", mount: mountFixture(false, MountStatusReleased, now.Add(-time.Hour)), wantFamily: ErrorFamilyStaleWriterSessionUncertain},
+		{name: "terminal revoked without evidence stale", mount: mountFixture(false, MountStatusRevoked, now.Add(-time.Hour)), wantFamily: ErrorFamilyStaleWriterSessionUncertain},
+		{name: "terminal expired without evidence stale", mount: mountFixture(false, MountStatusExpired, now.Add(-time.Hour)), wantFamily: ErrorFamilyStaleWriterSessionUncertain},
+		{name: "terminal failed without evidence stale", mount: mountFixture(false, MountStatusFailed, now.Add(time.Hour)), wantFamily: ErrorFamilyStaleWriterSessionUncertain},
+		{name: "terminal observed only does not prove writer drained", mount: mountWithEvidence(mountFixture(false, MountStatusFailed, now.Add(-time.Hour)), nil, nil, timePtr(now.Add(-time.Minute))), wantFamily: ErrorFamilyStaleWriterSessionUncertain},
+		{name: "terminal confirmed unmounted proves writer drained", mount: mountWithEvidence(mountFixture(false, MountStatusReleased, now.Add(-time.Hour)), timePtr(now.Add(-time.Minute)), nil, nil), wantAllowed: true},
+		{name: "terminal unable to write proves writer drained", mount: mountWithEvidence(mountFixture(false, MountStatusFailed, now.Add(-time.Hour)), nil, timePtr(now.Add(-time.Minute)), nil), wantAllowed: true},
+		{name: "read only terminal without evidence ignored", mount: mountFixture(true, MountStatusFailed, now.Add(time.Hour)), wantAllowed: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -80,6 +85,31 @@ func TestRestoreRunWriterGateMountSemantics(t *testing.T) {
 				Mounts:      []WorkloadMountBinding{tt.mount},
 			})
 			assertDecision(t, decision, tt.wantAllowed, tt.wantFamily)
+		})
+	}
+}
+
+func TestRestoreRunWriterGateTerminalMountEvidenceMatrix(t *testing.T) {
+	now := testNow()
+	for _, status := range []MountStatus{MountStatusReleased, MountStatusRevoked, MountStatusExpired, MountStatusFailed} {
+		t.Run(string(status)+" without evidence", func(t *testing.T) {
+			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mountFixture(false, status, now.Add(-time.Hour))}})
+			assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
+		})
+		t.Run(string(status)+" confirmed unmounted", func(t *testing.T) {
+			mount := mountWithEvidence(mountFixture(false, status, now.Add(-time.Hour)), timePtr(now.Add(-time.Minute)), nil, nil)
+			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
+			assertDecision(t, decision, true, "")
+		})
+		t.Run(string(status)+" unable to write", func(t *testing.T) {
+			mount := mountWithEvidence(mountFixture(false, status, now.Add(-time.Hour)), nil, timePtr(now.Add(-time.Minute)), nil)
+			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
+			assertDecision(t, decision, true, "")
+		})
+		t.Run(string(status)+" terminal observed only", func(t *testing.T) {
+			mount := mountWithEvidence(mountFixture(false, status, now.Add(-time.Hour)), nil, nil, timePtr(now.Add(-time.Minute)))
+			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
+			assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
 		})
 	}
 }
@@ -113,22 +143,38 @@ func TestLifecycleDrainGateBlocksAnyNonTerminalAccess(t *testing.T) {
 	}
 }
 
-func TestLifecycleDrainGateIgnoresTerminalSessions(t *testing.T) {
+func TestLifecycleDrainGateRequiresTerminalMountNonAccessingEvidence(t *testing.T) {
 	now := testNow()
-	decision := LifecycleDrainGate(GateRequest{
-		NamespaceID: "ns_123",
-		RepoID:      "repo_123",
-		Now:         now,
-		ExportSessions: []ExportSession{
-			exportFixture(AccessModeReadOnly, ExportStatusRevoked, now.Add(-time.Hour)),
-			exportFixture(AccessModeReadWrite, ExportStatusExpired, now.Add(-time.Hour)),
-		},
-		Mounts: []WorkloadMountBinding{
-			mountFixture(true, MountStatusReleased, now.Add(-time.Hour)),
-			mountFixture(false, MountStatusExpired, now.Add(-time.Hour)),
-		},
-	})
+	for _, status := range []MountStatus{MountStatusReleased, MountStatusRevoked, MountStatusExpired, MountStatusFailed} {
+		t.Run(string(status)+" without evidence", func(t *testing.T) {
+			decision := LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mountFixture(false, status, now.Add(-time.Hour))}})
+			assertDecision(t, decision, false, ErrorFamilyStaleSessionsBlockLifecycle)
+		})
+		t.Run(string(status)+" terminal observed only", func(t *testing.T) {
+			mount := mountWithEvidence(mountFixture(false, status, now.Add(-time.Hour)), nil, nil, timePtr(now.Add(-time.Minute)))
+			decision := LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
+			assertDecision(t, decision, false, ErrorFamilyStaleSessionsBlockLifecycle)
+		})
+		t.Run(string(status)+" unable to write only", func(t *testing.T) {
+			mount := mountWithEvidence(mountFixture(false, status, now.Add(-time.Hour)), nil, timePtr(now.Add(-time.Minute)), nil)
+			decision := LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
+			assertDecision(t, decision, false, ErrorFamilyStaleSessionsBlockLifecycle)
+		})
+		t.Run(string(status)+" confirmed unmounted", func(t *testing.T) {
+			mount := mountWithEvidence(mountFixture(false, status, now.Add(-time.Hour)), timePtr(now.Add(-time.Minute)), nil, nil)
+			decision := LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
+			assertDecision(t, decision, true, "")
+		})
+	}
 
+	readOnlyConfirmed := mountWithEvidence(mountFixture(true, MountStatusReleased, now.Add(-time.Hour)), timePtr(now.Add(-time.Minute)), nil, nil)
+	decision := LifecycleDrainGate(GateRequest{
+		NamespaceID:    "ns_123",
+		RepoID:         "repo_123",
+		Now:            now,
+		ExportSessions: []ExportSession{exportFixture(AccessModeReadOnly, ExportStatusRevoked, now.Add(-time.Hour))},
+		Mounts:         []WorkloadMountBinding{readOnlyConfirmed},
+	})
 	assertDecision(t, decision, true, "")
 }
 
@@ -286,6 +332,13 @@ func mountFixture(readOnly bool, status MountStatus, leaseExpiresAt time.Time) W
 		Status:         status,
 		LeaseExpiresAt: leaseExpiresAt,
 	}
+}
+
+func mountWithEvidence(mount WorkloadMountBinding, confirmedUnmountedAt, unableToWriteAt, terminalObservedAt *time.Time) WorkloadMountBinding {
+	mount.ConfirmedUnmountedAt = confirmedUnmountedAt
+	mount.UnableToWriteAt = unableToWriteAt
+	mount.TerminalObservedAt = terminalObservedAt
+	return mount
 }
 
 func testNow() time.Time {

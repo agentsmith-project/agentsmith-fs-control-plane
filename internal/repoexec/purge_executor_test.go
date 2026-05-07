@@ -107,6 +107,11 @@ func TestPurgeExecutorPolicyAndStorageFailuresRequireManualIntervention(t *testi
 			store.exports = []sessionstate.ExportSession{{ID: "export_stale", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Mode: sessionstate.AccessModeReadOnly, Status: sessionstate.ExportStatusActive, ExpiresAt: now.Add(-time.Minute), CreatedAt: now, UpdatedAt: now}}
 			return record
 		}},
+		{name: "terminal mount without non accessing evidence", edit: func(store *fakeRepoCreateStore, _ *fakeStoragePurger, record operations.OperationRecord) operations.OperationRecord {
+			store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(-2*time.Hour))
+			store.mounts = []sessionstate.WorkloadMountBinding{{ID: "wmb_alpha", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", ReadOnly: false, Status: sessionstate.MountStatusFailed, LeaseExpiresAt: now.Add(-time.Minute), UnableToWriteAt: repoExecTimePtr(now.Add(-time.Minute)), TerminalObservedAt: repoExecTimePtr(now.Add(-time.Minute)), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute)}}
+			return record
+		}},
 		{name: "partial absent cleanup failure", wantPurge: 1, wantDoctor: false, edit: func(store *fakeRepoCreateStore, purger *fakeStoragePurger, record operations.OperationRecord) operations.OperationRecord {
 			store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(-2*time.Hour))
 			purger.state = RepoStoragePartialAbsent

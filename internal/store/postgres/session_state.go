@@ -35,6 +35,9 @@ var workloadMountBindingColumns = []string{
 	"read_only",
 	"status",
 	"lease_expires_at",
+	"confirmed_unmounted_at",
+	"unable_to_write_at",
+	"terminal_observed_at",
 	"created_at",
 	"updated_at",
 }
@@ -136,6 +139,7 @@ func scanExportSession(row rowScanner) (sessionstate.ExportSession, error) {
 func scanWorkloadMountBinding(row rowScanner) (sessionstate.WorkloadMountBinding, error) {
 	var mount sessionstate.WorkloadMountBinding
 	var status string
+	var confirmedUnmountedAt, unableToWriteAt, terminalObservedAt sql.NullTime
 	if err := row.Scan(
 		&mount.ID,
 		&mount.NamespaceID,
@@ -143,11 +147,17 @@ func scanWorkloadMountBinding(row rowScanner) (sessionstate.WorkloadMountBinding
 		&mount.ReadOnly,
 		&status,
 		&mount.LeaseExpiresAt,
+		&confirmedUnmountedAt,
+		&unableToWriteAt,
+		&terminalObservedAt,
 		&mount.CreatedAt,
 		&mount.UpdatedAt,
 	); err != nil {
 		return sessionstate.WorkloadMountBinding{}, err
 	}
 	mount.Status = sessionstate.MountStatus(status)
+	mount.ConfirmedUnmountedAt = nullTimePtr(confirmedUnmountedAt)
+	mount.UnableToWriteAt = nullTimePtr(unableToWriteAt)
+	mount.TerminalObservedAt = nullTimePtr(terminalObservedAt)
 	return mount, nil
 }

@@ -759,6 +759,10 @@ func repoExecNow() time.Time {
 	return time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 }
 
+func repoExecTimePtr(t time.Time) *time.Time {
+	return &t
+}
+
 func newFakeStore() *fakeRepoCreateStore {
 	now := repoExecNow()
 	return &fakeRepoCreateStore{

@@ -63,7 +63,7 @@ Statuses:
 - `expired`
 - `failed`
 
-`revoked` is terminal only after the orchestrator confirms that the runtime mount is stopped or otherwise unable to write. A control-plane revoke request that has not yet stopped the runtime remains `releasing` and continues to block restore-run.
+`released` and `revoked` are evidence-bearing non-accessing terminal statuses: the orchestrator may report them only after confirming that the runtime mount is unmounted or otherwise non-accessing. This also proves unable-to-write. A control-plane revoke request that has not yet stopped runtime access remains `releasing` and continues to block restore-run. `expired` and `failed` are observed terminal statuses; they do not carry confirmed-unmounted, non-accessing, or unable-to-write evidence by themselves.
 
 GA requires:
 
@@ -73,11 +73,16 @@ GA requires:
 - revoke endpoint for AFSCP/operator initiated teardown
 - `lease_expires_at` on every binding
 
-Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions. Expired read-write bindings block restore-run until reconciliation marks a terminal state. `revoked` may unblock restore-run only when it means confirmed-unmounted, not merely requested.
+Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions. Expired read-write bindings block restore-run until reconciliation reaches an evidence-bearing terminal state proving that the runtime is unmounted or otherwise non-accessing. `revoked` may unblock restore-run only when it means confirmed non-accessing, not merely requested.
 
 Repo lifecycle drain is stricter than restore-run. Any binding, read-only or
 read-write, blocks archive, delete, and purge until AFSCP has a confirmed
 terminal non-accessing state from the orchestrator or reconciliation process.
+
+Future support for unable-to-write-but-still-mounted/readable evidence for
+restore-run must use a new explicit evidence field or status. It must not reuse
+`released` or `revoked`, because current GA lifecycle and purge gates treat
+those statuses as confirmed non-accessing evidence.
 
 ## Rules
 
@@ -104,9 +109,9 @@ Workload mounts cannot be GA-enabled until the orchestrator contract proves:
 - the repo container directory and control root are never mounted
 - Secret RBAC prevents ordinary caller ServiceAccounts and workloads from reading JuiceFS root Secrets
 - heartbeat extends leases only for non-terminal bindings
-- release is idempotent and terminal only after runtime write access has ended
-- revoke means requested teardown until the orchestrator confirms unmounted or unable to write
-- confirmed-unmounted `revoked`, `released`, `expired`, and `failed` unblock restore-run according to the writer-session fence contract
+- release is idempotent and terminal only after runtime access has ended
+- revoke means requested teardown until the orchestrator confirms unmounted or otherwise non-accessing
+- `released` and `revoked` are reported only as evidence-bearing non-accessing terminal statuses; `expired` and `failed` remain observed/uncertain and do not unblock lifecycle without future explicit evidence
 
 If these requirements are not accepted for a runtime, AFSCP returns
 `CAPABILITY_DENIED` instead of issuing a degraded mount binding.

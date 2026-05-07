@@ -77,14 +77,17 @@ type ExportSession struct {
 }
 
 type WorkloadMountBinding struct {
-	ID             string
-	NamespaceID    string
-	RepoID         string
-	ReadOnly       bool
-	Status         MountStatus
-	LeaseExpiresAt time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                   string
+	NamespaceID          string
+	RepoID               string
+	ReadOnly             bool
+	Status               MountStatus
+	LeaseExpiresAt       time.Time
+	ConfirmedUnmountedAt *time.Time
+	UnableToWriteAt      *time.Time
+	TerminalObservedAt   *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type GateRequest struct {
@@ -296,16 +299,34 @@ func exportWriterDrained(session ExportSession, now time.Time) bool {
 }
 
 func mountBlocker(kind gateKind, mount WorkloadMountBinding, now time.Time) blockerClass {
-	if mountTerminal(mount.Status) {
-		return blockerNone
-	}
 	if kind == gateRestoreRunWriter && mount.ReadOnly {
 		return blockerNone
+	}
+	if mountTerminal(mount.Status) {
+		if mountHasTerminalEvidence(kind, mount) {
+			return blockerNone
+		}
+		return blockerStale
 	}
 	if mount.LeaseExpiresAt.After(now) {
 		return blockerActive
 	}
 	return blockerStale
+}
+
+func mountHasTerminalEvidence(kind gateKind, mount WorkloadMountBinding) bool {
+	switch kind {
+	case gateRestoreRunWriter:
+		return nonZeroTimePtr(mount.ConfirmedUnmountedAt) || nonZeroTimePtr(mount.UnableToWriteAt)
+	case gateLifecycleDrain:
+		return nonZeroTimePtr(mount.ConfirmedUnmountedAt)
+	default:
+		return false
+	}
+}
+
+func nonZeroTimePtr(value *time.Time) bool {
+	return value != nil && !value.IsZero()
 }
 
 func exportTerminal(status ExportStatus) bool {
