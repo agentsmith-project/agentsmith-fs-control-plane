@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,7 @@ func TestNewRuntimeFailsClosedWithoutDSN(t *testing.T) {
 			"AFSCP_API_MODE":                              "internal",
 			"AFSCP_API_SERVICE_TOKENS":                    "svc_api=token-api",
 			"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS": "svc_api:product:operation_inspector",
+			"AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL":     "https://files.example.test",
 		},
 		StoreFactory: func(context.Context, string) (StoreHandle, error) {
 			t.Fatal("store factory should not be called without DSN")
@@ -67,6 +69,7 @@ func TestNewRuntimeFailsClosedWithoutValidTokenMapping(t *testing.T) {
 					"AFSCP_API_POSTGRES_DSN":                      "postgres://api:secret@db/afscp",
 					"AFSCP_API_SERVICE_TOKENS":                    tt.tokens,
 					"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS": "svc_api:product:operation_inspector",
+					"AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL":     "https://files.example.test",
 				},
 				StoreFactory: func(context.Context, string) (StoreHandle, error) {
 					t.Fatal("store factory should not be called with invalid token config")
@@ -86,6 +89,28 @@ func TestNewRuntimeFailsClosedWithoutValidTokenMapping(t *testing.T) {
 	}
 }
 
+func TestNewRuntimeFailsClosedWithoutWebDAVExportPublicBaseURL(t *testing.T) {
+	_, err := NewRuntime(Options{
+		Source: config.MapSource{
+			"AFSCP_API_MODE":                                 "internal",
+			"AFSCP_API_POSTGRES_DSN":                         "postgres://api:secret@db/afscp",
+			"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
+			"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_api:product:operation_inspector",
+			"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
+		},
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			t.Fatal("store factory should not be called without WebDAV export public base URL")
+			return StoreHandle{}, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("NewRuntime succeeded, want missing WebDAV export public base URL error")
+	}
+	if !strings.Contains(err.Error(), "AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL") {
+		t.Fatalf("error = %q, want public base URL context", err)
+	}
+}
+
 func TestNewRuntimeFromConfigSavePointHistoryVerifiesJVSBinaryAgainstAcceptedPin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jvs")
 	content := []byte("not the accepted jvs release binary")
@@ -99,6 +124,7 @@ func TestNewRuntimeFromConfigSavePointHistoryVerifiesJVSBinaryAgainstAcceptedPin
 			Mode:                              "internal",
 			PostgresDSN:                       "postgres://api:secret@db/afscp",
 			ServiceTokens:                     "svc_api=token-api",
+			WebDAVExportPublicBaseURL:         "https://files.example.test",
 			DeploymentGlobalAllowedCallers:    "svc_api:product:operation_inspector",
 			DeploymentNamespaceAllowedCallers: "svc_api:product:namespace_admin",
 			SavePointHistory: config.WorkerRepoCreateRecoveryConfig{
@@ -158,6 +184,94 @@ func TestInternalRuntimeServesStorageBackedImplementedSubsetAndFailsClosedForMis
 	}
 	if strings.Contains(body, "neutral shell") {
 		t.Fatalf("unimplemented route returned neutral shell text: %s", body)
+	}
+}
+
+func TestInternalRuntimeCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	binding := testBinding()
+	binding.AllowedCallers = []resources.AllowedCaller{{
+		CallerService: "svc_api",
+		Roles:         []resources.CallerRole{resources.CallerRoleExportAdmin},
+	}}
+	store := &fakeRuntimeStore{
+		binding: binding,
+		namespace: resources.Namespace{
+			ID:        "ns_alpha",
+			Status:    resources.NamespaceStatusActive,
+			CreatedAt: now.Add(-time.Hour),
+			UpdatedAt: now,
+		},
+		repo: resources.Repo{
+			ID:                  "repo_alpha",
+			NamespaceID:         "ns_alpha",
+			VolumeID:            "vol_main",
+			JVSRepoID:           "jvs_repo_alpha",
+			Kind:                resources.RepoKindRepo,
+			Status:              resources.RepoStatusActive,
+			ControlVolumeSubdir: "afscp/namespaces/ns_alpha/repos/repo_alpha/control",
+			PayloadVolumeSubdir: "afscp/namespaces/ns_alpha/repos/repo_alpha/payload",
+			Lifecycle:           resources.RepoLifecycle{Status: resources.RepoStatusActive},
+			CreatedAt:           now.Add(-time.Hour),
+			UpdatedAt:           now,
+		},
+		volume: activeRuntimeVolume(now),
+	}
+	source := readyTestRuntimeSource()
+	source["AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL"] = "https://files.example.test/public"
+	runtime, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {
+			if dsn != "postgres://api:secret@db/afscp" {
+				t.Fatalf("dsn = %q", dsn)
+			}
+			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+		},
+		OperationID: func() string { return "op_export_runtime" },
+		Clock:       func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer closeRuntime(t, runtime)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/repos/repo_alpha/exports", strings.NewReader(`{"mode":"read_only","ttl_seconds":120}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(auth.HeaderAuthorization, "Bearer token-api")
+	req.Header.Set(auth.HeaderCorrelationID, "corr_test")
+	req.Header.Set(auth.HeaderCallerService, "svc_api")
+	req.Header.Set(auth.HeaderNamespaceID, "ns_alpha")
+	req.Header.Set(auth.HeaderIdempotencyKey, "idem_export")
+	req.Header.Set(auth.HeaderActorType, "service")
+	req.Header.Set(auth.HeaderActorID, "svc_api")
+	rec := httptest.NewRecorder()
+
+	runtime.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+	}
+	var env api.OperationEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode operation envelope: %v: %s", err, rec.Body.String())
+	}
+	access, ok := env.Result["access"].(map[string]any)
+	if !ok {
+		t.Fatalf("result.access = %#v, want object", env.Result["access"])
+	}
+	got, ok := access["url"].(string)
+	if !ok {
+		t.Fatalf("access.url = %#v, want string", access["url"])
+	}
+	parsed, err := url.Parse(got)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		t.Fatalf("access.url = %q, want absolute URI: %v", got, err)
+	}
+	if !strings.HasPrefix(got, "https://files.example.test/public/e/") || !strings.HasSuffix(got, "/") {
+		t.Fatalf("access.url = %q, want configured public base URL", got)
+	}
+	if store.exportCreateCalls != 1 {
+		t.Fatalf("export create calls = %d, want 1", store.exportCreateCalls)
 	}
 }
 
@@ -496,6 +610,7 @@ func TestInternalRuntimeVolumeHealthDefaultsMissingBackendProbeToNotHealthy(t *t
 			"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
 			"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_api:admin:volume_admin",
 			"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
+			"AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL":        "https://files.example.test",
 		},
 		StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {
 			if dsn != "postgres://api:secret@db/afscp" {
@@ -682,6 +797,7 @@ func newVolumeHealthRuntime(t *testing.T, overrides config.MapSource, volume res
 		"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
 		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_api:admin:volume_admin",
 		"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
+		"AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL":        "https://files.example.test",
 	}
 	for key, value := range overrides {
 		source[key] = value
@@ -732,6 +848,7 @@ func baseTestRuntimeSource() config.MapSource {
 		"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
 		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_api:product:operation_inspector",
 		"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
+		"AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL":        "https://files.example.test",
 		"AFSCP_JVS_ENABLED":                              "true",
 		"AFSCP_JVS_READY":                                "true",
 		"AFSCP_WEBDAV_ENABLED":                           "true",
@@ -830,9 +947,13 @@ func runtimeVolumeHealthHasFinding(response api.VolumeHealthResponse, code strin
 }
 
 type fakeRuntimeStore struct {
-	binding resources.NamespaceVolumeBinding
-	volume  resources.Volume
-	closed  bool
+	binding           resources.NamespaceVolumeBinding
+	namespace         resources.Namespace
+	repo              resources.Repo
+	volume            resources.Volume
+	exportCreate      exportaccess.CreateRequest
+	exportCreateCalls int
+	closed            bool
 }
 
 func (store *fakeRuntimeStore) Close() error {
@@ -847,15 +968,24 @@ func (store *fakeRuntimeStore) GetNamespaceVolumeBinding(_ context.Context, name
 	return store.binding, nil
 }
 
-func (*fakeRuntimeStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
+func (store *fakeRuntimeStore) GetNamespace(_ context.Context, namespaceID string) (resources.Namespace, error) {
+	if store.namespace.ID == namespaceID {
+		return store.namespace, nil
+	}
 	return resources.Namespace{}, sql.ErrNoRows
 }
 
-func (*fakeRuntimeStore) GetRepo(context.Context, string) (resources.Repo, error) {
+func (store *fakeRuntimeStore) GetRepo(_ context.Context, repoID string) (resources.Repo, error) {
+	if store.repo.ID == repoID {
+		return store.repo, nil
+	}
 	return resources.Repo{}, sql.ErrNoRows
 }
 
-func (*fakeRuntimeStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
+func (store *fakeRuntimeStore) GetRepoInNamespace(_ context.Context, namespaceID, repoID string) (resources.Repo, error) {
+	if store.repo.NamespaceID == namespaceID && store.repo.ID == repoID {
+		return store.repo, nil
+	}
 	return resources.Repo{}, sql.ErrNoRows
 }
 
@@ -878,8 +1008,13 @@ func (*fakeRuntimeStore) GetOrchestratorMountPlan(context.Context, string, strin
 	return workloadmount.Plan{}, sql.ErrNoRows
 }
 
-func (*fakeRuntimeStore) CreateOrReuseExport(context.Context, exportaccess.CreateRequest) (exportaccess.CreateResult, error) {
-	return exportaccess.CreateResult{}, errors.New("not implemented")
+func (store *fakeRuntimeStore) CreateOrReuseExport(_ context.Context, request exportaccess.CreateRequest) (exportaccess.CreateResult, error) {
+	store.exportCreateCalls++
+	store.exportCreate = request
+	if store.repo.ID == "" {
+		return exportaccess.CreateResult{}, errors.New("not implemented")
+	}
+	return exportaccess.CreateResult{Operation: request.Operation, Session: request.Session}, nil
 }
 
 func (*fakeRuntimeStore) GetExportSession(context.Context, string) (exportaccess.Session, error) {

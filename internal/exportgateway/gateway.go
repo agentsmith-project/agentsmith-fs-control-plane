@@ -2,6 +2,7 @@ package exportgateway
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,8 +23,9 @@ import (
 )
 
 const (
-	defaultPrefix       = "/e/"
-	defaultHeartbeatTTL = 15 * time.Second
+	defaultPrefix             = "/e/"
+	defaultHeartbeatTTL       = 15 * time.Second
+	runtimeObservationTimeout = 5 * time.Second
 )
 
 var auditEventCounter uint64
@@ -315,6 +317,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mutating := methodMutates(r.Method)
 	if err := h.startRequestObservation(r.Context(), source.ExportID, mutating); err != nil {
 		_ = fs.Close()
+		if runtimeObservationAdmissionDenied(err) {
+			h.emitDeniedAudit(r, deniedAudit{
+				eventType:  audit.EventTypeAuthzDenied,
+				status:     http.StatusForbidden,
+				reason:     "authz_denied",
+				denyClass:  denyClassAuthzDenied,
+				exportID:   source.ExportID,
+				source:     source,
+				credential: &credential,
+			})
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -325,7 +340,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	backendReq := cloneForBackend(r, source, dest)
 	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	defer func() {
-		h.endRequestObservation(r.Context(), source.ExportID, mutating, rec.status)
+		ctx, cancel := context.WithTimeout(context.Background(), runtimeObservationTimeout)
+		defer cancel()
+		h.endRequestObservation(ctx, source.ExportID, mutating, rec.status)
 	}()
 	backend := &webdav.Handler{
 		Prefix:     "/",
@@ -427,6 +444,10 @@ func (h *Handler) startRequestObservation(ctx context.Context, exportID string, 
 		return err
 	}
 	return nil
+}
+
+func runtimeObservationAdmissionDenied(err error) bool {
+	return errors.Is(err, sql.ErrNoRows)
 }
 
 func (h *Handler) endRequestObservation(ctx context.Context, exportID string, mutating bool, status int) {

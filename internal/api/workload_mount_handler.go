@@ -201,7 +201,7 @@ func (handler workloadMountLeafHandler) create(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if !mountPolicyEnabled(binding) || !volumeWorkloadMountCapable(volume) {
-		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeRepoLifecycleInvalidState, http.StatusConflict, false, "workload mount is not enabled for this namespace or volume", []string{"workload_mount_not_enabled"}, handler.sink)
+		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeCapabilityDenied, http.StatusForbidden, false, "workload mount is not enabled for this namespace or volume", []string{"workload_mount_not_enabled"}, handler.sink)
 		return
 	}
 	now := handler.currentTime()

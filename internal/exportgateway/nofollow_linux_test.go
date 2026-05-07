@@ -211,6 +211,64 @@ func TestNoFollowFileSystemRenameRejectsSymlinksAndAllowsSameRootRename(t *testi
 	}
 }
 
+func TestNoFollowFileSystemRenameRefusesUnsafeSourceDirectoryTree(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tt := range []struct {
+		name  string
+		setup func(t *testing.T, root, sourceDir, outsideTarget string)
+	}{
+		{
+			name: "source directory contains symlink",
+			setup: func(t *testing.T, root, sourceDir, outsideTarget string) {
+				t.Helper()
+				if err := os.Symlink(outsideTarget, filepath.Join(sourceDir, "link.txt")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "source directory contains hardlink",
+			setup: func(t *testing.T, root, sourceDir, outsideTarget string) {
+				t.Helper()
+				if err := os.Link(outsideTarget, filepath.Join(sourceDir, "hardlinked.txt")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			outsideTarget := filepath.Join(t.TempDir(), "outside.txt")
+			if err := os.WriteFile(outsideTarget, []byte("keep"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			sourceDir := filepath.Join(root, "source")
+			if err := os.MkdirAll(filepath.Join(sourceDir, "nested"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(sourceDir, "nested", "owned.txt"), []byte("owned"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tt.setup(t, root, sourceDir, outsideTarget)
+
+			fs := mustNoFollowFS(t, root)
+			if err := fs.Rename(ctx, "/source", "/moved"); err == nil {
+				t.Fatal("Rename source directory containing unsafe entry succeeded, want error")
+			}
+			if _, err := os.Lstat(sourceDir); err != nil {
+				t.Fatalf("source directory after refused Rename: %v", err)
+			}
+			if _, err := os.Lstat(filepath.Join(root, "moved")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("destination after refused Rename error = %v, want not exist", err)
+			}
+			if got, err := os.ReadFile(outsideTarget); err != nil || string(got) != "keep" {
+				t.Fatalf("outside target after refused Rename = %q, %v; want keep", got, err)
+			}
+		})
+	}
+}
+
 func TestNoFollowFileUsesAlreadyOpenedDescriptor(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

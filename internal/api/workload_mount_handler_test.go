@@ -67,11 +67,11 @@ func TestCreateWorkloadMountBindingRejectsFilteredMountWithoutExternalControlRoo
 
 			handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", body, "ns_123"))
 
-			if rec.Code != http.StatusConflict {
-				t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
 			}
-			if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeRepoLifecycleInvalidState {
-				t.Fatalf("error = %#v, want repo lifecycle invalid state", env.Error)
+			if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+				t.Fatalf("error = %#v, want capability denied", env.Error)
 			}
 			if intake.calls != 0 {
 				t.Fatalf("intake calls = %d, want rejected before intake", intake.calls)
@@ -79,6 +79,48 @@ func TestCreateWorkloadMountBindingRejectsFilteredMountWithoutExternalControlRoo
 			assertWorkloadMountNoPlanLeak(t, rec.Body.String())
 		})
 	}
+}
+
+func TestCreateWorkloadMountBindingRejectsDisabledMountPolicyWithCapabilityDenied(t *testing.T) {
+	meta := workloadMountMetaFixture()
+	meta.binding.MountPolicy["workload_mount_enabled"] = false
+	intake := &fakeOperationIntakeStore{}
+	handler := workloadMountHandlerWithMeta(intake, meta, namespaceBindingAllowedPolicy(auth.RoleMountAdmin))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error = %#v, want capability denied", env.Error)
+	}
+	if intake.calls != 0 {
+		t.Fatalf("intake calls = %d, want rejected before intake", intake.calls)
+	}
+	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+}
+
+func TestCreateWorkloadMountBindingRejectsMissingWorkloadMountCapabilityWithCapabilityDenied(t *testing.T) {
+	meta := workloadMountMetaFixture()
+	meta.volume.Capabilities["workload_mount"] = false
+	intake := &fakeOperationIntakeStore{}
+	handler := workloadMountHandlerWithMeta(intake, meta, namespaceBindingAllowedPolicy(auth.RoleMountAdmin))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error = %#v, want capability denied", env.Error)
+	}
+	if intake.calls != 0 {
+		t.Fatalf("intake calls = %d, want rejected before intake", intake.calls)
+	}
+	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
 }
 
 func TestCreateWorkloadMountBindingRejectsDisabledNamespaceButReleaseStatusStayAvailable(t *testing.T) {

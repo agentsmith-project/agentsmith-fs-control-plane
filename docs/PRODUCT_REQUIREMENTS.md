@@ -46,7 +46,11 @@ AFSCP should provide an independently runnable, independently releasable shared 
 - Purge requests must include a caller-side confirmation or approval reference and reason; retention override requires an approved break-glass policy.
 - `quota_bytes_default` is a GA policy record and enforcement hook. It is not enforced unless the selected volume capability `directory_quota` supports directory quota enforcement and the corresponding volume integration explicitly enables directory quota enforcement.
 - Version merge and conflict resolution are out of scope.
-- First or reference consumer adoption is out of scope for AFSCP GA release gates. Consumers may provide requirements and compatibility feedback, but AFSCP GA is closed by AFSCP product, security, platform/runtime, operations, and generated-client compatibility evidence.
+- First or reference consumer adoption, handoff, integration sequencing, caller
+  application methods, and caller business logic are out of scope for AFSCP GA
+  release gates. Consumers may provide requirements and compatibility feedback,
+  but AFSCP GA is closed by AFSCP product, security, platform/runtime,
+  operations, and generated-client compatibility evidence.
 
 ## Non-Goals
 

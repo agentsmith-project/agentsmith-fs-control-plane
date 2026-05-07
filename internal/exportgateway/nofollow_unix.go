@@ -460,7 +460,7 @@ func validateRenameEndpoint(parentFD int, leaf string, mustExist bool) error {
 	if err := rejectUnsafeStat(st); err != nil {
 		return err
 	}
-	if fileType(st) == unix.S_IFDIR && !mustExist {
+	if fileType(st) == unix.S_IFDIR {
 		return validateTreeAt(parentFD, leaf)
 	}
 	return nil

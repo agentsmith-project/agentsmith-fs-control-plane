@@ -100,6 +100,10 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 	if dsn == "" {
 		return nil, errors.New("AFSCP_API_POSTGRES_DSN is required when AFSCP_API_MODE is internal")
 	}
+	webDAVExportPublicBaseURL, err := config.NormalizeWebDAVExportPublicBaseURL(cfg.API.WebDAVExportPublicBaseURL)
+	if err != nil {
+		return nil, err
+	}
 	resolver, err := NewServiceTokenPrincipalResolver(cfg.API.ServiceTokens)
 	if err != nil {
 		return nil, err
@@ -180,6 +184,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		OperationIntakeStore:           handle.Store,
 		GenerateOperationID:            operationID,
 		Now:                            func() time.Time { return now().UTC() },
+		WebDAVExportPublicBaseURL:      webDAVExportPublicBaseURL,
 		ReadinessProvider:              internalReadinessProvider(cfg, handle.Ping),
 		WorkloadMountAdmissionDisabled: !cfg.Capabilities.Mount.Available(),
 	})

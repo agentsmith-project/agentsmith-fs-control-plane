@@ -86,6 +86,9 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	if cfg.API.PostgresDSN != "" {
 		t.Fatalf("api postgres dsn = %q, want empty", cfg.API.PostgresDSN)
 	}
+	if cfg.API.WebDAVExportPublicBaseURL != "" {
+		t.Fatalf("api webdav export public base url = %q, want empty", cfg.API.WebDAVExportPublicBaseURL)
+	}
 	if cfg.ExportGateway.ListenAddr != "127.0.0.1:8080" {
 		t.Fatalf("export gateway listen addr = %q, want default", cfg.ExportGateway.ListenAddr)
 	}
@@ -174,6 +177,7 @@ func TestLoadAPIInternalRuntimeConfig(t *testing.T) {
 		"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-a",
 		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_ops:operator:operation_inspector|operator_admin",
 		"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
+		"AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL":        " https://files.example.com/public ",
 	})
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
@@ -193,6 +197,53 @@ func TestLoadAPIInternalRuntimeConfig(t *testing.T) {
 	}
 	if cfg.API.DeploymentNamespaceAllowedCallers != "svc_api:product:namespace_admin" {
 		t.Fatalf("api namespace callers = %q", cfg.API.DeploymentNamespaceAllowedCallers)
+	}
+	if cfg.API.WebDAVExportPublicBaseURL != "https://files.example.com/public" {
+		t.Fatalf("api webdav export public base url = %q", cfg.API.WebDAVExportPublicBaseURL)
+	}
+}
+
+func TestLoadAPIWebDAVExportPublicBaseURLRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "non http scheme", raw: "ftp://files.example.com"},
+		{name: "missing host", raw: "https:///exports"},
+		{name: "relative reference", raw: "/exports"},
+		{name: "userinfo", raw: "https://user:secret@files.example.com"},
+		{name: "query", raw: "https://files.example.com?token=secret"},
+		{name: "fragment", raw: "https://files.example.com/#secret"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(MapSource{
+				"AFSCP_API_MODE": "internal",
+				"AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL": tt.raw,
+			})
+			if err == nil {
+				t.Fatal("Load succeeded, want public base URL config error")
+			}
+			if !strings.Contains(err.Error(), "AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL") {
+				t.Fatalf("error = %q, want public base URL context", err)
+			}
+			for _, leaked := range []string{"user:secret", "token=secret", "#secret"} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Fatalf("error leaked raw URL component %q: %v", leaked, err)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadNeutralAPIDoesNotRequireWebDAVExportPublicBaseURL(t *testing.T) {
+	cfg, err := Load(MapSource{"AFSCP_API_MODE": "neutral"})
+	if err != nil {
+		t.Fatalf("Load returned error in neutral mode without public base URL: %v", err)
+	}
+	if cfg.API.WebDAVExportPublicBaseURL != "" {
+		t.Fatalf("api webdav export public base url = %q, want empty in neutral mode", cfg.API.WebDAVExportPublicBaseURL)
 	}
 }
 

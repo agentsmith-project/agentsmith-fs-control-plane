@@ -197,6 +197,21 @@ func TestRepoLifecycleSuccessCommitSQLRequiresConfirmedUnmountedMountEvidence(t 
 	}
 }
 
+func TestRepoLifecycleSuccessCommitSQLRequiresExportTerminalEvidence(t *testing.T) {
+	sql := repoLifecycleSuccessCommitWithLeaseSQL()
+	noSessions := sqlBetween(t, sql, "), no_sessions AS (", "), updated_repo AS (")
+	exportPredicate := sqlBetween(t, noSessions, "SELECT 1 FROM export_sessions", ") AND NOT EXISTS (SELECT 1 FROM workload_mount_bindings")
+
+	assertSQLContainsInOrder(t, exportPredicate,
+		"WHERE repo_id = $15",
+		"status NOT IN ('revoked','expired')",
+		"terminal_observed_at IS NULL",
+	)
+	if strings.Contains(exportPredicate, "'failed'") {
+		t.Fatalf("lifecycle no_sessions allows failed export sessions to pass drain: %s", exportPredicate)
+	}
+}
+
 func TestRepoLifecycleFailureCommitSQLReleaseGate(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	_, record := repoLifecycleCommitFixtures(now, operations.OperationRepoArchive, resources.RepoStatusArchived)

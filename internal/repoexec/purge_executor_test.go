@@ -3,6 +3,7 @@ package repoexec
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,41 @@ func TestPurgeExecutorBreakGlassOverrideSuccess(t *testing.T) {
 	}
 	if store.repo.Status != resources.RepoStatusPurged || store.repo.Lifecycle.PreDeleteStatus != resources.RepoStatusArchived {
 		t.Fatalf("repo lifecycle = %#v, want purged via break-glass", store.repo.Lifecycle)
+	}
+}
+
+func TestPurgeExecutorAuditIncludesPurgeApprovalFingerprints(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusArchived, now.Add(time.Hour))
+	purger := &fakeStoragePurger{state: RepoStorageAbsent}
+	executor := newTestPurgeExecutor(t, store, &fakeJVSRunner{}, purger, now)
+	record := repoPurgeLeasedRecord(now, 1)
+	record.InputSummary["product_confirmation_ref_fingerprint"] = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	record.InputSummary["operator_approval_ref_fingerprint"] = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	record.InputSummary["product_confirmation_ref"] = "confirm-secret-raw"
+	record.InputSummary["operator_approval_ref"] = "approval-secret-raw"
+	snapshot := record.InputSummary["lifecycle_policy_snapshot"].(map[string]any)
+	snapshot["retention_override_requested"] = true
+	snapshot["operator_approval_present"] = true
+	snapshot["break_glass_enabled"] = true
+	snapshot["break_glass_authorized"] = true
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if len(store.auditEvents) != 1 {
+		t.Fatalf("audit events = %#v, want one purge audit event", store.auditEvents)
+	}
+	event := store.auditEvents[0]
+	if event.Details["product_confirmation_ref_fingerprint"] != record.InputSummary["product_confirmation_ref_fingerprint"] || event.Details["operator_approval_ref_fingerprint"] != record.InputSummary["operator_approval_ref_fingerprint"] {
+		t.Fatalf("audit details = %#v, want purge approval fingerprints", event.Details)
+	}
+	rendered := strings.ToLower(fmt.Sprint(store.operation.InputSummary) + " " + fmt.Sprint(event))
+	for _, forbidden := range []string{"confirm-secret-raw", "approval-secret-raw"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("purge approval evidence leaked raw ref %q: operation=%#v event=%#v", forbidden, store.operation, event)
+		}
 	}
 }
 

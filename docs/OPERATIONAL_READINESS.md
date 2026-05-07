@@ -13,6 +13,13 @@ GA candidate deployments must explicitly set `AFSCP_READINESS_PROFILE=ga` so
 `/readyz` requires the full GA capability set; passing `/readyz` is still not a
 substitute for final evidence review and human GA approval.
 
+Internal API runtime config must include
+`AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL`. It is AFSCP control-plane
+configuration, not caller/product-specific configuration. The value must be an
+`http`/`https` absolute URL with no userinfo, query, or fragment, and serves as
+the base for WebDAV export `access.url`; deployments missing a valid value fail
+closed for export access URL issuance.
+
 `/readyz` reports storage ready only when static storage capability config is
 available and the runtime store health check passes.
 

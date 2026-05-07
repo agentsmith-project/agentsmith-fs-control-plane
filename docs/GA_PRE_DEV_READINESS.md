@@ -20,7 +20,8 @@ before they are merged as accepted GA behavior.
 ## GA Product Scope
 
 GA proves AFSCP as a product-agnostic shared filesystem control plane with no
-release dependency on first or reference consumers.
+release dependency on first or reference consumers. Reference consumer adoption
+or handoff recommendations are external compatibility material, not GA gates.
 
 GA includes:
 
@@ -116,7 +117,9 @@ behavior must pass the corresponding gate before it is accepted for GA.
 
 GA readiness requires evidence, not just implementation completion.
 
-- All product and contract docs are internally consistent and use the AFSCP generic model.
+- Core product docs, contracts, tests, and fixtures are internally consistent,
+  use the AFSCP generic model, and avoid first/reference consumer names,
+  caller application methods, or caller business logic.
 - The generated OpenAPI matches JSON schemas and the narrative contract.
 - Contract tests cover caller authz, namespace mismatch, path traversal, WebDAV method policy, mount-plan secrecy, idempotency, stable error families, and denied audit events.
 - JVS smoke tests prove external control root init/save/history/restore/clone/doctor behavior with no `.jvs` under payload roots.

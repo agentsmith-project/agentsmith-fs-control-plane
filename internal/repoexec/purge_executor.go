@@ -242,7 +242,7 @@ func (executor *PurgeExecutor) ExecuteOperationRecovery(ctx context.Context, rec
 	operation.VerificationResult = map[string]any{"repo_id": record.RepoID, "lifecycle_status": string(resources.RepoStatusPurged)}
 	operation.Error = nil
 	operation.FinishedAt = &now
-	event, err := executor.lifecycleAuditEvent(operation, now, audit.OutcomeSucceeded, "repo_purge_committed", map[string]any{"repo_id": record.RepoID, "lifecycle_status": string(resources.RepoStatusPurged)})
+	event, err := executor.lifecycleAuditEvent(operation, now, audit.OutcomeSucceeded, "repo_purge_committed", purgeAuditDetails(record, map[string]any{"repo_id": record.RepoID, "lifecycle_status": string(resources.RepoStatusPurged)}))
 	if err != nil {
 		return err
 	}
@@ -335,7 +335,7 @@ func (executor *PurgeExecutor) commitPurgeIntervention(ctx context.Context, reco
 	operation := repoLifecycleFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
 	operation.VerificationResult = details
 	attachJVSErrorDetails(&operation, details)
-	event, err := executor.lifecycleAuditEvent(operation, now, audit.OutcomeFailed, string(record.Type)+"_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
+	event, err := executor.lifecycleAuditEvent(operation, now, audit.OutcomeFailed, string(record.Type)+"_operator_intervention_required", purgeAuditDetails(record, map[string]any{"repo_id": record.RepoID}))
 	if err != nil {
 		return err
 	}
@@ -351,6 +351,29 @@ func (executor *PurgeExecutor) lifecycleAuditEvent(operation operations.Operatio
 		return audit.Event{}, errors.New("repo purge audit event id must be set")
 	}
 	return audit.NewEvent(audit.Event{EventID: eventID, Type: audit.EventTypeRepoPurge, Time: now, CallerService: operation.CallerService, AuthorizedActor: audit.Actor{Type: operation.AuthorizedActor.Type, ID: operation.AuthorizedActor.ID}, CorrelationID: operation.CorrelationID, OperationID: operation.ID, Resource: audit.Resource{Type: "repo", ID: operation.RepoID, NamespaceID: operation.NamespaceID}, Outcome: outcome, Reason: reason, Details: details}), nil
+}
+
+func purgeAuditDetails(record operations.OperationRecord, base map[string]any) map[string]any {
+	details := asStringAnyMap(base)
+	for _, key := range []string{"product_confirmation_ref_fingerprint", "operator_approval_ref_fingerprint"} {
+		value, ok := record.InputSummary[key].(string)
+		if ok && validPurgeRefFingerprint(value) {
+			details[key] = value
+		}
+	}
+	return details
+}
+
+func validPurgeRefFingerprint(value string) bool {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	for _, r := range strings.TrimPrefix(value, "sha256:") {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 type FilesystemStoragePurger struct{}

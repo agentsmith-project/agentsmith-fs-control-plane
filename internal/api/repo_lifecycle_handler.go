@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -275,14 +277,14 @@ func (handler repoLifecycleLeafHandler) loadMetadata(w http.ResponseWriter, r *h
 	repo, err := handler.repoReader.GetRepoInNamespace(r.Context(), namespaceID, repoID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeRepoLifecycleError(w, r, http.StatusNotFound, CodeRepoNotFound, "repo was not found", false)
+			handler.writeMetadataDenied(w, r, route, requestContext, http.StatusNotFound, CodeRepoNotFound, false, "repo was not found", []string{"repo_lifecycle_repo_not_found"}, audit.EventTypePathDenied)
 			return resources.Repo{}, resources.Namespace{}, resources.NamespaceVolumeBinding{}, nil, false
 		}
 		handler.writePolicyDenied(w, r, route, requestContext, http.StatusServiceUnavailable, CodeStorageUnavailable, true, "durable metadata store is unavailable", []string{"repo_metadata_unavailable"})
 		return resources.Repo{}, resources.Namespace{}, resources.NamespaceVolumeBinding{}, nil, false
 	}
 	if repo.NamespaceID != namespaceID {
-		writeRepoLifecycleError(w, r, http.StatusNotFound, CodeRepoNotFound, "repo was not found", false)
+		handler.writeMetadataDenied(w, r, route, requestContext, http.StatusNotFound, CodeRepoNotFound, false, "repo was not found", []string{"repo_lifecycle_namespace_mismatch"}, audit.EventTypeResourceNamespaceMismatchDenied)
 		return resources.Repo{}, resources.Namespace{}, resources.NamespaceVolumeBinding{}, nil, false
 	}
 	namespace, err := handler.namespaceReader.GetNamespace(r.Context(), namespaceID)
@@ -380,6 +382,19 @@ func (handler repoLifecycleLeafHandler) writeAdmissionDenied(w http.ResponseWrit
 
 func (handler repoLifecycleLeafHandler) writePolicyDenied(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, status int, code ErrorCode, retryable bool, message string, labels []string) {
 	writePolicyDeniedErrorWithAudit(w, r, route, requestContext, code, status, retryable, message, labels, handler.sink)
+}
+
+func (handler repoLifecycleLeafHandler) writeMetadataDenied(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, status int, code ErrorCode, retryable bool, message string, labels []string, eventType audit.EventType) {
+	writeRepoLifecycleError(w, r, status, code, message, retryable)
+	emitDeniedAuditEvent(r.Context(), handler.sink, r, deniedAuditEvent{
+		Type:             eventType,
+		Route:            route,
+		Status:           status,
+		Code:             code,
+		Reason:           message,
+		ValidationErrors: labels,
+		RequestContext:   requestContext,
+	})
 }
 
 func (handler repoLifecycleLeafHandler) writeBreakGlassPolicyError(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, err error) {
@@ -569,12 +584,28 @@ func lifecycleInputSummary(body lifecycleRequestDTO) map[string]any {
 }
 
 func purgeRepoInputSummary(body purgeRepoRequestDTO) map[string]any {
-	return map[string]any{
+	summary := map[string]any{
 		"reason_present":               strings.TrimSpace(body.Reason) != "",
 		"product_confirmation_present": strings.TrimSpace(body.ProductConfirmationRef) != "",
 		"retention_override_requested": body.RetentionOverrideRequested,
 		"operator_approval_present":    strings.TrimSpace(body.OperatorApprovalRef) != "",
 	}
+	if fingerprint := purgeRefFingerprint("product_confirmation_ref", body.ProductConfirmationRef); fingerprint != "" {
+		summary["product_confirmation_ref_fingerprint"] = fingerprint
+	}
+	if fingerprint := purgeRefFingerprint("operator_approval_ref", body.OperatorApprovalRef); fingerprint != "" {
+		summary["operator_approval_ref_fingerprint"] = fingerprint
+	}
+	return summary
+}
+
+func purgeRefFingerprint(kind, ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("afscp:v1:repo-purge-ref:" + kind + "\x00" + ref))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func writeRepoLifecycleValidationError(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, code ErrorCode, message string, labels []string, sink audit.Sink) {

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -158,6 +159,46 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 				t.Fatalf("partial shell capability denied message mentions neutral shell: %q", env.Error.Message)
 			}
 		})
+	}
+}
+
+func TestInternalAPIShellCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testing.T) {
+	meta := exportMetaFixture()
+	store := &fakeExportStore{}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:         namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:    meta.bindingReader,
+		NamespaceReader:           meta.namespaceReader,
+		RepoReader:                meta.repoReader,
+		VolumeReader:              meta.volumeReader,
+		RepoFenceReader:           &fakeRepoFenceReader{fences: meta.fences},
+		ExportStore:               store,
+		GenerateOperationID:       func() string { return "op_export_shell" },
+		Now:                       fixedNamespaceNow,
+		WebDAVExportPublicBaseURL: "https://files.example.test/public",
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+	}
+	env := decodeOperationEnvelope(t, rec.Body.Bytes())
+	access, ok := env.Result["access"].(map[string]any)
+	if !ok {
+		t.Fatalf("result.access = %#v, want object", env.Result["access"])
+	}
+	got, ok := access["url"].(string)
+	if !ok {
+		t.Fatalf("access.url = %#v, want string", access["url"])
+	}
+	parsed, err := url.Parse(got)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		t.Fatalf("access.url = %q, want absolute URI: %v", got, err)
+	}
+	if !strings.HasPrefix(got, "https://files.example.test/public/e/") || !strings.HasSuffix(got, "/") {
+		t.Fatalf("access.url = %q, want configured public base URL", got)
 	}
 }
 

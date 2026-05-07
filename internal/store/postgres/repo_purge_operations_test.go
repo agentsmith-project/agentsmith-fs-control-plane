@@ -129,6 +129,21 @@ func TestRepoPurgeSuccessCommitSQLRequiresConfirmedUnmountedMountEvidence(t *tes
 	}
 }
 
+func TestRepoPurgeSuccessCommitSQLRequiresExportTerminalEvidence(t *testing.T) {
+	sql := repoPurgeSuccessCommitWithLeaseSQL()
+	noSessions := sqlBetween(t, sql, "), no_sessions AS (", "), no_earlier_lifecycle AS (")
+	exportPredicate := sqlBetween(t, noSessions, "SELECT 1 FROM export_sessions", ") AND NOT EXISTS (SELECT 1 FROM workload_mount_bindings")
+
+	assertSQLContainsInOrder(t, exportPredicate,
+		"WHERE repo_id = $15",
+		"status NOT IN ('revoked','expired')",
+		"terminal_observed_at IS NULL",
+	)
+	if strings.Contains(exportPredicate, "'failed'") {
+		t.Fatalf("purge no_sessions allows failed export sessions to pass drain: %s", exportPredicate)
+	}
+}
+
 func TestRepoPurgeValidatorsRejectNonPurgeTypes(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	repo, record := repoLifecycleCommitFixtures(now, operations.OperationRepoArchive, resources.RepoStatusArchived)

@@ -133,6 +133,40 @@ func TestRepoLifecycleHandlerCreatesDeleteAndPurgeOperations(t *testing.T) {
 	}
 }
 
+func TestRepoLifecycleHandlerPurgeApprovalEvidenceFingerprints(t *testing.T) {
+	first := purgeOperationSummaryForTest(t, `{"reason":"raw secret reason","product_confirmation_ref":"confirm-secret-a","retention_override_requested":true,"operator_approval_ref":"approval-secret-a"}`)
+	firstAgain := purgeOperationSummaryForTest(t, `{"reason":"different reason","product_confirmation_ref":"confirm-secret-a","retention_override_requested":true,"operator_approval_ref":"approval-secret-a"}`)
+	second := purgeOperationSummaryForTest(t, `{"reason":"raw secret reason","product_confirmation_ref":"confirm-secret-b","retention_override_requested":true,"operator_approval_ref":"approval-secret-b"}`)
+
+	firstConfirmation := requireSummaryString(t, first, "product_confirmation_ref_fingerprint")
+	firstApproval := requireSummaryString(t, first, "operator_approval_ref_fingerprint")
+	firstAgainConfirmation := requireSummaryString(t, firstAgain, "product_confirmation_ref_fingerprint")
+	firstAgainApproval := requireSummaryString(t, firstAgain, "operator_approval_ref_fingerprint")
+	secondConfirmation := requireSummaryString(t, second, "product_confirmation_ref_fingerprint")
+	secondApproval := requireSummaryString(t, second, "operator_approval_ref_fingerprint")
+	for _, fingerprint := range []string{firstConfirmation, firstApproval, secondConfirmation, secondApproval} {
+		if !strings.HasPrefix(fingerprint, "sha256:") || len(fingerprint) != len("sha256:")+64 {
+			t.Fatalf("fingerprint %q, want sha256 digest", fingerprint)
+		}
+	}
+	if firstConfirmation != firstAgainConfirmation || firstApproval != firstAgainApproval {
+		t.Fatalf("fingerprints changed for the same refs: %q/%q vs %q/%q", firstConfirmation, firstApproval, firstAgainConfirmation, firstAgainApproval)
+	}
+	if firstConfirmation == secondConfirmation {
+		t.Fatalf("confirmation fingerprints did not distinguish different refs: %q", firstConfirmation)
+	}
+	if firstApproval == secondApproval {
+		t.Fatalf("approval fingerprints did not distinguish different refs: %q", firstApproval)
+	}
+
+	rendered := renderLifecycleArgs(t, first)
+	for _, forbidden := range []string{"raw secret reason", "confirm-secret-a", "approval-secret-a"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("purge summary leaked %q: %s", forbidden, rendered)
+		}
+	}
+}
+
 func TestRepoLifecycleHandlerReusesExistingOperationBeforeMetadata(t *testing.T) {
 	canonical := repoLifecycleCanonicalRequest{RepoID: "repo_123", Body: lifecycleRequestDTO{}}
 	requestHash, err := operations.HashRequest(canonical)
@@ -367,10 +401,10 @@ func TestRepoLifecycleHandlerMapsNotFoundAndStoreOutage(t *testing.T) {
 		retry    bool
 		audit    bool
 	}{
-		{name: "repo not found", edit: func(meta repoLifecycleMeta) { meta.repoReader.getErr = sql.ErrNoRows }, wantHTTP: http.StatusNotFound, wantCode: CodeRepoNotFound},
+		{name: "repo not found", edit: func(meta repoLifecycleMeta) { meta.repoReader.getErr = sql.ErrNoRows }, wantHTTP: http.StatusNotFound, wantCode: CodeRepoNotFound, audit: true},
 		{name: "repo namespace mismatch", edit: func(meta repoLifecycleMeta) {
 			meta.repoReader.repoInNamespaceOverride = repoResourceFixture("ns_other", "repo_123", resources.RepoStatusActive)
-		}, wantHTTP: http.StatusNotFound, wantCode: CodeRepoNotFound},
+		}, wantHTTP: http.StatusNotFound, wantCode: CodeRepoNotFound, audit: true},
 		{name: "repo store outage", edit: func(meta repoLifecycleMeta) { meta.repoReader.getErr = errors.New("postgres password=secret failed") }, wantHTTP: http.StatusServiceUnavailable, wantCode: CodeStorageUnavailable, retry: true, audit: true},
 		{name: "fence store outage", edit: func(meta repoLifecycleMeta) { meta.fenceReader.err = errors.New("postgres raw_path=/srv failed") }, wantHTTP: http.StatusServiceUnavailable, wantCode: CodeStorageUnavailable, retry: true, audit: true},
 	}
@@ -398,6 +432,13 @@ func TestRepoLifecycleHandlerMapsNotFoundAndStoreOutage(t *testing.T) {
 			if tt.audit {
 				if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
 					t.Fatalf("audit events = %#v, want denied audit", sink.events)
+				}
+				if sink.events[0].OperationID != "" || sink.events[0].Resource.NamespaceID != "ns_123" || sink.events[0].Details["error_code"] != string(tt.wantCode) {
+					t.Fatalf("audit event = %#v, want internal denial audit without mutation operation", sink.events[0])
+				}
+				renderedAudit := auditEventString(t, sink.events[0])
+				if strings.Contains(renderedAudit, "postgres") || strings.Contains(renderedAudit, "password=secret") || strings.Contains(renderedAudit, "/srv") {
+					t.Fatalf("audit leaked raw storage detail: %s", renderedAudit)
 				}
 			}
 			if store.calls != 0 {
@@ -679,6 +720,34 @@ func repoLifecycleHandlerForTestWithPolicies(store OperationIntakeStore, meta re
 		Now:               fixedNamespaceNow,
 		AuditSink:         auditSink,
 	})
+}
+
+func purgeOperationSummaryForTest(t *testing.T, body string) map[string]any {
+	t.Helper()
+	store := &fakeOperationIntakeStore{}
+	meta := repoLifecycleMetaFixture(resources.RepoStatusTombstoned)
+	retention := fixedNamespaceNow().Add(time.Hour)
+	meta.repo.Lifecycle.RetentionExpiresAt = &retention
+	meta.repoReader.repos = []resources.Repo{meta.repo}
+	meta.binding.LifecyclePolicy["break_glass_purge_enabled"] = true
+	handler := repoLifecycleHandlerForTestWithPolicy(store, meta, repoLifecycleBreakGlassAllowedPolicy(), nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoLifecycleRequest("/internal/v1/repos/repo_123:purge", "ns_123", body))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+	}
+	return store.spec.InputSummary
+}
+
+func requireSummaryString(t *testing.T, summary map[string]any, key string) string {
+	t.Helper()
+	value, ok := summary[key].(string)
+	if !ok || strings.TrimSpace(value) == "" {
+		t.Fatalf("summary[%s] = %#v, want non-empty string in %#v", key, summary[key], summary)
+	}
+	return value
 }
 
 func repoLifecycleBreakGlassAllowedCallers() []auth.AllowedCaller {

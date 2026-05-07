@@ -88,6 +88,13 @@ The script runs `git diff --check`, `go test -count=1 ./...`, and the internal
 API contract verifier. Passing it is local implementation baseline evidence, not
 final production GA acceptance.
 
+Internal API deployments must set
+`AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL`. This is an AFSCP control-plane
+runtime config value, not caller/product-specific config. It must be an
+`http`/`https` absolute URL with no userinfo, query, or fragment, and is used as
+the WebDAV export `access.url` base. Missing or invalid configuration fails
+closed for export access URL issuance.
+
 ## Current Status
 
 Completed:

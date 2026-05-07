@@ -58,6 +58,7 @@ type InternalAPIShellConfig struct {
 	OperationIntakeStore           OperationIntakeStore
 	GenerateOperationID            OperationIDGenerator
 	Now                            func() time.Time
+	WebDAVExportPublicBaseURL      string
 	Readiness                      ReadinessResponse
 	ReadinessProvider              func(context.Context) ReadinessResponse
 	WorkloadMountAdmissionDisabled bool
@@ -426,9 +427,10 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
 			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
 		},
-		OperationID: config.GenerateOperationID,
-		Now:         config.Now,
-		AuditSink:   config.AuditSink,
+		OperationID:   config.GenerateOperationID,
+		Now:           config.Now,
+		PublicBaseURL: config.WebDAVExportPublicBaseURL,
+		AuditSink:     config.AuditSink,
 	})
 	createExportHandler := requestLogHandler(exportHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/exports", "createExport")
 	getExportHandler := requestLogHandler(exportHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/exports/{exportId}", "getExport")

@@ -10,6 +10,10 @@ decisions visible before implementation depends on them.
 
 - Build directly toward the GA contract in `docs/GA_PRE_DEV_READINESS.md`.
 - Keep AFSCP product-agnostic; caller-specific behavior belongs in integration docs or sibling repos.
+- Keep core docs, contracts, tests, and fixtures generic; first/reference
+  consumer names, caller application methods, and caller business logic belong
+  only in external adoption or handoff references and must not become GA gate
+  criteria.
 - Prefer small, reviewable changes, but do not define staged product semantics unless a contract requires them.
 - Treat security boundaries, idempotency, audit, and recovery as product requirements.
 - Do not implement endpoint handlers or storage mutations from narrative drafts when schemas and OpenAPI are missing.
@@ -116,8 +120,9 @@ Every implementation PR that touches a GA boundary must state:
 - whether generated schemas/OpenAPI changed
 - whether docs need to change
 
-PRs must not introduce caller-specific product model names into AFSCP core
-packages.
+PRs must not introduce caller-specific product model names, application method
+names, workflow names, fixtures, or business logic into AFSCP core packages,
+docs, contracts, or tests.
 
 ## Risk Governance
 

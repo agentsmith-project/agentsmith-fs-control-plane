@@ -2,8 +2,10 @@ package exportgateway
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -281,6 +283,42 @@ func TestSuccessfulGETRecordsRuntimeObservation(t *testing.T) {
 	})
 }
 
+func TestEndRuntimeObservationUsesDetachedContextAfterRequestCancel(t *testing.T) {
+	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+	env.writePayload(t, "hello.txt", "hello")
+	req := httptest.NewRequest(http.MethodGet, "http://files.example.test/e/"+testExportID+"/hello.txt", nil)
+	req.SetBasicAuth(testExportID, testPassword)
+	reqCtx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	req = req.WithContext(reqCtx)
+	env.store.failCanceledRuntimeContext = true
+	env.store.runtimeHooks = []func(context.Context, exportaccess.RuntimeObservation){
+		func(context.Context, exportaccess.RuntimeObservation) {
+			cancel()
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+
+	requireObservation(t, env.store.runtimeApplied, 0, observationWant{
+		requestDelta: 1,
+		writeDelta:   0,
+		success:      false,
+	})
+	requireObservation(t, env.store.runtimeApplied, 1, observationWant{
+		requestDelta: -1,
+		writeDelta:   0,
+		success:      true,
+	})
+	if len(env.store.runtimeContextErrsAtCall) < 2 {
+		t.Fatalf("runtime context err checks = %d, want at least 2", len(env.store.runtimeContextErrsAtCall))
+	}
+	if err := env.store.runtimeContextErrsAtCall[1]; err != nil {
+		t.Fatalf("end observation context err at call = %v, want detached active context", err)
+	}
+}
+
 func TestReadWritePUTRecordsActiveWriteObservation(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
 	if err := os.MkdirAll(filepath.Join(env.payloadRoot, "docs"), 0o755); err != nil {
@@ -356,6 +394,43 @@ func TestStartRuntimeObservationFailureFailsClosedBeforeBackend(t *testing.T) {
 		writeDelta:   -1,
 		success:      true,
 	})
+}
+
+func TestStartRuntimeObservationAdmissionDeniedFailsClosedBeforeBackend(t *testing.T) {
+	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
+	if err := os.MkdirAll(filepath.Join(env.payloadRoot, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	storeDetail := "export_sessions runtime admission returned no rows"
+	env.store.runtimeErrs = []error{fmt.Errorf("%s: %w", storeDetail, sql.ErrNoRows)}
+
+	rec := env.request(http.MethodPut, "/e/"+testExportID+"/docs/blocked.txt", strings.NewReader("blocked"), "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body %q", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(env.payloadRoot, "docs", "blocked.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backend file stat err = %v, want not exist", err)
+	}
+	for _, forbidden := range []string{storeDetail, "sql", "no rows", "export_sessions"} {
+		if strings.Contains(rec.Body.String(), forbidden) {
+			t.Fatalf("response leaked store detail %q: %q", forbidden, rec.Body.String())
+		}
+	}
+	requireObservation(t, env.store.observations, 0, observationWant{
+		requestDelta: 1,
+		writeDelta:   1,
+		success:      false,
+	})
+	event := requireAuditEvent(t, env, 0, audit.EventTypeAuthzDenied, http.StatusForbidden, "authz_denied")
+	if event.Details["deny_class"] != denyClassAuthzDenied {
+		t.Fatalf("deny_class = %#v, want %s", event.Details["deny_class"], denyClassAuthzDenied)
+	}
+	rendered := renderAuditEvent(t, event)
+	for _, forbidden := range []string{storeDetail, "sql", "no rows", "export_sessions"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("audit event leaked store detail %q in %s", forbidden, rendered)
+		}
+	}
 }
 
 func TestEndRuntimeObservationFailureDoesNotChangeBackendResponse(t *testing.T) {
@@ -694,15 +769,19 @@ func (env *gatewayTestEnv) readPayload(t *testing.T, rel string) string {
 }
 
 type fakeGatewayStore struct {
-	credential         exportaccess.GatewayCredential
-	getErr             error
-	recordErr          error
-	runtimeErrs        []error
-	runtimeCallErrs    []error
-	observations       []exportaccess.RuntimeObservation
-	recordCalls        int
-	lastRecordExportID string
-	lastRecordAt       time.Time
+	credential                 exportaccess.GatewayCredential
+	getErr                     error
+	recordErr                  error
+	runtimeErrs                []error
+	runtimeCallErrs            []error
+	runtimeContextErrsAtCall   []error
+	runtimeHooks               []func(context.Context, exportaccess.RuntimeObservation)
+	runtimeApplied             []exportaccess.RuntimeObservation
+	failCanceledRuntimeContext bool
+	observations               []exportaccess.RuntimeObservation
+	recordCalls                int
+	lastRecordExportID         string
+	lastRecordAt               time.Time
 }
 
 type fakeAuditSink struct {
@@ -734,9 +813,13 @@ func (store *fakeGatewayStore) RecordExportAccess(ctx context.Context, exportID 
 
 func (store *fakeGatewayStore) RecordExportRuntimeObservation(ctx context.Context, observation exportaccess.RuntimeObservation) (exportaccess.Session, error) {
 	store.observations = append(store.observations, observation)
+	store.runtimeContextErrsAtCall = append(store.runtimeContextErrsAtCall, ctx.Err())
 	var err error
 	if call := len(store.observations) - 1; call < len(store.runtimeErrs) {
 		err = store.runtimeErrs[call]
+	}
+	if err == nil && store.failCanceledRuntimeContext {
+		err = ctx.Err()
 	}
 	store.runtimeCallErrs = append(store.runtimeCallErrs, err)
 	if err != nil {
@@ -757,6 +840,10 @@ func (store *fakeGatewayStore) RecordExportRuntimeObservation(ctx context.Contex
 		session.LastAccessedAt = cloneTimePtr(observation.SuccessfulRequestAccessedAt)
 	}
 	store.credential.Session = session
+	store.runtimeApplied = append(store.runtimeApplied, observation)
+	if call := len(store.observations) - 1; call < len(store.runtimeHooks) && store.runtimeHooks[call] != nil {
+		store.runtimeHooks[call](ctx, observation)
+	}
 	return session, nil
 }
 

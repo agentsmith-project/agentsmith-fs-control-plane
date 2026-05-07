@@ -92,6 +92,7 @@ type APIConfig struct {
 	Mode                              string
 	PostgresDSN                       string
 	ServiceTokens                     string
+	WebDAVExportPublicBaseURL         string
 	DeploymentGlobalAllowedCallers    string
 	DeploymentNamespaceAllowedCallers string
 	VolumeRoots                       map[string]string
@@ -473,6 +474,14 @@ func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
 		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_DATABASE_URL", "")
 	}
 	cfg.ServiceTokens = valueOrDefault(source, "AFSCP_API_SERVICE_TOKENS", "")
+	cfg.WebDAVExportPublicBaseURL = valueOrDefault(source, "AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL", cfg.WebDAVExportPublicBaseURL)
+	if strings.TrimSpace(cfg.WebDAVExportPublicBaseURL) != "" {
+		normalized, err := NormalizeWebDAVExportPublicBaseURL(cfg.WebDAVExportPublicBaseURL)
+		if err != nil {
+			return APIConfig{}, err
+		}
+		cfg.WebDAVExportPublicBaseURL = normalized
+	}
 	cfg.DeploymentGlobalAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS", "")
 	cfg.DeploymentNamespaceAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS", "")
 	if cfg.Mode != "internal" {
@@ -500,6 +509,29 @@ func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
 	}
 	cfg.SavePointHistory = savePointHistory
 	return cfg, nil
+}
+
+func NormalizeWebDAVExportPublicBaseURL(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL is required when AFSCP_API_MODE is internal")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", fmt.Errorf("AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL must be an http or https URL without userinfo, query, or fragment")
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", fmt.Errorf("AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL must be an http or https URL without userinfo, query, or fragment")
+	}
+	if parsed.Hostname() == "" {
+		return "", fmt.Errorf("AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL must be an http or https URL without userinfo, query, or fragment")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", fmt.Errorf("AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL must be an http or https URL without userinfo, query, or fragment")
+	}
+	parsed.Scheme = scheme
+	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 func loadJVSConfigWhenCapabilityAvailable(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {

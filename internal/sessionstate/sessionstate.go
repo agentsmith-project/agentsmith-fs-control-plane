@@ -261,6 +261,9 @@ func (err sessionError) Error() string {
 
 func exportBlocker(kind gateKind, session ExportSession, now time.Time) blockerClass {
 	if exportTerminal(session.Status) {
+		if kind == gateLifecycleDrain && !exportHasLifecycleTerminalEvidence(session) {
+			return blockerStale
+		}
 		return blockerNone
 	}
 	if kind == gateRestoreRunWriter && session.Mode != AccessModeReadWrite {
@@ -301,6 +304,15 @@ func exportWriterDrained(session ExportSession, now time.Time) bool {
 	return false
 }
 
+func exportHasLifecycleTerminalEvidence(session ExportSession) bool {
+	switch session.Status {
+	case ExportStatusRevoked, ExportStatusExpired:
+		return nonZeroTimePtr(session.TerminalObservedAt)
+	default:
+		return false
+	}
+}
+
 func mountBlocker(kind gateKind, mount WorkloadMountBinding, now time.Time) blockerClass {
 	if kind == gateRestoreRunWriter && mount.ReadOnly {
 		return blockerNone
@@ -320,7 +332,15 @@ func mountBlocker(kind gateKind, mount WorkloadMountBinding, now time.Time) bloc
 func mountHasTerminalEvidence(kind gateKind, mount WorkloadMountBinding) bool {
 	switch kind {
 	case gateRestoreRunWriter:
-		return nonZeroTimePtr(mount.ConfirmedUnmountedAt) || nonZeroTimePtr(mount.UnableToWriteAt)
+		if nonZeroTimePtr(mount.ConfirmedUnmountedAt) {
+			return true
+		}
+		switch mount.Status {
+		case MountStatusReleased, MountStatusRevoked:
+			return nonZeroTimePtr(mount.UnableToWriteAt)
+		default:
+			return false
+		}
 	case gateLifecycleDrain:
 		return nonZeroTimePtr(mount.ConfirmedUnmountedAt)
 	default:
