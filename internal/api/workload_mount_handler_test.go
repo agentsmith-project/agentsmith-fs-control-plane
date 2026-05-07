@@ -148,6 +148,28 @@ func TestCreateWorkloadMountBindingRejectsWhitespacePaddedMountPath(t *testing.T
 	}
 }
 
+func TestCreateWorkloadMountBindingRejectsUnsafeMountPathBeforeIntakeAndAudits(t *testing.T) {
+	intake := &fakeOperationIntakeStore{}
+	sink := &fakeAuditSink{}
+	config := workloadMountHandlerConfig(intake, namespaceBindingAllowedPolicy(auth.RoleMountAdmin), func(config *WorkloadMountHandlerConfig) {
+		config.AuditSink = sink
+	})
+	rec := httptest.NewRecorder()
+
+	WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", `{"mount_path":"/proc","read_only":true,"lease_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s, want 400", rec.Code, rec.Body.String())
+	}
+	if intake.calls != 0 {
+		t.Fatalf("intake calls = %d, want rejected before intake", intake.calls)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("audit events = %#v, want one denied validation audit", sink.events)
+	}
+	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+}
+
 func TestWorkloadMountGetAndPlanRedactionBoundary(t *testing.T) {
 	handler := workloadMountHandlerForTest(&fakeOperationIntakeStore{}, namespaceBindingAllowedPolicy(auth.RoleMountAdmin))
 
