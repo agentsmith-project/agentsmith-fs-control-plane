@@ -128,7 +128,10 @@ Client/desktop connector owns:
 ## First Engineering Checkpoints
 
 1. Bootstrap Go service skeleton from `docs/DEVELOPER_HANDOFF.md`.
-2. Do not implement storage mutation handlers until the relevant gate in `docs/READINESS_EVIDENCE.md` is closed.
+2. Continue or modify storage mutation handlers only through accepted contracts,
+   gate evidence, owner acceptance where required, and focused tests; baseline
+   implementation does not by itself close the relevant gate in
+   `docs/READINESS_EVIDENCE.md`.
 3. Treat G-005 as closed by
    `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`; repo/JVS/storage handlers
    still require the other accepted contracts, fences, session drain, operation

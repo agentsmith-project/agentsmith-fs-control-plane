@@ -1,8 +1,8 @@
 # Contributing
 
-This repository is currently a GA pre-development handoff for the AFSCP storage control plane implementation.
+This repository is currently a GA implementation baseline for the AFSCP storage control plane implementation.
 
-Before starting implementation:
+Before continuing implementation:
 
 1. Read [docs/HANDOFF.md](docs/HANDOFF.md).
 2. Read [docs/GA_PRE_DEV_READINESS.md](docs/GA_PRE_DEV_READINESS.md).

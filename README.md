@@ -35,9 +35,9 @@ AgentSmith is expected to be the first consumer, but AFSCP itself should not kno
 ## Repository Contents
 
 - [docs/HANDOFF.md](docs/HANDOFF.md): start here.
-- [docs/GA_PRE_DEV_READINESS.md](docs/GA_PRE_DEV_READINESS.md): active GA pre-dev source of truth.
+- [docs/GA_PRE_DEV_READINESS.md](docs/GA_PRE_DEV_READINESS.md): GA implementation baseline readiness source of truth.
 - [docs/DEVELOPMENT_GOVERNANCE.md](docs/DEVELOPMENT_GOVERNANCE.md): review, contract, ADR, and risk governance.
-- [docs/RISK_REGISTER.md](docs/RISK_REGISTER.md): live pre-dev risk register.
+- [docs/RISK_REGISTER.md](docs/RISK_REGISTER.md): live GA readiness risk register.
 - [docs/READINESS_EVIDENCE.md](docs/READINESS_EVIDENCE.md): GA gate evidence ledger.
 - [docs/PRE_DEV_COMPLETION.md](docs/PRE_DEV_COMPLETION.md): pre-dev artifact completion package and current gate status.
 - [docs/DEVELOPER_HANDOFF.md](docs/DEVELOPER_HANDOFF.md): coding team entrypoint.

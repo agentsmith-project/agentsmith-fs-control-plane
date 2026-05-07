@@ -1,15 +1,19 @@
 # GA Pre-Dev Readiness
 
-Status: active pre-development source of truth.
+Status: GA implementation baseline source of truth.
 
 This document supersedes stage-oriented planning language in active handoff
 documents. Historical review and research documents may still say P0, P1, or
 MVP; read those terms as historical scope notes unless this document says
 otherwise.
 
-AFSCP is being prepared for one GA target, not a staged product rollout. Work
-may start on a neutral service skeleton, but endpoint handlers and storage
-mutation logic must wait until the GA pre-dev admission items below are closed.
+AFSCP is being prepared for one GA target, not a staged product rollout. The
+pre-development handoff is complete and the repository is now in the GA
+implementation baseline: service skeleton, handlers, workers, generated
+contracts, and focused package tests may exist and continue to evolve. Final GA
+still requires evidence and owner acceptance for the criteria below. New
+capabilities or breaking behavior changes must pass the corresponding gates
+before they are merged as accepted GA behavior.
 
 ## GA Product Scope
 
@@ -81,11 +85,13 @@ AFSCP audit records must always distinguish the authenticated
 - Repo delete is not a raw filesystem unlink. It is an auditable lifecycle operation that blocks new sessions, drains or revokes existing exports and mounts, tombstones retained data, and purges only after the accepted retention or purge policy permits it.
 - Break-glass direct mount is disabled by default and is not part of ordinary GA access.
 
-## Pre-Dev Admission Items
+## GA Implementation Baseline Gates
 
-These items must be closed before endpoint handlers or storage mutations are
-implemented. They are not delivery phases; they are the readiness contract for
-building directly toward GA.
+These items are the readiness contract for building directly toward GA. They
+must not be treated as delivery phases or as automatically closed by the
+presence of baseline code. Existing handlers and workers must stay aligned with
+accepted contracts and evidence; new or breaking endpoint and storage mutation
+behavior must pass the corresponding gate before it is accepted for GA.
 
 | Area | Required Closure |
 | --- | --- |
@@ -122,8 +128,10 @@ GA readiness requires evidence, not just implementation completion.
 
 ## Implementation Guardrail
 
-Until the pre-dev admission items are closed, implementation should remain
-limited to neutral service skeleton work: package layout, health endpoint,
-config loading, logging, empty route registration, test harness, and generated
-contract plumbing. Storage handlers must be driven by frozen contracts, not by
-ad hoc payloads.
+The implementation baseline may include package layout, health endpoint, config
+loading, logging, route registration, generated contract plumbing, endpoint
+handlers, workers, and focused tests. This does not close every GA gate. Final
+GA remains evidence-driven: existing and future storage handlers must be driven
+by accepted schemas, OpenAPI, auth, JVS, operation, audit, export, mount, and
+writer-session contracts, with owner acceptance where required, not by ad hoc
+payloads or narrative-only assumptions.
