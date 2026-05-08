@@ -211,6 +211,68 @@ func TestReadinessHandlerUsesInjectedRequiredCapabilities(t *testing.T) {
 	}
 }
 
+func TestReadinessHandlerSerializesSeparateRequirementSemantics(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	readiness := ReadinessResponse{
+		Status:               "not_ready",
+		Ready:                false,
+		RequiredCapabilities: []string{CapabilityStorage},
+		Capabilities: map[string]CapabilityGate{
+			CapabilityStorage:      {Enabled: true, Ready: true},
+			CapabilityJVS:          {Enabled: true, Ready: true},
+			CapabilityWebDAVExport: {Enabled: true, Ready: false, Gated: true, Reason: "webdav_not_ready"},
+			CapabilityWorkloadMount: {
+				Enabled: false,
+				Ready:   false,
+				Gated:   true,
+				Reason:  "mount_not_configured",
+			},
+		},
+	}
+
+	ReadinessHandler(readiness).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Capabilities map[string]map[string]any `json:"capabilities"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness response did not decode: %v", err)
+	}
+	if got := readinessBoolField(t, body.Capabilities[CapabilityStorage], "required_for_service_ready"); !got {
+		t.Fatalf("storage required_for_service_ready = false, want true")
+	}
+	if got := readinessBoolField(t, body.Capabilities[CapabilityStorage], "optional_gated"); got {
+		t.Fatalf("storage optional_gated = true, want false")
+	}
+	if got := readinessBoolField(t, body.Capabilities[CapabilityJVS], "required_for_service_ready"); got {
+		t.Fatalf("jvs required_for_service_ready = true, want false")
+	}
+	if got := readinessBoolField(t, body.Capabilities[CapabilityWebDAVExport], "optional_gated"); !got {
+		t.Fatalf("webdav optional_gated = false, want true for non-service-required gated capability")
+	}
+	if got := readinessBoolField(t, body.Capabilities[CapabilityWorkloadMount], "required_for_default_ga"); got {
+		t.Fatalf("workload mount required_for_default_ga = true, want false by default")
+	}
+}
+
+func readinessBoolField(t *testing.T, fields map[string]any, name string) bool {
+	t.Helper()
+	raw, ok := fields[name]
+	if !ok {
+		t.Fatalf("capability fields %#v missing %q", fields, name)
+	}
+	got, ok := raw.(bool)
+	if !ok {
+		t.Fatalf("capability field %q = %#v, want bool", name, raw)
+	}
+	return got
+}
+
 func readyCapabilities() map[string]CapabilityGate {
 	ready := CapabilityGate{Enabled: true, Ready: true, Gated: false}
 	return map[string]CapabilityGate{

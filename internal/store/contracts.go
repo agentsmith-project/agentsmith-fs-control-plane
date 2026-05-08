@@ -53,9 +53,12 @@ type OperationLeaseStore interface {
 }
 
 // OperationWorkerCommitStore atomically commits a lease-fenced operation update and
-// its audit outbox event. The audit event OperationID must match the operation
-// being updated. Implementations must commit both the operation update and audit
-// outbox append in the same durable boundary, never leaving one without the other.
+// its audit outbox event. Generic operation recovery interventions that move an
+// unsupported operation to operator_intervention_required must use this boundary,
+// not OperationLeaseStore.UpdateOperationWithLease. The audit event OperationID
+// must match the operation being updated. Implementations must commit both the
+// operation update and audit outbox append in the same durable boundary, never
+// leaving one without the other.
 type OperationWorkerCommitStore interface {
 	CommitOperationWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
 }

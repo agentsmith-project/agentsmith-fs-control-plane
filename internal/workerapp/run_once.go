@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 )
 
 type OperationRecoveryStore interface {
+	store.OperationWorkerCommitStore
 	store.VolumeEnsureOperationRecoveryStore
 	store.NamespaceUpsertOperationRecoveryStore
 	store.NamespaceDisableOperationRecoveryStore
@@ -597,11 +599,13 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
 			Reader:        scopedStore,
 			LeaseStore:    scopedStore,
+			CommitStore:   scopedStore,
 			Executor:      multiExecutor{executors: executors},
 			Owner:         opConfig.Owner,
 			LeaseDuration: opConfig.LeaseDuration,
 			Limit:         opConfig.Limit,
 			Clock:         now,
+			AuditEventID:  func() string { return eventID() },
 		})
 		workerConfig.OperationRecovery = operationRecovery
 	}
@@ -804,69 +808,51 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 	records = append(records, namespaceDisableRecords...)
 	records = append(records, bindingRecords...)
 	records = append(records, mountRecords...)
-	if scoped.repoCreateEnabled {
-		repoRecords, err := scoped.store.ListRepoCreateOperationsForRecovery(ctx, now, limit)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, repoRecords...)
+	repoRecords, err := scoped.store.ListRepoCreateOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
 	}
-	if scoped.repoLifecycleEnabled {
-		lifecycleRecords, err := scoped.store.ListRepoLifecycleOperationsForRecovery(ctx, now, limit)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, lifecycleRecords...)
+	records = append(records, repoRecords...)
+	lifecycleRecords, err := scoped.store.ListRepoLifecycleOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
 	}
-	if scoped.repoPurgeEnabled {
-		purgeRecords, err := scoped.store.ListRepoPurgeOperationsForRecovery(ctx, now, limit)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, purgeRecords...)
+	records = append(records, lifecycleRecords...)
+	purgeRecords, err := scoped.store.ListRepoPurgeOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
 	}
-	if scoped.savePointEnabled {
-		savePointRecords, err := scoped.store.ListSavePointCreateOperationsForRecovery(ctx, now, limit)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, savePointRecords...)
+	records = append(records, purgeRecords...)
+	savePointRecords, err := scoped.store.ListSavePointCreateOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
 	}
-	if scoped.templateCreateEnabled {
-		templateCreateRecords, err := scoped.store.ListTemplateCreateOperationsForRecovery(ctx, now, limit)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, templateCreateRecords...)
+	records = append(records, savePointRecords...)
+	templateCreateRecords, err := scoped.store.ListTemplateCreateOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
 	}
-	if scoped.templateCloneEnabled {
-		templateCloneRecords, err := scoped.store.ListTemplateCloneOperationsForRecovery(ctx, now, limit)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, templateCloneRecords...)
+	records = append(records, templateCreateRecords...)
+	templateCloneRecords, err := scoped.store.ListTemplateCloneOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
 	}
-	if scoped.restorePreviewEnabled {
-		restorePreviewRecords, err := scoped.store.ListRestorePreviewOperationsForRecovery(ctx, now, limit)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, restorePreviewRecords...)
+	records = append(records, templateCloneRecords...)
+	restorePreviewRecords, err := scoped.store.ListRestorePreviewOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
 	}
-	if scoped.restorePreviewDiscardEnabled {
-		restorePreviewDiscardRecords, err := scoped.store.ListRestorePreviewDiscardOperationsForRecovery(ctx, now, limit)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, restorePreviewDiscardRecords...)
+	records = append(records, restorePreviewRecords...)
+	restorePreviewDiscardRecords, err := scoped.store.ListRestorePreviewDiscardOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
 	}
-	if scoped.restoreRunEnabled {
-		restoreRunRecords, err := scoped.store.ListRestoreRunOperationsForRecovery(ctx, now, limit)
-		if err != nil {
-			return nil, err
-		}
-		records = append(records, restoreRunRecords...)
+	records = append(records, restorePreviewDiscardRecords...)
+	restoreRunRecords, err := scoped.store.ListRestoreRunOperationsForRecovery(ctx, now, limit)
+	if err != nil {
+		return nil, err
 	}
+	records = append(records, restoreRunRecords...)
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
 			return records[i].ID < records[j].ID
@@ -900,58 +886,39 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
 		return record, err
 	}
-	if scoped.repoCreateEnabled {
-		record, err = scoped.store.AcquireRepoCreateOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoLifecycleEnabled && !scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.templateCreateEnabled && !scoped.templateCloneEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
-			return record, err
-		}
+	record, err = scoped.store.AcquireRepoCreateOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
 	}
-	if scoped.repoLifecycleEnabled {
-		record, err = scoped.store.AcquireRepoLifecycleOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.repoPurgeEnabled && !scoped.savePointEnabled && !scoped.templateCreateEnabled && !scoped.templateCloneEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
-			return record, err
-		}
+	record, err = scoped.store.AcquireRepoLifecycleOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
 	}
-	if scoped.repoPurgeEnabled {
-		record, err = scoped.store.AcquireRepoPurgeOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.savePointEnabled && !scoped.templateCreateEnabled && !scoped.templateCloneEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
-			return record, err
-		}
+	record, err = scoped.store.AcquireRepoPurgeOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
 	}
-	if scoped.savePointEnabled {
-		record, err = scoped.store.AcquireSavePointCreateOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.templateCreateEnabled && !scoped.templateCloneEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
-			return record, err
-		}
+	record, err = scoped.store.AcquireSavePointCreateOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
 	}
-	if scoped.templateCreateEnabled {
-		record, err = scoped.store.AcquireTemplateCreateOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.templateCloneEnabled && !scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
-			return record, err
-		}
+	record, err = scoped.store.AcquireTemplateCreateOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
 	}
-	if scoped.templateCloneEnabled {
-		record, err = scoped.store.AcquireTemplateCloneOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.restorePreviewEnabled && !scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
-			return record, err
-		}
+	record, err = scoped.store.AcquireTemplateCloneOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
 	}
-	if scoped.restorePreviewEnabled {
-		record, err = scoped.store.AcquireRestorePreviewOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || (!scoped.restorePreviewDiscardEnabled && !scoped.restoreRunEnabled) {
-			return record, err
-		}
+	record, err = scoped.store.AcquireRestorePreviewOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
 	}
-	if scoped.restorePreviewDiscardEnabled {
-		record, err = scoped.store.AcquireRestorePreviewDiscardOperationLease(ctx, operationID, request)
-		if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) || !scoped.restoreRunEnabled {
-			return record, err
-		}
+	record, err = scoped.store.AcquireRestorePreviewDiscardOperationLease(ctx, operationID, request)
+	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
+		return record, err
 	}
-	if scoped.restoreRunEnabled {
-		return scoped.store.AcquireRestoreRunOperationLease(ctx, operationID, request)
-	}
-	return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	return scoped.store.AcquireRestoreRunOperationLease(ctx, operationID, request)
 }
 
 func (scoped operationRecoveryStore) RenewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
@@ -959,7 +926,11 @@ func (scoped operationRecoveryStore) RenewOperationLease(context.Context, string
 }
 
 func (scoped operationRecoveryStore) UpdateOperationWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
-	return operations.OperationRecord{}, fmt.Errorf("%w: worker operation recovery does not perform generic operation updates", operations.ErrInvalidLeaseRequest)
+	return operations.OperationRecord{}, fmt.Errorf("%w: worker operation recovery does not perform generic update-only commits", operations.ErrInvalidLeaseRequest)
+}
+
+func (scoped operationRecoveryStore) CommitOperationWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return scoped.store.CommitOperationWithLease(ctx, record, owner, now, event)
 }
 
 func (scoped operationRecoveryStore) CommitVolumeEnsureWithLease(ctx context.Context, volume resources.Volume, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Volume, operations.OperationRecord, error) {
@@ -1184,7 +1155,7 @@ func (executor multiExecutor) SupportsOperationRecovery(ctx context.Context, rec
 		if support.Supported {
 			return support
 		}
-		if reason == "" {
+		if reason == "" && !strings.HasSuffix(support.Reason, "_operation") {
 			reason = support.Reason
 		}
 	}
@@ -1210,6 +1181,7 @@ var (
 	_ OperationRecoveryStore                           = (*postgres.Store)(nil)
 	_ store.OperationRecoveryReader                    = operationRecoveryStore{}
 	_ store.OperationLeaseStore                        = operationRecoveryStore{}
+	_ store.OperationWorkerCommitStore                 = operationRecoveryStore{}
 	_ store.VolumeEnsureOperationCommitStore           = operationRecoveryStore{}
 	_ store.NamespaceUpsertOperationCommitStore        = operationRecoveryStore{}
 	_ store.NamespaceDisableOperationCommitStore       = operationRecoveryStore{}

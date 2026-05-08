@@ -389,11 +389,13 @@ func TestOperationCoordinatorRunsNamespaceUpsertClaimRetryAndReclaim(t *testing.
 			coordinator := recovery.NewOperationCoordinator(recovery.OperationConfig{
 				Reader:        store,
 				LeaseStore:    store,
+				CommitStore:   store,
 				Executor:      executor,
 				Owner:         "worker-a",
 				LeaseDuration: time.Minute,
 				Limit:         10,
 				Now:           now,
+				AuditEventID:  func() string { return "evt_operation_recovery" },
 			})
 
 			result, err := coordinator.RunOnce(context.Background())
@@ -554,6 +556,19 @@ func (store *fakeNamespaceRecoveryStore) RenewOperationLease(context.Context, st
 
 func (store *fakeNamespaceRecoveryStore) UpdateOperationWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected ordinary operation update")
+}
+
+func (store *fakeNamespaceRecoveryStore) CommitOperationWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	if strings.TrimSpace(event.OperationID) == "" || event.OperationID != operation.ID {
+		return operations.OperationRecord{}, audit.ErrInvalidOutboxRequest
+	}
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
 }
 
 func (store *fakeNamespaceRecoveryStore) CommitNamespaceUpsertWithLease(ctx context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {

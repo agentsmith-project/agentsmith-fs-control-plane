@@ -19,6 +19,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
@@ -417,22 +418,42 @@ func parseRoles(raw string) ([]auth.Role, bool) {
 }
 
 func internalReadiness(cfg config.Config) api.ReadinessResponse {
-	return api.ReadinessResponse{
-		Status:               "not_ready",
-		Ready:                false,
-		RequiredCapabilities: internalRequiredReadinessCapabilities(cfg),
-		Capabilities: map[string]api.CapabilityGate{
-			api.CapabilityStorage:      capabilityReadiness(cfg.Capabilities.Storage, "storage_not_configured", "storage_not_ready"),
-			api.CapabilityJVS:          capabilityReadiness(cfg.Capabilities.JVS, "jvs_not_configured", "jvs_not_ready"),
-			api.CapabilityWebDAVExport: capabilityReadiness(cfg.Capabilities.WebDAV, "webdav_not_configured", "webdav_not_ready"),
-			api.CapabilityWorkloadMount: {
-				Enabled: cfg.Capabilities.Mount.Enabled,
-				Ready:   cfg.Capabilities.Mount.Ready,
-				Gated:   !cfg.Capabilities.Mount.Available(),
-				Reason:  mountReadinessReason(cfg.Capabilities.Mount),
-			},
-		},
+	return api.ReadinessFromCapabilityMatrix(internalCapabilityMatrix(cfg))
+}
+
+func internalCapabilityMatrix(cfg config.Config) capability.Matrix {
+	storageStatus := capabilityStatus(cfg.Capabilities.Storage, "storage_not_configured", "storage_not_ready")
+	jvsStatus := capabilityStatus(cfg.Capabilities.JVS, "jvs_not_configured", "jvs_not_ready")
+	webDAVStatus := capabilityStatus(cfg.Capabilities.WebDAV, "webdav_not_configured", "webdav_not_ready")
+	mountStatus := capability.Status{
+		Enabled: cfg.Capabilities.Mount.Enabled,
+		Ready:   cfg.Capabilities.Mount.Ready,
+		Gated:   !cfg.Capabilities.Mount.Available(),
+		Reason:  mountReadinessReason(cfg.Capabilities.Mount),
 	}
+
+	return capability.NewMatrix(
+		capability.Entry{
+			ID:          capability.Storage,
+			Status:      storageStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.Storage, storageStatus),
+		},
+		capability.Entry{
+			ID:          capability.JVS,
+			Status:      jvsStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.JVS, jvsStatus),
+		},
+		capability.Entry{
+			ID:          capability.WebDAVExport,
+			Status:      webDAVStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.WebDAVExport, webDAVStatus),
+		},
+		capability.Entry{
+			ID:          capability.WorkloadMount,
+			Status:      mountStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.WorkloadMount, mountStatus),
+		},
+	)
 }
 
 func internalReadinessProvider(cfg config.Config, ping func(context.Context) error) func(context.Context) api.ReadinessResponse {
@@ -442,46 +463,81 @@ func internalReadinessProvider(cfg config.Config, ping func(context.Context) err
 			return readiness
 		}
 		if ping == nil {
-			readiness.Capabilities[api.CapabilityStorage] = api.CapabilityGate{
-				Enabled: true,
-				Ready:   false,
-				Gated:   true,
-				Reason:  "storage_health_check_missing",
-			}
+			readiness.Capabilities[api.CapabilityStorage] = storageReadinessOverride(readiness, "storage_health_check_missing")
 			return readiness
 		}
 		if err := ping(ctx); err != nil {
-			readiness.Capabilities[api.CapabilityStorage] = api.CapabilityGate{
-				Enabled: true,
-				Ready:   false,
-				Gated:   true,
-				Reason:  "storage_not_ready",
-			}
+			readiness.Capabilities[api.CapabilityStorage] = storageReadinessOverride(readiness, "storage_not_ready")
 		}
 		return readiness
 	}
 }
 
 func internalRequiredReadinessCapabilities(cfg config.Config) []string {
-	if cfg.ReadinessProfile == config.ReadinessProfileGA {
-		return []string{
-			api.CapabilityStorage,
-			api.CapabilityJVS,
-			api.CapabilityWebDAVExport,
-			api.CapabilityWorkloadMount,
+	ids := []capability.ID{
+		capability.Storage,
+		capability.JVS,
+		capability.WebDAVExport,
+		capability.WorkloadMount,
+	}
+	required := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if internalRequiredForServiceReady(cfg, id) {
+			required = append(required, string(id))
 		}
 	}
-	required := []string{api.CapabilityStorage}
-	if cfg.Capabilities.JVS.Enabled {
-		required = append(required, api.CapabilityJVS)
-	}
-	if cfg.Capabilities.Mount.Enabled {
-		required = append(required, api.CapabilityWorkloadMount)
-	}
-	if cfg.Capabilities.WebDAV.Enabled {
-		required = append(required, api.CapabilityWebDAVExport)
-	}
 	return required
+}
+
+func storageReadinessOverride(readiness api.ReadinessResponse, reason string) api.CapabilityGate {
+	gate := readiness.Capabilities[api.CapabilityStorage]
+	gate.Enabled = true
+	gate.Ready = false
+	gate.Gated = true
+	gate.Reason = reason
+	return gate
+}
+
+func internalCapabilityRequirement(cfg config.Config, id capability.ID, status capability.Status) capability.Requirement {
+	requiredForServiceReady := internalRequiredForServiceReady(cfg, id)
+	return capability.Requirement{
+		RequiredForServiceReady: requiredForServiceReady,
+		RequiredForDefaultGA:    internalRequiredForDefaultGA(id),
+		OptionalGated:           !requiredForServiceReady && status.Gated,
+	}
+}
+
+func internalRequiredForServiceReady(cfg config.Config, id capability.ID) bool {
+	if cfg.ReadinessProfile == config.ReadinessProfileGA {
+		switch id {
+		case capability.Storage, capability.JVS, capability.WebDAVExport:
+			return true
+		default:
+			return false
+		}
+	}
+
+	switch id {
+	case capability.Storage:
+		return true
+	case capability.JVS:
+		return cfg.Capabilities.JVS.Enabled
+	case capability.WebDAVExport:
+		return cfg.Capabilities.WebDAV.Enabled
+	case capability.WorkloadMount:
+		return cfg.Capabilities.Mount.Enabled
+	default:
+		return false
+	}
+}
+
+func internalRequiredForDefaultGA(id capability.ID) bool {
+	switch id {
+	case capability.Storage, capability.JVS, capability.WebDAVExport:
+		return true
+	default:
+		return false
+	}
 }
 
 func mountReadinessReason(capability config.Capability) string {
@@ -494,23 +550,23 @@ func mountReadinessReason(capability config.Capability) string {
 	return ""
 }
 
-func capabilityReadiness(capability config.Capability, disabledReason string, unreadyReason string) api.CapabilityGate {
-	gate := api.CapabilityGate{
-		Enabled: capability.Enabled,
-		Ready:   capability.Ready,
+func capabilityStatus(cap config.Capability, disabledReason string, unreadyReason string) capability.Status {
+	status := capability.Status{
+		Enabled: cap.Enabled,
+		Ready:   cap.Ready,
 		Gated:   false,
 		Reason:  "",
 	}
-	if !capability.Enabled {
-		gate.Gated = true
-		gate.Reason = disabledReason
-		return gate
+	if !cap.Enabled {
+		status.Gated = true
+		status.Reason = disabledReason
+		return status
 	}
-	if !capability.Ready {
-		gate.Gated = true
-		gate.Reason = unreadyReason
+	if !cap.Ready {
+		status.Gated = true
+		status.Reason = unreadyReason
 	}
-	return gate
+	return status
 }
 
 func NewOperationID() string {

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
 
@@ -16,13 +17,15 @@ func TestOperationCoordinatorRejectsInvalidConfigBeforeStoreCalls(t *testing.T) 
 		name   string
 		config OperationConfig
 	}{
-		{name: "nil reader", config: OperationConfig{LeaseStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Limit: 1, Now: now}},
-		{name: "nil lease store", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Limit: 1, Now: now}},
-		{name: "nil executor", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Limit: 1, Now: now}},
-		{name: "blank owner", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: " \t", LeaseDuration: time.Minute, Limit: 1, Now: now}},
-		{name: "non-positive duration", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", Limit: 1, Now: now}},
-		{name: "non-positive limit", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Now: now}},
-		{name: "zero now", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Limit: 1}},
+		{name: "nil reader", config: OperationConfig{LeaseStore: &fakeOperationLeaseStore{}, CommitStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Limit: 1, Now: now, AuditEventID: fakeOperationAuditEventID}},
+		{name: "nil lease store", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, CommitStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Limit: 1, Now: now, AuditEventID: fakeOperationAuditEventID}},
+		{name: "nil commit store", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Limit: 1, Now: now, AuditEventID: fakeOperationAuditEventID}},
+		{name: "nil executor", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, CommitStore: &fakeOperationLeaseStore{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Limit: 1, Now: now, AuditEventID: fakeOperationAuditEventID}},
+		{name: "blank owner", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, CommitStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: " \t", LeaseDuration: time.Minute, Limit: 1, Now: now, AuditEventID: fakeOperationAuditEventID}},
+		{name: "non-positive duration", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, CommitStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", Limit: 1, Now: now, AuditEventID: fakeOperationAuditEventID}},
+		{name: "non-positive limit", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, CommitStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Now: now, AuditEventID: fakeOperationAuditEventID}},
+		{name: "zero now", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, CommitStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Limit: 1, AuditEventID: fakeOperationAuditEventID}},
+		{name: "nil audit event id", config: OperationConfig{Reader: &fakeOperationRecoveryReader{}, LeaseStore: &fakeOperationLeaseStore{}, CommitStore: &fakeOperationLeaseStore{}, Executor: &fakeOperationExecutor{}, Owner: "recovery-worker", LeaseDuration: time.Minute, Limit: 1, Now: now}},
 	}
 
 	for _, tt := range tests {
@@ -62,11 +65,13 @@ func TestOperationCoordinatorReaderReceivesContextNowAndLimit(t *testing.T) {
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         7,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	if _, err := coordinator.RunOnce(ctx); err != nil {
@@ -85,27 +90,38 @@ func TestOperationCoordinatorAcquiresClaimRetryReclaimAndFinalizeInReaderOrder(t
 	expired := now.Add(-time.Minute)
 	reader := &fakeOperationRecoveryReader{
 		records: []operations.OperationRecord{
-			{ID: "op_claim", State: operations.OperationStateQueued, Phase: "reader-claim"},
-			{ID: "op_retry", State: operations.OperationStateQueued, Attempt: 2, Phase: "reader-retry"},
-			{ID: "op_reclaim", State: operations.OperationStateRunning, Phase: "reader-reclaim", LeaseOwner: "worker-a", LeaseExpiresAt: &expired},
-			{ID: "op_cancel", State: operations.OperationStateCancelRequested},
+			recoveryOperationRecord("op_claim", operations.OperationStateQueued, "reader-claim", now),
+			func() operations.OperationRecord {
+				record := recoveryOperationRecord("op_retry", operations.OperationStateQueued, "reader-retry", now)
+				record.Attempt = 2
+				return record
+			}(),
+			func() operations.OperationRecord {
+				record := recoveryOperationRecord("op_reclaim", operations.OperationStateRunning, "reader-reclaim", now)
+				record.LeaseOwner = "worker-a"
+				record.LeaseExpiresAt = &expired
+				return record
+			}(),
+			recoveryOperationRecord("op_cancel", operations.OperationStateCancelRequested, operations.OperationPhaseRepoCreateValidate, now),
 		},
 	}
 	store := &fakeOperationLeaseStore{acquireRecords: map[string]operations.OperationRecord{
-		"op_claim":   {ID: "op_claim", State: operations.OperationStateRunning, Phase: "updated-claim"},
-		"op_retry":   {ID: "op_retry", State: operations.OperationStateRunning, Phase: "updated-retry"},
-		"op_reclaim": {ID: "op_reclaim", State: operations.OperationStateRunning, Phase: "updated-reclaim"},
-		"op_cancel":  {ID: "op_cancel", State: operations.OperationStateCancelled},
+		"op_claim":   recoveryOperationRecord("op_claim", operations.OperationStateRunning, "updated-claim", now),
+		"op_retry":   recoveryOperationRecord("op_retry", operations.OperationStateRunning, "updated-retry", now),
+		"op_reclaim": recoveryOperationRecord("op_reclaim", operations.OperationStateRunning, "updated-reclaim", now),
+		"op_cancel":  recoveryOperationRecord("op_cancel", operations.OperationStateCancelled, operations.OperationPhaseRepoCreateValidate, now),
 	}}
 	executor := &fakeOperationExecutor{}
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: 5 * time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -139,19 +155,28 @@ func TestOperationCoordinatorAcquiresClaimRetryReclaimAndFinalizeInReaderOrder(t
 	if executor.calls[0].plan.Action != RecoveryActionClaimable || executor.calls[1].plan.Action != RecoveryActionRetry || executor.calls[2].plan.Action != RecoveryActionReclaim {
 		t.Fatalf("executor plans = %#v", executor.calls)
 	}
-	if store.updateCalls != 0 || store.renewCalls != 0 {
-		t.Fatalf("unexpected lease store calls update=%d renew=%d", store.updateCalls, store.renewCalls)
+	if len(store.updateCalls) != 0 || store.renewCalls != 0 {
+		t.Fatalf("unexpected lease store calls update=%d renew=%d", len(store.updateCalls), store.renewCalls)
 	}
 }
 
-func TestOperationCoordinatorMarksUnsupportedClaimRetryAndReclaimWithoutLeaseOrExecute(t *testing.T) {
+func TestOperationCoordinatorCommitsUnsupportedClaimRetryAndReclaimWithAuditWithoutExecute(t *testing.T) {
 	now := recoveryTestNow()
 	expired := now.Add(-time.Minute)
 	reader := &fakeOperationRecoveryReader{
 		records: []operations.OperationRecord{
-			{ID: "op_claim", State: operations.OperationStateQueued},
-			{ID: "op_retry", State: operations.OperationStateQueued, Attempt: 2},
-			{ID: "op_reclaim", State: operations.OperationStateRunning, LeaseOwner: "worker-a", LeaseExpiresAt: &expired},
+			recoveryOperationRecord("op_claim", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
+			func() operations.OperationRecord {
+				record := recoveryOperationRecord("op_retry", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now)
+				record.Attempt = 2
+				return record
+			}(),
+			func() operations.OperationRecord {
+				record := recoveryOperationRecord("op_reclaim", operations.OperationStateRunning, operations.OperationPhaseRepoCreateValidate, now)
+				record.LeaseOwner = "worker-a"
+				record.LeaseExpiresAt = &expired
+				return record
+			}(),
 		},
 	}
 	store := &fakeOperationLeaseStore{}
@@ -163,22 +188,51 @@ func TestOperationCoordinatorMarksUnsupportedClaimRetryAndReclaimWithoutLeaseOrE
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if result.Unsupported != 3 || len(store.acquireCalls) != 0 || len(executor.calls) != 0 {
-		t.Fatalf("result/acquire/execute = %#v/%d/%d, want unsupported 3 and no calls", result, len(store.acquireCalls), len(executor.calls))
+	if result.Unsupported != 3 || len(store.acquireCalls) != 3 || len(store.commitCalls) != 3 || len(store.updateCalls) != 0 || len(executor.calls) != 0 {
+		t.Fatalf("result/acquire/commit/update/execute = %#v/%d/%d/%d/%d, want unsupported 3 with audit commits and no update-only/execute", result, len(store.acquireCalls), len(store.commitCalls), len(store.updateCalls), len(executor.calls))
 	}
 	if gotIDs := executor.supportOperationIDs(); strings.Join(gotIDs, ",") != "op_claim,op_retry,op_reclaim" {
 		t.Fatalf("support checks = %#v", gotIDs)
+	}
+	if gotIDs := store.acquireOperationIDs(); strings.Join(gotIDs, ",") != "op_claim,op_retry,op_reclaim" {
+		t.Fatalf("acquire IDs = %#v, want unsupported candidates leased in order", gotIDs)
+	}
+	if gotIDs := store.commitOperationIDs(); strings.Join(gotIDs, ",") != "op_claim,op_retry,op_reclaim" {
+		t.Fatalf("commit IDs = %#v, want unsupported candidates persisted in order", gotIDs)
+	}
+	for _, call := range store.commitCalls {
+		if call.owner != "recovery-worker" || !call.now.Equal(now) {
+			t.Fatalf("commit fence = %q/%v, want configured owner/now", call.owner, call.now)
+		}
+		if call.record.State != operations.OperationStateOperatorInterventionRequired {
+			t.Fatalf("unsupported commit state = %q, want operator_intervention_required", call.record.State)
+		}
+		if call.record.Error == nil || call.record.Error.Code != "OPERATION_RECOVERY_REQUIRED" || call.record.Error.Retryable {
+			t.Fatalf("unsupported error = %#v, want stable non-retryable unsupported recovery error", call.record.Error)
+		}
+		reason, _ := call.record.Error.Details["reason"].(string)
+		if reason == "" {
+			t.Fatalf("unsupported error details = %#v, want reason evidence", call.record.Error.Details)
+		}
+		if call.event.Type != audit.EventTypeRepoCreate || call.event.Outcome != audit.OutcomeFailed || call.event.Reason != "unsupported_operation_recovery" || call.event.OperationID != call.record.ID {
+			t.Fatalf("unsupported audit = %#v, want failed repo_create unsupported event for operation", call.event)
+		}
+		if call.event.Details["reason"] != reason || call.event.Details["evidence"] == nil {
+			t.Fatalf("unsupported audit details = %#v, want reason/evidence", call.event.Details)
+		}
 	}
 }
 
@@ -186,8 +240,8 @@ func TestOperationCoordinatorContinuesAfterUnsupportedCandidate(t *testing.T) {
 	now := recoveryTestNow()
 	reader := &fakeOperationRecoveryReader{
 		records: []operations.OperationRecord{
-			{ID: "op_unsupported", State: operations.OperationStateQueued},
-			{ID: "op_supported", State: operations.OperationStateQueued},
+			recoveryOperationRecord("op_unsupported", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
+			recoveryOperationRecord("op_supported", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
 		},
 	}
 	store := &fakeOperationLeaseStore{}
@@ -195,11 +249,13 @@ func TestOperationCoordinatorContinuesAfterUnsupportedCandidate(t *testing.T) {
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -209,8 +265,11 @@ func TestOperationCoordinatorContinuesAfterUnsupportedCandidate(t *testing.T) {
 	if result.Unsupported != 1 || result.Claimed != 1 {
 		t.Fatalf("result = %#v, want unsupported 1 claimed 1", result)
 	}
-	if gotIDs := store.acquireOperationIDs(); strings.Join(gotIDs, ",") != "op_supported" {
-		t.Fatalf("acquire IDs = %#v, want supported only", gotIDs)
+	if gotIDs := store.acquireOperationIDs(); strings.Join(gotIDs, ",") != "op_unsupported,op_supported" {
+		t.Fatalf("acquire IDs = %#v, want unsupported terminalized then supported claimed", gotIDs)
+	}
+	if gotIDs := store.commitOperationIDs(); strings.Join(gotIDs, ",") != "op_unsupported" {
+		t.Fatalf("commit IDs = %#v, want unsupported candidate persisted", gotIDs)
 	}
 	if gotIDs := executor.operationIDs(); strings.Join(gotIDs, ",") != "op_supported" {
 		t.Fatalf("executor IDs = %#v, want supported only", gotIDs)
@@ -220,18 +279,20 @@ func TestOperationCoordinatorContinuesAfterUnsupportedCandidate(t *testing.T) {
 func TestOperationCoordinatorUsesFallbackReasonForUnsupportedWithoutExecutorReason(t *testing.T) {
 	now := recoveryTestNow()
 	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
-		{ID: "op_unsupported", State: operations.OperationStateQueued},
+		recoveryOperationRecord("op_unsupported", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
 	}}
 	store := &fakeOperationLeaseStore{}
 	executor := &fakeOperationExecutor{unsupported: map[string]string{"op_unsupported": " \t"}}
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -247,6 +308,15 @@ func TestOperationCoordinatorUsesFallbackReasonForUnsupportedWithoutExecutorReas
 	if result.Results[0].Reason == "queued_operation_claimable" {
 		t.Fatalf("unsupported result kept planner reason: %#v", result.Results[0])
 	}
+	if len(store.commitCalls) != 1 {
+		t.Fatalf("commits = %#v, want unsupported candidate persisted with audit", store.commitCalls)
+	}
+	if got := store.commitCalls[0].record.Error.Details["reason"]; got != "unsupported_operation_recovery" {
+		t.Fatalf("persisted reason = %#v, want fallback unsupported reason", got)
+	}
+	if got := store.commitCalls[0].event.Details["reason"]; got != "unsupported_operation_recovery" {
+		t.Fatalf("audit reason detail = %#v, want fallback unsupported reason", got)
+	}
 }
 
 func TestOperationCoordinatorSkipsWaitNoopManualAndAutomaticRecoverPlans(t *testing.T) {
@@ -254,10 +324,15 @@ func TestOperationCoordinatorSkipsWaitNoopManualAndAutomaticRecoverPlans(t *test
 	live := now.Add(time.Minute)
 	reader := &fakeOperationRecoveryReader{
 		records: []operations.OperationRecord{
-			{ID: "op_wait", State: operations.OperationStateRunning, LeaseOwner: "worker-a", LeaseExpiresAt: &live},
-			{ID: "op_noop", State: operations.OperationStateSucceeded},
-			{ID: "op_manual", State: operations.OperationStateRunning},
-			{ID: "op_operator", State: operations.OperationStateOperatorInterventionRequired},
+			func() operations.OperationRecord {
+				record := recoveryOperationRecord("op_wait", operations.OperationStateRunning, operations.OperationPhaseRepoCreateValidate, now)
+				record.LeaseOwner = "worker-a"
+				record.LeaseExpiresAt = &live
+				return record
+			}(),
+			recoveryOperationRecord("op_noop", operations.OperationStateSucceeded, operations.OperationPhaseRepoCreateValidate, now),
+			recoveryOperationRecord("op_manual", operations.OperationStateRunning, operations.OperationPhaseRepoCreateValidate, now),
+			recoveryOperationRecord("op_operator", operations.OperationStateOperatorInterventionRequired, operations.OperationPhaseRepoCreateValidate, now),
 		},
 	}
 	store := &fakeOperationLeaseStore{}
@@ -265,11 +340,13 @@ func TestOperationCoordinatorSkipsWaitNoopManualAndAutomaticRecoverPlans(t *test
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -284,19 +361,21 @@ func TestOperationCoordinatorSkipsWaitNoopManualAndAutomaticRecoverPlans(t *test
 func TestOperationCoordinatorCountsLeaseUnavailableRaceAsNonFatal(t *testing.T) {
 	now := recoveryTestNow()
 	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
-		{ID: "op_race", State: operations.OperationStateQueued},
-		{ID: "op_claim", State: operations.OperationStateQueued},
+		recoveryOperationRecord("op_race", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
+		recoveryOperationRecord("op_claim", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
 	}}
 	store := &fakeOperationLeaseStore{acquireErrors: map[string]error{"op_race": operations.ErrLeaseUnavailable}}
 	executor := &fakeOperationExecutor{}
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -317,18 +396,20 @@ func TestOperationCoordinatorCountsLeaseUnavailableRaceAsNonFatal(t *testing.T) 
 func TestOperationCoordinatorFinalizeCancellationDoesNotRequireExecutorSupport(t *testing.T) {
 	now := recoveryTestNow()
 	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
-		{ID: "op_cancel", State: operations.OperationStateCancelRequested},
+		recoveryOperationRecord("op_cancel", operations.OperationStateCancelRequested, operations.OperationPhaseRepoCreateValidate, now),
 	}}
 	store := &fakeOperationLeaseStore{}
 	executor := &fakeOperationExecutor{unsupported: map[string]string{"op_cancel": "executor does not finalize"}}
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -348,8 +429,8 @@ func TestOperationCoordinatorReturnsNonLeaseAcquireErrorWithPartialResult(t *tes
 	acquireErr := errors.New("postgres unavailable")
 	reader := &fakeOperationRecoveryReader{
 		records: []operations.OperationRecord{
-			{ID: "op_claim", State: operations.OperationStateQueued},
-			{ID: "op_after_error", State: operations.OperationStateQueued},
+			recoveryOperationRecord("op_claim", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
+			recoveryOperationRecord("op_after_error", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
 		},
 	}
 	store := &fakeOperationLeaseStore{acquireErr: acquireErr}
@@ -357,11 +438,13 @@ func TestOperationCoordinatorReturnsNonLeaseAcquireErrorWithPartialResult(t *tes
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -380,19 +463,21 @@ func TestOperationCoordinatorReturnsExecutorErrorWithPartialResult(t *testing.T)
 	now := recoveryTestNow()
 	executorErr := errors.New("executor failed")
 	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
-		{ID: "op_claim", State: operations.OperationStateQueued},
-		{ID: "op_after_error", State: operations.OperationStateQueued},
+		recoveryOperationRecord("op_claim", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
+		recoveryOperationRecord("op_after_error", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
 	}}
 	store := &fakeOperationLeaseStore{}
 	executor := &fakeOperationExecutor{err: executorErr}
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -407,18 +492,20 @@ func TestOperationCoordinatorReturnsExecutorErrorWithPartialResult(t *testing.T)
 func TestOperationCoordinatorCountsCommittedOperatorInterventionAsManual(t *testing.T) {
 	now := recoveryTestNow()
 	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
-		{ID: "op_intervention", State: operations.OperationStateQueued},
+		recoveryOperationRecord("op_intervention", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
 	}}
 	store := &fakeOperationLeaseStore{}
 	executor := &fakeOperationExecutor{err: ErrOperationManualIntervention}
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -442,11 +529,13 @@ func TestOperationCoordinatorReaderErrorDoesNotCallLeaseStoreOrExecutor(t *testi
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	_, err := coordinator.RunOnce(context.Background())
@@ -462,18 +551,25 @@ func TestOperationCoordinatorSkipsCancelRequestedLiveLease(t *testing.T) {
 	now := recoveryTestNow()
 	live := now.Add(time.Minute)
 	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
-		{ID: "op_cancel_live", State: operations.OperationStateCancelRequested, LeaseOwner: "worker-a", LeaseExpiresAt: &live},
+		func() operations.OperationRecord {
+			record := recoveryOperationRecord("op_cancel_live", operations.OperationStateCancelRequested, operations.OperationPhaseRepoCreateValidate, now)
+			record.LeaseOwner = "worker-a"
+			record.LeaseExpiresAt = &live
+			return record
+		}(),
 	}}
 	store := &fakeOperationLeaseStore{}
 	executor := &fakeOperationExecutor{}
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         10,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -488,20 +584,22 @@ func TestOperationCoordinatorSkipsCancelRequestedLiveLease(t *testing.T) {
 func TestOperationCoordinatorProcessesOnlyLimitCandidates(t *testing.T) {
 	now := recoveryTestNow()
 	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
-		{ID: "op_one", State: operations.OperationStateQueued},
-		{ID: "op_two", State: operations.OperationStateQueued},
-		{ID: "op_three", State: operations.OperationStateQueued},
+		recoveryOperationRecord("op_one", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
+		recoveryOperationRecord("op_two", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
+		recoveryOperationRecord("op_three", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
 	}}
 	store := &fakeOperationLeaseStore{}
 	executor := &fakeOperationExecutor{}
 	coordinator := NewOperationCoordinator(OperationConfig{
 		Reader:        reader,
 		LeaseStore:    store,
+		CommitStore:   store,
 		Executor:      executor,
 		Owner:         "recovery-worker",
 		LeaseDuration: time.Minute,
 		Limit:         2,
 		Now:           now,
+		AuditEventID:  fakeOperationAuditEventID,
 	})
 
 	result, err := coordinator.RunOnce(context.Background())
@@ -546,12 +644,26 @@ type fakeOperationLeaseStore struct {
 	acquireErrors  map[string]error
 	acquireRecords map[string]operations.OperationRecord
 	renewCalls     int
-	updateCalls    int
+	updateCalls    []operationUpdateCall
+	commitCalls    []operationCommitCall
 }
 
 type operationAcquireCall struct {
 	operationID string
 	request     operations.LeaseRequest
+}
+
+type operationUpdateCall struct {
+	record operations.OperationRecord
+	owner  string
+	now    time.Time
+}
+
+type operationCommitCall struct {
+	record operations.OperationRecord
+	owner  string
+	now    time.Time
+	event  audit.Event
 }
 
 func (store *fakeOperationLeaseStore) AcquireOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
@@ -565,7 +677,7 @@ func (store *fakeOperationLeaseStore) AcquireOperationLease(_ context.Context, o
 	if record, ok := store.acquireRecords[operationID]; ok {
 		return record, nil
 	}
-	return operations.OperationRecord{ID: operationID, State: operations.OperationStateRunning}, nil
+	return recoveryOperationRecord(operationID, operations.OperationStateRunning, operations.OperationPhaseRepoCreateValidate, recoveryTestNow()), nil
 }
 
 func (store *fakeOperationLeaseStore) RenewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
@@ -573,15 +685,42 @@ func (store *fakeOperationLeaseStore) RenewOperationLease(context.Context, strin
 	return operations.OperationRecord{}, errors.New("unexpected renew call")
 }
 
-func (store *fakeOperationLeaseStore) UpdateOperationWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
-	store.updateCalls++
-	return operations.OperationRecord{}, errors.New("unexpected update call")
+func (store *fakeOperationLeaseStore) UpdateOperationWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	operation := record.Record()
+	store.updateCalls = append(store.updateCalls, operationUpdateCall{record: operation, owner: owner, now: now})
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	return operation, nil
+}
+
+func (store *fakeOperationLeaseStore) CommitOperationWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	store.commitCalls = append(store.commitCalls, operationCommitCall{record: operation, owner: owner, now: now, event: event})
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	return operation, nil
 }
 
 func (store *fakeOperationLeaseStore) acquireOperationIDs() []string {
 	out := make([]string, len(store.acquireCalls))
 	for idx, call := range store.acquireCalls {
 		out[idx] = call.operationID
+	}
+	return out
+}
+
+func (store *fakeOperationLeaseStore) updateOperationIDs() []string {
+	out := make([]string, len(store.updateCalls))
+	for idx, call := range store.updateCalls {
+		out[idx] = call.record.ID
+	}
+	return out
+}
+
+func (store *fakeOperationLeaseStore) commitOperationIDs() []string {
+	out := make([]string, len(store.commitCalls))
+	for idx, call := range store.commitCalls {
+		out[idx] = call.record.ID
 	}
 	return out
 }
@@ -642,4 +781,24 @@ func (executor *fakeOperationExecutor) operationPhases() []string {
 
 func recoveryTestNow() time.Time {
 	return time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+}
+
+func fakeOperationAuditEventID() string {
+	return "evt_operation_recovery"
+}
+
+func recoveryOperationRecord(operationID string, state operations.OperationState, phase string, now time.Time) operations.OperationRecord {
+	return operations.OperationRecord{
+		ID:              operationID,
+		Type:            operations.OperationRepoCreate,
+		State:           state,
+		Phase:           phase,
+		CorrelationID:   "corr-alpha",
+		CallerService:   "product-caller",
+		AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:        operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
+		NamespaceID:     "ns_alpha01",
+		RepoID:          "repo_alpha01",
+		CreatedAt:       now.Add(-time.Hour),
+	}
 }

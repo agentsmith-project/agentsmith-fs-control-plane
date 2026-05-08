@@ -560,7 +560,7 @@ func TestInternalRuntimeReadinessDefaultProfileRequiresStaticStorageCapability(t
 	}
 }
 
-func TestInternalRuntimeReadinessGAProfileRequiresFullGACapabilitySet(t *testing.T) {
+func TestInternalRuntimeReadinessGAProfileRequiresDefaultGACapabilitySet(t *testing.T) {
 	tests := []struct {
 		name      string
 		overrides config.MapSource
@@ -604,15 +604,6 @@ func TestInternalRuntimeReadinessGAProfileRequiresFullGACapabilitySet(t *testing
 			wantCode: http.StatusServiceUnavailable,
 		},
 		{
-			name: "mount unready",
-			overrides: config.MapSource{
-				"AFSCP_MOUNT_ENABLED": "true",
-				"AFSCP_MOUNT_READY":   "false",
-			},
-			wantGate: api.CapabilityWorkloadMount,
-			wantCode: http.StatusServiceUnavailable,
-		},
-		{
 			name:      "all ready",
 			overrides: config.MapSource{},
 			wantCode:  http.StatusOK,
@@ -650,6 +641,85 @@ func TestInternalRuntimeReadinessGAProfileRequiresFullGACapabilitySet(t *testing
 			gate := body.Capabilities[tt.wantGate]
 			if gate.Enabled && gate.Ready && !gate.Gated {
 				t.Fatalf("%s gate = %#v, want gated or unavailable", tt.wantGate, gate)
+			}
+		})
+	}
+}
+
+func TestInternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated(t *testing.T) {
+	tests := []struct {
+		name       string
+		overrides  config.MapSource
+		wantReason string
+	}{
+		{
+			name: "disabled",
+			overrides: config.MapSource{
+				"AFSCP_MOUNT_ENABLED": "false",
+				"AFSCP_MOUNT_READY":   "false",
+			},
+			wantReason: "mount_not_configured",
+		},
+		{
+			name: "unready",
+			overrides: config.MapSource{
+				"AFSCP_MOUNT_ENABLED": "true",
+				"AFSCP_MOUNT_READY":   "false",
+			},
+			wantReason: "mount_not_ready",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			overrides := config.MapSource{"AFSCP_READINESS_PROFILE": "ga"}
+			for key, value := range tt.overrides {
+				overrides[key] = value
+			}
+			runtime := newTestRuntimeWithSourceOverrides(t, overrides, func(context.Context) error { return nil })
+			defer closeRuntime(t, runtime)
+
+			rec := httptest.NewRecorder()
+			runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			var body struct {
+				Ready        bool                      `json:"ready"`
+				Capabilities map[string]map[string]any `json:"capabilities"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+			}
+			if !body.Ready {
+				t.Fatalf("readiness = not ready, want ready when only workload mount is gated")
+			}
+			for _, capability := range []string{api.CapabilityStorage, api.CapabilityJVS, api.CapabilityWebDAVExport} {
+				gate := body.Capabilities[capability]
+				if !runtimeReadinessBoolField(t, gate, "required_for_service_ready") {
+					t.Fatalf("%s required_for_service_ready = false, want true", capability)
+				}
+				if !runtimeReadinessBoolField(t, gate, "required_for_default_ga") {
+					t.Fatalf("%s required_for_default_ga = false, want true", capability)
+				}
+				if runtimeReadinessBoolField(t, gate, "optional_gated") {
+					t.Fatalf("%s optional_gated = true, want false", capability)
+				}
+			}
+
+			mount := body.Capabilities[api.CapabilityWorkloadMount]
+			if runtimeReadinessBoolField(t, mount, "required_for_service_ready") {
+				t.Fatalf("workload mount required_for_service_ready = true, want false")
+			}
+			if runtimeReadinessBoolField(t, mount, "required_for_default_ga") {
+				t.Fatalf("workload mount required_for_default_ga = true, want false")
+			}
+			if !runtimeReadinessBoolField(t, mount, "optional_gated") {
+				t.Fatalf("workload mount optional_gated = false, want true")
+			}
+			if got, _ := mount["reason"].(string); got != tt.wantReason {
+				t.Fatalf("workload mount reason = %q, want %q", got, tt.wantReason)
 			}
 		})
 	}
@@ -888,6 +958,19 @@ func TestInternalRuntimeVolumeHealthRootProbeRejectsSymlinkAndMissingPermissions
 			}
 		})
 	}
+}
+
+func runtimeReadinessBoolField(t *testing.T, fields map[string]any, name string) bool {
+	t.Helper()
+	raw, ok := fields[name]
+	if !ok {
+		t.Fatalf("capability fields %#v missing %q", fields, name)
+	}
+	got, ok := raw.(bool)
+	if !ok {
+		t.Fatalf("capability field %q = %#v, want bool", name, raw)
+	}
+	return got
 }
 
 func newTestRuntime(t *testing.T) *Runtime {

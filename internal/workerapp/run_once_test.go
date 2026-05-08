@@ -373,19 +373,39 @@ func TestRunOnceClaimsQueuedVolumeEnsureThroughDefaultRunner(t *testing.T) {
 	}
 }
 
-func TestRunOnceRepoCreateDisabledDoesNotListRepoCreate(t *testing.T) {
+func TestRunOnceRepoCreateDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
 	now := workerAppNow()
 	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
 	store := newWorkerAppStore(repoRecord)
 	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
 
 	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
+	}
+	if !strings.Contains(err.Error(), "operation recovery incomplete") {
+		t.Fatalf("RunOnce error = %q, want operation recovery incomplete", err)
 	}
 	summary := result.Summary().Operation
-	if summary.Scanned != 0 || summary.Claimed != 0 || strings.Join(store.acquireIDs, ",") != "" {
-		t.Fatalf("summary/acquire = %#v/%#v, want repo_create ignored while gate disabled", summary, store.acquireIDs)
+	if summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || summary.Failed != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want disabled repo_create scanned into unsupported recovery", summary)
+	}
+	if got := strings.Join(store.acquireIDs, ","); got != repoRecord.ID {
+		t.Fatalf("acquire IDs = %q, want disabled repo_create leased for intervention", got)
+	}
+	got := store.records[repoRecord.ID]
+	if got.State != operations.OperationStateOperatorInterventionRequired || got.Error == nil || got.Error.Code != "OPERATION_RECOVERY_REQUIRED" {
+		t.Fatalf("repo_create record = %#v, want persisted unsupported intervention", got)
+	}
+	if got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("repo_create lease = %q/%v, want cleared after intervention", got.LeaseOwner, got.LeaseExpiresAt)
+	}
+	if store.genericUpdateCalls != 0 {
+		t.Fatalf("generic update calls = %d, want unsupported intervention committed through audit boundary", store.genericUpdateCalls)
+	}
+	assertWorkerAppUnsupportedAudit(t, store, repoRecord, audit.EventTypeRepoCreate)
+	if store.releasedFenceID != "" {
+		t.Fatalf("released fence = %q, want no executor side effects or fence release", store.releasedFenceID)
 	}
 }
 
@@ -428,7 +448,7 @@ func TestRunOnceRepoCreateEnabledClaimsThroughRepoExecutor(t *testing.T) {
 	}
 }
 
-func TestRunOnceRepoLifecycleDisabledDoesNotListLifecycle(t *testing.T) {
+func TestRunOnceRepoLifecycleDisabledScansAndPersistsUnsupportedInterventions(t *testing.T) {
 	now := workerAppNow()
 	archiveRecord := workerAppRepoLifecycleOperationRecord("op_archive", operations.OperationRepoArchive, now)
 	deleteRecord := workerAppRepoLifecycleOperationRecord("op_delete", operations.OperationRepoDelete, now)
@@ -439,12 +459,18 @@ func TestRunOnceRepoLifecycleDisabledDoesNotListLifecycle(t *testing.T) {
 	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
 
 	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
 	}
 	summary := result.Summary().Operation
-	if summary.Scanned != 0 || summary.Claimed != 0 || strings.Join(store.acquireIDs, ",") != "" {
-		t.Fatalf("summary/acquire = %#v/%#v, want repo lifecycle ignored while gate disabled", summary, store.acquireIDs)
+	if summary.Scanned != 4 || summary.Unsupported != 4 || summary.Claimed != 0 || summary.Failed != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want disabled repo lifecycle/purge scanned into unsupported recovery", summary)
+	}
+	if len(store.acquireIDs) != 4 || store.genericUpdateCalls != 0 {
+		t.Fatalf("acquire/update = %#v/%d, want four audited unsupported commits without generic update", store.acquireIDs, store.genericUpdateCalls)
+	}
+	if len(store.auditEvents) != 4 {
+		t.Fatalf("audit events = %#v, want one failed unsupported event per lifecycle/purge operation", store.auditEvents)
 	}
 }
 
@@ -648,7 +674,7 @@ func TestRunOnceRepoLifecycleStaleSessionReturnsManualError(t *testing.T) {
 	}
 }
 
-func TestRunOnceRepoLifecycleDoesNotClaimPurge(t *testing.T) {
+func TestRunOnceRepoLifecycleGateScansPurgeAsUnsupportedWhenPurgeExecutorDisabled(t *testing.T) {
 	now := workerAppNow()
 	purgeRecord := workerAppRepoLifecycleOperationRecord("op_purge", operations.OperationRepoPurge, now)
 	store := newWorkerAppStore(purgeRecord)
@@ -669,16 +695,17 @@ func TestRunOnceRepoLifecycleDoesNotClaimPurge(t *testing.T) {
 	}
 
 	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported purge recovery count error")
 	}
 	summary := result.Summary().Operation
-	if summary.Scanned != 0 || summary.Claimed != 0 || len(store.acquireIDs) != 0 {
-		t.Fatalf("summary/acquire = %#v/%#v, want purge ignored by lifecycle runner", summary, store.acquireIDs)
+	if summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || len(store.acquireIDs) != 1 {
+		t.Fatalf("summary/acquire = %#v/%#v, want purge audited unsupported, not claimed by lifecycle executor", summary, store.acquireIDs)
 	}
+	assertWorkerAppUnsupportedAudit(t, store, purgeRecord, audit.EventTypeRepoPurge)
 }
 
-func TestRunOnceRepoPurgeRequiresIndependentGate(t *testing.T) {
+func TestRunOnceRepoPurgeDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
 	now := workerAppNow()
 	purgeRecord := workerAppRepoPurgeOperationRecord("op_purge", now)
 	store := newWorkerAppStore(purgeRecord)
@@ -701,12 +728,13 @@ func TestRunOnceRepoPurgeRequiresIndependentGate(t *testing.T) {
 		t.Fatalf("NewRunOnceRunner: %v", err)
 	}
 	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported purge recovery count error")
 	}
-	if summary := result.Summary().Operation; summary.Scanned != 0 || summary.Claimed != 0 || len(store.acquireIDs) != 0 {
-		t.Fatalf("summary/acquire = %#v/%#v, want purge ignored by lifecycle-only gate", summary, store.acquireIDs)
+	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || strings.Join(store.acquireIDs, ",") != purgeRecord.ID {
+		t.Fatalf("summary/acquire = %#v/%#v, want disabled purge audited unsupported intervention", summary, store.acquireIDs)
 	}
+	assertWorkerAppUnsupportedAudit(t, store, purgeRecord, audit.EventTypeRepoPurge)
 }
 
 func TestRunOnceRepoPurgeEnabledProcessesPurge(t *testing.T) {
@@ -807,7 +835,7 @@ func TestRunOnceRepoPurgeCancelRequestedIsNotFinalized(t *testing.T) {
 	}
 }
 
-func TestRunOnceSavePointCreateDisabledDoesNotListOrClaim(t *testing.T) {
+func TestRunOnceSavePointCreateDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
 	now := workerAppNow()
 	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
 	store := newWorkerAppStore(record)
@@ -815,12 +843,16 @@ func TestRunOnceSavePointCreateDisabledDoesNotListOrClaim(t *testing.T) {
 	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
 
 	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
 	}
-	if summary := result.Summary().Operation; summary.Scanned != 0 || summary.Claimed != 0 || store.savePointListCalls != 0 || len(store.acquireIDs) != 0 {
-		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want save_point_create ignored while gate disabled", summary, store.savePointListCalls, store.acquireIDs)
+	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || store.savePointListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
+		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want disabled save_point_create audited unsupported intervention", summary, store.savePointListCalls, store.acquireIDs)
 	}
+	if store.genericUpdateCalls != 0 {
+		t.Fatalf("generic update calls = %d, want unsupported intervention committed through audit boundary", store.genericUpdateCalls)
+	}
+	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeSavePointCreate)
 }
 
 func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.T) {
@@ -873,7 +905,47 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	}
 }
 
-func TestRunOnceRestorePreviewDisabledDoesNotListOrClaim(t *testing.T) {
+func TestRunOnceTemplateCreateDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppTemplateCreateOperationRecord("op_template_create", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
+	}
+	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || store.templateCreateListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
+		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want disabled template_create audited unsupported intervention", summary, store.templateCreateListCalls, store.acquireIDs)
+	}
+	if store.genericUpdateCalls != 0 {
+		t.Fatalf("generic update calls = %d, want unsupported intervention committed through audit boundary", store.genericUpdateCalls)
+	}
+	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeTemplateCreate)
+}
+
+func TestRunOnceTemplateCloneDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppTemplateCloneOperationRecord("op_template_clone", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
+	}
+	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || store.templateCloneListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
+		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want disabled template_clone audited unsupported intervention", summary, store.templateCloneListCalls, store.acquireIDs)
+	}
+	if store.genericUpdateCalls != 0 {
+		t.Fatalf("generic update calls = %d, want unsupported intervention committed through audit boundary", store.genericUpdateCalls)
+	}
+	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeTemplateClone)
+}
+
+func TestRunOnceRestorePreviewDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
 	now := workerAppNow()
 	record := workerAppRestorePreviewOperationRecord("op_preview", now)
 	store := newWorkerAppStore(record)
@@ -881,12 +953,13 @@ func TestRunOnceRestorePreviewDisabledDoesNotListOrClaim(t *testing.T) {
 	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
 
 	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
 	}
-	if summary := result.Summary().Operation; summary.Scanned != 0 || summary.Claimed != 0 || store.restorePreviewListCalls != 0 || len(store.acquireIDs) != 0 {
-		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want restore_preview ignored while gate disabled", summary, store.restorePreviewListCalls, store.acquireIDs)
+	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || store.restorePreviewListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
+		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want disabled restore_preview audited unsupported intervention", summary, store.restorePreviewListCalls, store.acquireIDs)
 	}
+	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeRestorePreview)
 }
 
 func TestRunOnceRestorePreviewEnabledClaimsThroughRestorePreviewExecutor(t *testing.T) {
@@ -935,7 +1008,7 @@ func TestRunOnceRestorePreviewEnabledClaimsThroughRestorePreviewExecutor(t *test
 	}
 }
 
-func TestRunOnceRestorePreviewDiscardDisabledDoesNotListOrClaim(t *testing.T) {
+func TestRunOnceRestorePreviewDiscardDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
 	now := workerAppNow()
 	record := workerAppRestorePreviewDiscardOperationRecord("op_discard", now)
 	store := newWorkerAppStore(record)
@@ -943,12 +1016,13 @@ func TestRunOnceRestorePreviewDiscardDisabledDoesNotListOrClaim(t *testing.T) {
 	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
 
 	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
 	}
-	if summary := result.Summary().Operation; summary.Scanned != 0 || summary.Claimed != 0 || store.restorePreviewDiscardListCalls != 0 || len(store.acquireIDs) != 0 {
-		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want restore_preview_discard ignored while gate disabled", summary, store.restorePreviewDiscardListCalls, store.acquireIDs)
+	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || store.restorePreviewDiscardListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
+		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want disabled restore_preview_discard audited unsupported intervention", summary, store.restorePreviewDiscardListCalls, store.acquireIDs)
 	}
+	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeRestorePreviewDiscard)
 }
 
 func TestRunOnceRestorePreviewDiscardEnabledClaimsThroughDiscardExecutor(t *testing.T) {
@@ -999,7 +1073,7 @@ func TestRunOnceRestorePreviewDiscardEnabledClaimsThroughDiscardExecutor(t *test
 	}
 }
 
-func TestRunOnceRestoreRunDisabledDoesNotListOrClaim(t *testing.T) {
+func TestRunOnceRestoreRunDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
 	now := workerAppNow()
 	record := workerAppRestoreRunOperationRecord("op_run", now)
 	store := newWorkerAppStore(record)
@@ -1007,12 +1081,13 @@ func TestRunOnceRestoreRunDisabledDoesNotListOrClaim(t *testing.T) {
 	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
 
 	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
 	}
-	if summary := result.Summary().Operation; summary.Scanned != 0 || summary.Claimed != 0 || store.restoreRunListCalls != 0 || len(store.acquireIDs) != 0 {
-		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want restore_run ignored while gate disabled", summary, store.restoreRunListCalls, store.acquireIDs)
+	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || store.restoreRunListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
+		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want disabled restore_run audited unsupported intervention", summary, store.restoreRunListCalls, store.acquireIDs)
 	}
+	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeRestoreRun)
 }
 
 func TestRunOnceRestoreRunEnabledClaimsThroughRestoreRunExecutor(t *testing.T) {
@@ -1589,6 +1664,30 @@ func newWorkerAppRunner(t *testing.T, store *fakeWorkerAppStore, source config.M
 	return runner
 }
 
+func assertWorkerAppUnsupportedAudit(t *testing.T, store *fakeWorkerAppStore, record operations.OperationRecord, eventType audit.EventType) {
+	t.Helper()
+	got := store.records[record.ID]
+	if got.State != operations.OperationStateOperatorInterventionRequired || got.Error == nil || got.Error.Code != "OPERATION_RECOVERY_REQUIRED" || got.Error.Retryable {
+		t.Fatalf("operation = %#v, want OPERATION_RECOVERY_REQUIRED operator intervention", got)
+	}
+	if got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("operation lease = %q/%v, want cleared by commit", got.LeaseOwner, got.LeaseExpiresAt)
+	}
+	if got.Error.Details["reason"] == nil || got.Error.Details["evidence"] == nil {
+		t.Fatalf("operation error details = %#v, want reason/evidence", got.Error.Details)
+	}
+	if len(store.auditEvents) != 1 {
+		t.Fatalf("audit events = %#v, want one unsupported recovery event", store.auditEvents)
+	}
+	event := store.auditEvents[0]
+	if event.Type != eventType || event.Outcome != audit.OutcomeFailed || event.Reason != "unsupported_operation_recovery" || event.OperationID != record.ID {
+		t.Fatalf("audit event = %#v, want failed unsupported %s event", event, eventType)
+	}
+	if event.Details["reason"] != got.Error.Details["reason"] || event.Details["evidence"] == nil {
+		t.Fatalf("audit details = %#v, want reason/evidence matching operation", event.Details)
+	}
+}
+
 func workerAppConfigSource(overrides config.MapSource) config.MapSource {
 	source := config.MapSource{
 		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
@@ -1834,6 +1933,48 @@ func workerAppSavePointCreateOperationRecord(operationID string, now time.Time) 
 	}
 }
 
+func workerAppTemplateCreateOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	return operations.OperationRecord{
+		ID:               operationID,
+		Type:             operations.OperationTemplateCreate,
+		State:            operations.OperationStateQueued,
+		Phase:            operations.OperationPhaseTemplateCreateValidate,
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationTemplateCreate, "idem_template").String(),
+		IdempotencyKey:   "idem_template",
+		RequestHash:      operations.RequestHash("sha256:template-create"),
+		CorrelationID:    "corr-alpha",
+		CallerService:    "product-caller",
+		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:         operations.ResourceRef{Type: "repo_template", ID: "tmpl_base01"},
+		NamespaceID:      "ns_alpha01",
+		RepoID:           "repo_alpha01",
+		TemplateID:       "tmpl_base01",
+		InputSummary:     map[string]any{"source_repo_id": "repo_alpha01", "target_template_id": "tmpl_base01", "clone_history_mode": "main"},
+		CreatedAt:        now.Add(-time.Hour),
+	}
+}
+
+func workerAppTemplateCloneOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	return operations.OperationRecord{
+		ID:               operationID,
+		Type:             operations.OperationTemplateClone,
+		State:            operations.OperationStateQueued,
+		Phase:            operations.OperationPhaseTemplateCloneValidate,
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationTemplateClone, "idem_template_clone").String(),
+		IdempotencyKey:   "idem_template_clone",
+		RequestHash:      operations.RequestHash("sha256:template-clone"),
+		CorrelationID:    "corr-alpha",
+		CallerService:    "product-caller",
+		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:         operations.ResourceRef{Type: "repo", ID: "repo_clone01"},
+		NamespaceID:      "ns_alpha01",
+		RepoID:           "repo_clone01",
+		TemplateID:       "tmpl_base01",
+		InputSummary:     map[string]any{"template_id": "tmpl_base01", "target_repo_id": "repo_clone01", "clone_history_mode": "main"},
+		CreatedAt:        now.Add(-time.Hour),
+	}
+}
+
 func workerAppRestorePreviewOperationRecord(operationID string, now time.Time) operations.OperationRecord {
 	return operations.OperationRecord{
 		ID:               operationID,
@@ -2043,6 +2184,8 @@ type fakeWorkerAppStore struct {
 	auditClaimOwner                string
 	auditClaimLimit                int
 	savePointListCalls             int
+	templateCreateListCalls        int
+	templateCloneListCalls         int
 	restorePreviewListCalls        int
 	restorePreviewDiscardListCalls int
 	restoreRunListCalls            int
@@ -2055,6 +2198,7 @@ type fakeWorkerAppStore struct {
 	staleWorkloadMountBindings     []workloadmount.Binding
 	workloadMountStaleNow          time.Time
 	workloadMountStaleLimit        int
+	genericUpdateCalls             int
 }
 
 type workerAppAuditFailedCall struct {
@@ -2476,10 +2620,12 @@ func (store *fakeWorkerAppStore) ListSavePointCreateOperationsForRecovery(ctx co
 }
 
 func (store *fakeWorkerAppStore) ListTemplateCreateOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	store.templateCreateListCalls++
 	return store.listTemplateOperationsForRecovery(now, limit, operations.OperationTemplateCreate, operations.OperationPhaseTemplateCreateValidate)
 }
 
 func (store *fakeWorkerAppStore) ListTemplateCloneOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	store.templateCloneListCalls++
 	return store.listTemplateOperationsForRecovery(now, limit, operations.OperationTemplateClone, operations.OperationPhaseTemplateCloneValidate)
 }
 
@@ -2794,6 +2940,34 @@ func workerAppCommittedOperation(record operations.SanitizedOperationRecord) ope
 	operation.LeaseOwner = ""
 	operation.LeaseExpiresAt = nil
 	return operation
+}
+
+func (store *fakeWorkerAppStore) UpdateOperationWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	store.genericUpdateCalls++
+	operation := record.Record()
+	existing, ok := store.records[operation.ID]
+	if !ok || existing.State != operations.OperationStateRunning || existing.LeaseOwner != owner || existing.LeaseExpiresAt == nil || !existing.LeaseExpiresAt.After(now) {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitOperationWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	existing, ok := store.records[operation.ID]
+	if !ok || existing.State != operations.OperationStateRunning || existing.LeaseOwner != owner || existing.LeaseExpiresAt == nil || !existing.LeaseExpiresAt.After(now) {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
 }
 
 func (store *fakeWorkerAppStore) CommitNamespaceUpsertWithLease(_ context.Context, namespace resources.Namespace, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Namespace, operations.OperationRecord, error) {

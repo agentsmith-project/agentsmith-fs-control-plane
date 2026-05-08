@@ -582,6 +582,10 @@ func (store *cmdWorkerAppStore) CommitRestoreRunFailedWithLease(context.Context,
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
+func (store *cmdWorkerAppStore) CommitOperationWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected generic operation commit")
+}
+
 func (store *cmdWorkerAppStore) GetOperation(context.Context, string) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected operation read")
 }

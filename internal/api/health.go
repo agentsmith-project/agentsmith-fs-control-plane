@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 )
 
 const (
-	CapabilityStorage       = "storage"
-	CapabilityJVS           = "jvs"
-	CapabilityWebDAVExport  = "webdav_export"
-	CapabilityWorkloadMount = "workload_mount"
+	CapabilityStorage       = string(capability.Storage)
+	CapabilityJVS           = string(capability.JVS)
+	CapabilityWebDAVExport  = string(capability.WebDAVExport)
+	CapabilityWorkloadMount = string(capability.WorkloadMount)
 )
 
 var requiredReadinessCapabilities = []string{
@@ -32,10 +35,13 @@ type ReadinessResponse struct {
 }
 
 type CapabilityGate struct {
-	Enabled bool   `json:"enabled"`
-	Ready   bool   `json:"ready"`
-	Gated   bool   `json:"gated"`
-	Reason  string `json:"reason"`
+	Enabled                 bool   `json:"enabled"`
+	Ready                   bool   `json:"ready"`
+	Gated                   bool   `json:"gated"`
+	Reason                  string `json:"reason"`
+	RequiredForServiceReady bool   `json:"required_for_service_ready"`
+	RequiredForDefaultGA    bool   `json:"required_for_default_ga"`
+	OptionalGated           bool   `json:"optional_gated"`
 }
 
 func HealthHandler() http.Handler {
@@ -87,10 +93,44 @@ func ReadinessHandlerFunc(provider func(context.Context) ReadinessResponse) http
 	})
 }
 
+func ReadinessFromCapabilityMatrix(matrix capability.Matrix) ReadinessResponse {
+	entries := matrix.Entries()
+	capabilities := make(map[string]CapabilityGate, len(entries))
+	requiredCapabilities := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		id := string(entry.ID)
+		capabilities[id] = CapabilityGate{
+			Enabled:                 entry.Status.Enabled,
+			Ready:                   entry.Status.Ready,
+			Gated:                   entry.Status.Gated,
+			Reason:                  entry.Status.Reason,
+			RequiredForServiceReady: entry.Requirement.RequiredForServiceReady,
+			RequiredForDefaultGA:    entry.Requirement.RequiredForDefaultGA,
+			OptionalGated:           entry.Requirement.OptionalGated,
+		}
+		if entry.Requirement.RequiredForServiceReady {
+			requiredCapabilities = append(requiredCapabilities, id)
+		}
+	}
+
+	return ReadinessResponse{
+		Status:               "not_ready",
+		Ready:                false,
+		Capabilities:         capabilities,
+		RequiredCapabilities: requiredCapabilities,
+	}
+}
+
 func effectiveReadiness(readiness ReadinessResponse) ReadinessResponse {
 	requiredCapabilities := readinessRequiredCapabilities(readiness)
+	requiredSet := map[string]bool{}
+	for _, capability := range requiredCapabilities {
+		requiredSet[capability] = true
+	}
 	capabilities := make(map[string]CapabilityGate, len(readiness.Capabilities)+len(requiredCapabilities))
 	for capability, gate := range readiness.Capabilities {
+		gate.RequiredForServiceReady = requiredSet[capability]
+		gate.OptionalGated = !gate.RequiredForServiceReady && (gate.OptionalGated || gate.Gated)
 		capabilities[capability] = gate
 	}
 
@@ -99,14 +139,18 @@ func effectiveReadiness(readiness ReadinessResponse) ReadinessResponse {
 		gate, ok := capabilities[capability]
 		if !ok {
 			capabilities[capability] = CapabilityGate{
-				Enabled: false,
-				Ready:   false,
-				Gated:   true,
-				Reason:  "missing_required_capability",
+				Enabled:                 false,
+				Ready:                   false,
+				Gated:                   true,
+				Reason:                  "missing_required_capability",
+				RequiredForServiceReady: true,
 			}
 			ready = false
 			continue
 		}
+		gate.RequiredForServiceReady = true
+		gate.OptionalGated = false
+		capabilities[capability] = gate
 		if !gate.Enabled || !gate.Ready || gate.Gated {
 			ready = false
 		}
@@ -125,6 +169,16 @@ func effectiveReadiness(readiness ReadinessResponse) ReadinessResponse {
 func readinessRequiredCapabilities(readiness ReadinessResponse) []string {
 	if readiness.RequiredCapabilities != nil {
 		return readiness.RequiredCapabilities
+	}
+	required := make([]string, 0, len(readiness.Capabilities))
+	for capability, gate := range readiness.Capabilities {
+		if gate.RequiredForServiceReady {
+			required = append(required, capability)
+		}
+	}
+	if len(required) > 0 {
+		sort.Strings(required)
+		return required
 	}
 	return requiredReadinessCapabilities
 }
