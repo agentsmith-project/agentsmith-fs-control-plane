@@ -613,6 +613,83 @@ func TestCurrentRepoManifestCapabilityMatrixSelectorCoversReadyzWorkloadSplitTes
 	}
 }
 
+func TestCurrentRepoManifestReplacesAdminBootstrapSeedGap(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	for _, item := range manifest.Items {
+		if item.ID == "seed_gap_admin_bootstrap_ready_open" {
+			t.Fatal("current manifest must close seed_gap_admin_bootstrap_ready_open with implemented evidence")
+		}
+	}
+
+	var item Item
+	found := false
+	for _, candidate := range manifest.Items {
+		if candidate.ID == "admin_bootstrap_ready_unit" {
+			item = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("manifest missing admin_bootstrap_ready_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_ADMIN_BOOTSTRAP_READY" ||
+		item.SubclaimID != "admin_bootstrap_ready" ||
+		item.AcceptanceID != "P0_ADMIN_BOOTSTRAP_READY" ||
+		item.RiskID != "F3" ||
+		item.CapabilityID != "admin_bootstrap" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		!item.DefaultGARequired {
+		t.Fatalf("admin_bootstrap_ready_unit shape = %+v, want exact default positive replacement", item)
+	}
+	if item.PassCriteria.Kind != "positive_path" || !containsString(item.PassCriteria.Assertions, "admin bootstrap readiness passes in default mode") {
+		t.Fatalf("admin_bootstrap_ready_unit pass criteria = %+v", item.PassCriteria)
+	}
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/api", "./internal/apiapp", "./internal/contractcheck"}) {
+		t.Fatalf("%s command packages = %#v, want api, apiapp, and contractcheck", item.ID, packages)
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range []string{
+		"TestReadinessFromCapabilityMatrixSerializesAdminBootstrapFacets",
+		"TestReadinessHandlerRedactsAdminBootstrapReasons",
+		"TestInternalRuntimeReadinessIncludesAdminBootstrapFacets",
+		"TestInternalRuntimeReadinessGAProfileRequiresAdminBootstrap",
+		"TestInternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors",
+		"TestInternalRuntimeReadinessAdminBootstrapRequiresUsableCallerPolicyRoles",
+		"TestInternalRuntimeReadinessAdminBootstrapRequiresPolicyCallersToBeAuthenticatable",
+		"TestInternalRuntimeReadinessAdminBootstrapDoesNotRequireDefaultUserLoop",
+		"TestCurrentRepoReadinessEvidenceHasCurrentImplementationStatus",
+	} {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
 func TestCurrentRepoManifestSeedModeAllowsOpenSeedGaps(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
@@ -644,6 +721,9 @@ func goTestPackageForTestName(testName string) string {
 	}
 	if strings.HasPrefix(testName, "TestInternalRuntime") {
 		return "./internal/apiapp"
+	}
+	if strings.HasPrefix(testName, "TestCurrentRepoReadiness") {
+		return "./internal/contractcheck"
 	}
 	return "./internal/api"
 }

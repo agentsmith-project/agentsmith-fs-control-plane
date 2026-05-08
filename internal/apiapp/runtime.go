@@ -454,6 +454,11 @@ func internalReadiness(cfg config.Config) api.ReadinessResponse {
 
 func internalCapabilityMatrix(cfg config.Config) capability.Matrix {
 	storageStatus := capabilityStatus(cfg.Capabilities.Storage, "storage_not_configured", "storage_not_ready")
+	namespaceBindingStatus := namespaceBindingReadinessStatus(cfg)
+	volumePreflightStatus := volumePreflightReadinessStatus(storageStatus, "")
+	callerPolicyStatus := callerPolicyReadinessStatus(cfg)
+	pathRedactionStatus := capability.Status{Enabled: true, Ready: true}
+	adminBootstrapStatus := adminBootstrapReadinessStatus(namespaceBindingStatus, volumePreflightStatus, callerPolicyStatus, pathRedactionStatus)
 	jvsStatus := capabilityStatus(cfg.Capabilities.JVS, "jvs_not_configured", "jvs_not_ready")
 	webDAVStatus := capabilityStatus(cfg.Capabilities.WebDAV, "webdav_not_configured", "webdav_not_ready")
 	mountStatus := capability.Status{
@@ -470,6 +475,31 @@ func internalCapabilityMatrix(cfg config.Config) capability.Matrix {
 			ID:          capability.Storage,
 			Status:      storageStatus,
 			Requirement: internalCapabilityRequirement(cfg, capability.Storage, storageStatus),
+		},
+		capability.Entry{
+			ID:          capability.NamespaceBinding,
+			Status:      namespaceBindingStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.NamespaceBinding, namespaceBindingStatus),
+		},
+		capability.Entry{
+			ID:          capability.VolumePreflight,
+			Status:      volumePreflightStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.VolumePreflight, volumePreflightStatus),
+		},
+		capability.Entry{
+			ID:          capability.CallerPolicyReadiness,
+			Status:      callerPolicyStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.CallerPolicyReadiness, callerPolicyStatus),
+		},
+		capability.Entry{
+			ID:          capability.PathRedaction,
+			Status:      pathRedactionStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.PathRedaction, pathRedactionStatus),
+		},
+		capability.Entry{
+			ID:          capability.AdminBootstrap,
+			Status:      adminBootstrapStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.AdminBootstrap, adminBootstrapStatus),
 		},
 		capability.Entry{
 			ID:          capability.JVS,
@@ -517,10 +547,14 @@ func internalReadinessProvider(cfg config.Config, ping func(context.Context) err
 		}
 		if ping == nil {
 			readiness.Capabilities[api.CapabilityStorage] = storageReadinessOverride(readiness, "storage_health_check_missing")
+			readiness.Capabilities[api.CapabilityVolumePreflight] = volumePreflightReadinessOverride(readiness, "volume_preflight_health_check_missing")
+			readiness.Capabilities[api.CapabilityAdminBootstrap] = adminBootstrapGateFromReadiness(readiness)
 			return readiness
 		}
 		if err := ping(ctx); err != nil {
 			readiness.Capabilities[api.CapabilityStorage] = storageReadinessOverride(readiness, "storage_not_ready")
+			readiness.Capabilities[api.CapabilityVolumePreflight] = volumePreflightReadinessOverride(readiness, "volume_preflight_storage_not_ready")
+			readiness.Capabilities[api.CapabilityAdminBootstrap] = adminBootstrapGateFromReadiness(readiness)
 		}
 		return readiness
 	}
@@ -532,6 +566,43 @@ func storageReadinessOverride(readiness api.ReadinessResponse, reason string) ap
 	gate.Ready = false
 	gate.Gated = true
 	gate.Reason = reason
+	return gate
+}
+
+func volumePreflightReadinessOverride(readiness api.ReadinessResponse, reason string) api.CapabilityGate {
+	gate := readiness.Capabilities[api.CapabilityVolumePreflight]
+	gate.Enabled = true
+	gate.Ready = false
+	gate.Gated = true
+	gate.Reason = reason
+	return gate
+}
+
+func adminBootstrapGateFromReadiness(readiness api.ReadinessResponse) api.CapabilityGate {
+	for _, dependency := range []string{
+		api.CapabilityNamespaceBinding,
+		api.CapabilityVolumePreflight,
+		api.CapabilityCallerPolicyReadiness,
+		api.CapabilityPathRedaction,
+	} {
+		gate := readiness.Capabilities[dependency]
+		if !gate.Enabled || !gate.Ready || gate.Gated {
+			return api.CapabilityGate{
+				Enabled:                 true,
+				Ready:                   false,
+				Gated:                   true,
+				Reason:                  "admin_bootstrap_dependency_not_ready",
+				RequiredForServiceReady: readiness.Capabilities[api.CapabilityAdminBootstrap].RequiredForServiceReady,
+				RequiredForDefaultGA:    readiness.Capabilities[api.CapabilityAdminBootstrap].RequiredForDefaultGA,
+				OptionalGated:           readiness.Capabilities[api.CapabilityAdminBootstrap].OptionalGated,
+			}
+		}
+	}
+	gate := readiness.Capabilities[api.CapabilityAdminBootstrap]
+	gate.Enabled = true
+	gate.Ready = true
+	gate.Gated = false
+	gate.Reason = ""
 	return gate
 }
 
@@ -547,7 +618,14 @@ func internalCapabilityRequirement(cfg config.Config, id capability.ID, status c
 func internalRequiredForServiceReady(cfg config.Config, id capability.ID) bool {
 	if cfg.ReadinessProfile == config.ReadinessProfileGA {
 		switch id {
-		case capability.Storage, capability.JVS, capability.WebDAVExport:
+		case capability.Storage,
+			capability.NamespaceBinding,
+			capability.VolumePreflight,
+			capability.CallerPolicyReadiness,
+			capability.PathRedaction,
+			capability.AdminBootstrap,
+			capability.JVS,
+			capability.WebDAVExport:
 			return true
 		default:
 			return false
@@ -555,7 +633,12 @@ func internalRequiredForServiceReady(cfg config.Config, id capability.ID) bool {
 	}
 
 	switch id {
-	case capability.Storage:
+	case capability.Storage,
+		capability.NamespaceBinding,
+		capability.VolumePreflight,
+		capability.CallerPolicyReadiness,
+		capability.PathRedaction,
+		capability.AdminBootstrap:
 		return true
 	case capability.JVS:
 		return cfg.Capabilities.JVS.Enabled
@@ -570,6 +653,92 @@ func internalRequiredForServiceReady(cfg config.Config, id capability.ID) bool {
 	default:
 		return false
 	}
+}
+
+func namespaceBindingReadinessStatus(cfg config.Config) capability.Status {
+	if strings.TrimSpace(cfg.API.Mode) != "internal" {
+		return capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "namespace_binding_not_configured"}
+	}
+	return capability.Status{Enabled: true, Ready: true}
+}
+
+func callerPolicyReadinessStatus(cfg config.Config) capability.Status {
+	tokenCallers, ok := serviceTokenCallers(cfg.API.ServiceTokens)
+	if !ok {
+		return capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "caller_policy_not_configured"}
+	}
+	globalCallers, err := parseAllowedCallerConfig("AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS", cfg.API.DeploymentGlobalAllowedCallers)
+	if err != nil {
+		return capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "caller_policy_not_configured"}
+	}
+	namespaceCallers, err := parseAllowedCallerConfig("AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS", cfg.API.DeploymentNamespaceAllowedCallers)
+	if err != nil {
+		return capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "caller_policy_not_configured"}
+	}
+	if !policyCallersAuthenticatable(tokenCallers, globalCallers) || !policyCallersAuthenticatable(tokenCallers, namespaceCallers) {
+		return capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "caller_policy_not_configured"}
+	}
+	if !policyHasUsableRole(globalCallers, tokenCallers, auth.RoleVolumeAdmin) ||
+		!policyHasUsableRole(namespaceCallers, tokenCallers, auth.RoleNamespaceAdmin) ||
+		!policyHasUsableRole(globalCallers, tokenCallers, auth.RoleOperationInspector) {
+		return capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "caller_policy_missing_bootstrap_role"}
+	}
+	return capability.Status{Enabled: true, Ready: true}
+}
+
+func serviceTokenCallers(raw string) (map[string]bool, bool) {
+	resolver, err := NewServiceTokenPrincipalResolver(raw)
+	if err != nil {
+		return nil, false
+	}
+	callers := map[string]bool{}
+	for _, caller := range resolver.tokenToCaller {
+		callers[caller] = true
+	}
+	return callers, len(callers) > 0
+}
+
+func policyCallersAuthenticatable(tokenCallers map[string]bool, allowedCallers []auth.AllowedCaller) bool {
+	for _, caller := range allowedCallers {
+		if !tokenCallers[caller.CallerService] {
+			return false
+		}
+	}
+	return true
+}
+
+func policyHasUsableRole(allowedCallers []auth.AllowedCaller, tokenCallers map[string]bool, role auth.Role) bool {
+	for _, caller := range allowedCallers {
+		if !tokenCallers[caller.CallerService] {
+			continue
+		}
+		if !auth.CallerNotAllowed(caller.CallerService, role, []auth.AllowedCaller{caller}) {
+			return true
+		}
+	}
+	return false
+}
+
+func volumePreflightReadinessStatus(storage capability.Status, overrideReason string) capability.Status {
+	if overrideReason != "" {
+		return capability.Status{Enabled: true, Ready: false, Gated: true, Reason: overrideReason}
+	}
+	if !storage.Enabled {
+		return capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "volume_preflight_storage_not_configured"}
+	}
+	if !storage.Ready || storage.Gated {
+		return capability.Status{Enabled: true, Ready: false, Gated: true, Reason: "volume_preflight_storage_not_ready"}
+	}
+	return capability.Status{Enabled: true, Ready: true}
+}
+
+func adminBootstrapReadinessStatus(dependencies ...capability.Status) capability.Status {
+	for _, dependency := range dependencies {
+		if !dependency.EffectiveReady() {
+			return capability.Status{Enabled: true, Ready: false, Gated: true, Reason: "admin_bootstrap_dependency_not_ready"}
+		}
+	}
+	return capability.Status{Enabled: true, Ready: true}
 }
 
 func mountReadinessReason(capability config.Capability) string {

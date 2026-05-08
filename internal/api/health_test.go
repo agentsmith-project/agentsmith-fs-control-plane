@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
@@ -332,6 +333,123 @@ func TestReadinessFromCapabilityMatrixSerializesWorkloadMountSplitCapabilities(t
 		if gate.Enabled || gate.Ready || !gate.Gated || gate.Reason != "mount_not_configured" {
 			t.Fatalf("%s gate = %#v, want disabled optional mount gate", capability, gate)
 		}
+	}
+}
+
+func TestReadinessFromCapabilityMatrixSerializesAdminBootstrapFacets(t *testing.T) {
+	readiness := ReadinessFromCapabilityMatrix(capability.NewMatrix(
+		capability.Entry{
+			ID:     capability.NamespaceBinding,
+			Status: capability.Status{Enabled: true, Ready: true},
+			Requirement: capability.Requirement{
+				RequiredForServiceReady: true,
+				RequiredForDefaultGA:    true,
+			},
+		},
+		capability.Entry{
+			ID:     capability.VolumePreflight,
+			Status: capability.Status{Enabled: true, Ready: true},
+			Requirement: capability.Requirement{
+				RequiredForServiceReady: true,
+				RequiredForDefaultGA:    true,
+			},
+		},
+		capability.Entry{
+			ID:     capability.CallerPolicyReadiness,
+			Status: capability.Status{Enabled: true, Ready: true},
+			Requirement: capability.Requirement{
+				RequiredForServiceReady: true,
+				RequiredForDefaultGA:    true,
+			},
+		},
+		capability.Entry{
+			ID:     capability.PathRedaction,
+			Status: capability.Status{Enabled: true, Ready: true},
+			Requirement: capability.Requirement{
+				RequiredForServiceReady: true,
+				RequiredForDefaultGA:    true,
+			},
+		},
+		capability.Entry{
+			ID:     capability.AdminBootstrap,
+			Status: capability.Status{Enabled: true, Ready: true},
+			Requirement: capability.Requirement{
+				RequiredForServiceReady: true,
+				RequiredForDefaultGA:    true,
+			},
+		},
+	))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	ReadinessHandler(readiness).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var body ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness response did not decode: %v", err)
+	}
+	for _, capability := range []string{
+		CapabilityNamespaceBinding,
+		CapabilityVolumePreflight,
+		CapabilityCallerPolicyReadiness,
+		CapabilityPathRedaction,
+		CapabilityAdminBootstrap,
+	} {
+		gate, ok := body.Capabilities[capability]
+		if !ok {
+			t.Fatalf("missing admin bootstrap capability gate %q", capability)
+		}
+		if !gate.Enabled || !gate.Ready || gate.Gated || !gate.RequiredForServiceReady || !gate.RequiredForDefaultGA || gate.OptionalGated {
+			t.Fatalf("%s gate = %#v, want required ready default-GA facet", capability, gate)
+		}
+	}
+}
+
+func TestReadinessHandlerRedactsAdminBootstrapReasons(t *testing.T) {
+	readiness := ReadinessResponse{
+		Status:               "not_ready",
+		Ready:                false,
+		RequiredCapabilities: []string{CapabilityAdminBootstrap},
+		Capabilities: map[string]CapabilityGate{
+			CapabilityAdminBootstrap: {
+				Enabled:                 true,
+				Ready:                   false,
+				Gated:                   true,
+				Reason:                  "postgres://api:secret@db/afscp root=/srv/afscp/volumes/vol_main SecretRef=ns/runtime credential=.jvs",
+				RequiredForServiceReady: true,
+				RequiredForDefaultGA:    true,
+			},
+			CapabilityPathRedaction: {
+				Enabled:              true,
+				Ready:                true,
+				RequiredForDefaultGA: true,
+			},
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	ReadinessHandler(readiness).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	}
+	rendered := rec.Body.String()
+	for _, leaked := range []string{"postgres://api", "secret", "/srv/afscp", "SecretRef", "credential", ".jvs"} {
+		if strings.Contains(rendered, leaked) {
+			t.Fatalf("readiness response leaked %q in %s", leaked, rendered)
+		}
+	}
+	var body ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness response did not decode: %v", err)
+	}
+	if got := body.Capabilities[CapabilityAdminBootstrap].Reason; got != "admin_bootstrap_dependency_not_ready" {
+		t.Fatalf("admin bootstrap reason = %q, want fixed redacted aggregate reason", got)
 	}
 }
 

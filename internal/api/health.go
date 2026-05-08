@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 )
@@ -12,6 +13,11 @@ import (
 const (
 	CapabilityStorage                = string(capability.Storage)
 	CapabilityJVS                    = string(capability.JVS)
+	CapabilityNamespaceBinding       = string(capability.NamespaceBinding)
+	CapabilityVolumePreflight        = string(capability.VolumePreflight)
+	CapabilityAdminBootstrap         = string(capability.AdminBootstrap)
+	CapabilityCallerPolicyReadiness  = string(capability.CallerPolicyReadiness)
+	CapabilityPathRedaction          = string(capability.PathRedaction)
 	CapabilityWebDAVExport           = string(capability.WebDAVExport)
 	CapabilityWorkloadMount          = string(capability.WorkloadMount)
 	CapabilityWorkloadMountBinding   = string(capability.WorkloadMountBinding)
@@ -68,6 +74,11 @@ func NeutralReadiness() ReadinessResponse {
 		Capabilities: map[string]CapabilityGate{
 			CapabilityStorage:                disabled,
 			CapabilityJVS:                    disabled,
+			CapabilityNamespaceBinding:       disabled,
+			CapabilityVolumePreflight:        disabled,
+			CapabilityAdminBootstrap:         disabled,
+			CapabilityCallerPolicyReadiness:  disabled,
+			CapabilityPathRedaction:          disabled,
 			CapabilityWebDAVExport:           disabled,
 			CapabilityWorkloadMountBinding:   disabled,
 			CapabilityWorkloadMountDiscovery: disabled,
@@ -139,6 +150,7 @@ func effectiveReadiness(readiness ReadinessResponse) ReadinessResponse {
 	for capability, gate := range readiness.Capabilities {
 		gate.RequiredForServiceReady = requiredSet[capability]
 		gate.OptionalGated = !gate.RequiredForServiceReady && (gate.OptionalGated || gate.Gated)
+		gate = sanitizeCapabilityGate(capability, gate)
 		capabilities[capability] = gate
 	}
 
@@ -172,6 +184,36 @@ func effectiveReadiness(readiness ReadinessResponse) ReadinessResponse {
 		readiness.Status = "not_ready"
 	}
 	return readiness
+}
+
+func sanitizeCapabilityGate(capability string, gate CapabilityGate) CapabilityGate {
+	if capability == CapabilityAdminBootstrap && (!gate.Enabled || !gate.Ready || gate.Gated) {
+		gate.Reason = "admin_bootstrap_dependency_not_ready"
+		return gate
+	}
+	if containsSensitiveReadinessReason(gate.Reason) {
+		gate.Reason = "readiness_reason_redacted"
+	}
+	return gate
+}
+
+func containsSensitiveReadinessReason(reason string) bool {
+	normalized := strings.ToLower(reason)
+	for _, token := range []string{
+		"postgres://",
+		"secret",
+		"credential",
+		"bearer ",
+		"authorization:",
+		"secretref",
+		"/srv/",
+		".jvs",
+	} {
+		if strings.Contains(normalized, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func readinessRequiredCapabilities(readiness ReadinessResponse) []string {

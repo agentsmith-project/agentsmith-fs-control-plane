@@ -708,6 +708,190 @@ func TestInternalRuntimeReadinessGAProfileRequiresDefaultGACapabilitySet(t *test
 	}
 }
 
+func TestInternalRuntimeReadinessIncludesAdminBootstrapFacets(t *testing.T) {
+	runtime := newTestRuntime(t)
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	for _, capability := range []string{
+		api.CapabilityNamespaceBinding,
+		api.CapabilityVolumePreflight,
+		api.CapabilityCallerPolicyReadiness,
+		api.CapabilityPathRedaction,
+		api.CapabilityAdminBootstrap,
+	} {
+		gate, ok := body.Capabilities[capability]
+		if !ok {
+			t.Fatalf("missing admin bootstrap facet %q", capability)
+		}
+		if !gate.Enabled || !gate.Ready || gate.Gated || gate.Reason != "" {
+			t.Fatalf("%s gate = %#v, want ready admin bootstrap facet", capability, gate)
+		}
+	}
+}
+
+func TestInternalRuntimeReadinessGAProfileRequiresAdminBootstrap(t *testing.T) {
+	runtime := newTestRuntimeWithSourceOverrides(t, config.MapSource{
+		"AFSCP_READINESS_PROFILE": "ga",
+	}, func(context.Context) error {
+		return errors.New("dial tcp postgres://api:secret@db/afscp")
+	})
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	for _, capability := range []string{
+		api.CapabilityNamespaceBinding,
+		api.CapabilityVolumePreflight,
+		api.CapabilityCallerPolicyReadiness,
+		api.CapabilityPathRedaction,
+		api.CapabilityAdminBootstrap,
+	} {
+		gate, ok := body.Capabilities[capability]
+		if !ok {
+			t.Fatalf("missing GA admin bootstrap facet %q", capability)
+		}
+		if !gate.RequiredForServiceReady || !gate.RequiredForDefaultGA || gate.OptionalGated {
+			t.Fatalf("%s gate = %#v, want required for GA service readiness", capability, gate)
+		}
+	}
+	admin := body.Capabilities[api.CapabilityAdminBootstrap]
+	if !admin.Enabled || admin.Ready || !admin.Gated || admin.Reason != "admin_bootstrap_dependency_not_ready" {
+		t.Fatalf("admin bootstrap gate = %#v, want fixed dependency failure", admin)
+	}
+}
+
+func TestInternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors(t *testing.T) {
+	runtime := newTestRuntimeWithStorePing(t, func(context.Context) error {
+		return errors.New("postgres://api:secret@db/afscp root=/srv/afscp/volumes/vol_main SecretRef=ns/runtime credential=.jvs")
+	})
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	volume := body.Capabilities[api.CapabilityVolumePreflight]
+	if !volume.Enabled || volume.Ready || !volume.Gated || volume.Reason != "volume_preflight_storage_not_ready" {
+		t.Fatalf("volume preflight gate = %#v, want redacted storage ping failure", volume)
+	}
+	admin := body.Capabilities[api.CapabilityAdminBootstrap]
+	if !admin.Enabled || admin.Ready || !admin.Gated || admin.Reason != "admin_bootstrap_dependency_not_ready" {
+		t.Fatalf("admin bootstrap gate = %#v, want fixed aggregate failure", admin)
+	}
+	rendered := rec.Body.String()
+	for _, leaked := range []string{"postgres://api", "secret", "/srv/afscp", "SecretRef", "credential", ".jvs"} {
+		if strings.Contains(rendered, leaked) {
+			t.Fatalf("readiness response leaked %q in %s", leaked, rendered)
+		}
+	}
+}
+
+func TestInternalRuntimeReadinessAdminBootstrapRequiresUsableCallerPolicyRoles(t *testing.T) {
+	runtime := newTestRuntimeWithSourceOverrides(t, config.MapSource{
+		"AFSCP_API_SERVICE_TOKENS":                    "svc_api=secret-token",
+		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS": "svc_api:product:operation_inspector",
+	}, func(context.Context) error { return nil })
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	callerPolicy := body.Capabilities[api.CapabilityCallerPolicyReadiness]
+	if callerPolicy.Enabled || callerPolicy.Ready || !callerPolicy.Gated || callerPolicy.Reason != "caller_policy_missing_bootstrap_role" {
+		t.Fatalf("caller policy gate = %#v, want missing bootstrap role", callerPolicy)
+	}
+	admin := body.Capabilities[api.CapabilityAdminBootstrap]
+	if !admin.Enabled || admin.Ready || !admin.Gated || admin.Reason != "admin_bootstrap_dependency_not_ready" {
+		t.Fatalf("admin bootstrap gate = %#v, want aggregate dependency failure", admin)
+	}
+	rendered := rec.Body.String()
+	for _, leaked := range []string{"secret-token", "secret"} {
+		if strings.Contains(rendered, leaked) {
+			t.Fatalf("readiness response leaked %q in %s", leaked, rendered)
+		}
+	}
+}
+
+func TestInternalRuntimeReadinessAdminBootstrapRequiresPolicyCallersToBeAuthenticatable(t *testing.T) {
+	runtime := newTestRuntimeWithSourceOverrides(t, config.MapSource{
+		"AFSCP_API_SERVICE_TOKENS":                    "svc_api=token-api",
+		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS": "svc_volume:admin:volume_admin,svc_api:operator:operator_admin",
+	}, func(context.Context) error { return nil })
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	callerPolicy := body.Capabilities[api.CapabilityCallerPolicyReadiness]
+	if callerPolicy.Enabled || callerPolicy.Ready || !callerPolicy.Gated || callerPolicy.Reason != "caller_policy_not_configured" {
+		t.Fatalf("caller policy gate = %#v, want unauthenticatable policy caller to fail readiness", callerPolicy)
+	}
+	admin := body.Capabilities[api.CapabilityAdminBootstrap]
+	if !admin.Enabled || admin.Ready || !admin.Gated || admin.Reason != "admin_bootstrap_dependency_not_ready" {
+		t.Fatalf("admin bootstrap gate = %#v, want aggregate dependency failure", admin)
+	}
+}
+
+func TestInternalRuntimeReadinessAdminBootstrapDoesNotRequireDefaultUserLoop(t *testing.T) {
+	runtime := newTestRuntimeWithSourceOverrides(t, config.MapSource{
+		"AFSCP_JVS_ENABLED":    "false",
+		"AFSCP_JVS_READY":      "false",
+		"AFSCP_WEBDAV_ENABLED": "false",
+		"AFSCP_WEBDAV_READY":   "false",
+	}, func(context.Context) error { return nil })
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	admin := body.Capabilities[api.CapabilityAdminBootstrap]
+	if !admin.Enabled || !admin.Ready || admin.Gated || admin.Reason != "" {
+		t.Fatalf("admin bootstrap gate = %#v, want ready without JVS/WebDAV default user loop", admin)
+	}
+}
+
 func TestInternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1276,8 +1460,8 @@ func baseTestRuntimeSource() config.MapSource {
 	return config.MapSource{
 		"AFSCP_API_MODE":                                 "internal",
 		"AFSCP_API_POSTGRES_DSN":                         "postgres://api:secret@db/afscp",
-		"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api",
-		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_api:product:operation_inspector",
+		"AFSCP_API_SERVICE_TOKENS":                       "svc_api=token-api,svc_admin=token-admin",
+		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_admin:admin:volume_admin|operator_admin",
 		"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
 		"AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL":        "https://files.example.test",
 		"AFSCP_JVS_ENABLED":                              "true",

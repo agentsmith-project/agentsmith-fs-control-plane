@@ -659,35 +659,48 @@
       "scope": "workflow-guard"
     },
     {
-      "id": "seed_gap_admin_bootstrap_ready_open",
-      "evidence_status": "placeholder",
+      "id": "admin_bootstrap_ready_unit",
+      "evidence_status": "implemented",
       "claim_id": "CLAIM_ADMIN_BOOTSTRAP_READY",
-      "subclaim_id": "seed_gap_open",
-      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "subclaim_id": "admin_bootstrap_ready",
+      "acceptance_id": "P0_ADMIN_BOOTSTRAP_READY",
       "risk_id": "F3",
       "fixture_id": "",
-      "capability_id": "",
+      "capability_id": "admin_bootstrap",
       "evidence_profile": "default",
       "default_mode": true,
       "fixture_enabled_mode": false,
-      "negative_or_positive": "both",
-      "evidence_type": "doc-guard",
-      "required": false,
-      "command": [],
-      "anchors": [
-        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      "negative_or_positive": "positive",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/api",
+        "./internal/apiapp",
+        "./internal/contractcheck",
+        "-run",
+        "Test.*(AdminBootstrap|Readiness.*Bootstrap|RedactsAdminBootstrap|Readiness|OpenAPI|Schema)"
       ],
-      "doc_only_allowed": true,
+      "anchors": [
+        "internal/api/health.go",
+        "internal/api/health_test.go",
+        "internal/apiapp/runtime.go",
+        "internal/apiapp/runtime_test.go",
+        "internal/contractcheck/contractcheck_test.go"
+      ],
+      "doc_only_allowed": false,
       "optional_gated": false,
-      "default_ga_required": false,
+      "default_ga_required": true,
       "pass_criteria": {
-        "kind": "seed_gap",
+        "kind": "positive_path",
         "assertions": [
-          "open"
+          "admin bootstrap readiness passes in default mode"
         ]
       },
       "expected_runtime": "fast",
-      "scope": "doc-guard"
+      "scope": "package"
     },
     {
       "id": "seed_gap_default_user_loop_open",
