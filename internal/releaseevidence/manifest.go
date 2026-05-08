@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
@@ -366,8 +368,14 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 		itemsByID[item.ID] = item
 	}
 
+	defaultLoopOpenSeedGap := mode != ManifestModeFinal && defaultUserLoopOpenSeedGapActive(itemsByID)
+	requireDefaultLoopAggregation := mode == ManifestModeFinal || !defaultLoopOpenSeedGap || defaultUserLoopAggregationPresent(itemsByID)
+
 	var findings []Finding
 	for _, spec := range requiredEvidenceSpecs {
+		if defaultUserLoopAggregationSpecCanBeSeedOpen(spec.ID) && !requireDefaultLoopAggregation {
+			continue
+		}
 		item, ok := itemsByID[spec.ID]
 		if !ok {
 			findings = append(findings, Finding{Code: "manifest.required_evidence_missing", Message: fmt.Sprintf("missing exact required evidence item %s", spec.ID)})
@@ -393,7 +401,10 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.required_evidence_metadata_invalid", Message: fmt.Sprintf("required evidence item %s metadata does not match release contract", spec.ID)})
 		}
 	}
-	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest)...)
+	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest, requireDefaultLoopAggregation)...)
+	if requireDefaultLoopAggregation {
+		findings = append(findings, validateDefaultUserLoopAggregation(manifest)...)
+	}
 	if mode == ManifestModeFinal {
 		findings = append(findings, validateFinalSeedGaps(manifest, selector)...)
 		findings = append(findings, validateFinalRequiredClaimReplacements(manifest, selector)...)
@@ -403,12 +414,160 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 	return findings
 }
 
+func defaultUserLoopAggregationSpecCanBeSeedOpen(id string) bool {
+	return id == "default_user_loop_trace_unit" || id == "default_user_loop_positive_unit"
+}
+
+func defaultUserLoopAggregationPresent(itemsByID map[string]Item) bool {
+	_, ok := itemsByID["default_user_loop_positive_unit"]
+	return ok
+}
+
+func defaultUserLoopOpenSeedGapActive(itemsByID map[string]Item) bool {
+	item, ok := itemsByID["seed_gap_default_user_loop_open"]
+	if !ok {
+		return false
+	}
+	return item.ClaimID == "CLAIM_DEFAULT_USER_LOOP" &&
+		item.SubclaimID == "seed_gap_open" &&
+		item.AcceptanceID == "P0_SEED_GAP_OPEN" &&
+		item.RiskID == "F2" &&
+		item.EvidenceStatus == "placeholder" &&
+		item.EvidenceProfile == "default" &&
+		item.DefaultMode &&
+		!item.FixtureEnabledMode &&
+		item.ExpectedRuntime == "fast" &&
+		item.Scope == "doc-guard" &&
+		item.NegativeOrPositive == "both" &&
+		item.CapabilityID == "" &&
+		item.EvidenceType == "doc-guard" &&
+		!item.Required &&
+		len(item.Command) == 0 &&
+		item.DocOnlyAllowed &&
+		!item.OptionalGated &&
+		!item.DefaultGARequired &&
+		item.PassCriteria.Kind == "seed_gap" &&
+		containsString(item.PassCriteria.Assertions, "open")
+}
+
+func validateDefaultUserLoopAggregation(manifest Manifest) []Finding {
+	itemsByID := make(map[string]Item, len(manifest.Items))
+	for _, item := range manifest.Items {
+		itemsByID[item.ID] = item
+	}
+
+	aggregation, ok := itemsByID["default_user_loop_positive_unit"]
+	if !ok {
+		return []Finding{{Code: "manifest.default_user_loop_aggregation_missing", Message: "missing default_user_loop_positive_unit aggregation evidence for CLAIM_DEFAULT_USER_LOOP closure"}}
+	}
+
+	var findings []Finding
+	if !defaultUserLoopAggregationCommandIsPrecise(aggregation.Command) {
+		findings = append(findings, Finding{ItemID: aggregation.ID, Code: "manifest.default_user_loop_aggregation_command_invalid", Message: "default user loop aggregation command must use the exact releaseevidence/CLI aggregation selector, not a broad or helper-only selector"})
+	}
+
+	specs := requiredEvidenceSpecsByID()
+	for _, prereqID := range defaultUserLoopAggregationPrereqIDs {
+		spec, specOK := specs[prereqID]
+		prereq, prereqOK := itemsByID[prereqID]
+		if !specOK || !prereqOK {
+			findings = append(findings, Finding{ItemID: aggregation.ID, Code: "manifest.default_user_loop_prereq_missing", Message: fmt.Sprintf("default user loop aggregation requires exact prerequisite evidence %s", prereqID)})
+			continue
+		}
+		if !defaultUserLoopPrereqMetadataMatchesSpec(prereq, spec) {
+			findings = append(findings, Finding{ItemID: prereq.ID, Code: "manifest.default_user_loop_prereq_invalid", Message: fmt.Sprintf("default user loop prerequisite %s must be implemented/closed, default profile, required, non-doc-only, and match its exact release evidence contract", prereqID)})
+		}
+		if !defaultUserLoopPrereqCommandIsPrecise(prereq.Command) {
+			findings = append(findings, Finding{ItemID: prereq.ID, Code: "manifest.default_user_loop_prereq_command_invalid", Message: fmt.Sprintf("default user loop prerequisite %s command must use a precise repo-local behavior selector, not a broad or helper-only selector", prereqID)})
+		}
+	}
+	return findings
+}
+
+func requiredEvidenceSpecsByID() map[string]requiredEvidenceSpec {
+	specs := make(map[string]requiredEvidenceSpec, len(requiredEvidenceSpecs))
+	for _, spec := range requiredEvidenceSpecs {
+		specs[spec.ID] = spec
+	}
+	return specs
+}
+
+func defaultUserLoopPrereqMetadataMatchesSpec(item Item, spec requiredEvidenceSpec) bool {
+	return (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed") &&
+		item.ID == spec.ID &&
+		item.ClaimID == spec.ClaimID &&
+		item.SubclaimID == spec.SubclaimID &&
+		item.AcceptanceID == spec.AcceptanceID &&
+		item.RiskID == spec.RiskID &&
+		item.CapabilityID == spec.CapabilityID &&
+		item.EvidenceProfile == spec.EvidenceProfile &&
+		item.DefaultMode == spec.DefaultMode &&
+		item.FixtureEnabledMode == spec.FixtureEnabledMode &&
+		item.ExpectedRuntime == spec.ExpectedRuntime &&
+		item.Scope == spec.Scope &&
+		item.NegativeOrPositive == spec.NegativeOrPositive &&
+		item.PassCriteria.Kind == spec.PassCriteriaKind &&
+		item.EvidenceType == spec.EvidenceType &&
+		item.Required == spec.Required &&
+		item.DocOnlyAllowed == spec.DocOnlyAllowed &&
+		item.OptionalGated == spec.OptionalGated &&
+		item.DefaultGARequired == spec.DefaultGARequired &&
+		len(item.Anchors) > 0
+}
+
+func defaultUserLoopPrereqCommandIsPrecise(command []string) bool {
+	if len(command) == 0 {
+		return false
+	}
+	if len(command) < 2 || command[0] != "go" || command[1] != "test" {
+		return true
+	}
+	selector, ok := goTestRunSelector(command)
+	if !ok || broadGoTestSelector(selector) {
+		return false
+	}
+	packages := goTestPackageArgs(command)
+	if len(packages) == 0 || goTestPackagesAreHelperOnly(packages) {
+		return false
+	}
+	return true
+}
+
+func goTestPackagesAreHelperOnly(packages []string) bool {
+	for _, pkg := range packages {
+		if !strings.Contains(pkg, "evidencetest") && !strings.Contains(pkg, "testhelper") {
+			return false
+		}
+	}
+	return true
+}
+
+func defaultUserLoopAggregationCommandIsPrecise(command []string) bool {
+	if !sameStringSlice(command, defaultUserLoopAggregationCommand()) {
+		return false
+	}
+	selector, ok := goTestRunSelector(command)
+	if !ok || broadGoTestSelector(selector) {
+		return false
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		return false
+	}
+	for _, testName := range defaultUserLoopAggregationRequiredTestNames {
+		if !compiled.MatchString(testName) {
+			return false
+		}
+	}
+	return true
+}
+
 type requiredClaimSubclaimSpec struct {
 	ClaimID    string
 	SubclaimID string
 }
 
-func validateRequiredClaimSubclaimCoverage(manifest Manifest) []Finding {
+func validateRequiredClaimSubclaimCoverage(manifest Manifest, requireDefaultLoopAggregation bool) []Finding {
 	requiredCoverage := make(map[requiredClaimSubclaimSpec]bool, len(manifest.Items))
 	for _, item := range manifest.Items {
 		if !item.Required {
@@ -419,6 +578,10 @@ func validateRequiredClaimSubclaimCoverage(manifest Manifest) []Finding {
 
 	var findings []Finding
 	for _, spec := range requiredClaimSubclaimSpecs {
+		if !requireDefaultLoopAggregation && spec.ClaimID == "CLAIM_DEFAULT_USER_LOOP" &&
+			(spec.SubclaimID == "default_user_loop_trace" || spec.SubclaimID == "default_user_loop_positive") {
+			continue
+		}
 		if !requiredCoverage[spec] {
 			findings = append(findings, Finding{
 				Code:    "manifest.required_claim_subclaim_missing",
@@ -689,6 +852,58 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
+func sameStringSlice(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func broadGoTestSelector(selector string) bool {
+	trimmed := strings.TrimSpace(selector)
+	return trimmed == "" ||
+		strings.Contains(trimmed, ".*") ||
+		strings.Contains(trimmed, "Test.*") ||
+		trimmed == "^Test"
+}
+
+func defaultUserLoopAggregationCommand() []string {
+	return []string{
+		"go",
+		"test",
+		"-count=1",
+		"./internal/releaseevidence",
+		"./cmd/afscp-evidence-verify",
+		"-run",
+		"^Test(DefaultUserLoopAggregationRejectsMissingPrereq|DefaultUserLoopAggregationRejectsPlaceholderPrereq|DefaultUserLoopAggregationRejectsWrongProfileDefaultModePolarityRequiredOrDocOnlyPrereq|DefaultUserLoopAggregationRejectsPartialOnlyManifest|DefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand|DefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand|RunCheckOnlyAcceptsDefaultUserLoopAggregationManifest)$",
+	}
+}
+
+var defaultUserLoopAggregationRequiredTestNames = []string{
+	"TestDefaultUserLoopAggregationRejectsMissingPrereq",
+	"TestDefaultUserLoopAggregationRejectsPlaceholderPrereq",
+	"TestDefaultUserLoopAggregationRejectsWrongProfileDefaultModePolarityRequiredOrDocOnlyPrereq",
+	"TestDefaultUserLoopAggregationRejectsPartialOnlyManifest",
+	"TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand",
+	"TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand",
+	"TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest",
+}
+
+var defaultUserLoopAggregationPrereqIDs = []string{
+	"default_user_loop_repo_projection_unit",
+	"default_user_loop_jvs_save_restore_unit",
+	"default_user_loop_webdav_access_unit",
+	"webdav_default_access_unit",
+	"default_user_loop_trace_unit",
+	"capability_runtime_parity_unit",
+	"operation_runtime_terminalization_unit",
+}
+
 var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "webdav_export_disabled_admission_unit", ClaimID: "CLAIM_DEFAULT_DENIAL_SAFE", SubclaimID: "webdav_export_disabled_admission", AcceptanceID: "P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION", RiskID: "F5", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "webdav_export", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "repo_lifecycle_retained_positive_unit", ClaimID: "CLAIM_RETAINED_LIFECYCLE_DEFAULT", SubclaimID: "retained_lifecycle_positive", AcceptanceID: "P0_RETAINED_LIFECYCLE_DEFAULT_POSITIVE", RiskID: "F15", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "repo_lifecycle_retained", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
@@ -705,6 +920,8 @@ var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "default_user_loop_jvs_save_restore_unit", ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_jvs_save_restore", AcceptanceID: "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE", RiskID: "F2", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "jvs_save_restore", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "webdav_default_access_unit", ClaimID: "CLAIM_WEBDAV_DEFAULT_ACCESS", SubclaimID: "webdav_default_access", AcceptanceID: "P0_WEBDAV_DEFAULT_ACCESS", RiskID: "F8", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "webdav_export", EvidenceType: "integration", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "default_user_loop_webdav_access_unit", ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_webdav_access", AcceptanceID: "P1D_DEFAULT_USER_LOOP_WEBDAV_ACCESS", RiskID: "F2", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "webdav_export", EvidenceType: "integration", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
+	{ID: "default_user_loop_trace_unit", ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_trace", AcceptanceID: "P1E_DEFAULT_USER_LOOP_TRACE", RiskID: "F2", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "caller_policy_readiness", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
+	{ID: "default_user_loop_positive_unit", ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_positive", AcceptanceID: "P0_DEFAULT_USER_LOOP_POSITIVE", RiskID: "F2", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "caller_policy_readiness", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "repo_create_jvs_runtime_unavailable_recovery_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery", AcceptanceID: "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_create", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_terminalization_contract_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract", AcceptanceID: "P2A_OPERATION_TERMINALIZATION_CONTRACT", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_runtime_terminalization_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization", AcceptanceID: "P2B_OPERATION_RUNTIME_TERMINALIZATION", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
@@ -730,6 +947,8 @@ var requiredClaimSubclaimSpecs = []requiredClaimSubclaimSpec{
 	{ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_jvs_save_restore"},
 	{ClaimID: "CLAIM_WEBDAV_DEFAULT_ACCESS", SubclaimID: "webdav_default_access"},
 	{ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_webdav_access"},
+	{ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_trace"},
+	{ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_positive"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization"},
@@ -990,22 +1209,72 @@ func validateGoTestRunSelector(item Item, repoRoot string, packages []string) []
 	if !ok || runSelector == "" || len(packages) == 0 {
 		return nil
 	}
+	compiled, err := regexp.Compile(runSelector)
+	if err != nil {
+		return []Finding{{ItemID: item.ID, Code: "item.command_run_selector_invalid", Message: fmt.Sprintf("go test -run selector %q is invalid: %v", runSelector, err)}}
+	}
 
 	for _, pkg := range packages {
-		listCommand := exec.Command("go", "test", "-list", runSelector, pkg)
-		listCommand.Dir = repoRoot
-		output, err := listCommand.CombinedOutput()
-		if err != nil {
-			return []Finding{{ItemID: item.ID, Code: "item.command_run_selector_invalid", Message: fmt.Sprintf("go test -list failed for package %q and -run selector %q: %v: %s", pkg, runSelector, err, compactCommandOutput(output))}}
+		result := goTestListPackage(repoRoot, pkg)
+		if result.err != "" {
+			return []Finding{{ItemID: item.ID, Code: "item.command_run_selector_invalid", Message: fmt.Sprintf("go test -list failed for package %q: %s: %s", pkg, result.err, result.output)}}
 		}
-		if !goTestListOutputHasTest(output) {
-			if goTestListOutputHasBenchmark(output) {
+		if !goTestNamesMatch(compiled, result.tests) {
+			if goTestNamesMatch(compiled, result.benchmarks) {
 				return []Finding{{ItemID: item.ID, Code: "item.command_run_selector_benchmark_only", Message: fmt.Sprintf("go test -run selector %q only matches Benchmark targets in package %q; benchmark evidence is not supported", runSelector, pkg)}}
 			}
 			return []Finding{{ItemID: item.ID, Code: "item.command_run_selector_empty", Message: fmt.Sprintf("go test -run selector %q matches no tests in package %q", runSelector, pkg)}}
 		}
 	}
 	return nil
+}
+
+var goTestListPackageCache sync.Map
+
+type goTestListPackageCacheKey struct {
+	repoRoot string
+	pkg      string
+}
+
+type goTestListPackageCacheValue struct {
+	tests      []string
+	benchmarks []string
+	err        string
+	output     string
+}
+
+func goTestListPackage(repoRoot, pkg string) goTestListPackageCacheValue {
+	absRepoRoot, err := filepath.Abs(repoRoot)
+	if err != nil {
+		absRepoRoot = repoRoot
+	}
+	key := goTestListPackageCacheKey{repoRoot: absRepoRoot, pkg: pkg}
+	if cached, ok := goTestListPackageCache.Load(key); ok {
+		return cached.(goTestListPackageCacheValue)
+	}
+
+	listCommand := exec.Command("go", "test", "-list", ".", pkg)
+	listCommand.Dir = repoRoot
+	output, runErr := listCommand.CombinedOutput()
+	value := goTestListPackageCacheValue{
+		tests:      goTestListOutputNames(output, goTestListNameTests),
+		benchmarks: goTestListOutputNames(output, goTestListNameBenchmarks),
+		output:     compactCommandOutput(output),
+	}
+	if runErr != nil {
+		value.err = runErr.Error()
+	}
+	goTestListPackageCache.Store(key, value)
+	return value
+}
+
+func goTestNamesMatch(compiled *regexp.Regexp, names []string) bool {
+	for _, name := range names {
+		if compiled.MatchString(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func goTestPackageArgs(command []string) []string {
@@ -1047,22 +1316,32 @@ func skipNextGoTestFlagValue(arg string) bool {
 }
 
 func goTestListOutputHasTest(output []byte) bool {
-	for _, line := range strings.Split(string(output), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "Test") || strings.HasPrefix(trimmed, "Example") {
-			return true
-		}
-	}
-	return false
+	return len(goTestListOutputNames(output, goTestListNameTests)) > 0
 }
 
 func goTestListOutputHasBenchmark(output []byte) bool {
+	return len(goTestListOutputNames(output, goTestListNameBenchmarks)) > 0
+}
+
+type goTestListNameKind string
+
+const (
+	goTestListNameTests      goTestListNameKind = "tests"
+	goTestListNameBenchmarks goTestListNameKind = "benchmarks"
+)
+
+func goTestListOutputNames(output []byte, kind goTestListNameKind) []string {
+	var names []string
 	for _, line := range strings.Split(string(output), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "Benchmark") {
-			return true
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case kind == goTestListNameTests && (strings.HasPrefix(trimmed, "Test") || strings.HasPrefix(trimmed, "Example")):
+			names = append(names, trimmed)
+		case kind == goTestListNameBenchmarks && strings.HasPrefix(trimmed, "Benchmark"):
+			names = append(names, trimmed)
 		}
 	}
-	return false
+	return names
 }
 
 func compactCommandOutput(output []byte) string {

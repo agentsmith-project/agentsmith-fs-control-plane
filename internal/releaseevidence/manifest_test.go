@@ -2,7 +2,6 @@ package releaseevidence
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -751,49 +750,19 @@ func TestCurrentRepoManifestContainsP2aOperationTerminalizationContractEvidence(
 	}
 }
 
-func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenWithPartialEvidence(t *testing.T) {
-	repoRoot := filepath.Join("..", "..")
-	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+func TestPartialDefaultUserLoopEvidenceWithOpenSeedGapRemainsValidSeedMode(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	body := strings.Replace(validReleaseEvidenceManifest(), `"id":"default_user_loop_positive_unit"`, `"id":"default_user_loop_positive_missing"`, 1)
+	body = appendReleaseEvidenceItem(body, `"id":"seed_gap_default_user_loop_open","evidence_status":"placeholder","claim_id":"CLAIM_DEFAULT_USER_LOOP","subclaim_id":"seed_gap_open","acceptance_id":"P0_SEED_GAP_OPEN","risk_id":"F2","fixture_id":"","capability_id":"","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"doc-guard","negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"seed_gap","assertions":["open"]}`)
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
 
-	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
 	if err != nil {
-		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
 	if len(findings) != 0 {
-		t.Fatalf("current manifest findings: %+v", findings)
-	}
-
-	foundOpenGap := false
-	for _, item := range manifest.Items {
-		if item.ClaimID != "CLAIM_DEFAULT_USER_LOOP" {
-			continue
-		}
-		if item.ID == "seed_gap_default_user_loop_open" &&
-			item.EvidenceStatus == "placeholder" &&
-			item.PassCriteria.Kind == "seed_gap" &&
-			containsString(item.PassCriteria.Assertions, "open") {
-			foundOpenGap = true
-			continue
-		}
-		if item.ID == "default_user_loop_repo_projection_unit" &&
-			item.SubclaimID == "default_user_loop_repo_projection" &&
-			item.AcceptanceID == "P1B_DEFAULT_USER_LOOP_REPO_PROJECTION" &&
-			item.EvidenceStatus == "implemented" {
-			continue
-		}
-		if item.ID == "default_user_loop_jvs_save_restore_unit" &&
-			item.SubclaimID == "default_user_loop_jvs_save_restore" &&
-			item.AcceptanceID == "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE" &&
-			item.EvidenceStatus == "implemented" {
-			continue
-		}
-		if item.ID == "default_user_loop_positive_unit" ||
-			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
-			t.Fatalf("manifest must not close full CLAIM_DEFAULT_USER_LOOP while the seed gap remains open, found %+v", item)
-		}
-	}
-	if !foundOpenGap {
-		t.Fatal("manifest must keep seed_gap_default_user_loop_open while only partial default-user-loop evidence exists")
+		t.Fatalf("partial default user loop with open seed gap should remain valid seed mode, got findings: %+v", findings)
 	}
 }
 
@@ -1222,7 +1191,341 @@ func p1dWebDAVRequiredTestNames() []string {
 	}
 }
 
-func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1b(t *testing.T) {
+func TestCurrentRepoManifestContainsDefaultUserLoopTraceEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	item, ok := manifestItemByID(manifest, "default_user_loop_trace_unit")
+	if !ok {
+		t.Fatal("manifest missing default_user_loop_trace_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_DEFAULT_USER_LOOP" ||
+		item.SubclaimID != "default_user_loop_trace" ||
+		item.AcceptanceID != "P1E_DEFAULT_USER_LOOP_TRACE" ||
+		item.RiskID != "F2" ||
+		item.CapabilityID != "caller_policy_readiness" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.NegativeOrPositive != "both" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		!item.DefaultGARequired ||
+		item.PassCriteria.Kind != "coverage_guard" {
+		t.Fatalf("%s shape = %+v, want default required default-loop trace evidence", item.ID, item)
+	}
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/api", "./internal/inspection", "./internal/audit", "./internal/recovery", "./internal/workerapp", "./internal/store/postgres"}) {
+		t.Fatalf("%s command packages = %#v, want api, inspection, audit, recovery, workerapp, and postgres store", item.ID, packages)
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range defaultUserLoopTraceRequiredTestNames() {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestCurrentRepoManifestContainsDefaultUserLoopAggregationEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	item, ok := manifestItemByID(manifest, "default_user_loop_positive_unit")
+	if !ok {
+		t.Fatal("manifest missing default_user_loop_positive_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_DEFAULT_USER_LOOP" ||
+		item.SubclaimID != "default_user_loop_positive" ||
+		item.AcceptanceID != "P0_DEFAULT_USER_LOOP_POSITIVE" ||
+		item.RiskID != "F2" ||
+		item.CapabilityID != "caller_policy_readiness" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.NegativeOrPositive != "positive" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		!item.DefaultGARequired ||
+		item.PassCriteria.Kind != "positive_path" ||
+		!containsString(item.PassCriteria.Assertions, "default user loop passes in default mode") {
+		t.Fatalf("%s shape = %+v, want default required default-loop aggregation evidence", item.ID, item)
+	}
+	if _, ok := manifestItemByID(manifest, "seed_gap_default_user_loop_open"); ok {
+		t.Fatal("default user loop aggregation must close seed_gap_default_user_loop_open")
+	}
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/releaseevidence", "./cmd/afscp-evidence-verify"}) {
+		t.Fatalf("%s command packages = %#v, want releaseevidence and CLI verifier", item.ID, packages)
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range defaultUserLoopAggregationRequiredTestNames {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestDefaultUserLoopAggregationRejectsMissingPrereq(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	body := strings.Replace(validReleaseEvidenceManifest(), `"id":"default_user_loop_trace_unit"`, `"id":"default_user_loop_trace_missing"`, 1)
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
+
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
+	}
+	assertReleaseEvidenceFindingContains(t, findings, "default_user_loop_trace_unit")
+}
+
+func TestDefaultUserLoopAggregationRejectsPlaceholderPrereq(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	body := strings.Replace(validReleaseEvidenceManifest(), `"id":"default_user_loop_trace_unit",
+      "evidence_status":"implemented"`, `"id":"default_user_loop_trace_unit",
+      "evidence_status":"placeholder"`, 1)
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
+
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
+	}
+	assertReleaseEvidenceFindingContains(t, findings, "default_user_loop_trace_unit")
+	assertReleaseEvidenceFindingContains(t, findings, "placeholder")
+}
+
+func TestDefaultUserLoopAggregationRejectsWrongProfileDefaultModePolarityRequiredOrDocOnlyPrereq(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(string) string
+	}{
+		{
+			name: "wrong profile",
+			edit: func(body string) string {
+				return replaceItemField(t, body, "default_user_loop_trace_unit", `"evidence_profile":"default"`, `"evidence_profile":"repo-local-fixture-enabled"`)
+			},
+		},
+		{
+			name: "wrong default mode",
+			edit: func(body string) string {
+				return replaceItemField(t, body, "default_user_loop_trace_unit", `"default_mode":true`, `"default_mode":false`)
+			},
+		},
+		{
+			name: "wrong polarity",
+			edit: func(body string) string {
+				return replaceItemField(t, body, "default_user_loop_trace_unit", `"negative_or_positive":"both"`, `"negative_or_positive":"negative"`)
+			},
+		},
+		{
+			name: "not required",
+			edit: func(body string) string {
+				return replaceItemField(t, body, "default_user_loop_trace_unit", `"required":true`, `"required":false`)
+			},
+		},
+		{
+			name: "doc only",
+			edit: func(body string) string {
+				return replaceItemField(t, body, "default_user_loop_trace_unit", `"doc_only_allowed":false`, `"doc_only_allowed":true`)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.edit(validReleaseEvidenceManifest()))
+
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, "default_user_loop_trace_unit")
+		})
+	}
+}
+
+func TestDefaultUserLoopAggregationRejectsPartialOnlyManifest(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	body := strings.Replace(validReleaseEvidenceManifest(), `"id":"default_user_loop_positive_unit"`, `"id":"default_user_loop_positive_missing"`, 1)
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
+
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
+	}
+	assertReleaseEvidenceFindingContains(t, findings, "default_user_loop_positive_unit")
+}
+
+func TestDefaultUserLoopOpenSeedGapIsAcceptedInSeedModeWithoutAggregation(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	body := strings.Replace(validReleaseEvidenceManifest(), `"id":"default_user_loop_positive_unit"`, `"id":"default_user_loop_positive_missing"`, 1)
+	body = strings.Replace(body, `"id":"default_user_loop_trace_unit"`, `"id":"default_user_loop_trace_missing"`, 1)
+	body = appendReleaseEvidenceItem(body, `"id":"seed_gap_default_user_loop_open","evidence_status":"placeholder","claim_id":"CLAIM_DEFAULT_USER_LOOP","subclaim_id":"seed_gap_open","acceptance_id":"P0_SEED_GAP_OPEN","risk_id":"F2","fixture_id":"","capability_id":"","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"doc-guard","negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"seed_gap","assertions":["open"]}`)
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
+
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
+	}
+	assertNoReleaseEvidenceFindingContains(t, findings, "default_user_loop_positive_unit")
+	assertNoReleaseEvidenceFindingContains(t, findings, "default_user_loop_trace_unit")
+	assertNoReleaseEvidenceFindingContains(t, findings, "manifest.default_user_loop_aggregation_missing")
+}
+
+func TestDefaultUserLoopOpenSeedGapIsRejectedInFinalMode(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	body := strings.Replace(validReleaseEvidenceManifest(), `"id":"default_user_loop_positive_unit"`, `"id":"default_user_loop_positive_missing"`, 1)
+	body = appendReleaseEvidenceItem(body, `"id":"seed_gap_default_user_loop_open","evidence_status":"placeholder","claim_id":"CLAIM_DEFAULT_USER_LOOP","subclaim_id":"seed_gap_open","acceptance_id":"P0_SEED_GAP_OPEN","risk_id":"F2","fixture_id":"","capability_id":"","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"doc-guard","negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"seed_gap","assertions":["open"]}`)
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
+
+	findings, err := VerifyFile(path, finalReleaseOptions(t, root, nil))
+	if err != nil {
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
+	}
+	assertReleaseEvidenceFindingContains(t, findings, "seed_gap_default_user_loop_open")
+	assertReleaseEvidenceFindingContains(t, findings, "default_user_loop_positive_unit")
+}
+
+func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		replacement string
+	}{
+		{
+			name:        "broad selector",
+			replacement: `"command":["go","test","-count=1","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","Test.*"]`,
+		},
+		{
+			name:        "helper only package",
+			replacement: `"command":["go","test","-count=1","./internal/evidencetest","-run","^TestExistingEvidenceSelector$"]`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			body := strings.Replace(validReleaseEvidenceManifest(), `"command":["go","test","-count=1","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(DefaultUserLoopAggregationRejectsMissingPrereq|DefaultUserLoopAggregationRejectsPlaceholderPrereq|DefaultUserLoopAggregationRejectsWrongProfileDefaultModePolarityRequiredOrDocOnlyPrereq|DefaultUserLoopAggregationRejectsPartialOnlyManifest|DefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand|DefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand|RunCheckOnlyAcceptsDefaultUserLoopAggregationManifest)$"]`, tt.replacement, 1)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, body)
+
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, "default_user_loop_positive_unit")
+		})
+	}
+}
+
+func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		id          string
+		replacement string
+	}{
+		{
+			name:        "repo projection broad selector",
+			id:          "default_user_loop_repo_projection_unit",
+			replacement: `"command":["go","test","-count=1","./internal/api","-run","Test.*"]`,
+		},
+		{
+			name:        "trace helper only selector",
+			id:          "default_user_loop_trace_unit",
+			replacement: `"command":["go","test","-count=1","./internal/evidencetest","-run","^TestExistingEvidenceSelector$"]`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			body := replaceItemCommand(t, validReleaseEvidenceManifest(), tt.id, tt.replacement)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, body)
+
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.id)
+			assertReleaseEvidenceFindingContains(t, findings, "command")
+		})
+	}
+}
+
+func defaultUserLoopTraceRequiredTestNames() []string {
+	return []string{
+		"TestOperationInspectionHandlerReturnsRedactedRecordWithoutNamespaceHeader",
+		"TestOperationInspectionHandlerHidesProductNamespaceMismatchAsNotFoundAndAudits",
+		"TestOperationInspectionHandlerHidesProductGlobalDeniedAsNotFoundAndAudits",
+		"TestOperationInspectionHandlerRequiresStoredBindingForProductCaller",
+		"TestOperationEnvelopeJSONIsFlatAndSchemaShaped",
+		"TestOperationEnvelopeCarriesResultAndTerminalError",
+		"TestProductCallerOperationResponsesDoNotLeakStorageInternals",
+		"TestAuthGateWithAuditSinkEmitsDeniedEventsWithoutSensitiveRequestData",
+		"TestInternalAPIShellServesOperationInspectionThroughInjectedReader",
+		"TestInternalAPIShellOperationInspectionProductStillRequiresStoredBinding",
+		"TestInspectOperationAllowsProductInspectionRoleAndRedactsRecord",
+		"TestInspectOperationRequiresStoredNamespaceToMatchRequestNamespaceForProductCaller",
+		"TestInspectOperationDeniesGlobalRecordToProductCaller",
+		"TestInspectOperationDeniesProductCallerAuthorizedOnlyForDifferentStoredNamespace",
+		"TestNamespaceVolumeBindingAuthorizerWiresIntoInspectOperationAndKeepsRedaction",
+		"TestOperationTypesMapToStableAuditEventTypes",
+		"TestDeniedEventsAllowEmptyOperationID",
+		"TestEventJSONContainsStableAuditFields",
+		"TestOperationCoordinatorCommitsUnsupportedClaimRetryAndReclaimWithAuditWithoutExecute",
+		"TestRunOnceOperationAndAuditCanRunTogether",
+		"TestRunOnceAuditOnlyRunsStaleRecoveryBeforeDelivery",
+		"TestRunOnceExportSessionReconcileRunsBeforeOperationRecovery",
+		"TestRunOnceAuditDeliveryFailureRecordsRetryWithoutLeakingSecret",
+		"TestCreateOperationBuildsFullInsertWithSanitizedJSON",
+		"TestGetOperationScansFullRecord",
+		"TestCommitOperationWithLeaseAtomicallyUpdatesOperationAndAppendsAudit",
+		"TestAppendAuditEventInsertsPendingOutboxRecord",
+		"TestRecoverStaleAuditOutboxRecordsAtomicallyUpdatesRetryWaitWithoutTerminalFailure",
+		"TestMarkAuditOutboxDeliveryFailedChoosesRetryWaitOrFailedAndRedactsError",
+	}
+}
+
+func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1b(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
 
@@ -1235,7 +1538,6 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1b(t *test
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_default_user_loop_open",
 		"seed_gap_discovery_surfaces_open",
 		"seed_gap_secret_path_redaction_open",
 	} {
@@ -1248,14 +1550,13 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1b(t *test
 		}
 	}
 	for _, item := range manifest.Items {
-		if item.ID == "default_user_loop_positive_unit" ||
-			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
-			t.Fatalf("P1b repo projection is partial and must not close full default user loop: %+v", item)
+		if item.ID == "default_user_loop_repo_projection_unit" && item.AcceptanceID != "P1B_DEFAULT_USER_LOOP_REPO_PROJECTION" {
+			t.Fatalf("P1b repo projection must remain partial evidence with P1B acceptance: %+v", item)
 		}
 	}
 }
 
-func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1c(t *testing.T) {
+func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1c(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
 
@@ -1268,7 +1569,6 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1c(t *test
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_default_user_loop_open",
 		"seed_gap_restore_reconciliation_open",
 		"seed_gap_secret_path_redaction_open",
 		"seed_gap_discovery_surfaces_open",
@@ -1282,14 +1582,13 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1c(t *test
 		}
 	}
 	for _, item := range manifest.Items {
-		if item.ID == "default_user_loop_positive_unit" ||
-			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
-			t.Fatalf("P1c JVS save/restore is partial and must not close full default user loop: %+v", item)
+		if item.ID == "default_user_loop_jvs_save_restore_unit" && item.AcceptanceID != "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE" {
+			t.Fatalf("P1c JVS save/restore must remain partial evidence with P1C acceptance: %+v", item)
 		}
 	}
 }
 
-func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1d(t *testing.T) {
+func TestCurrentRepoManifestKeepsWebDAVSeedGapClosedAfterPartialP1d(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
 
@@ -1301,25 +1600,17 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1d(t *test
 		t.Fatalf("current manifest findings: %+v", findings)
 	}
 
-	item, ok := manifestItemByID(manifest, "seed_gap_default_user_loop_open")
-	if !ok {
-		t.Fatal("manifest must keep seed_gap_default_user_loop_open for partial P1d")
-	}
-	if item.EvidenceStatus != "placeholder" || item.PassCriteria.Kind != "seed_gap" || !containsString(item.PassCriteria.Assertions, "open") {
-		t.Fatalf("%s = %+v, want open placeholder seed gap", item.ID, item)
-	}
 	if _, ok := manifestItemByID(manifest, "seed_gap_webdav_default_access_open"); ok {
 		t.Fatal("P1d must close seed_gap_webdav_default_access_open with exact WebDAV replacement evidence")
 	}
 	for _, item := range manifest.Items {
-		if item.ID == "default_user_loop_positive_unit" ||
-			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
-			t.Fatalf("P1d WebDAV access is partial and must not close full default user loop: %+v", item)
+		if item.ID == "default_user_loop_webdav_access_unit" && item.AcceptanceID != "P1D_DEFAULT_USER_LOOP_WEBDAV_ACCESS" {
+			t.Fatalf("P1d WebDAV access must remain partial evidence with P1D acceptance: %+v", item)
 		}
 	}
 }
 
-func TestCurrentRepoManifestDoesNotCloseDefaultUserLoopBeforeAggregation(t *testing.T) {
+func TestCurrentRepoManifestClosesDefaultUserLoopOnlyWithAggregation(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
 
@@ -1330,13 +1621,15 @@ func TestCurrentRepoManifestDoesNotCloseDefaultUserLoopBeforeAggregation(t *test
 	if len(findings) != 0 {
 		t.Fatalf("current manifest findings: %+v", findings)
 	}
-	if _, ok := manifestItemByID(manifest, "default_user_loop_positive_unit"); ok {
-		t.Fatal("manifest must not add default_user_loop_positive_unit before aggregation")
+	if _, ok := manifestItemByID(manifest, "seed_gap_default_user_loop_open"); ok {
+		t.Fatal("manifest must close seed_gap_default_user_loop_open only after aggregation evidence exists")
 	}
-	for _, item := range manifest.Items {
-		if item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed") {
-			t.Fatalf("manifest must not close full default user loop before aggregation: %+v", item)
-		}
+	item, ok := manifestItemByID(manifest, "default_user_loop_positive_unit")
+	if !ok {
+		t.Fatal("manifest must include default_user_loop_positive_unit aggregation evidence")
+	}
+	if item.AcceptanceID != "P0_DEFAULT_USER_LOOP_POSITIVE" || item.EvidenceStatus != "implemented" {
+		t.Fatalf("default loop closure must use implemented P0 aggregation evidence: %+v", item)
 	}
 }
 
@@ -1351,7 +1644,7 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopAndDiscoverySeedGapsOpenForP2b(t
 	if len(findings) != 0 {
 		t.Fatalf("current manifest findings: %+v", findings)
 	}
-	for _, gapID := range []string{"seed_gap_default_user_loop_open", "seed_gap_discovery_surfaces_open"} {
+	for _, gapID := range []string{"seed_gap_discovery_surfaces_open"} {
 		item, ok := manifestItemByID(manifest, gapID)
 		if !ok {
 			t.Fatalf("manifest must keep %s open for P2b", gapID)
@@ -1359,6 +1652,9 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopAndDiscoverySeedGapsOpenForP2b(t
 		if item.EvidenceStatus != "placeholder" || item.PassCriteria.Kind != "seed_gap" || !containsString(item.PassCriteria.Assertions, "open") {
 			t.Fatalf("%s = %+v, want open placeholder seed gap", gapID, item)
 		}
+	}
+	if _, ok := manifestItemByID(manifest, "default_user_loop_positive_unit"); !ok {
+		t.Fatal("manifest should close default user loop through aggregation after P2b and P1 partial evidence")
 	}
 }
 
@@ -1397,6 +1693,25 @@ func goTestPackageForTestName(testName string) string {
 	if strings.HasPrefix(testName, "TestInternalRuntime") {
 		return "./internal/apiapp"
 	}
+	if strings.HasPrefix(testName, "TestOperationInspectionHandler") ||
+		strings.HasPrefix(testName, "TestOperationEnvelope") ||
+		strings.HasPrefix(testName, "TestProductCallerOperationResponses") ||
+		strings.HasPrefix(testName, "TestAuthGateWithAuditSink") ||
+		strings.HasPrefix(testName, "TestInternalAPIShell") {
+		return "./internal/api"
+	}
+	if strings.HasPrefix(testName, "TestInspectOperation") ||
+		strings.HasPrefix(testName, "TestNamespaceVolumeBindingAuthorizer") {
+		return "./internal/inspection"
+	}
+	if strings.HasPrefix(testName, "TestOperationTypesMap") ||
+		strings.HasPrefix(testName, "TestDeniedEvents") ||
+		strings.HasPrefix(testName, "TestEventJSON") {
+		return "./internal/audit"
+	}
+	if strings.HasPrefix(testName, "TestOperationCoordinator") {
+		return "./internal/recovery"
+	}
 	if strings.HasPrefix(testName, "TestRunOnceReconciles") ||
 		strings.HasPrefix(testName, "TestRunOnceRecovers") ||
 		strings.HasPrefix(testName, "TestRunOnceTreats") {
@@ -1418,9 +1733,15 @@ func goTestPackageForTestName(testName string) string {
 		return "./internal/repoexec"
 	}
 	if strings.HasPrefix(testName, "TestCreateGetAndListRepos") ||
+		strings.HasPrefix(testName, "TestCreateOperationBuilds") ||
 		strings.HasPrefix(testName, "TestCreateOrReuseRepoCreateOperation") ||
 		strings.HasPrefix(testName, "TestCreateOrReuseExport") ||
 		strings.HasPrefix(testName, "TestCommitRepoCreate") ||
+		strings.HasPrefix(testName, "TestCommitOperationWithLease") ||
+		strings.HasPrefix(testName, "TestAppendAuditEvent") ||
+		strings.HasPrefix(testName, "TestRecoverStaleAudit") ||
+		strings.HasPrefix(testName, "TestMarkAuditOutbox") ||
+		strings.HasPrefix(testName, "TestGetOperationScans") ||
 		strings.HasPrefix(testName, "TestAcquireSavePointCreateOperationLease") ||
 		strings.HasPrefix(testName, "TestCommitSavePointCreate") ||
 		strings.HasPrefix(testName, "TestCreateOrReuseRestore") ||
@@ -1455,6 +1776,12 @@ func goTestPackageForTestName(testName string) string {
 	if strings.HasPrefix(testName, "TestCurrentRepoReadiness") {
 		return "./internal/contractcheck"
 	}
+	if strings.HasPrefix(testName, "TestDefaultUserLoopAggregation") {
+		return "./internal/releaseevidence"
+	}
+	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest") {
+		return "./cmd/afscp-evidence-verify"
+	}
 	if strings.HasPrefix(testName, "TestOperation") {
 		return "./internal/contractcheck"
 	}
@@ -1473,18 +1800,23 @@ func manifestItemByID(manifest Manifest, id string) (Item, bool) {
 func assertGoTestListIncludesTest(t *testing.T, repoRoot, itemID, selector, pkg, testName string) {
 	t.Helper()
 
-	command := exec.Command("go", "test", "-list", selector, pkg)
-	command.Dir = repoRoot
-	output, err := command.CombinedOutput()
+	compiled, err := regexp.Compile(selector)
 	if err != nil {
-		t.Fatalf("%s go test -list %q %s failed: %v: %s", itemID, selector, pkg, err, compactCommandOutput(output))
+		t.Fatalf("%s selector %q failed to compile: %v", itemID, selector, err)
 	}
-	for _, line := range strings.Split(string(output), "\n") {
-		if strings.TrimSpace(line) == testName {
+	if !compiled.MatchString(testName) {
+		t.Fatalf("%s selector %q does not match %s before package lookup", itemID, selector, testName)
+	}
+	result := goTestListPackage(repoRoot, pkg)
+	if result.err != "" {
+		t.Fatalf("%s go test -list %s failed: %s: %s", itemID, pkg, result.err, result.output)
+	}
+	for _, name := range result.tests {
+		if name == testName {
 			return
 		}
 	}
-	t.Fatalf("%s go test -list %q %s output missing %s: %s", itemID, selector, pkg, testName, compactCommandOutput(output))
+	t.Fatalf("%s go test -list %s output missing %s: %s", itemID, pkg, testName, result.output)
 }
 
 func TestValidateManifestRequiresExactReleaseEvidenceItems(t *testing.T) {
@@ -1551,6 +1883,23 @@ func TestExistingEvidenceSelector(t *testing.T) {}
 import "testing"
 
 func BenchmarkEvidenceOnly(b *testing.B) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "releaseevidence", "aggregation_test.go"), `package releaseevidence
+
+import "testing"
+
+func TestDefaultUserLoopAggregationRejectsMissingPrereq(t *testing.T) {}
+func TestDefaultUserLoopAggregationRejectsPlaceholderPrereq(t *testing.T) {}
+func TestDefaultUserLoopAggregationRejectsWrongProfileDefaultModePolarityRequiredOrDocOnlyPrereq(t *testing.T) {}
+func TestDefaultUserLoopAggregationRejectsPartialOnlyManifest(t *testing.T) {}
+func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand(t *testing.T) {}
+func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
+
+import "testing"
+
+func TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest(t *testing.T) {}
 `)
 	return root
 }
@@ -1726,6 +2075,28 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":true
     },
     {
+      "id":"default_user_loop_trace_unit",
+      "capability_id":"caller_policy_readiness",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
+      "id":"default_user_loop_positive_unit",
+      "capability_id":"caller_policy_readiness",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(DefaultUserLoopAggregationRejectsMissingPrereq|DefaultUserLoopAggregationRejectsPlaceholderPrereq|DefaultUserLoopAggregationRejectsWrongProfileDefaultModePolarityRequiredOrDocOnlyPrereq|DefaultUserLoopAggregationRejectsPartialOnlyManifest|DefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand|DefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand|RunCheckOnlyAcceptsDefaultUserLoopAggregationManifest)$"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -1865,7 +2236,6 @@ var package0SeedGapFixtureMetadata = []struct {
 	riskID  string
 }{
 	{"seed_gap_admin_bootstrap_ready_open", "CLAIM_ADMIN_BOOTSTRAP_READY", "F3"},
-	{"seed_gap_default_user_loop_open", "CLAIM_DEFAULT_USER_LOOP", "F2"},
 	{"seed_gap_workload_fixture_ready_open", "CLAIM_WORKLOAD_FIXTURE_READY", "F9"},
 	{"seed_gap_operator_repair_safe_open", "CLAIM_OPERATOR_REPAIR_SAFE", "F11"},
 	{"seed_gap_purge_approval_safe_open", "CLAIM_PURGE_APPROVAL_SAFE", "F13"},
@@ -1912,6 +2282,8 @@ var package0FixtureMetadata = []struct {
 	{"default_user_loop_jvs_save_restore_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_jvs_save_restore", "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "JVS save history restore-preview restore-run and discard paths pass without closing the full default user loop"},
 	{"webdav_default_access_unit", "CLAIM_WEBDAV_DEFAULT_ACCESS", "webdav_default_access", "P0_WEBDAV_DEFAULT_ACCESS", "F8", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "webdav default access passes in default mode"},
 	{"default_user_loop_webdav_access_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_webdav_access", "P1D_DEFAULT_USER_LOOP_WEBDAV_ACCESS", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "WebDAV access contributes only partial default user loop evidence"},
+	{"default_user_loop_trace_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_trace", "P1E_DEFAULT_USER_LOOP_TRACE", "F2", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "caller-scoped operation audit and recovery trace stays redacted and terminally visible"},
+	{"default_user_loop_positive_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_positive", "P0_DEFAULT_USER_LOOP_POSITIVE", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "default user loop passes in default mode"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},
@@ -1938,6 +2310,44 @@ func appendReleaseEvidenceItem(body, item string) string {
 		item = `"evidence_status":"implemented",` + item
 	}
 	return strings.Replace(body, "\n  ]\n}", ",\n    {"+item+"}\n  ]\n}", 1)
+}
+
+func replaceItemField(t *testing.T, body, id, old, replacement string) string {
+	t.Helper()
+
+	idNeedle := `"id":"` + id + `"`
+	start := strings.Index(body, idNeedle)
+	if start < 0 {
+		t.Fatalf("missing item %s", id)
+	}
+	relative := strings.Index(body[start:], old)
+	if relative < 0 {
+		t.Fatalf("missing field %q after item %s", old, id)
+	}
+	offset := start + relative
+	return body[:offset] + replacement + body[offset+len(old):]
+}
+
+func replaceItemCommand(t *testing.T, body, id, replacement string) string {
+	t.Helper()
+
+	idNeedle := `"id":"` + id + `"`
+	start := strings.Index(body, idNeedle)
+	if start < 0 {
+		t.Fatalf("missing item %s", id)
+	}
+	commandStartRelative := strings.Index(body[start:], `"command":[`)
+	if commandStartRelative < 0 {
+		t.Fatalf("missing command after item %s", id)
+	}
+	commandStart := start + commandStartRelative
+	commandEndRelative := strings.Index(body[commandStart:], `],
+      "anchors"`)
+	if commandEndRelative < 0 {
+		t.Fatalf("missing command terminator after item %s", id)
+	}
+	commandEnd := commandStart + commandEndRelative + len(`]`)
+	return body[:commandStart] + replacement + body[commandEnd:]
 }
 
 func stringSlicesEqual(got, want []string) bool {

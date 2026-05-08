@@ -320,6 +320,7 @@ func TestPackage0RequiresSeedClaimSubclaimCoverage(t *testing.T) {
 }
 
 func TestPackage0RequiresSeedGapMarkers(t *testing.T) {
+	const gapID = "seed_gap_operator_repair_safe_open"
 	tests := []struct {
 		name string
 		edit func(string) string
@@ -328,38 +329,38 @@ func TestPackage0RequiresSeedGapMarkers(t *testing.T) {
 		{
 			name: "missing gap marker",
 			edit: func(body string) string {
-				return replacePackage0ItemID(body, "seed_gap_default_user_loop_open", "seed_gap_default_user_loop_typo")
+				return replacePackage0ItemID(body, gapID, "seed_gap_operator_repair_safe_typo")
 			},
-			want: "CLAIM_DEFAULT_USER_LOOP",
+			want: "CLAIM_OPERATOR_REPAIR_SAFE",
 		},
 		{
 			name: "gap marker cannot become required",
 			edit: func(body string) string {
-				return replacePackage0FieldForItem(body, "seed_gap_default_user_loop_open", `"required":false`, `"required":true`)
+				return replacePackage0FieldForItem(body, gapID, `"required":false`, `"required":true`)
 			},
 			want: "gap marker",
 		},
 		{
 			name: "gap marker cannot carry executable evidence",
 			edit: func(body string) string {
-				return replacePackage0FieldForItem(body, "seed_gap_default_user_loop_open", `"command":[]`, `"command":["bash","scripts/pass.sh"]`)
+				return replacePackage0FieldForItem(body, gapID, `"command":[]`, `"command":["bash","scripts/pass.sh"]`)
 			},
 			want: "command",
 		},
 		{
 			name: "gap marker cannot become executable required evidence",
 			edit: func(body string) string {
-				body = replacePackage0FieldForItem(body, "seed_gap_default_user_loop_open", `"evidence_type":"doc-guard"`, `"evidence_type":"unit"`)
-				body = replacePackage0FieldForItem(body, "seed_gap_default_user_loop_open", `"required":false`, `"required":true`)
-				body = replacePackage0FieldForItem(body, "seed_gap_default_user_loop_open", `"command":[]`, `"command":["bash","scripts/pass.sh"]`)
-				return replacePackage0FieldForItem(body, "seed_gap_default_user_loop_open", `"doc_only_allowed":true`, `"doc_only_allowed":false`)
+				body = replacePackage0FieldForItem(body, gapID, `"evidence_type":"doc-guard"`, `"evidence_type":"unit"`)
+				body = replacePackage0FieldForItem(body, gapID, `"required":false`, `"required":true`)
+				body = replacePackage0FieldForItem(body, gapID, `"command":[]`, `"command":["bash","scripts/pass.sh"]`)
+				return replacePackage0FieldForItem(body, gapID, `"doc_only_allowed":true`, `"doc_only_allowed":false`)
 			},
 			want: "gap marker",
 		},
 		{
 			name: "gap marker must be open",
 			edit: func(body string) string {
-				return replacePackage0FieldForItem(body, "seed_gap_default_user_loop_open", `"kind":"seed_gap"`, `"kind":"coverage_guard"`)
+				return replacePackage0FieldForItem(body, gapID, `"kind":"seed_gap"`, `"kind":"coverage_guard"`)
 			},
 			want: "open",
 		},
@@ -544,7 +545,7 @@ func TestPackage0FinalModeRequiresReplacementEvidenceForRequiredSeedGaps(t *test
 	}
 	assertReleaseEvidenceFindingContains(t, findings, "manifest.final_required_claim_missing")
 	assertReleaseEvidenceFindingContains(t, findings, "CLAIM_ADMIN_BOOTSTRAP_READY")
-	assertReleaseEvidenceFindingContains(t, findings, "CLAIM_DEFAULT_USER_LOOP")
+	assertNoReleaseEvidenceFindingContains(t, findings, "CLAIM_DEFAULT_USER_LOOP")
 	assertNoReleaseEvidenceFindingContains(t, findings, "manifest.final_seed_gap_open")
 	assertNoReleaseEvidenceFindingContains(t, findings, "CLAIM_OPTIONAL_FIXTURE_CONFORMANT")
 	assertNoReleaseEvidenceFindingContains(t, findings, "CLAIM_WORKLOAD_FIXTURE_READY")

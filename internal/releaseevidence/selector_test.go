@@ -157,7 +157,7 @@ func TestEvidenceStatusContract(t *testing.T) {
 		{
 			name: "seed gap must remain placeholder",
 			edit: func(body string) string {
-				return replacePackage0FieldForItem(body, "seed_gap_default_user_loop_open", `"evidence_status":"placeholder"`, `"evidence_status":"implemented"`)
+				return replacePackage0FieldForItem(body, "seed_gap_operator_repair_safe_open", `"evidence_status":"placeholder"`, `"evidence_status":"implemented"`)
 			},
 			want: "placeholder",
 		},

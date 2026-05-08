@@ -25,6 +25,19 @@ func TestRunCheckOnlyValidatesManifestWithoutExecutingCommands(t *testing.T) {
 	}
 }
 
+func TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest(t *testing.T) {
+	root := t.TempDir()
+	writeEvidenceCLIScripts(t, root)
+	manifestPath := filepath.Join(root, "manifest.json")
+	writeEvidenceCLIFile(t, manifestPath, evidenceCLIManifest(`["bash","scripts/pass.sh"]`, "scripts/pass.sh"))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-mode", "seed", "-manifest", manifestPath, "-repo-root", root, "-check-only"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestRunExecutesRequiredCommandsByDefault(t *testing.T) {
 	root := t.TempDir()
 	writeEvidenceCLIScripts(t, root)
@@ -310,6 +323,28 @@ func evidenceCLIManifest(command, anchor string) string {
       "default_ga_required":true
     },
     {
+      "id":"default_user_loop_trace_unit",
+      "capability_id":"caller_policy_readiness",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
+      "id":"default_user_loop_positive_unit",
+      "capability_id":"caller_policy_readiness",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(DefaultUserLoopAggregationRejectsMissingPrereq|DefaultUserLoopAggregationRejectsPlaceholderPrereq|DefaultUserLoopAggregationRejectsWrongProfileDefaultModePolarityRequiredOrDocOnlyPrereq|DefaultUserLoopAggregationRejectsPartialOnlyManifest|DefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand|DefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand|RunCheckOnlyAcceptsDefaultUserLoopAggregationManifest)$"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -449,7 +484,6 @@ var package0CLISeedGapMetadata = []struct {
 	riskID  string
 }{
 	{"seed_gap_admin_bootstrap_ready_open", "CLAIM_ADMIN_BOOTSTRAP_READY", "F3"},
-	{"seed_gap_default_user_loop_open", "CLAIM_DEFAULT_USER_LOOP", "F2"},
 	{"seed_gap_workload_fixture_ready_open", "CLAIM_WORKLOAD_FIXTURE_READY", "F9"},
 	{"seed_gap_operator_repair_safe_open", "CLAIM_OPERATOR_REPAIR_SAFE", "F11"},
 	{"seed_gap_purge_approval_safe_open", "CLAIM_PURGE_APPROVAL_SAFE", "F13"},
@@ -492,6 +526,8 @@ var package0CLIMetadata = []struct {
 	{"default_user_loop_jvs_save_restore_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_jvs_save_restore", "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE", "F2", "positive", "fast", "package", "true", "positive_path", "JVS save history restore-preview restore-run and discard paths pass without closing the full default user loop"},
 	{"webdav_default_access_unit", "CLAIM_WEBDAV_DEFAULT_ACCESS", "webdav_default_access", "P0_WEBDAV_DEFAULT_ACCESS", "F8", "positive", "fast", "package", "true", "positive_path", "webdav default access passes in default mode"},
 	{"default_user_loop_webdav_access_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_webdav_access", "P1D_DEFAULT_USER_LOOP_WEBDAV_ACCESS", "F2", "positive", "fast", "package", "true", "positive_path", "WebDAV access contributes only partial default user loop evidence"},
+	{"default_user_loop_trace_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_trace", "P1E_DEFAULT_USER_LOOP_TRACE", "F2", "both", "fast", "package", "true", "coverage_guard", "caller-scoped operation audit and recovery trace stays redacted and terminally visible"},
+	{"default_user_loop_positive_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_positive", "P0_DEFAULT_USER_LOOP_POSITIVE", "F2", "positive", "fast", "package", "true", "positive_path", "default user loop passes in default mode"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "negative", "fast", "package", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "both", "fast", "package", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "both", "fast", "package", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},
@@ -624,9 +660,27 @@ func sha256EvidenceCLISelectorInputDigest(t *testing.T, body string) string {
 func writeEvidenceCLIScripts(t *testing.T, root string) {
 	t.Helper()
 
+	writeEvidenceCLIFile(t, filepath.Join(root, "go.mod"), "module example.com/evidenceclifixture\n\ngo 1.22\n")
 	writeEvidenceCLIFile(t, filepath.Join(root, "docs", "GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"), "fixture\n")
 	writeEvidenceCLIFile(t, filepath.Join(root, "scripts", "pass.sh"), "#!/usr/bin/env bash\nexit 0\n")
 	writeEvidenceCLIFile(t, filepath.Join(root, "scripts", "fail.sh"), "#!/usr/bin/env bash\nexit 1\n")
+	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "releaseevidence", "aggregation_test.go"), `package releaseevidence
+
+import "testing"
+
+func TestDefaultUserLoopAggregationRejectsMissingPrereq(t *testing.T) {}
+func TestDefaultUserLoopAggregationRejectsPlaceholderPrereq(t *testing.T) {}
+func TestDefaultUserLoopAggregationRejectsWrongProfileDefaultModePolarityRequiredOrDocOnlyPrereq(t *testing.T) {}
+func TestDefaultUserLoopAggregationRejectsPartialOnlyManifest(t *testing.T) {}
+func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand(t *testing.T) {}
+func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand(t *testing.T) {}
+`)
+	writeEvidenceCLIFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
+
+import "testing"
+
+func TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest(t *testing.T) {}
+`)
 }
 
 func writeEvidenceCLIFile(t *testing.T, path, body string) {
