@@ -234,6 +234,140 @@ func TestInternalAPIShellCreateExportCapabilityDeniedWhenWebDAVAdmissionDisabled
 	}
 }
 
+func TestInternalAPIShellCreateWorkloadMountAdmissionDisabledReplaysExistingOperation(t *testing.T) {
+	hash, err := operations.HashRequest(createWorkloadMountRequest{MountPath: "/mnt/repo", ReadOnly: true, LeaseSeconds: 120})
+	if err != nil {
+		t.Fatalf("hash workload mount request: %v", err)
+	}
+	meta := workloadMountMetaFixture()
+	store := &fakeOperationIntakeStore{lookupRecord: existingWorkloadMountOperationRecord("op_existing_mount_shell", hash)}
+	repoReader := &fakeRepoReader{repos: []resources.Repo{meta.repo}}
+	namespaceReader := &fakeNamespaceReader{namespace: meta.namespace}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: meta.binding}
+	volumeCalls := 0
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:              namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:         bindingReader,
+		NamespaceReader:                namespaceReader,
+		RepoReader:                     repoReader,
+		VolumeReader:                   fakeWorkloadMountVolumeReader{volume: meta.volume, calls: &volumeCalls},
+		RepoFenceReader:                fenceReader,
+		OperationIntakeStore:           store,
+		GenerateOperationID:            func() string { return "op_mount_shell" },
+		Now:                            fixedNamespaceNow,
+		WorkloadMountAdmissionDisabled: true,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202 existing operation", rec.Code, rec.Body.String())
+	}
+	envelope := decodeOperationEnvelope(t, rec.Body.Bytes())
+	if envelope.OperationID != "op_existing_mount_shell" {
+		t.Fatalf("operation id = %q, want existing operation", envelope.OperationID)
+	}
+	if store.calls != 0 || store.lookupCalls != 1 {
+		t.Fatalf("intake/lookup calls = %d/%d, want replay lookup only", store.calls, store.lookupCalls)
+	}
+	if repoReader.getInNamespaceCalls != 0 || namespaceReader.calls != 0 || volumeCalls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/volume/fence = %d/%d/%d/%d, want none", repoReader.getInNamespaceCalls, namespaceReader.calls, volumeCalls, fenceReader.calls)
+	}
+	if bindingReader.calls != 1 {
+		t.Fatalf("binding reader calls = %d, want auth-only read", bindingReader.calls)
+	}
+	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+}
+
+func TestInternalAPIShellCreateWorkloadMountAdmissionDisabledRejectsBrandNewBeforeMetadata(t *testing.T) {
+	meta := workloadMountMetaFixture()
+	store := &fakeOperationIntakeStore{}
+	repoReader := &fakeRepoReader{repos: []resources.Repo{meta.repo}}
+	namespaceReader := &fakeNamespaceReader{namespace: meta.namespace}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: meta.binding}
+	volumeCalls := 0
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	sink := &fakeAuditSink{}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		AuditSink:                      sink,
+		PrincipalResolver:              namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:         bindingReader,
+		NamespaceReader:                namespaceReader,
+		RepoReader:                     repoReader,
+		VolumeReader:                   fakeWorkloadMountVolumeReader{volume: meta.volume, calls: &volumeCalls},
+		RepoFenceReader:                fenceReader,
+		OperationIntakeStore:           store,
+		GenerateOperationID:            func() string { return "op_mount_shell" },
+		Now:                            fixedNamespaceNow,
+		WorkloadMountAdmissionDisabled: true,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error = %#v, want capability denied", env.Error)
+	}
+	if store.calls != 0 || store.lookupCalls != 1 {
+		t.Fatalf("intake/lookup calls = %d/%d, want lookup without create", store.calls, store.lookupCalls)
+	}
+	if repoReader.getInNamespaceCalls != 0 || namespaceReader.calls != 0 || volumeCalls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/volume/fence = %d/%d/%d/%d, want none", repoReader.getInNamespaceCalls, namespaceReader.calls, volumeCalls, fenceReader.calls)
+	}
+	if bindingReader.calls != 1 {
+		t.Fatalf("binding reader calls = %d, want auth-only read", bindingReader.calls)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied || sink.events[0].Reason != "workload mount create admission is disabled" {
+		t.Fatalf("audit events = %#v, want one denied admission audit", sink.events)
+	}
+	assertWorkloadMountAdmissionDisabledAudit(t, sink.events[0])
+	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+}
+
+func TestInternalAPIShellCreateWorkloadMountAdmissionDisabledWithoutLookupStoreFailsClosed(t *testing.T) {
+	meta := workloadMountMetaFixture()
+	store := &fakeNoLookupOperationIntakeStore{}
+	repoReader := &fakeRepoReader{repos: []resources.Repo{meta.repo}}
+	namespaceReader := &fakeNamespaceReader{namespace: meta.namespace}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: meta.binding}
+	volumeCalls := 0
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:              namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:         bindingReader,
+		NamespaceReader:                namespaceReader,
+		RepoReader:                     repoReader,
+		VolumeReader:                   fakeWorkloadMountVolumeReader{volume: meta.volume, calls: &volumeCalls},
+		RepoFenceReader:                fenceReader,
+		OperationIntakeStore:           store,
+		GenerateOperationID:            func() string { return "op_mount_shell" },
+		Now:                            fixedNamespaceNow,
+		WorkloadMountAdmissionDisabled: true,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403 fail-closed fallback", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error = %#v, want capability denied", env.Error)
+	}
+	if store.calls != 0 {
+		t.Fatalf("generic intake calls = %d, want none", store.calls)
+	}
+	if repoReader.getInNamespaceCalls != 0 || namespaceReader.calls != 0 || bindingReader.calls != 0 || volumeCalls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", repoReader.getInNamespaceCalls, namespaceReader.calls, bindingReader.calls, volumeCalls, fenceReader.calls)
+	}
+	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+}
+
 func TestInternalAPIShellGetAndRevokeExportRemainAvailableWhenWebDAVAdmissionDisabled(t *testing.T) {
 	meta := exportMetaFixture()
 	store := &fakeExportStore{}

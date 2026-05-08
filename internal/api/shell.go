@@ -397,15 +397,17 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		MountReader:       mountReader,
 		PlanReader:        mountPlanReader,
 		IntakeStore:       config.OperationIntakeStore,
+		IntakeLookupStore: operationLookupStore,
 		PrincipalResolver: config.PrincipalResolver,
 		AllowedCallers: RouteAwareAllowedCallerPolicy{
 			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
 			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
 			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
 		},
-		OperationID: config.GenerateOperationID,
-		Now:         config.Now,
-		AuditSink:   config.AuditSink,
+		OperationID:       config.GenerateOperationID,
+		Now:               config.Now,
+		AdmissionDisabled: config.WorkloadMountAdmissionDisabled,
+		AuditSink:         config.AuditSink,
 	})
 	createWorkloadMountHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/workload-mount-bindings", "createWorkloadMountBinding")
 	getWorkloadMountHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/workload-mount-bindings/{mountBindingId}", "getWorkloadMountBinding")
@@ -468,8 +470,10 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"upsertNamespace":                  upsertNamespaceHandler,
 		"updateWorkloadMountBindingStatus": updateWorkloadMountStatusHandler,
 	}
-	if !config.WorkloadMountAdmissionDisabled {
+	if !config.WorkloadMountAdmissionDisabled || operationLookupStore != nil {
 		implemented["createWorkloadMountBinding"] = createWorkloadMountHandler
+	}
+	if !config.WorkloadMountAdmissionDisabled {
 		implemented["getOrchestratorMountPlan"] = getOrchestratorMountPlanHandler
 	}
 	if config.VolumeReader != nil {

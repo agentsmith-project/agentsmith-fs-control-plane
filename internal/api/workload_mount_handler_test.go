@@ -40,6 +40,87 @@ func TestCreateWorkloadMountBindingQueuesOperationAndDoesNotLeakPlan(t *testing.
 	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
 }
 
+func TestCreateWorkloadMountBindingAdmissionDisabledReplaysExistingBeforeMetadata(t *testing.T) {
+	hash, err := operations.HashRequest(createWorkloadMountRequest{MountPath: "/mnt/repo", ReadOnly: true, LeaseSeconds: 120})
+	if err != nil {
+		t.Fatalf("hash workload mount request: %v", err)
+	}
+	store := &fakeOperationIntakeStore{lookupRecord: existingWorkloadMountOperationRecord("op_existing_mount", hash)}
+	meta := workloadMountMetaFixture()
+	repoReader := &fakeRepoReader{repos: []resources.Repo{meta.repo}}
+	namespaceReader := &fakeNamespaceReader{namespace: meta.namespace}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: meta.binding}
+	volumeCalls := 0
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := WorkloadMountHandler(workloadMountHandlerConfig(store, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleMountAdmin}}}}, func(config *WorkloadMountHandlerConfig) {
+		config.AdmissionDisabled = true
+		config.RepoReader = repoReader
+		config.NamespaceReader = namespaceReader
+		config.BindingReader = bindingReader
+		config.VolumeReader = fakeWorkloadMountVolumeReader{volume: meta.volume, calls: &volumeCalls}
+		config.FenceReader = fenceReader
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+	}
+	envelope := decodeOperationEnvelope(t, rec.Body.Bytes())
+	if envelope.OperationID != "op_existing_mount" {
+		t.Fatalf("operation id = %q, want existing operation", envelope.OperationID)
+	}
+	if store.calls != 0 || store.lookupCalls != 1 {
+		t.Fatalf("intake/lookup calls = %d/%d, want replay lookup only", store.calls, store.lookupCalls)
+	}
+	if repoReader.getInNamespaceCalls != 0 || namespaceReader.calls != 0 || bindingReader.calls != 0 || volumeCalls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", repoReader.getInNamespaceCalls, namespaceReader.calls, bindingReader.calls, volumeCalls, fenceReader.calls)
+	}
+	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+}
+
+func TestCreateWorkloadMountBindingAdmissionDisabledRejectsNewBeforeMetadataAndAudits(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	meta := workloadMountMetaFixture()
+	repoReader := &fakeRepoReader{repos: []resources.Repo{meta.repo}}
+	namespaceReader := &fakeNamespaceReader{namespace: meta.namespace}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: meta.binding}
+	volumeCalls := 0
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	sink := &fakeAuditSink{}
+	handler := WorkloadMountHandler(workloadMountHandlerConfig(store, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleMountAdmin}}}}, func(config *WorkloadMountHandlerConfig) {
+		config.AdmissionDisabled = true
+		config.AuditSink = sink
+		config.RepoReader = repoReader
+		config.NamespaceReader = namespaceReader
+		config.BindingReader = bindingReader
+		config.VolumeReader = fakeWorkloadMountVolumeReader{volume: meta.volume, calls: &volumeCalls}
+		config.FenceReader = fenceReader
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error = %#v, want capability denied", env.Error)
+	}
+	if store.calls != 0 || store.lookupCalls != 1 {
+		t.Fatalf("intake/lookup calls = %d/%d, want lookup without create", store.calls, store.lookupCalls)
+	}
+	if repoReader.getInNamespaceCalls != 0 || namespaceReader.calls != 0 || bindingReader.calls != 0 || volumeCalls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", repoReader.getInNamespaceCalls, namespaceReader.calls, bindingReader.calls, volumeCalls, fenceReader.calls)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied || sink.events[0].Reason != "workload mount create admission is disabled" {
+		t.Fatalf("audit events = %#v, want one denied admission audit", sink.events)
+	}
+	assertWorkloadMountAdmissionDisabledAudit(t, sink.events[0])
+	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+}
+
 func TestCreateWorkloadMountBindingRejectsFilteredMountWithoutExternalControlRoot(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -529,9 +610,15 @@ func workloadMountMetaFixture() workloadMountMeta {
 	}
 }
 
-type fakeWorkloadMountVolumeReader struct{ volume resources.Volume }
+type fakeWorkloadMountVolumeReader struct {
+	volume resources.Volume
+	calls  *int
+}
 
 func (reader fakeWorkloadMountVolumeReader) GetVolume(context.Context, string) (resources.Volume, error) {
+	if reader.calls != nil {
+		(*reader.calls)++
+	}
 	return reader.volume, nil
 }
 
@@ -583,6 +670,75 @@ func workloadMountRequestForCaller(method, path, body, namespaceID, authCaller s
 func workloadMountWriterFence(operationID string) fences.Fence {
 	now := fixedNamespaceNow()
 	return fences.Fence{ID: "fence_writer", RepoID: "repo_123", Kind: fences.KindWriterSession, HolderOperationID: operationID, Status: fences.StatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}
+}
+
+func existingWorkloadMountOperationRecord(operationID string, hash operations.RequestHash) *operations.OperationRecord {
+	now := fixedNamespaceNow()
+	return &operations.OperationRecord{
+		ID:                  operationID,
+		Type:                operations.OperationMountBindingCreate,
+		State:               operations.OperationStateQueued,
+		Phase:               operations.OperationPhaseMountBindingCreateValidate,
+		IdempotencyScope:    operations.NewIdempotencyScope("product-caller", "ns_123", operations.OperationMountBindingCreate, "idem_mount").String(),
+		IdempotencyKey:      "idem_mount",
+		RequestHash:         hash,
+		CorrelationID:       "corr_mount",
+		CallerService:       "product-caller",
+		AuthorizedActor:     operations.Actor{Type: "user", ID: "user_123"},
+		Resource:            operations.ResourceRef{Type: "workload_mount_binding", ID: "wmb_existing"},
+		NamespaceID:         "ns_123",
+		RepoID:              "repo_123",
+		MountBindingID:      "wmb_existing",
+		ExternalResourceIDs: map[string]string{},
+		InputSummary:        map[string]any{"mount_path": "/mnt/repo", "read_only": true, "lease_seconds": 120},
+		CreatedAt:           now,
+	}
+}
+
+type fakeNoLookupOperationIntakeStore struct {
+	calls int
+	spec  operations.QueuedOperationSpec
+}
+
+func (store *fakeNoLookupOperationIntakeStore) CreateOrReuseOperation(_ context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	store.calls++
+	store.spec = spec
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	return operations.IdempotencyResolution{Operation: record.Sanitized()}, nil
+}
+
+func assertWorkloadMountAdmissionDisabledAudit(t *testing.T, event audit.Event) {
+	t.Helper()
+	if event.Type != audit.EventTypeCapabilityDenied {
+		t.Fatalf("audit event Type = %q, want %q", event.Type, audit.EventTypeCapabilityDenied)
+	}
+	if got := event.Details["route_operation_id"]; got != "createWorkloadMountBinding" {
+		t.Fatalf("audit route_operation_id = %#v, want createWorkloadMountBinding; details=%#v", got, event.Details)
+	}
+	if !auditValidationErrorsContain(event.Details["validation_errors"], "workload_mount_admission_disabled") {
+		t.Fatalf("audit validation_errors = %#v, want workload_mount_admission_disabled; details=%#v", event.Details["validation_errors"], event.Details)
+	}
+}
+
+func auditValidationErrorsContain(value any, want string) bool {
+	switch typed := value.(type) {
+	case []string:
+		for _, got := range typed {
+			if got == want {
+				return true
+			}
+		}
+	case []any:
+		for _, got := range typed {
+			if got == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func assertWorkloadMountNoPlanLeak(t *testing.T, body string) {

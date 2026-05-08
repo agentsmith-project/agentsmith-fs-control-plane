@@ -47,6 +47,7 @@ type WorkloadMountHandlerConfig struct {
 	MountBindingID    func() string
 	EventID           func() string
 	Now               func() time.Time
+	AdmissionDisabled bool
 	AuditSink         audit.Sink
 }
 
@@ -82,7 +83,7 @@ func WorkloadMountHandler(config WorkloadMountHandlerConfig) http.Handler {
 			lookup = typed
 		}
 	}
-	leaf := workloadMountLeafHandler{routes: routes, repoReader: config.RepoReader, namespaceReader: config.NamespaceReader, bindingReader: config.BindingReader, volumeReader: config.VolumeReader, fenceReader: config.FenceReader, mountReader: config.MountReader, planReader: config.PlanReader, intakeStore: config.IntakeStore, lookupStore: lookup, operationID: config.OperationID, mountBindingID: config.MountBindingID, eventID: config.EventID, now: config.Now, sink: config.AuditSink}
+	leaf := workloadMountLeafHandler{routes: routes, repoReader: config.RepoReader, namespaceReader: config.NamespaceReader, bindingReader: config.BindingReader, volumeReader: config.VolumeReader, fenceReader: config.FenceReader, mountReader: config.MountReader, planReader: config.PlanReader, intakeStore: config.IntakeStore, lookupStore: lookup, operationID: config.OperationID, mountBindingID: config.MountBindingID, eventID: config.EventID, now: config.Now, admissionDisabled: config.AdmissionDisabled, sink: config.AuditSink}
 	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, workloadMountRouteResolver{routes: routes}, config.AllowedCallers, config.AuditSink)
 }
 
@@ -115,21 +116,22 @@ func (resolver workloadMountRouteResolver) ResolveRouteClass(r *http.Request) (R
 }
 
 type workloadMountLeafHandler struct {
-	routes          []RouteMetadata
-	repoReader      RepoReader
-	namespaceReader NamespaceReader
-	bindingReader   NamespaceVolumeBindingReader
-	volumeReader    VolumeReader
-	fenceReader     RepoFenceReader
-	mountReader     WorkloadMountBindingReader
-	planReader      WorkloadMountPlanReader
-	intakeStore     OperationIntakeStore
-	lookupStore     OperationIdempotencyLookupStore
-	operationID     OperationIDGenerator
-	mountBindingID  func() string
-	eventID         func() string
-	now             func() time.Time
-	sink            audit.Sink
+	routes            []RouteMetadata
+	repoReader        RepoReader
+	namespaceReader   NamespaceReader
+	bindingReader     NamespaceVolumeBindingReader
+	volumeReader      VolumeReader
+	fenceReader       RepoFenceReader
+	mountReader       WorkloadMountBindingReader
+	planReader        WorkloadMountPlanReader
+	intakeStore       OperationIntakeStore
+	lookupStore       OperationIdempotencyLookupStore
+	operationID       OperationIDGenerator
+	mountBindingID    func() string
+	eventID           func() string
+	now               func() time.Time
+	admissionDisabled bool
+	sink              audit.Sink
 }
 
 func (handler workloadMountLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -156,10 +158,6 @@ func (handler workloadMountLeafHandler) ServeHTTP(w http.ResponseWriter, r *http
 }
 
 func (handler workloadMountLeafHandler) create(w http.ResponseWriter, r *http.Request, route RouteMetadata, params map[string]string, requestContext auth.RequestContext) {
-	if handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.volumeReader == nil || handler.fenceReader == nil || handler.intakeStore == nil || handler.lookupStore == nil {
-		writeWorkloadMountError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
-		return
-	}
 	namespaceID, ok := requestNamespace(w, r, route, requestContext, handler.sink)
 	if !ok {
 		return
@@ -184,7 +182,19 @@ func (handler workloadMountLeafHandler) create(w http.ResponseWriter, r *http.Re
 		return
 	}
 	canonical := createWorkloadMountRequest{MountPath: body.MountPath, ReadOnly: body.ReadOnly, LeaseSeconds: leaseSeconds}
+	if handler.lookupStore == nil {
+		writeWorkloadMountError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+		return
+	}
 	if handler.writeExistingIdempotentOperation(w, r, route, requestContext, namespaceID, canonical) {
+		return
+	}
+	if handler.admissionDisabled {
+		writeWorkloadMountAdmissionDisabled(w, r, route, requestContext, handler.sink)
+		return
+	}
+	if handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.volumeReader == nil || handler.fenceReader == nil || handler.intakeStore == nil {
+		writeWorkloadMountError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return
 	}
 	repo, namespace, binding, volume, held, ok := handler.loadCreateMetadata(w, r, route, requestContext, namespaceID, repoID)
@@ -637,6 +647,33 @@ func writeWorkloadMountReadError(w http.ResponseWriter, r *http.Request, err err
 	}
 	writeWorkloadMountError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
 	return true
+}
+
+func writeWorkloadMountAdmissionDisabled(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, sink audit.Sink) {
+	message := "workload mount create admission is disabled"
+	validationErrors := []string{"workload_mount_admission_disabled"}
+	var operationID *string
+	if route.OperationID != "" {
+		operationID = &route.OperationID
+	}
+	envelope := NewErrorEnvelope(
+		CodeCapabilityDenied,
+		message,
+		false,
+		CorrelationIDFromRequest(r),
+		operationID,
+		map[string]any{"validation_errors": validationErrors},
+	)
+	_ = WriteErrorEnvelope(w, http.StatusForbidden, envelope)
+	emitDeniedAuditEvent(r.Context(), sink, r, deniedAuditEvent{
+		Type:             audit.EventTypeCapabilityDenied,
+		Route:            route,
+		Status:           http.StatusForbidden,
+		Code:             CodeCapabilityDenied,
+		Reason:           message,
+		ValidationErrors: validationErrors,
+		RequestContext:   requestContext,
+	})
 }
 
 func writeWorkloadMountError(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, message string, retryable bool) {
