@@ -582,7 +582,7 @@
         "./internal/api",
         "./internal/apiapp",
         "-run",
-        "^Test(CapabilityMatrixV1(RowsMatchHandoffVocabulary|ExcludesLegacyCoarseCapabilities|SplitsJVSAndWebDAVProjectionFacets|SplitsWorkloadBindingDiscoveryAndTeardownPlanFacets|WebDAVExportAdmissionIncludesCreateAndRevoke|TeardownOnlyPlanDoesNotBypassNewMutationDenial)|AdmissionCapabilityForOperationTypeCoversEveryMatrixAdmissionOperation|NeutralReadinessHandlerReportsNotReadyAndDisabledGates|ReadinessFromCapabilityMatrixSerializesWorkloadMountSplitCapabilities|NeutralShellFallbackReportsSplitWorkloadCapabilities|InternalRuntimeReadinessIsNotNeutralAndDoesNotAdvertiseUnimplementedHandlersReady|InternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated|InternalRuntimeReadinessRuntimeProfileRequiresOptedInWorkloadMountFacets)$"
+        "^Test(CapabilityMatrixV1(RowsMatchHandoffVocabulary|DecisionRowsCoverP2aSurfaceContract|CoversEveryRouteMutationOperation|IncludesRestorePreviewAsDurableJVSMutation|ClassifiesVolumeEnsureAdmission|ExcludesLegacyCoarseCapabilities|SplitsJVSAndWebDAVProjectionFacets|SplitsWorkloadBindingDiscoveryAndTeardownPlanFacets|WebDAVExportAdmissionIncludesCreateAndRevoke|TeardownOnlyPlanDoesNotBypassNewMutationDenial)|AdmissionCapabilityForOperationTypeCoversEveryMatrixAdmissionOperation|NeutralReadinessHandlerReportsNotReadyAndDisabledGates|ReadinessFromCapabilityMatrixSerializesWorkloadMountSplitCapabilities|NeutralShellFallbackReportsSplitWorkloadCapabilities|InternalRuntimeReadinessIsNotNeutralAndDoesNotAdvertiseUnimplementedHandlersReady|InternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated|InternalRuntimeReadinessRuntimeProfileRequiresOptedInWorkloadMountFacets)$"
       ],
       "anchors": [
         "internal/capability/matrix.go",
@@ -614,6 +614,50 @@
           "workload binding, discovery, and teardown plan facets stay separate, and teardown-only plan has no admission operation bypass",
           "readyz and shell readiness serialize workload binding, discovery, and teardown plan split capabilities explicitly",
           "every matrix admission operation reverse maps to the same capability row"
+        ]
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
+    },
+    {
+      "id": "operation_terminalization_contract_unit",
+      "evidence_status": "implemented",
+      "capability_id": "operation_recovery",
+      "evidence_type": "contract",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/capability",
+        "./internal/contractcheck",
+        "-run",
+        "^Test(CapabilityMatrixV1(DecisionRowsCoverP2aSurfaceContract|CoversEveryRouteMutationOperation|IncludesRestorePreviewAsDurableJVSMutation|ClassifiesVolumeEnsureAdmission)|Operation(StateMachineContractCoversEveryOperationType|TerminalizationContractRequiresSideEffectReplayAndTerminalDecision))$"
+      ],
+      "anchors": [
+        "internal/capability/matrix.go",
+        "internal/capability/matrix_test.go",
+        "docs/contracts/operation-state-machine-v1.md",
+        "internal/contractcheck/contractcheck_test.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": true,
+      "claim_id": "CLAIM_OPERATION_TERMINALIZATION",
+      "subclaim_id": "operation_terminalization_contract",
+      "acceptance_id": "P2A_OPERATION_TERMINALIZATION_CONTRACT",
+      "risk_id": "F6",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "pass_criteria": {
+        "kind": "coverage_guard",
+        "assertions": [
+          "operation inventory covers every operation type including namespace_disable export_session_reconcile and migration_cutover",
+          "side effect replay and terminal decision tables distinguish failed from operator_intervention_required",
+          "capability decision rows cover api admission worker execution worker recovery readyz discovery operator inspection and evidence surfaces"
         ]
       },
       "expected_runtime": "fast",

@@ -86,12 +86,103 @@ Rows in the current GA restore slice, including `restore_preview_discard`, are
 represented in the machine-readable OpenAPI/schema, operation-type fixtures,
 routes, and generated contracts used by implementation.
 
+## Operation Type Inventory
+
+| operation_type | caller API admission | worker execution | worker recovery | capability | default GA posture |
+| --- | --- | --- | --- | --- | --- |
+| `volume_ensure` | yes | yes | yes | `volume_preflight` | default positive |
+| `namespace_upsert` | yes | yes | yes | `namespace_binding` | default positive |
+| `namespace_disable` | yes | yes | yes | `namespace_binding` | default positive |
+| `namespace_volume_binding_put` | yes | yes | yes | `namespace_binding` | default positive |
+| `repo_create` | yes | yes | yes | `repo_create` | default positive |
+| `repo_archive` | yes | yes | yes | `repo_lifecycle_retained` | default positive |
+| `repo_restore_archived` | yes | yes | yes | `repo_lifecycle_retained` | default positive |
+| `repo_delete` | yes | yes | yes | `repo_lifecycle_retained` | default positive |
+| `repo_restore_tombstoned` | yes | yes | yes | `repo_lifecycle_retained` | default positive |
+| `repo_purge` | optional-gated | optional-gated | yes | `repo_purge` | default denied; optional positive only by selector |
+| `save_point_create` | yes | yes | yes | `jvs_save_restore` | default positive |
+| `restore_preview` | yes | yes | yes | `jvs_save_restore` | default positive durable restore-plan mutation |
+| `restore_preview_discard` | yes | yes | yes | `jvs_save_restore` | default positive cleanup mutation |
+| `restore_run` | yes | yes | yes | `jvs_save_restore` | default positive |
+| `template_create` | optional-gated | optional-gated | yes | `repo_template` | default denied; optional positive only by selector |
+| `template_clone` | optional-gated | optional-gated | yes | `repo_template` | default denied; optional positive only by selector |
+| `export_create` | yes | yes | yes | `webdav_export` | default positive |
+| `export_revoke` | yes | yes | yes | `webdav_export` | default positive |
+| `export_session_reconcile` | no caller API admission | yes | yes | `operation_recovery` | internal recovery terminalization |
+| `mount_binding_create` | optional-gated | optional-gated | yes | `workload_mount_binding` | default denied; optional positive only by selector |
+| `mount_binding_status_update` | optional-gated | optional-gated | yes | `workload_mount_binding` | default denied; optional positive only by selector |
+| `mount_binding_heartbeat` | optional-gated | optional-gated | yes | `workload_mount_binding` | default denied; optional positive only by selector |
+| `mount_binding_release` | optional-gated | optional-gated | yes | `workload_mount_binding` | default denied; optional positive only by selector |
+| `mount_binding_revoke` | optional-gated | optional-gated | yes | `workload_mount_binding` | default denied; optional positive only by selector |
+| `migration_cutover` | no caller API admission | conditional | recovery-only | `operation_recovery` | conditional unsupported unless migration tooling is explicitly enabled |
+
+## Side Effect And Replay Boundary
+
+| operation_type | side_effect_boundary | idempotent_replay |
+| --- | --- | --- |
+| `volume_ensure` | metadata-only volume row, operation, and audit commit | same idempotency scope returns committed volume metadata |
+| `namespace_upsert` | namespace row, operation, and audit commit | same request returns active namespace metadata |
+| `namespace_disable` | namespace disabled state, operation, and audit commit | same request returns disabled namespace metadata without re-disabling side effects |
+| `namespace_volume_binding_put` | namespace binding row, operation, and audit commit | same request returns binding metadata |
+| `repo_create` | repo metadata, JVS identity, operation, and audit boundary | same request returns original repo operation/result |
+| `repo_archive` | lifecycle archive state plus session-drain predicate | same request returns archive terminal result |
+| `repo_restore_archived` | lifecycle restore state plus health predicate | same request returns restore terminal result |
+| `repo_delete` | tombstone state plus session-drain predicate | same request returns delete terminal result |
+| `repo_restore_tombstoned` | tombstone restore state plus retention predicate | same request returns restore terminal result |
+| `repo_purge` | irreversible purge marker and retained storage absence | same request returns original purge terminal result; disabled default denies before side effects |
+| `save_point_create` | JVS save point plus operation/audit boundary | same request returns original save point metadata |
+| `restore_preview` | durable restore plan, preflight idle marker, operation, and audit boundary | same request returns original preview plan metadata without creating a second plan |
+| `restore_preview_discard` | matching restore plan discard state, operation, and audit boundary | same request returns discarded plan result |
+| `restore_run` | matching plan consume state, writer fence, JVS run, doctor, operation, and audit boundary | same request returns original restore-run terminal result |
+| `template_create` | source save point and target template create boundary | same request returns original template operation/result; disabled default denies before side effects |
+| `template_clone` | target repo create from template boundary | same request returns original clone operation/result; disabled default denies before side effects |
+| `export_create` | export session, generated credential, operation, and audit boundary | same request returns existing session without credential reissue |
+| `export_revoke` | session revoking state, operation, and audit boundary | same request returns existing revoke operation/session state |
+| `export_session_reconcile` | session terminal state, runtime ledger counts, operation, and audit boundary | replay scans durable session/ledger state and never creates caller credentials |
+| `mount_binding_create` | binding issuance state, operation, and audit boundary | same request returns existing binding without reissuing runtime material |
+| `mount_binding_status_update` | orchestrator status observation, operation, and audit boundary | same request returns existing status update result |
+| `mount_binding_heartbeat` | binding lease extension boundary | same request returns existing heartbeat result |
+| `mount_binding_release` | release requested/confirmed terminal boundary | same request returns existing release state |
+| `mount_binding_revoke` | revoke requested/confirmed terminal boundary | same request returns existing revoke state |
+| `migration_cutover` | migration generation handoff if tooling is enabled | recovery-only replay requires operator decision when source/target generation is ambiguous |
+
+## Failed vs Operator Intervention Decision
+
+| operation_type | failed | operator_intervention_required |
+| --- | --- | --- |
+| `volume_ensure` | validation or durable metadata conflict before external ambiguity | ambiguous_external_state or storage recovery uncertainty |
+| `namespace_upsert` | invalid namespace input or durable constraint rejection | ambiguous_external_state after partial commit uncertainty |
+| `namespace_disable` | invalid namespace state or durable constraint rejection | ambiguous_external_state after partial disable uncertainty |
+| `namespace_volume_binding_put` | inactive namespace/volume or durable constraint rejection | ambiguous_external_state after binding commit uncertainty |
+| `repo_create` | validation failure before repo/JVS side effects | ambiguous_external_state, JVS runtime unavailable after queued recovery, or path/JVS uncertainty |
+| `repo_archive` | stable session/lifecycle denial before mutation | ambiguous_external_state or uncertain retained lifecycle/storage transition |
+| `repo_restore_archived` | stable lifecycle/health denial before mutation | ambiguous_external_state or uncertain restore transition |
+| `repo_delete` | stable session/lifecycle denial before mutation | ambiguous_external_state or uncertain tombstone transition |
+| `repo_restore_tombstoned` | stable retention/lifecycle denial before mutation | ambiguous_external_state or uncertain tombstone restore transition |
+| `repo_purge` | capability_disabled_or_unsupported or approval/retention denial before side effects | ambiguous_external_state after possible irreversible deletion |
+| `save_point_create` | validation/JVS preflight denial before save side effects | ambiguous_external_state or uncertain JVS save state |
+| `restore_preview` | stable dirty-state or active-plan denial before preview side effects | ambiguous_external_state, mismatched pending plan, or uncertain JVS recovery state |
+| `restore_preview_discard` | missing/mismatched pending plan before discard side effects | ambiguous_external_state or uncertain discard state |
+| `restore_run` | stable writer-session/fence denial before JVS run | ambiguous_external_state, doctor failure after run, or uncertain recovery state |
+| `template_create` | capability_disabled_or_unsupported or validation denial before side effects | ambiguous_external_state after save/clone uncertainty |
+| `template_clone` | capability_disabled_or_unsupported or validation denial before side effects | ambiguous_external_state after clone uncertainty |
+| `export_create` | capability/session validation denial before credential creation | ambiguous_external_state around persisted credential/session boundary |
+| `export_revoke` | stable missing/terminal session denial | ambiguous_external_state when runtime access may remain |
+| `export_session_reconcile` | stable terminalization denial when counts are provably nonzero | ambiguous_external_state when ledger/session counts disagree |
+| `mount_binding_create` | capability_disabled_or_unsupported or validation denial before issuance | ambiguous_external_state when runtime mount material may have been issued |
+| `mount_binding_status_update` | stable invalid transition denial | ambiguous_external_state for conflicting orchestrator terminal evidence |
+| `mount_binding_heartbeat` | stable terminal/missing binding denial | ambiguous_external_state for lease/store uncertainty |
+| `mount_binding_release` | stable missing/terminal binding denial | ambiguous_external_state when runtime access may remain |
+| `mount_binding_revoke` | stable missing/terminal binding denial | ambiguous_external_state when runtime access may remain |
+| `migration_cutover` | capability_disabled_or_unsupported when migration tooling is not enabled | ambiguous_external_state or generation mismatch requires recovery-only operator decision |
+
 Minimum GA matrix:
 
 | Operation | Resource Lock | Recovery Requirement |
 | --- | --- | --- |
 | volume_ensure | volume metadata row | `validate_volume_ensure` claim/retry/reclaim atomically commits volume metadata, succeeded operation, and succeeded audit event; this is metadata-only and does not provision JuiceFS or perform health checks |
 | namespace_upsert | namespace metadata row | `validate_namespace_upsert` claim/retry/reclaim atomically commits active namespace metadata, succeeded operation, and succeeded audit event; `cancel_requested` may be lease-finalized to `cancelled` within the namespace_upsert scope without touching non-namespace operations |
+| namespace_disable | namespace metadata row | `validate_namespace_disable` claim/retry/reclaim atomically commits disabled namespace metadata, succeeded operation, and succeeded audit event; existing exports and workload mounts remain governed by their own terminalization contracts |
 | namespace_volume_binding_put | namespace volume binding row | `validate_namespace_volume_binding_put` claim/retry/reclaim atomically commits namespace volume binding metadata, succeeded operation, and succeeded audit event after verifying active namespace and active default volume; `cancel_requested` may be lease-finalized to `cancelled` within the namespace_volume_binding_put scope without touching non-binding operations |
 | repo_create | target repo exclusive create | inspect allocated path, JVS identity, and doctor result |
 | repo_archive | repo lifecycle exclusive plus session drain | inspect lifecycle status, session terminal state, and retained storage |

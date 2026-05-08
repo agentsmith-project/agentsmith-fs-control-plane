@@ -63,7 +63,7 @@ func TestCapabilityMatrixV1RowsMatchHandoffVocabulary(t *testing.T) {
 			if !allowedSurfaceTypes[row.SurfaceType] {
 				t.Fatalf("%s SurfaceType = %q, want one of the handoff v1 surface vocabulary", tt.id, row.SurfaceType)
 			}
-			if row.SurfaceType != SurfaceDurableOperation && len(row.AdmissionOperationTypes) != 0 {
+			if row.SurfaceType != SurfaceDurableOperation && row.ID != VolumePreflight && len(row.AdmissionOperationTypes) != 0 {
 				t.Fatalf("%s has AdmissionOperationTypes on non-durable surface %q: %#v", tt.id, row.SurfaceType, row.AdmissionOperationTypes)
 			}
 		})
@@ -93,13 +93,11 @@ func TestCapabilityMatrixV1SplitsJVSAndWebDAVProjectionFacets(t *testing.T) {
 	jvsDurable := rows[JVSSaveRestore]
 	if !operationTypeSlicesEqual(jvsDurable.AdmissionOperationTypes, []operations.OperationType{
 		operations.OperationSavePointCreate,
+		operations.OperationRestorePreview,
 		operations.OperationRestorePreviewDiscard,
 		operations.OperationRestoreRun,
 	}) {
-		t.Fatalf("%s AdmissionOperationTypes = %#v, want save point create, restore preview discard, and restore run only", JVSSaveRestore, jvsDurable.AdmissionOperationTypes)
-	}
-	if operationTypeSliceContains(jvsDurable.AdmissionOperationTypes, operations.OperationRestorePreview) {
-		t.Fatalf("%s must not mix restore preview projection into durable admission operations", JVSSaveRestore)
+		t.Fatalf("%s AdmissionOperationTypes = %#v, want save point create, restore preview, restore preview discard, and restore run", JVSSaveRestore, jvsDurable.AdmissionOperationTypes)
 	}
 	jvsProjection := rows[JVSProjection]
 	if jvsProjection.SurfaceType != SurfaceReadProjection || len(jvsProjection.AdmissionOperationTypes) != 0 {
@@ -186,6 +184,186 @@ func TestAdmissionCapabilityForOperationTypeCoversEveryMatrixAdmissionOperation(
 	}
 }
 
+func TestCapabilityMatrixV1DecisionRowsCoverP2aSurfaceContract(t *testing.T) {
+	rows := CapabilityMatrixV1DecisionRows()
+	if len(rows) == 0 {
+		t.Fatal("CapabilityMatrixV1DecisionRows is empty")
+	}
+
+	seenSurface := map[DecisionSurfaceType]bool{}
+	seenOperation := map[operations.OperationType]bool{}
+	for _, row := range rows {
+		if row.SurfaceType == "" {
+			t.Fatalf("decision row missing surface type: %#v", row)
+		}
+		if row.CapabilityID == "" {
+			t.Fatalf("decision row missing capability id: %#v", row)
+		}
+		if row.ResourceScope == "" {
+			t.Fatalf("%s/%s missing resource scope", row.SurfaceType, row.OperationType)
+		}
+		if row.RunbookRef == "" || row.EvidenceRef == "" {
+			t.Fatalf("%s/%s missing runbook/evidence refs: %#v", row.SurfaceType, row.OperationType, row)
+		}
+		if row.RequiredForDefaultGA && row.OptionalGated {
+			t.Fatalf("%s/%s cannot be both default-required and optional-gated", row.SurfaceType, row.OperationType)
+		}
+		if !row.Supported && row.RequiredForDefaultGA {
+			t.Fatalf("%s/%s unsupported row cannot be default-required", row.SurfaceType, row.OperationType)
+		}
+		seenSurface[row.SurfaceType] = true
+		if row.OperationType != "" {
+			seenOperation[row.OperationType] = true
+		}
+	}
+
+	for _, surface := range []DecisionSurfaceType{
+		SurfaceAPIAdmission,
+		SurfaceWorkerExecution,
+		SurfaceWorkerRecovery,
+		SurfaceReadyz,
+		SurfaceCallerDiscovery,
+		SurfaceOrchestratorDiscovery,
+		SurfaceOperatorInspection,
+		SurfaceEvidence,
+	} {
+		if !seenSurface[surface] {
+			t.Fatalf("CapabilityMatrixV1DecisionRows missing surface %s", surface)
+		}
+	}
+	for _, operationType := range operations.OperationTypes() {
+		if !seenOperation[operationType] {
+			t.Fatalf("CapabilityMatrixV1DecisionRows missing operation inventory row for %s", operationType)
+		}
+	}
+}
+
+func TestCapabilityMatrixV1DecisionRowsExposeHandoffMinimumFields(t *testing.T) {
+	for _, row := range CapabilityMatrixV1DecisionRows() {
+		if row.Configured == "" {
+			t.Fatalf("%s/%s missing configured contract field", row.SurfaceType, row.OperationType)
+		}
+		if row.Ready == "" {
+			t.Fatalf("%s/%s missing ready contract field", row.SurfaceType, row.OperationType)
+		}
+		if row.NamespacePolicy == "" {
+			t.Fatalf("%s/%s missing namespace_policy contract field", row.SurfaceType, row.OperationType)
+		}
+		if row.VolumeRuntimeCapability == "" {
+			t.Fatalf("%s/%s missing volume_runtime_capability contract field", row.SurfaceType, row.OperationType)
+		}
+	}
+}
+
+func TestCapabilityMatrixV1DecisionRowsCoverRequiredSurfacesByOperationClass(t *testing.T) {
+	rows := CapabilityMatrixV1DecisionRows()
+	for _, operationType := range operations.RouteOperationTypes() {
+		assertDecisionRow(t, rows, operationType, SurfaceAPIAdmission, "", true)
+		assertDecisionRow(t, rows, operationType, SurfaceWorkerExecution, "", true)
+		assertDecisionRow(t, rows, operationType, SurfaceWorkerRecovery, OperationRecovery, true)
+		assertDecisionRow(t, rows, operationType, SurfaceEvidence, "", true)
+	}
+
+	for _, operationType := range []operations.OperationType{
+		operations.OperationRepoPurge,
+		operations.OperationTemplateCreate,
+		operations.OperationTemplateClone,
+		operations.OperationMountBindingCreate,
+		operations.OperationMountBindingStatusUpdate,
+		operations.OperationMountBindingHeartbeat,
+		operations.OperationMountBindingRelease,
+		operations.OperationMountBindingRevoke,
+	} {
+		row := assertDecisionRow(t, rows, operationType, SurfaceAPIAdmission, "", true)
+		if !row.OptionalGated || row.RequiredForDefaultGA {
+			t.Fatalf("%s api-admission row = %#v, want default-negative optional-gated", operationType, row)
+		}
+	}
+
+	for _, operationType := range []operations.OperationType{
+		operations.OperationExportSessionReconcile,
+		operations.OperationMigrationCutover,
+	} {
+		assertDecisionRow(t, rows, operationType, SurfaceWorkerExecution, "", operationType == operations.OperationExportSessionReconcile)
+		assertDecisionRow(t, rows, operationType, SurfaceWorkerRecovery, OperationRecovery, operationType == operations.OperationExportSessionReconcile)
+		assertDecisionRow(t, rows, operationType, SurfaceEvidence, "", operationType == operations.OperationExportSessionReconcile)
+		if operationType == operations.OperationMigrationCutover {
+			row := assertDecisionRow(t, rows, operationType, SurfaceWorkerExecution, OperationRecovery, false)
+			if row.Configured != "conditional" || row.Ready != "unsupported" {
+				t.Fatalf("%s worker-execution row = %#v, want conditional unsupported", operationType, row)
+			}
+		}
+	}
+
+	for _, tt := range []struct {
+		surface      DecisionSurfaceType
+		capabilityID ID
+	}{
+		{surface: SurfaceReadyz, capabilityID: AdminBootstrap},
+		{surface: SurfaceReadyz, capabilityID: VolumePreflight},
+		{surface: SurfaceCallerDiscovery, capabilityID: CallerPolicyReadiness},
+		{surface: SurfaceOrchestratorDiscovery, capabilityID: WorkloadTeardownPlan},
+		{surface: SurfaceOperatorInspection, capabilityID: OperationRecovery},
+	} {
+		assertDecisionRow(t, rows, "", tt.surface, tt.capabilityID, true)
+	}
+}
+
+func TestCapabilityMatrixV1DecisionRowsAlignWithRecoveryOnlyContractOperations(t *testing.T) {
+	rows := CapabilityMatrixV1DecisionRows()
+	reconcileExecution := assertDecisionRow(t, rows, operations.OperationExportSessionReconcile, SurfaceWorkerExecution, OperationRecovery, true)
+	if reconcileExecution.Configured != "runtime-derived" || reconcileExecution.Ready != "runtime-derived" {
+		t.Fatalf("export_session_reconcile worker-execution row = %#v, want runtime-derived state", reconcileExecution)
+	}
+	migrationExecution := assertDecisionRow(t, rows, operations.OperationMigrationCutover, SurfaceWorkerExecution, OperationRecovery, false)
+	if migrationExecution.Configured != "conditional" || migrationExecution.Ready != "unsupported" {
+		t.Fatalf("migration_cutover worker-execution row = %#v, want conditional unsupported", migrationExecution)
+	}
+	migrationRecovery := assertDecisionRow(t, rows, operations.OperationMigrationCutover, SurfaceWorkerRecovery, OperationRecovery, false)
+	if migrationRecovery.Configured != "conditional" || migrationRecovery.Ready != "recovery-only" {
+		t.Fatalf("migration_cutover worker-recovery row = %#v, want conditional recovery-only", migrationRecovery)
+	}
+}
+
+func TestCapabilityMatrixV1CoversEveryRouteMutationOperation(t *testing.T) {
+	for routeOperationID, operationType := range operations.RouteOperationTypes() {
+		got, ok := AdmissionCapabilityForOperationType(operationType)
+		if !ok {
+			t.Fatalf("route operation %s (%s) missing API admission capability", routeOperationID, operationType)
+		}
+		if got == "" {
+			t.Fatalf("route operation %s (%s) mapped to empty capability", routeOperationID, operationType)
+		}
+	}
+}
+
+func TestCapabilityMatrixV1IncludesRestorePreviewAsDurableJVSMutation(t *testing.T) {
+	row, ok := CapabilityMatrixV1Row(JVSSaveRestore)
+	if !ok {
+		t.Fatalf("CapabilityMatrixV1Rows missing %s", JVSSaveRestore)
+	}
+	if !operationTypeSliceContains(row.AdmissionOperationTypes, operations.OperationRestorePreview) {
+		t.Fatalf("%s AdmissionOperationTypes = %#v, want restore_preview durable plan mutation", JVSSaveRestore, row.AdmissionOperationTypes)
+	}
+	got, ok := AdmissionCapabilityForOperationType(operations.OperationRestorePreview)
+	if !ok {
+		t.Fatalf("AdmissionCapabilityForOperationType(%s) missing", operations.OperationRestorePreview)
+	}
+	if got != JVSSaveRestore {
+		t.Fatalf("AdmissionCapabilityForOperationType(%s) = %s, want %s", operations.OperationRestorePreview, got, JVSSaveRestore)
+	}
+}
+
+func TestCapabilityMatrixV1ClassifiesVolumeEnsureAdmission(t *testing.T) {
+	got, ok := AdmissionCapabilityForOperationType(operations.OperationVolumeEnsure)
+	if !ok {
+		t.Fatalf("AdmissionCapabilityForOperationType(%s) missing", operations.OperationVolumeEnsure)
+	}
+	if got != VolumePreflight {
+		t.Fatalf("AdmissionCapabilityForOperationType(%s) = %s, want %s", operations.OperationVolumeEnsure, got, VolumePreflight)
+	}
+}
+
 func TestCapabilityMatrixV1TeardownOnlyPlanDoesNotBypassNewMutationDenial(t *testing.T) {
 	row, ok := CapabilityMatrixV1Row(WorkloadTeardownPlan)
 	if !ok {
@@ -225,8 +403,10 @@ func TestAdmissionCapabilityForOperationTypeIsStable(t *testing.T) {
 		{operationType: operations.OperationNamespaceUpsert, want: NamespaceBinding},
 		{operationType: operations.OperationNamespaceDisable, want: NamespaceBinding},
 		{operationType: operations.OperationNamespaceVolumeBindingPut, want: NamespaceBinding},
+		{operationType: operations.OperationVolumeEnsure, want: VolumePreflight},
 		{operationType: operations.OperationRepoCreate, want: RepoCreate},
 		{operationType: operations.OperationSavePointCreate, want: JVSSaveRestore},
+		{operationType: operations.OperationRestorePreview, want: JVSSaveRestore},
 		{operationType: operations.OperationRestorePreviewDiscard, want: JVSSaveRestore},
 		{operationType: operations.OperationRestoreRun, want: JVSSaveRestore},
 		{operationType: operations.OperationExportCreate, want: WebDAVExport},
@@ -296,6 +476,11 @@ func TestCapabilityAdmissionOperationCoverageContract(t *testing.T) {
 		wantOptionalGated bool
 	}{
 		{
+			capabilityID:     VolumePreflight,
+			wantDefaultGA:    true,
+			wantAdmissionOps: []operations.OperationType{operations.OperationVolumeEnsure},
+		},
+		{
 			capabilityID:     NamespaceBinding,
 			wantDefaultGA:    true,
 			wantAdmissionOps: []operations.OperationType{operations.OperationNamespaceUpsert, operations.OperationNamespaceDisable, operations.OperationNamespaceVolumeBindingPut},
@@ -308,7 +493,7 @@ func TestCapabilityAdmissionOperationCoverageContract(t *testing.T) {
 		{
 			capabilityID:     JVSSaveRestore,
 			wantDefaultGA:    true,
-			wantAdmissionOps: []operations.OperationType{operations.OperationSavePointCreate, operations.OperationRestorePreviewDiscard, operations.OperationRestoreRun},
+			wantAdmissionOps: []operations.OperationType{operations.OperationSavePointCreate, operations.OperationRestorePreview, operations.OperationRestorePreviewDiscard, operations.OperationRestoreRun},
 		},
 		{
 			capabilityID:     WebDAVExport,
@@ -376,6 +561,24 @@ func operationTypeSliceContains(values []operations.OperationType, want operatio
 		}
 	}
 	return false
+}
+
+func assertDecisionRow(t *testing.T, rows []DecisionRow, operationType operations.OperationType, surface DecisionSurfaceType, capabilityID ID, supported bool) DecisionRow {
+	t.Helper()
+	for _, row := range rows {
+		if row.OperationType != operationType || row.SurfaceType != surface {
+			continue
+		}
+		if capabilityID != "" && row.CapabilityID != capabilityID {
+			continue
+		}
+		if row.Supported != supported {
+			t.Fatalf("%s/%s supported = %v, want %v in row %#v", surface, operationType, row.Supported, supported, row)
+		}
+		return row
+	}
+	t.Fatalf("missing decision row operation=%s surface=%s capability=%s supported=%v", operationType, surface, capabilityID, supported)
+	return DecisionRow{}
 }
 
 func capabilityMatrixV1RowsByID(t *testing.T) map[ID]Row {

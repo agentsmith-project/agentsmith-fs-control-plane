@@ -39,6 +39,19 @@ const (
 	SurfaceRuntimeSupport   SurfaceType = "runtime_support"
 )
 
+type DecisionSurfaceType string
+
+const (
+	SurfaceAPIAdmission          DecisionSurfaceType = "api-admission"
+	SurfaceWorkerExecution       DecisionSurfaceType = "worker-execution"
+	SurfaceWorkerRecovery        DecisionSurfaceType = "worker-recovery"
+	SurfaceReadyz                DecisionSurfaceType = "readyz"
+	SurfaceCallerDiscovery       DecisionSurfaceType = "caller-discovery"
+	SurfaceOrchestratorDiscovery DecisionSurfaceType = "orchestrator-discovery"
+	SurfaceOperatorInspection    DecisionSurfaceType = "operator-inspection"
+	SurfaceEvidence              DecisionSurfaceType = "evidence"
+)
+
 type Row struct {
 	ID                      ID
 	SurfaceType             SurfaceType
@@ -46,6 +59,24 @@ type Row struct {
 	OptionalGated           bool
 	AdmissionOperationTypes []operations.OperationType
 	TeardownOperationTypes  []operations.OperationType
+}
+
+type DecisionRow struct {
+	SurfaceType             DecisionSurfaceType
+	OperationType           operations.OperationType
+	CapabilityID            ID
+	ResourceScope           string
+	Supported               bool
+	Configured              string
+	Ready                   string
+	RequiredForDefaultGA    bool
+	RequiredForServiceReady bool
+	OptionalGated           bool
+	NamespacePolicy         string
+	VolumeRuntimeCapability string
+	DenialCode              string
+	RunbookRef              string
+	EvidenceRef             string
 }
 
 var capabilityMatrixV1Rows = []Row{
@@ -56,9 +87,10 @@ var capabilityMatrixV1Rows = []Row{
 		AdmissionOperationTypes: []operations.OperationType{operations.OperationNamespaceUpsert, operations.OperationNamespaceDisable, operations.OperationNamespaceVolumeBindingPut},
 	},
 	{
-		ID:                VolumePreflight,
-		SurfaceType:       SurfacePreflight,
-		DefaultGARequired: true,
+		ID:                      VolumePreflight,
+		SurfaceType:             SurfacePreflight,
+		DefaultGARequired:       true,
+		AdmissionOperationTypes: []operations.OperationType{operations.OperationVolumeEnsure},
 	},
 	{
 		ID:                AdminBootstrap,
@@ -90,7 +122,7 @@ var capabilityMatrixV1Rows = []Row{
 		ID:                      JVSSaveRestore,
 		SurfaceType:             SurfaceDurableOperation,
 		DefaultGARequired:       true,
-		AdmissionOperationTypes: []operations.OperationType{operations.OperationSavePointCreate, operations.OperationRestorePreviewDiscard, operations.OperationRestoreRun},
+		AdmissionOperationTypes: []operations.OperationType{operations.OperationSavePointCreate, operations.OperationRestorePreview, operations.OperationRestorePreviewDiscard, operations.OperationRestoreRun},
 	},
 	{
 		ID:                JVSProjection,
@@ -151,12 +183,19 @@ var capabilityMatrixV1Rows = []Row{
 
 var admissionCapabilitiesByOperationType = admissionCapabilitiesFromRows(capabilityMatrixV1Rows)
 var teardownOperationsByCapability = teardownOperationsFromRows(capabilityMatrixV1Rows)
+var capabilityMatrixV1DecisionRows = buildCapabilityMatrixV1DecisionRows()
 
 func CapabilityMatrixV1Rows() []Row {
 	rows := make([]Row, 0, len(capabilityMatrixV1Rows))
 	for _, row := range capabilityMatrixV1Rows {
 		rows = append(rows, row.copy())
 	}
+	return rows
+}
+
+func CapabilityMatrixV1DecisionRows() []DecisionRow {
+	rows := make([]DecisionRow, len(capabilityMatrixV1DecisionRows))
+	copy(rows, capabilityMatrixV1DecisionRows)
 	return rows
 }
 
@@ -167,6 +206,197 @@ func CapabilityMatrixV1Row(id ID) (Row, bool) {
 		}
 	}
 	return Row{}, false
+}
+
+func buildCapabilityMatrixV1DecisionRows() []DecisionRow {
+	rows := []DecisionRow{
+		decisionRow(SurfaceReadyz, "", AdminBootstrap, "service", true, true, true, false, "static", "runtime-derived", "deployment", "not-applicable", "CAPABILITY_DENIED", "docs/READINESS_EVIDENCE.md", "admin_bootstrap_ready_unit"),
+		decisionRow(SurfaceReadyz, "", VolumePreflight, "volume", true, true, true, false, "runtime-derived", "runtime-derived", "deployment", "required", "STORAGE_UNAVAILABLE", "docs/READINESS_EVIDENCE.md", "admin_bootstrap_ready_unit"),
+		decisionRow(SurfaceCallerDiscovery, "", CallerPolicyReadiness, "deployment", true, true, true, false, "runtime-derived", "runtime-derived", "deployment", "not-applicable", "ROLE_NOT_ALLOWED", "docs/contracts/afscp-internal-api-v1.md", "admin_bootstrap_ready_unit"),
+		decisionRow(SurfaceOrchestratorDiscovery, "", WorkloadTeardownPlan, "workload_mount_binding", true, false, false, true, "disabled-by-default", "disabled-by-default", "namespace-binding", "not-applicable", "CAPABILITY_DENIED", "docs/contracts/workload-mount-binding-v1.md", "workload_mount_disabled_admission_unit"),
+		decisionRow(SurfaceOperatorInspection, "", OperationRecovery, "operation", true, true, true, false, "static", "runtime-derived", "operator", "not-applicable", "OPERATION_NOT_FOUND", "docs/contracts/operation-state-machine-v1.md", "operation_terminalization_contract_unit"),
+		decisionRow(SurfaceEvidence, "", OperationRecovery, "release", true, true, true, false, "static", "static", "not-applicable", "not-applicable", "", "docs/GA_RELEASE_GATES.md", "operation_terminalization_contract_unit"),
+	}
+
+	for _, row := range CapabilityMatrixV1Rows() {
+		for _, operationType := range row.AdmissionOperationTypes {
+			rows = append(rows, decisionRow(
+				SurfaceAPIAdmission,
+				operationType,
+				row.ID,
+				resourceScopeForOperation(operationType),
+				true,
+				row.DefaultGARequired,
+				row.DefaultGARequired,
+				row.OptionalGated,
+				configuredForCapability(row.ID),
+				readyForCapability(row.ID),
+				namespacePolicyForOperation(operationType),
+				volumeRuntimeCapabilityForOperation(operationType),
+				denialCodeForCapability(row.ID),
+				"docs/contracts/operation-state-machine-v1.md",
+				"capability_matrix_v1_contract_unit",
+			))
+			rows = append(rows, decisionRow(
+				SurfaceWorkerExecution,
+				operationType,
+				row.ID,
+				resourceScopeForOperation(operationType),
+				true,
+				row.DefaultGARequired,
+				false,
+				row.OptionalGated,
+				configuredForCapability(row.ID),
+				readyForCapability(row.ID),
+				namespacePolicyForOperation(operationType),
+				volumeRuntimeCapabilityForOperation(operationType),
+				"",
+				"docs/contracts/operation-state-machine-v1.md",
+				"operation_terminalization_contract_unit",
+			))
+			rows = append(rows, decisionRow(
+				SurfaceWorkerRecovery,
+				operationType,
+				OperationRecovery,
+				resourceScopeForOperation(operationType),
+				true,
+				true,
+				false,
+				false,
+				"runtime-derived",
+				"runtime-derived",
+				namespacePolicyForOperation(operationType),
+				volumeRuntimeCapabilityForOperation(operationType),
+				"OPERATION_RECOVERY_REQUIRED",
+				"docs/contracts/operation-state-machine-v1.md",
+				"operation_terminalization_contract_unit",
+			))
+			rows = append(rows, decisionRow(
+				SurfaceEvidence,
+				operationType,
+				row.ID,
+				resourceScopeForOperation(operationType),
+				true,
+				row.DefaultGARequired,
+				false,
+				row.OptionalGated,
+				"static",
+				"static",
+				namespacePolicyForOperation(operationType),
+				volumeRuntimeCapabilityForOperation(operationType),
+				"",
+				"docs/GA_RELEASE_GATES.md",
+				"capability_matrix_v1_contract_unit",
+			))
+		}
+	}
+
+	rows = append(rows,
+		decisionRow(SurfaceWorkerExecution, operations.OperationExportSessionReconcile, OperationRecovery, "export_session", true, true, false, false, "runtime-derived", "runtime-derived", "not-applicable", "not-applicable", "", "docs/contracts/export-access-webdav-v1.md", "operation_terminalization_contract_unit"),
+		decisionRow(SurfaceWorkerRecovery, operations.OperationExportSessionReconcile, OperationRecovery, "export_session", true, true, false, false, "runtime-derived", "runtime-derived", "not-applicable", "not-applicable", "OPERATION_RECOVERY_REQUIRED", "docs/contracts/export-access-webdav-v1.md", "operation_terminalization_contract_unit"),
+		decisionRow(SurfaceEvidence, operations.OperationExportSessionReconcile, OperationRecovery, "export_session", true, true, false, false, "static", "static", "not-applicable", "not-applicable", "", "docs/contracts/export-access-webdav-v1.md", "operation_terminalization_contract_unit"),
+		decisionRow(SurfaceWorkerExecution, operations.OperationMigrationCutover, OperationRecovery, "migration", false, false, false, false, "conditional", "unsupported", "operator", "not-applicable", "CAPABILITY_DENIED", "docs/contracts/operation-state-machine-v1.md", "operation_terminalization_contract_unit"),
+		decisionRow(SurfaceWorkerRecovery, operations.OperationMigrationCutover, OperationRecovery, "migration", false, false, false, false, "conditional", "recovery-only", "operator", "not-applicable", "OPERATION_RECOVERY_REQUIRED", "docs/contracts/operation-state-machine-v1.md", "operation_terminalization_contract_unit"),
+		decisionRow(SurfaceEvidence, operations.OperationMigrationCutover, OperationRecovery, "migration", false, false, false, false, "conditional", "recovery-only", "operator", "not-applicable", "", "docs/contracts/operation-state-machine-v1.md", "operation_terminalization_contract_unit"),
+	)
+
+	return rows
+}
+
+func decisionRow(surface DecisionSurfaceType, operationType operations.OperationType, capabilityID ID, resourceScope string, supported, requiredDefault, requiredService, optionalGated bool, configured, ready, namespacePolicy, volumeRuntimeCapability, denialCode, runbookRef, evidenceRef string) DecisionRow {
+	return DecisionRow{
+		SurfaceType:             surface,
+		OperationType:           operationType,
+		CapabilityID:            capabilityID,
+		ResourceScope:           resourceScope,
+		Supported:               supported,
+		Configured:              configured,
+		Ready:                   ready,
+		RequiredForDefaultGA:    requiredDefault,
+		RequiredForServiceReady: requiredService,
+		OptionalGated:           optionalGated,
+		NamespacePolicy:         namespacePolicy,
+		VolumeRuntimeCapability: volumeRuntimeCapability,
+		DenialCode:              denialCode,
+		RunbookRef:              runbookRef,
+		EvidenceRef:             evidenceRef,
+	}
+}
+
+func configuredForCapability(id ID) string {
+	if RequiredForDefaultGA(id) {
+		return "runtime-derived"
+	}
+	return "disabled-by-default"
+}
+
+func readyForCapability(id ID) string {
+	if RequiredForDefaultGA(id) {
+		return "runtime-derived"
+	}
+	return "disabled-by-default"
+}
+
+func namespacePolicyForOperation(operationType operations.OperationType) string {
+	switch operationType {
+	case operations.OperationVolumeEnsure, operations.OperationExportSessionReconcile, operations.OperationMigrationCutover:
+		return "not-applicable"
+	default:
+		return "namespace-binding"
+	}
+}
+
+func volumeRuntimeCapabilityForOperation(operationType operations.OperationType) string {
+	switch operationType {
+	case operations.OperationVolumeEnsure,
+		operations.OperationRepoCreate,
+		operations.OperationRepoArchive,
+		operations.OperationRepoRestoreArchived,
+		operations.OperationRepoDelete,
+		operations.OperationRepoRestoreTombstoned,
+		operations.OperationRepoPurge,
+		operations.OperationSavePointCreate,
+		operations.OperationRestorePreview,
+		operations.OperationRestorePreviewDiscard,
+		operations.OperationRestoreRun,
+		operations.OperationTemplateCreate,
+		operations.OperationTemplateClone,
+		operations.OperationExportCreate,
+		operations.OperationExportRevoke:
+		return "required"
+	default:
+		return "not-applicable"
+	}
+}
+
+func resourceScopeForOperation(operationType operations.OperationType) string {
+	switch operationType {
+	case operations.OperationVolumeEnsure:
+		return "volume"
+	case operations.OperationNamespaceUpsert, operations.OperationNamespaceDisable, operations.OperationNamespaceVolumeBindingPut:
+		return "namespace"
+	case operations.OperationExportCreate, operations.OperationExportRevoke, operations.OperationExportSessionReconcile:
+		return "export_session"
+	case operations.OperationMountBindingCreate,
+		operations.OperationMountBindingStatusUpdate,
+		operations.OperationMountBindingHeartbeat,
+		operations.OperationMountBindingRelease,
+		operations.OperationMountBindingRevoke:
+		return "workload_mount_binding"
+	case operations.OperationMigrationCutover:
+		return "migration"
+	default:
+		return "repo"
+	}
+}
+
+func denialCodeForCapability(id ID) string {
+	switch id {
+	case VolumePreflight:
+		return "STORAGE_UNAVAILABLE"
+	default:
+		return "CAPABILITY_DENIED"
+	}
 }
 
 func (row Row) copy() Row {

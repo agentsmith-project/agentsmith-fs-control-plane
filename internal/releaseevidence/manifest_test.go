@@ -690,6 +690,100 @@ func TestCurrentRepoManifestReplacesAdminBootstrapSeedGap(t *testing.T) {
 	}
 }
 
+func TestCurrentRepoManifestContainsP2aOperationTerminalizationContractEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	var item Item
+	found := false
+	for _, candidate := range manifest.Items {
+		if candidate.ID == "operation_terminalization_contract_unit" {
+			item = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("manifest missing operation_terminalization_contract_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_OPERATION_TERMINALIZATION" ||
+		item.SubclaimID != "operation_terminalization_contract" ||
+		item.AcceptanceID != "P2A_OPERATION_TERMINALIZATION_CONTRACT" ||
+		item.CapabilityID != "operation_recovery" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		!item.DefaultGARequired {
+		t.Fatalf("operation_terminalization_contract_unit shape = %+v, want default required contract evidence", item)
+	}
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/capability", "./internal/contractcheck"}) {
+		t.Fatalf("%s command packages = %#v, want capability and contractcheck", item.ID, packages)
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range []string{
+		"TestCapabilityMatrixV1DecisionRowsCoverP2aSurfaceContract",
+		"TestCapabilityMatrixV1CoversEveryRouteMutationOperation",
+		"TestCapabilityMatrixV1IncludesRestorePreviewAsDurableJVSMutation",
+		"TestCapabilityMatrixV1ClassifiesVolumeEnsureAdmission",
+		"TestOperationStateMachineContractCoversEveryOperationType",
+		"TestOperationTerminalizationContractRequiresSideEffectReplayAndTerminalDecision",
+	} {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForP2a(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	foundOpenGap := false
+	for _, item := range manifest.Items {
+		if item.ClaimID != "CLAIM_DEFAULT_USER_LOOP" {
+			continue
+		}
+		if item.ID == "seed_gap_default_user_loop_open" &&
+			item.EvidenceStatus == "placeholder" &&
+			item.PassCriteria.Kind == "seed_gap" &&
+			containsString(item.PassCriteria.Assertions, "open") {
+			foundOpenGap = true
+			continue
+		}
+		if item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed" {
+			t.Fatalf("P2a must not close CLAIM_DEFAULT_USER_LOOP, found %+v", item)
+		}
+	}
+	if !foundOpenGap {
+		t.Fatal("manifest must keep seed_gap_default_user_loop_open for P2a")
+	}
+}
+
 func TestCurrentRepoManifestSeedModeAllowsOpenSeedGaps(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
@@ -723,6 +817,9 @@ func goTestPackageForTestName(testName string) string {
 		return "./internal/apiapp"
 	}
 	if strings.HasPrefix(testName, "TestCurrentRepoReadiness") {
+		return "./internal/contractcheck"
+	}
+	if strings.HasPrefix(testName, "TestOperation") {
 		return "./internal/contractcheck"
 	}
 	return "./internal/api"
@@ -951,6 +1048,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":true
     },
     {
+      "id":"operation_terminalization_contract_unit",
+      "capability_id":"operation_recovery",
+      "evidence_type":"contract",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"default_ga_capability_classification_unit",
       "capability_id":"",
       "evidence_type":"unit",
@@ -1091,6 +1199,7 @@ var package0FixtureMetadata = []struct {
 	{"repo_purge_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_admission", "P0_OPTIONAL_DENIED_PURGE_ADMISSION", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "repo purge disabled admission rejects before metadata and audits without queuing"},
 	{"repo_purge_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_worker_recovery", "P0_OPTIONAL_DENIED_PURGE_RECOVERY", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "disabled repo purge recovery terminalizes unsupported historical operations"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
+	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"default_ga_capability_classification_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "default_ga_capability_classification", "P0_CAPABILITY_MATRIX_DEFAULT_CLASSIFICATION", "F4", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "capability matrix classifies default and optional capabilities consistently"},
 	{"capability_admission_operation_coverage_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "capability_admission_operation_coverage", "P0_CAPABILITY_MATRIX_OPERATION_COVERAGE", "F4", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "capability admission operation coverage stays consistent"},
 	{"capability_matrix_v1_contract_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "capability_matrix_v1_contract", "P1_CAPABILITY_MATRIX_V1_CONTRACT", "F4", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "capability matrix v1 contract covers readyz workload split vocabulary"},

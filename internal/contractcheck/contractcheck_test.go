@@ -1249,6 +1249,66 @@ func TestCurrentRepoContractsPass(t *testing.T) {
 	}
 }
 
+func TestOperationStateMachineContractCoversEveryOperationType(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	path := filepath.Join(repoRoot, "docs", "contracts", "operation-state-machine-v1.md")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read operation state machine contract: %v", err)
+	}
+	text := string(body)
+	inventory := markdownSection(t, text, "## Operation Type Inventory")
+	sideEffect := markdownSection(t, text, "## Side Effect And Replay Boundary")
+	terminalDecision := markdownSection(t, text, "## Failed vs Operator Intervention Decision")
+
+	for _, operationType := range operations.OperationTypes() {
+		value := "`" + operationType.String() + "`"
+		if !strings.Contains(inventory, value) {
+			t.Fatalf("operation inventory missing %s", value)
+		}
+		if !strings.Contains(sideEffect, value) {
+			t.Fatalf("side-effect/replay boundary missing %s", value)
+		}
+		if !strings.Contains(terminalDecision, value) {
+			t.Fatalf("terminal decision table missing %s", value)
+		}
+	}
+}
+
+func TestOperationTerminalizationContractRequiresSideEffectReplayAndTerminalDecision(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	path := filepath.Join(repoRoot, "docs", "contracts", "operation-state-machine-v1.md")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read operation state machine contract: %v", err)
+	}
+	text := string(body)
+	for _, heading := range []string{
+		"## Operation Type Inventory",
+		"## Side Effect And Replay Boundary",
+		"## Failed vs Operator Intervention Decision",
+	} {
+		if !strings.Contains(text, heading) {
+			t.Fatalf("operation state machine contract missing heading %q", heading)
+		}
+	}
+	for _, required := range []string{
+		"operation_type",
+		"side_effect_boundary",
+		"idempotent_replay",
+		"failed",
+		"operator_intervention_required",
+		"ambiguous_external_state",
+		"capability_disabled_or_unsupported",
+		"migration_cutover",
+		"recovery-only",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("operation terminalization contract missing vocabulary %q", required)
+		}
+	}
+}
+
 func TestPullRequestTemplateGovernanceGuardCatchesMissingOrIncompleteTemplate(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1948,6 +2008,20 @@ func contains(s, needle string) bool {
 		}
 	}
 	return needle == ""
+}
+
+func markdownSection(t *testing.T, text, heading string) string {
+	t.Helper()
+	start := strings.Index(text, heading)
+	if start < 0 {
+		t.Fatalf("missing markdown section %q", heading)
+	}
+	rest := text[start+len(heading):]
+	next := strings.Index(rest, "\n## ")
+	if next >= 0 {
+		rest = rest[:next]
+	}
+	return rest
 }
 
 type contractFixture struct {
