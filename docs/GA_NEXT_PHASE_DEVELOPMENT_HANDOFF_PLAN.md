@@ -39,6 +39,12 @@ The default GA product promise is:
 - Retained lifecycle archive/restore_archived/delete-tombstone/
   restore_tombstoned is default GA positive storage-state behavior.
 
+The default user loop is complete only when exact, non-placeholder evidence
+exists for repo projection, JVS save/restore, WebDAV default access,
+caller-scoped operation/audit/recovery trace, and the P2b runtime parity those
+paths depend on. P1b/P1c/P1d partial evidence is necessary, but it is not the
+final caller-loop claim.
+
 Default User Loop and other default GA claims are related but not identical:
 
 - P1 Default User Loop is the caller main loop: trusted caller repo
@@ -261,6 +267,7 @@ Security disclosure boundaries are part of the product contract, not polish.
 | Template naming/mental model | P4/P5 | For GA, position template as same-namespace/same-volume clone primitive unless controlled admin import/publish is explicitly designed. Do not imply marketplace or cross-namespace reusable templates by default. |
 | Quota fields | P1/P5 | Do not imply hard quota enforcement from `quota_bytes_default`. Add or align machine-readable status such as `quota_enforcement_status`, `effective_quota_bytes`, or `enforced=false`, or rename toward policy wording. |
 | Restore session drain | P4 | Fixed decision: `restore_archived` and `restore_tombstoned` restore access. Default GA must prove no active or uncertain session/fence; otherwise fail closed or enter `operator_intervention_required`. Contract, implementation, errors, tests, runbook, and evidence must agree. |
+| WebDAV credential issuer | P1d/P5 | AFSCP issues the short-lived one-time WebDAV credential to the trusted caller. The trusted caller relays it to the connector. The connector does not call AFSCP APIs directly, and the caller does not generate the WebDAV password. |
 | Product-neutral conformance | P1/P2/P4 evidence owner: contractcheck plus repo-local smoke/fixture hooks owned by touched API/WebDAV/orchestrator-facing packages. | Minimum scope is caller credential relay, connector WebDAV access/revoke, orchestrator default-denied/discovery, operation inspection negative cases, and negative authorization. It is repo-local fixture/smoke evidence and product-neutral, not a sibling gate. |
 | Capability discovery layering | P2/P3 | Caller discovery, orchestrator discovery, operator inspection, readyz, and evidence classification read the matrix but expose different outputs and have separate acceptance. Readyz is not caller authorization; discovery is not readiness; evidence classification is not runtime admission. |
 | Shared-volume residual risk | P4/P5 | Define namespace isolation assumptions, volume admin misconfiguration risk, backup/restore mismatch, POSIX/CSI drift, detection metrics, compensating controls, and when dedicated volume is required. Risk acceptance is not human release approval or production state; it is a repo-local schema, fixture, and audit shape that must be verified. |
@@ -682,6 +689,10 @@ Work:
   evidence inputs, before/after state shape, audit schema, stable
   denial/intervention behavior, and relationship to
   `docs/contracts/operation-state-machine-v1.md`.
+- Minimum operable loop: correlated operation lookup, intervention queue view,
+  held fence/session visibility, stale lease and audit lag visibility, one
+  allowlisted repair action, and audit tying reason/evidence to before/after
+  state.
 - Workload teardown-only stale closure uses this repair contract.
 - Arbitrary SQL, generic state rewrite, unrestricted fence release, and
   workload-specific repair bypasses are forbidden.
@@ -833,7 +844,7 @@ Recommended next slice depends on the current branch:
 | P2a is closed | P2b Runtime Parity. | Contract seed is not enough; API admission, worker registration/recovery, unsupported terminalization, discovery, and evidence must align at runtime. |
 | P2b is closed but P1b or P1c is missing | Fill the missing P1 partial evidence first. | The default loop aggregation depends on exact repo and JVS partial evidence before WebDAV can complete the caller-loop set. |
 | P2b, P1b, and P1c evidence are present but P1d is missing | P1d WebDAV default access. | Runtime parity plus repo/JVS partial evidence are present. WebDAV is the next caller-loop positive; it may close only `CLAIM_WEBDAV_DEFAULT_ACCESS` and add partial default-loop evidence. |
-| P1d WebDAV exact evidence is present | Default user loop aggregation guard. | Only the aggregation guard may close `seed_gap_default_user_loop_open`, and only if P1b/P1c/P1d plus P2b are exact, non-placeholder, and selector-precise. |
+| P1d WebDAV exact evidence is present | Default user loop aggregation guard. | Use this row when the manifest confirms P2b/P1b/P1c/P1d evidence. Only the aggregation guard may close `seed_gap_default_user_loop_open`, and only if P1b/P1c/P1d plus P2b are exact, non-placeholder, selector-precise, and include caller-scoped operation/audit/recovery trace evidence. |
 | Default-loop aggregation is closed | Remaining default safety work: operator repair, restore reconciliation, release hardening, and runtime envelope docs/evidence. | These are default GA claims but not the P1 caller-loop slice. Keep each claim/subclaim exact. |
 
 Fallback: if the current branch does not contain `admin_bootstrap_ready_unit`
@@ -843,8 +854,8 @@ P2a only if it does not create durable repo/JVS/WebDAV mutation admission.
 
 For older branches, use the table above to close missing prerequisites. If the
 current branch already has P2b, P1b, P1c, and P1d evidence present, the
-immediate closure target is the default user loop aggregation guard. If P1d is
-still missing, close WebDAV default access first:
+immediate closure target is the default user loop aggregation guard; do not
+repeat P1d. If P1d is still missing, close WebDAV default access first:
 
 - Add exact `CLAIM_WEBDAV_DEFAULT_ACCESS` replacement for
   `seed_gap_webdav_default_access_open`.
@@ -893,9 +904,22 @@ go test -count=1 <touched packages> -run '<precise selector>'
 # manifest/evidence changes
 go run ./cmd/afscp-evidence-verify -mode seed -manifest docs/release-evidence/ga-manifest.json -check-only
 
-# release/evidence status changes, final pre-merge acceptance, or release candidates
+# release/final-candidate triggers
 bash scripts/verify-ga-release.sh
 ```
+
+Each PR must publish the unique rerunnable command set it used. Keep commands
+focused to the touched claim; do not add broad unrelated test runs as a
+substitute for precise evidence. Any PR that adds, replaces, or closes manifest
+evidence must record and run the exact `command` from each changed evidence
+item; the seed verifier `-check-only` is a structure guard and cannot replace
+that evidence command. Run `bash scripts/verify-ga-release.sh` when any
+release/final-candidate trigger is present: `docs/release-evidence/ga-release-selector.json`
+exists with `release_intent=final_candidate`, `AFSCP_RELEASE_INTENT=final_candidate`
+is set, the PR modifies selector/final evidence/evidence_status/seed-gap
+closure/release workflow, or the PR is a release candidate. Final acceptance is
+judged only from a clean checkout by the unique script exit code and
+manifest/selector machine judgment.
 
 Do not:
 
@@ -962,8 +986,12 @@ Current Slice DoD:
   positives, and release hardening as separate claims unless it explicitly owns
   those claims.
 - The PR runs focused package tests for every slice, the seed verifier for
-  manifest/evidence changes, and the release script for release/evidence status
-  changes, final pre-merge acceptance, or release candidates.
+  manifest/evidence changes, and the exact `command` from every evidence item it
+  adds, replaces, or closes.
+- The PR records one rerunnable command block for reviewers. For code-only
+  slices this can be focused tests; for manifest/evidence deltas it must include
+  the seed verifier plus changed evidence commands; for release/final-candidate
+  triggers it must include `bash scripts/verify-ga-release.sh`.
 - The PR does not add sibling project, business project, manual approval, or
   production deployment gates.
 
