@@ -14,6 +14,13 @@ acceptance, role-based approval, generated-client approval, owner approval,
 runbook meetings, sibling project status, and first-consumer adoption are not
 GA gate conditions.
 
+`docs/release-evidence/ga-manifest.json` is the repo-local machine-readable
+index for release evidence. It refines this ledger into enumerated evidence
+items with types, commands, capability IDs, and source anchors, and is executed
+by the same `scripts/verify-ga-release.sh` gate. The initial manifest slice is
+only a minimal skeleton over already-existing checks; it must not be read as
+complete Postgres, WebDAV, JVS provenance, or end-to-end evidence closure.
+
 AFSCP GA gates are internal to the shared filesystem control plane. Reference
 consumer adoption notes can inform compatibility work, but no first consumer or
 sibling repository acceptance is an AFSCP gate or release blocker.

@@ -1,0 +1,90 @@
+{
+  "schema_version": "1",
+  "release_gate": "scripts/verify-ga-release.sh",
+  "items": [
+    {
+      "id": "repo_template_disabled_admission_unit",
+      "capability_id": "repo_template",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/api",
+        "-run",
+        "TestRepoTemplateAdmissionDisabledRejectsNewOperationsBeforeMetadataAndAudits$"
+      ],
+      "anchors": [
+        "internal/api/repo_template_handler_test.go",
+        "internal/api/repo_template_handler.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": true,
+      "default_ga_required": false
+    },
+    {
+      "id": "repo_purge_disabled_admission_unit",
+      "capability_id": "repo_purge",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/api",
+        "-run",
+        "TestRepoLifecyclePurgeAdmissionDisabledRejectsNewBeforeMetadataAndAudits$"
+      ],
+      "anchors": [
+        "internal/api/repo_lifecycle_handler_test.go",
+        "internal/api/repo_lifecycle_handler.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": true,
+      "default_ga_required": false
+    },
+    {
+      "id": "default_ga_capability_classification_unit",
+      "capability_id": "",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/capability",
+        "-run",
+        "TestDefaultGARequirementClassifiesCoreAndOptionalCapabilities$"
+      ],
+      "anchors": [
+        "internal/capability/matrix.go",
+        "internal/capability/matrix_test.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": false
+    },
+    {
+      "id": "release_script_evidence_manifest_guard",
+      "capability_id": "",
+      "evidence_type": "contract",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/contractcheck",
+        "-run",
+        "TestCurrentRepoGAVerificationScriptsAreAuthoritative$"
+      ],
+      "anchors": [
+        "scripts/verify-ga-release.sh",
+        "internal/contractcheck/contractcheck_test.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": false
+    }
+  ]
+}

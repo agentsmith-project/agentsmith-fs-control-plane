@@ -1526,6 +1526,9 @@ func TestCurrentRepoGAVerificationScriptsAreAuthoritative(t *testing.T) {
 			t.Fatalf("%s must run %q", releasePath, required)
 		}
 	}
+	if !releaseScriptRunsEvidenceManifestVerifier(releaseText) {
+		t.Fatalf("%s must run evidence manifest verifier as a non-comment release gate command", releasePath)
+	}
 	for _, forbidden := range []string{
 		"mbos-sandbox",
 		"improve-agentsmith",
@@ -1571,6 +1574,47 @@ func TestCurrentRepoGAVerificationScriptsAreAuthoritative(t *testing.T) {
 		!strings.Contains(readmeText, "scripts/verify-ga-baseline.sh") {
 		t.Fatalf("%s must document release-only governance checks, baseline checks, and scripts/verify-ga-release.sh as the authoritative GA gate whose exit code decides GA", readmePath)
 	}
+}
+
+func TestGAVerificationScriptManifestVerifierGuardIgnoresComments(t *testing.T) {
+	commentOnly := `
+#!/usr/bin/env bash
+# run go run ./cmd/afscp-evidence-verify -manifest docs/release-evidence/ga-manifest.json
+run echo not-the-verifier
+`
+	if releaseScriptRunsEvidenceManifestVerifier(commentOnly) {
+		t.Fatal("comment-only evidence verifier reference counted as an active release gate command")
+	}
+
+	active := `
+#!/usr/bin/env bash
+run go run ./cmd/afscp-evidence-verify -manifest docs/release-evidence/ga-manifest.json
+`
+	if !releaseScriptRunsEvidenceManifestVerifier(active) {
+		t.Fatal("active evidence verifier command was not recognized")
+	}
+
+	suppressed := `
+#!/usr/bin/env bash
+run go run ./cmd/afscp-evidence-verify -manifest docs/release-evidence/ga-manifest.json || true
+`
+	if releaseScriptRunsEvidenceManifestVerifier(suppressed) {
+		t.Fatal("evidence verifier command with failure-swallowing suffix counted as authoritative")
+	}
+}
+
+func releaseScriptRunsEvidenceManifestVerifier(text string) bool {
+	const required = "run go run ./cmd/afscp-evidence-verify -manifest docs/release-evidence/ga-manifest.json"
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if trimmed == required {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCurrentRepoGAReleaseWorkflowRunsAuthoritativeScript(t *testing.T) {
