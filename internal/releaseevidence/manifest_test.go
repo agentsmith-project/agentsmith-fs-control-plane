@@ -751,7 +751,7 @@ func TestCurrentRepoManifestContainsP2aOperationTerminalizationContractEvidence(
 	}
 }
 
-func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForP2a(t *testing.T) {
+func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenWithPartialEvidence(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
 
@@ -775,12 +775,19 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForP2a(t *testing.T) 
 			foundOpenGap = true
 			continue
 		}
-		if item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed" {
-			t.Fatalf("P2a must not close CLAIM_DEFAULT_USER_LOOP, found %+v", item)
+		if item.ID == "default_user_loop_repo_projection_unit" &&
+			item.SubclaimID == "default_user_loop_repo_projection" &&
+			item.AcceptanceID == "P1B_DEFAULT_USER_LOOP_REPO_PROJECTION" &&
+			item.EvidenceStatus == "implemented" {
+			continue
+		}
+		if item.ID == "default_user_loop_positive_unit" ||
+			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
+			t.Fatalf("manifest must not close full CLAIM_DEFAULT_USER_LOOP while the seed gap remains open, found %+v", item)
 		}
 	}
 	if !foundOpenGap {
-		t.Fatal("manifest must keep seed_gap_default_user_loop_open for P2a")
+		t.Fatal("manifest must keep seed_gap_default_user_loop_open while only partial default-user-loop evidence exists")
 	}
 }
 
@@ -906,6 +913,111 @@ func TestCurrentRepoManifestContainsP2bRuntimeParityEvidence(t *testing.T) {
 	}
 }
 
+func TestCurrentRepoManifestContainsP1bRepoProjectionEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	item, ok := manifestItemByID(manifest, "default_user_loop_repo_projection_unit")
+	if !ok {
+		t.Fatal("manifest missing default_user_loop_repo_projection_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_DEFAULT_USER_LOOP" ||
+		item.SubclaimID != "default_user_loop_repo_projection" ||
+		item.AcceptanceID != "P1B_DEFAULT_USER_LOOP_REPO_PROJECTION" ||
+		item.RiskID != "F2" ||
+		item.CapabilityID != "repo_projection" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.NegativeOrPositive != "positive" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		!item.DefaultGARequired ||
+		item.PassCriteria.Kind != "positive_path" {
+		t.Fatalf("%s shape = %+v, want default required P1b repo projection positive evidence", item.ID, item)
+	}
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/api", "./internal/store/postgres", "./internal/workerapp"}) {
+		t.Fatalf("%s command packages = %#v, want api, postgres store, and workerapp", item.ID, packages)
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range []string{
+		"TestCreateRepoHandlerCreatesOperationIntake",
+		"TestCreateRepoHandlerReusesExistingOperation",
+		"TestCreateRepoHandlerValidationDeniesBeforeIntake",
+		"TestCreateRepoHandlerReturnsRepoAlreadyExistsFromDedicatedIntake",
+		"TestCreateRepoHandlerMapsIntakeErrorsWithoutLeakingDetails",
+		"TestGetRepoHandlerReturnsNamespaceBoundProjection",
+		"TestGetRepoHandlerUsesNamespaceScopedReadBoundary",
+		"TestListReposHandlerReturnsNamespaceBoundProjectionAndLifecycleFilter",
+		"TestRepoReadHandlerValidationDeniesBeforeStore",
+		"TestRepoReadHandlerRejectsUnsafeStoredJVSRepoIDWithoutLeaking",
+		"TestRepoReadHandlerNotFoundNamespaceMismatchAndStoreErrors",
+		"TestCreateGetAndListReposPersistImmutableIdentityAndLifecycleMetadata",
+		"TestCreateOrReuseRepoCreateOperationReusesExistingBeforeRepoExists",
+		"TestCreateOrReuseRepoCreateOperationNewRequestExistingRepoReturnsRepoAlreadyExists",
+		"TestCreateOrReuseRepoCreateOperationDifferentHashReturnsIdempotencyConflictBeforeRepoExists",
+		"TestCommitRepoCreateSucceededWithLeaseAtomicBoundary",
+		"TestRunOnceRepoCreateEnabledClaimsThroughRepoExecutor",
+	} {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1b(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	for _, gapID := range []string{
+		"seed_gap_default_user_loop_open",
+		"seed_gap_discovery_surfaces_open",
+		"seed_gap_webdav_default_access_open",
+		"seed_gap_secret_path_redaction_open",
+	} {
+		item, ok := manifestItemByID(manifest, gapID)
+		if !ok {
+			t.Fatalf("manifest must keep %s open for partial P1b", gapID)
+		}
+		if item.EvidenceStatus != "placeholder" || item.PassCriteria.Kind != "seed_gap" || !containsString(item.PassCriteria.Assertions, "open") {
+			t.Fatalf("%s = %+v, want open placeholder seed gap", gapID, item)
+		}
+	}
+	for _, item := range manifest.Items {
+		if item.ID == "default_user_loop_positive_unit" ||
+			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
+			t.Fatalf("P1b repo projection is partial and must not close full default user loop: %+v", item)
+		}
+	}
+}
+
 func TestCurrentRepoManifestKeepsDefaultUserLoopAndDiscoverySeedGapsOpenForP2b(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
@@ -968,6 +1080,11 @@ func goTestPackageForTestName(testName string) string {
 	}
 	if strings.HasPrefix(testName, "TestWorker") {
 		return "./internal/workerapp"
+	}
+	if strings.HasPrefix(testName, "TestCreateGetAndListRepos") ||
+		strings.HasPrefix(testName, "TestCreateOrReuseRepoCreateOperation") ||
+		strings.HasPrefix(testName, "TestCommitRepoCreate") {
+		return "./internal/store/postgres"
 	}
 	if strings.HasPrefix(testName, "TestCurrentRepoReadiness") {
 		return "./internal/contractcheck"
@@ -1199,6 +1316,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":false
     },
     {
+      "id":"default_user_loop_repo_projection_unit",
+      "capability_id":"repo_projection",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -1382,6 +1510,7 @@ var package0FixtureMetadata = []struct {
 	{"repo_template_clone_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_template_clone_disabled_worker_recovery", "P0_OPTIONAL_DENIED_TEMPLATE_CLONE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "disabled template clone recovery terminalizes unsupported historical operations"},
 	{"repo_purge_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_admission", "P0_OPTIONAL_DENIED_PURGE_ADMISSION", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "repo purge disabled admission rejects before metadata and audits without queuing"},
 	{"repo_purge_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_worker_recovery", "P0_OPTIONAL_DENIED_PURGE_RECOVERY", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "disabled repo purge recovery terminalizes unsupported historical operations"},
+	{"default_user_loop_repo_projection_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_repo_projection", "P1B_DEFAULT_USER_LOOP_REPO_PROJECTION", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "repo create get list projection and repo-create worker positive path pass without closing the full default user loop"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},
