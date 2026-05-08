@@ -8,7 +8,9 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
 
 func NewNeutralShell() http.Handler {
@@ -79,6 +81,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		readinessHandler = ReadinessHandlerFunc(config.ReadinessProvider)
 	}
 	mux.Handle("/readyz", requestLogHandler(readinessHandler, config.Logger, slog.LevelInfo, "afscp.readiness", "readiness request", "/readyz", ""))
+	disabledAdmission := internalAPIDisabledAdmissionCapabilities(config)
 
 	volumeHandler := EnsureVolumeHandler(EnsureVolumeHandlerConfig{
 		IntakeStore:       config.OperationIntakeStore,
@@ -149,7 +152,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		BreakGlassCallers:      deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
 		OperationID:            config.GenerateOperationID,
 		Now:                    config.Now,
-		PurgeAdmissionDisabled: config.RepoPurgeAdmissionDisabled,
+		PurgeAdmissionDisabled: capabilityAdmissionDisabled(disabledAdmission, capability.RepoPurge),
 		AuditSink:              config.AuditSink,
 	})
 	archiveRepoHandler := requestLogHandler(repoLifecycleHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}:archive", "archiveRepo")
@@ -350,7 +353,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		},
 		OperationID:       config.GenerateOperationID,
 		Now:               config.Now,
-		AdmissionDisabled: config.RepoTemplateAdmissionDisabled,
+		AdmissionDisabled: capabilityAdmissionDisabled(disabledAdmission, capability.RepoTemplate),
 		AuditSink:         config.AuditSink,
 	})
 	createRepoTemplateHandler := requestLogHandler(repoTemplateHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repo-templates", "createRepoTemplate")
@@ -416,7 +419,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		},
 		OperationID:       config.GenerateOperationID,
 		Now:               config.Now,
-		AdmissionDisabled: config.WorkloadMountAdmissionDisabled,
+		AdmissionDisabled: capabilityAdmissionDisabled(disabledAdmission, capability.WorkloadMountBinding),
 		AuditSink:         config.AuditSink,
 	})
 	createWorkloadMountHandler := requestLogHandler(workloadMountHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/workload-mount-bindings", "createWorkloadMountBinding")
@@ -444,7 +447,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		OperationID:       config.GenerateOperationID,
 		Now:               config.Now,
 		PublicBaseURL:     config.WebDAVExportPublicBaseURL,
-		AdmissionDisabled: config.WebDAVExportAdmissionDisabled,
+		AdmissionDisabled: capabilityAdmissionDisabled(disabledAdmission, capability.WebDAVExport),
 		AuditSink:         config.AuditSink,
 	})
 	createExportHandler := requestLogHandler(exportHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/exports", "createExport")
@@ -478,24 +481,24 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"putNamespaceVolumeBinding": putBindingHandler,
 		"upsertNamespace":           upsertNamespaceHandler,
 	}
-	if !config.WorkloadMountAdmissionDisabled || operationLookupStore != nil {
+	if !capabilityAdmissionDisabled(disabledAdmission, capability.WorkloadMountBinding) || operationLookupStore != nil {
 		implemented["createWorkloadMountBinding"] = createWorkloadMountHandler
 		implemented["heartbeatWorkloadMountBinding"] = heartbeatWorkloadMountHandler
 		implemented["releaseWorkloadMountBinding"] = releaseWorkloadMountHandler
 		implemented["revokeWorkloadMountBinding"] = revokeWorkloadMountHandler
 		implemented["updateWorkloadMountBindingStatus"] = updateWorkloadMountStatusHandler
 	}
-	if !config.WorkloadMountAdmissionDisabled || (mountReader != nil && mountPlanReader != nil) {
+	if !capabilityAdmissionDisabled(disabledAdmission, capability.WorkloadMountBinding) || (mountReader != nil && mountPlanReader != nil) {
 		implemented["getOrchestratorMountPlan"] = getOrchestratorMountPlanHandler
 	}
 	if config.VolumeReader != nil {
 		implemented["getVolumeHealth"] = volumeHealthHandler
 	}
 	if exportStore != nil && config.NamespaceBindingReader != nil {
-		if config.RepoReader != nil && config.NamespaceReader != nil && config.VolumeReader != nil && config.RepoFenceReader != nil && !config.WebDAVExportAdmissionDisabled {
+		if config.RepoReader != nil && config.NamespaceReader != nil && config.VolumeReader != nil && config.RepoFenceReader != nil && !capabilityAdmissionDisabled(disabledAdmission, capability.WebDAVExport) {
 			implemented["createExport"] = createExportHandler
 		}
-		if config.WebDAVExportAdmissionDisabled && exportLookupStore != nil {
+		if capabilityAdmissionDisabled(disabledAdmission, capability.WebDAVExport) && exportLookupStore != nil {
 			implemented["createExport"] = createExportHandler
 		}
 		if config.RepoReader != nil && config.NamespaceReader != nil && config.VolumeReader != nil && config.RepoFenceReader != nil {
@@ -516,6 +519,32 @@ func deploymentPolicyOrStatic(policy AllowedCallerPolicy, callers []auth.Allowed
 		return static
 	}
 	return nil
+}
+
+func internalAPIDisabledAdmissionCapabilities(config InternalAPIShellConfig) map[capability.ID]bool {
+	return map[capability.ID]bool{
+		capability.WebDAVExport:         config.WebDAVExportAdmissionDisabled,
+		capability.WorkloadMountBinding: config.WorkloadMountAdmissionDisabled,
+		capability.RepoTemplate:         config.RepoTemplateAdmissionDisabled,
+		capability.RepoPurge:            config.RepoPurgeAdmissionDisabled,
+	}
+}
+
+func routeOperationAdmissionDisabled(disabled map[capability.ID]bool, operationType operations.OperationType) bool {
+	capabilityID, ok := capability.AdmissionCapabilityForOperationType(operationType)
+	return ok && capabilityAdmissionDisabled(disabled, capabilityID)
+}
+
+func routeIDAdmissionDisabled(disabled map[capability.ID]bool, operationID string) bool {
+	operationType, ok := operations.OperationTypeForRouteOperationID(operationID)
+	return ok && routeOperationAdmissionDisabled(disabled, operationType)
+}
+
+func capabilityAdmissionDisabled(disabled map[capability.ID]bool, capabilityID capability.ID) bool {
+	if disabled == nil {
+		return false
+	}
+	return disabled[capabilityID]
 }
 
 func routeDispatchHandler(implemented map[string]http.Handler, fallback http.Handler) http.Handler {

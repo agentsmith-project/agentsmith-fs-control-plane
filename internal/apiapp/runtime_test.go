@@ -20,6 +20,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/api"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
@@ -1072,6 +1073,31 @@ func TestInternalRuntimeReadinessRuntimeProfileRequiresOptedInRepoOptionalCapabi
 				t.Fatalf("%s gate = %#v, want enabled unready gated reason %q", tt.capability, gate, tt.wantReason)
 			}
 		})
+	}
+}
+
+func TestInternalRuntimeAdmissionDisabledFlagsMatchCapabilityMatrix(t *testing.T) {
+	source := readyTestRuntimeSource()
+	source["AFSCP_MOUNT_ENABLED"] = "false"
+	source["AFSCP_MOUNT_READY"] = "false"
+	source["AFSCP_REPO_TEMPLATE_ENABLED"] = "false"
+	source["AFSCP_REPO_TEMPLATE_READY"] = "false"
+	source["AFSCP_REPO_PURGE_ENABLED"] = "false"
+	source["AFSCP_REPO_PURGE_READY"] = "false"
+	cfg, err := config.Load(source)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	disabled := apiAdmissionDisabledCapabilities(cfg)
+	for _, row := range capability.DecisionRowsForSurface(capability.SurfaceAPIAdmission) {
+		got := disabled[row.CapabilityID]
+		if row.OptionalGated && !got {
+			t.Fatalf("%s/%s optional matrix admission capability %s disabled = false", row.OperationType, row.SurfaceType, row.CapabilityID)
+		}
+		if !row.OptionalGated && got {
+			t.Fatalf("%s/%s default matrix admission capability %s disabled = true", row.OperationType, row.SurfaceType, row.CapabilityID)
+		}
 	}
 }
 

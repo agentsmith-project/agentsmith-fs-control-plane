@@ -32,7 +32,10 @@ The default GA product promise is:
 - Trusted caller can complete pinned JVS save/history/restore-preview/
   restore-run/discard.
 - Trusted caller can complete WebDAV export/gateway/revoke.
-- Caller/operator can trace operation, audit, and recovery state.
+- Trusted caller can trace caller-scoped operation/audit/recovery state for its
+  namespace and operations.
+- Operator/admin can inspect global audit/intervention/fence/session/stale
+  lease/audit lag state.
 - Retained lifecycle archive/restore_archived/delete-tombstone/
   restore_tombstoned is default GA positive storage-state behavior.
 
@@ -99,9 +102,9 @@ test names may differ.
 | `CLAIM_DEFAULT_DENIAL_SAFE` | Default negative | Unauthorized namespace, policy deny, revoked/expired WebDAV, path escape, secret/path redaction, no permanent queued operation. | P1/P2 |
 | `CLAIM_SECRET_PATH_REDACTION` | Default safety subclaim | Raw root paths, metadata URLs, SecretRefs, host paths, storage credentials, `.jvs`, and replayable raw secrets are redacted from caller/runtime/audit/evidence surfaces. | P1/P2/P5 |
 | `CLAIM_OPTIONAL_DENIED_SAFE` | Default negative | Workload mount, template/clone, purge/break-glass, and runtime positives deny/fail closed when not enabled. | P2/P4 |
-| `CLAIM_CAPABILITY_MATRIX_CONSISTENT` | Default safety | API, worker, recovery, readyz, discovery, operator inspection, evidence classification use one matrix. | P2 |
+| `CLAIM_CAPABILITY_MATRIX_CONSISTENT` | Default safety | API, worker, recovery, readyz, discovery, operator inspection, evidence classification use one matrix; runtime behavior claims require production wiring evidence, not helper-only agreement. | P2 |
 | `CLAIM_OPERATION_TERMINALIZATION` | Default safety | Operation inventory; side-effect boundary; failed vs intervention decisions; idempotent replay; historical recovery visibility. | P2 |
-| `CLAIM_DISCOVERY_SURFACES` | Default safety | Caller, orchestrator, operator, and readyz discovery are layered and do not overexpose optional/runtime state. | P2/P3 |
+| `CLAIM_DISCOVERY_SURFACES` | Default safety | Caller, orchestrator, operator, and readyz surfaces are layered and do not overexpose optional/runtime state; discovery closure requires surface output evidence, not only matrix rows. | P2/P3 |
 | `CLAIM_OPERATOR_REPAIR_SAFE` | Default safety | One shared repair contract/test suite/audit schema; API or CLI entry; reason/evidence/before-after/safety predicate. | P3 |
 | `CLAIM_OPTIONAL_FIXTURE_CONFORMANT` | Selected optional positive | Repo-local fixture positive for selected optional capabilities only. | P4 |
 | `CLAIM_WORKLOAD_FIXTURE_READY` | Selected optional subclaim | Workload fixture plan fetch, heartbeat, release, revoke, and terminal evidence only under `repo-local-fixture-enabled` and selected capability. | P4c |
@@ -216,10 +219,10 @@ Artifact requirements:
 | Actor | Owns | Must not own for AFSCP GA |
 | --- | --- | --- |
 | AFSCP | Namespace/volume binding, repo storage state, pinned JVS save/restore, WebDAV export gateway, retained lifecycle, operation/audit/recovery, capability/admission/worker/readyz/evidence consistency. | Business catalog, product lifecycle UX, connector UI, real orchestrator implementation, deployment permission state. |
-| Trusted caller | Caller identity, namespace authorization, AFSCP API calls, relaying first-create WebDAV credentials to a connector. | Issuing WebDAV passwords, seeing raw root paths or SecretRefs, bypassing namespace policy. |
+| Trusted caller | Caller identity, namespace authorization, AFSCP API calls, relaying first-create WebDAV credentials to a connector, caller-scoped operation/audit trace for its namespace and operations. | Issuing WebDAV passwords, seeing raw root paths or SecretRefs, bypassing namespace policy, global audit/intervention/fence/session/stale lease inspection. |
 | Client connector | Receiving short-lived WebDAV credentials from the trusted caller and accessing the AFSCP gateway. | Calling AFSCP admin/caller APIs directly, reading `.jvs`, replaying raw passwords, managing storage credentials. |
 | Orchestrator | Consuming workload plans only when an orchestrator capability is explicitly enabled. | Being a default GA dependency or exposing mount plans to ordinary callers. |
-| Operator/admin | Bootstrap, preflight, inspection, intervention queue review, one allowlisted repair entry, audit review. | Manual GA approval, arbitrary SQL repair, arbitrary state rewrite. |
+| Operator/admin | Bootstrap, preflight, global inspection for audit/intervention/fence/session/stale lease/audit lag, one allowlisted repair entry, audit review. | Manual GA approval, arbitrary SQL repair, arbitrary state rewrite. |
 | Deployment/runtime | Providing Postgres, managed volume, JVS binary, WebDAV runtime, audit sink, CI, and optional orchestrator runtime. | Serving as this repo's release gate or replacing repo-local evidence. |
 
 ## Actor Mental Model
@@ -230,24 +233,36 @@ concepts needed for its job.
 
 | Actor | Concepts they should understand | Concepts they should not need |
 | --- | --- | --- |
-| Trusted caller | Namespace, repo, repo projection/list, savepoint/history, restore preview/run/discard, WebDAV export/revoke, operation status, audit/recovery status, stable denial. | Volume root path, SecretRef, host path, metadata URL, control root, `.jvs`, mount plan, fence internals, deployment runtime state. |
+| Trusted caller | Namespace, repo, repo projection/list, savepoint/history, restore preview/run/discard, WebDAV export/revoke, caller-scoped operation status, caller-scoped audit/recovery status, stable denial. | Volume root path, SecretRef, host path, metadata URL, control root, `.jvs`, mount plan, fence internals, deployment runtime state, global audit/intervention/fence/session/stale lease state. |
 | Client connector | Short-lived WebDAV credential relayed by trusted caller, gateway URL/session expiry, revoked/expired access behavior. | AFSCP caller/admin API, namespace policy, repo lifecycle internals, storage credentials, raw password replay. |
 | Operator/admin | Volume preflight, namespace binding policy, capability/readiness matrix, intervention queue, held fence/session, stale lease, audit lag, allowlisted repair, residual-risk record shape. | Business catalog workflow, connector UI, arbitrary SQL/state rewrite, manual GA approval. |
 | Orchestrator | Only when optional capability is enabled: scoped mount/teardown state, heartbeat/release/revoke/terminal evidence, denied/default-disabled status. | Default GA positive path, ordinary caller repo projection, raw SecretRef/path/credential, business workload management. |
 | Deployment/runtime | Runtime envelope, config detection, redaction policy, rollback/roll-forward policy, CI service availability, fixture/runtime prerequisites. | Repo-local final acceptance authority, branch protection/real artifact/GitHub environment state as local gate proof. |
 
+## Security Disclosure Boundaries
+
+Security disclosure boundaries are part of the product contract, not polish.
+
+| Surface | Disclosure rule |
+| --- | --- |
+| Caller discovery/API | No SecretRef, raw root path, host path, credential, workload runtime material, raw `.jvs` path, or globally scoped audit/intervention/fence/session/stale lease state. |
+| Orchestrator discovery | Only scoped workload state needed for denied/default-disabled, release, revoke, heartbeat, and terminal evidence. No credential, SecretRef, raw path, payload subdir, or derivable mount material. |
+| Operator inspection | More global than caller surfaces, but still redacted by default: IDs, hashes, policy refs, runbook refs, and redacted paths over raw secrets/material. |
+| Evidence artifacts | Use hashes, IDs, policy refs, redacted paths, stable denial codes, and redaction status. Do not preserve raw credentials, SecretRefs, raw paths, or workload runtime material. |
+| Optional positives | Do not appear as default release proof. Selected optional fixture positives live only under `repo-local-fixture-enabled` evidence and selector-selected final blocking. |
+
 ## Product Decisions
 
 | Decision area | Package/owner | Decision |
 | --- | --- | --- |
-| Operator repair entry | P3 | GA requires one shared repair contract, one test suite, and one audit schema. The entry can be API or CLI. GA does not require both. Ad hoc SQL and arbitrary state rewrite are forbidden. |
+| Operator repair entry | P3 | Authoritative contract artifact is `docs/contracts/operator-repair-v1.md`. GA requires one shared repair contract, one test suite, and one audit schema. The entry can be API or CLI. GA does not require both. Ad hoc SQL and arbitrary state rewrite are forbidden. |
 | Purge release-note posture | P4/P5 | Purge and break-glass purge are optional, irreversible, capability-gated, and not default GA. Default release notes say purge is denied/fail-closed unless explicitly enabled with structured approval evidence. |
 | Purge approval reference | P4 | Approval is a controlled evidence object or verifiable reference with subject, policy version, scope, expiry, reason, hash/correlation, audit binding, and anti-replay semantics. |
 | Template naming/mental model | P4/P5 | For GA, position template as same-namespace/same-volume clone primitive unless controlled admin import/publish is explicitly designed. Do not imply marketplace or cross-namespace reusable templates by default. |
 | Quota fields | P1/P5 | Do not imply hard quota enforcement from `quota_bytes_default`. Add or align machine-readable status such as `quota_enforcement_status`, `effective_quota_bytes`, or `enforced=false`, or rename toward policy wording. |
 | Restore session drain | P4 | Fixed decision: `restore_archived` and `restore_tombstoned` restore access. Default GA must prove no active or uncertain session/fence; otherwise fail closed or enter `operator_intervention_required`. Contract, implementation, errors, tests, runbook, and evidence must agree. |
-| Product-neutral conformance | P1/P2/P4 | Minimum scope is caller credential relay semantics, connector WebDAV access/revoke semantics, orchestrator denied/default-disabled semantics, operation inspection, and negative authorization cases. It is repo-local and product-neutral, not a sibling gate. |
-| Capability discovery layering | P2/P3 | Caller, orchestrator, operator, and readyz surfaces expose different decisions from the same matrix. Readyz is not the only contract. |
+| Product-neutral conformance | P1/P2/P4 evidence owner: contractcheck plus repo-local smoke/fixture hooks owned by touched API/WebDAV/orchestrator-facing packages. | Minimum scope is caller credential relay, connector WebDAV access/revoke, orchestrator default-denied/discovery, operation inspection negative cases, and negative authorization. It is repo-local fixture/smoke evidence and product-neutral, not a sibling gate. |
+| Capability discovery layering | P2/P3 | Caller discovery, orchestrator discovery, operator inspection, readyz, and evidence classification read the matrix but expose different outputs and have separate acceptance. Readyz is not caller authorization; discovery is not readiness; evidence classification is not runtime admission. |
 | Shared-volume residual risk | P4/P5 | Define namespace isolation assumptions, volume admin misconfiguration risk, backup/restore mismatch, POSIX/CSI drift, detection metrics, compensating controls, and when dedicated volume is required. Risk acceptance is not human release approval or production state; it is a repo-local schema, fixture, and audit shape that must be verified. |
 
 ## User Journeys
@@ -284,7 +299,7 @@ decide admission, recovery, terminalization, and evidence behavior.
 | --- | --- | --- |
 | `capability-matrix-v1` row inventory | P2a | Contract seed for surface-decision rows. It is not runtime parity closure. New default positive or optional-gated mutations rely on one matrix for API admission, worker execution, recovery, readyz/discovery, operator inspection, and evidence classification. |
 | Operation terminalization/state-machine extension | P2a | Contract seed in `docs/contracts/operation-state-machine-v1.md`. It is not full API/worker/recovery implementation closure. Any slice that creates or recovers durable operations needs side-effect boundary, replay rule, failed/intervention decision, stable errors, audit, and historical recovery visibility. |
-| Operator repair contract | P3 | Any stale/intervention closure that would otherwise require ad hoc SQL; workload teardown-only stale closure must use this shared contract. |
+| Operator repair contract | P3 | `docs/contracts/operator-repair-v1.md`; any stale/intervention closure that would otherwise require ad hoc SQL; workload teardown-only stale closure must use this shared contract. |
 | Restore consistency contract | P4b | Backup/restore reconciliation, retained lifecycle restore, purge invariant, and no credential reissue claims. |
 | Release evidence contract | P0/P5 | Seed/final correctness, selector/digest semantics, generated artifacts, workflow/publication hardening, and doc-sync evidence. |
 
@@ -351,6 +366,16 @@ Surface rules:
 | Orchestrator discovery | Shows mount/teardown state only to authorized scoped readers. |
 | Operator inspection | Shows matrix state, intervention, held fence/session, stale lease, recovery state, and audit lag. |
 | Evidence | Maps claim/subclaim/acceptance to exact matrix rows. |
+
+Readyz, discovery, and evidence all read the matrix, but they are different
+output surfaces with different acceptance:
+
+- Readyz reports service readiness and bootstrap/runtime health. It is not
+  caller authorization and cannot prove caller access.
+- Caller/orchestrator discovery reports actor-scoped capability decisions. It
+  is not readiness and must not expose operator/global/runtime material.
+- Evidence classification maps claims to rows and commands. It is not runtime
+  admission and cannot close runtime behavior without executable runtime tests.
 
 ## Operation Terminalization Contract
 
@@ -441,8 +466,8 @@ Implementation should converge around these shared contracts:
 
 | Contract | Owner | Closure condition |
 | --- | --- | --- |
-| Capability matrix | P2 | API, worker, recovery, readyz, discovery, operator inspection, and evidence agree. |
-| Operation terminalization | P2 | New disabled work fails before queue; historical unsupported work terminalizes or intervenes. |
+| Capability matrix | P2 | API, worker, recovery, readyz, discovery, operator inspection, and evidence agree in contract and are proven through real runtime wiring where behavior is claimed. |
+| Operation terminalization | P2 | New disabled work fails before queue; historical unsupported work terminalizes or intervenes through actual worker/runtime recovery paths. |
 | Access/session/fence predicates | P1/P4 | WebDAV, restore, lifecycle, workload cleanup, and retained lifecycle share stable predicate semantics. |
 | Operator repair | P3 | One shared repair contract/test suite/audit schema; API or CLI entry; no arbitrary SQL. |
 | Retained lifecycle | P4 | Default positive archive/restore_archived/delete-tombstone/restore_tombstoned evidence covers admission, predicate, worker, errors, audit, schema/OpenAPI, runbook, manifest. |
@@ -578,6 +603,19 @@ Work:
   recovery historical visibility, unsupported/capability-disabled
   terminalization, actor discovery parity, and evidence parity all use the same
   surface-decision matrix.
+- P2b closure requires real production runtime wiring evidence. Matrix/helper
+  tests are allowed as support, but they cannot close
+  `CLAIM_CAPABILITY_MATRIX_CONSISTENT`, `CLAIM_OPERATION_TERMINALIZATION`, or
+  `CLAIM_DISCOVERY_SURFACES` runtime parity by themselves.
+- API evidence must exercise real handlers and intake paths: disabled optional
+  create/mutation requests deny before metadata lookup and before queueing, and
+  existing idempotent operations replay before capability denial with stable
+  audit and redaction.
+- Worker evidence must exercise real `RunOnce`/runtime/coordinator behavior or
+  the registry actually used by the runner: historical operations stay visible
+  to recovery when capabilities are disabled or unavailable, unsupported work is
+  persisted as `operator_intervention_required` or stable failure, and audit and
+  stable errors are emitted.
 - Default negatives for workload mount, template/clone, purge, deployment
   runtime.
 - Discovery surfaces split by actor.
@@ -593,10 +631,14 @@ go test -count=1 ./internal/contractcheck -run 'Test.*Capability|Test.*Discovery
 P2b expected red-test direction:
 
 ```bash
-go test -count=1 ./internal/api -run 'Test.*CapabilityMatrix.*Admission|Test.*Disabled.*BeforeQueue'
-go test -count=1 ./internal/workerapp -run 'Test.*CapabilityMatrix.*Executor|Test.*Historical.*Recovery|Test.*Unsupported.*Terminal'
-go test -count=1 ./internal/capability -run 'Test.*DecisionRows.*RuntimeParity'
+go test -count=1 ./internal/api -run 'Test.*AdmissionDisabled.*(ReplaysExisting|Rejects.*BeforeMetadata|BeforeQueue|Audits)'
+go test -count=1 ./internal/workerapp -run 'TestRunOnce.*(Disabled|Unavailable).*PersistsUnsupportedIntervention'
+go test -count=1 ./internal/capability -run 'Test.*DecisionRows.*(Map|EvidenceRefs)'
 ```
+
+Avoid broad regexes that match only helper/matrix tests. The manifest command
+selector for P2b evidence must name the real API and worker runtime tests needed
+for closure, with helper tests included only as auxiliary mapping coverage.
 
 P2b must not implement P1 default user loop positives. It only proves the
 shared capability/terminalization runtime path that later P1/P3/P4 work depends
@@ -609,6 +651,7 @@ Owner: operator/admin surface.
 Work:
 
 - P3 is not a complete operator platform.
+- Authoritative contract artifact: `docs/contracts/operator-repair-v1.md`.
 - Inspection for correlated operation lookup, intervention queue, held
   fence/session, stale lease, recovery state, and audit lag.
 - One shared repair contract/test suite/audit schema.
@@ -616,6 +659,10 @@ Work:
   both.
 - Reason, evidence reference, affected IDs, before/after state, safety
   predicate, audit event.
+- The contract must define allowed actions, preconditions, reason vocabulary,
+  evidence inputs, before/after state shape, audit schema, stable
+  denial/intervention behavior, and relationship to
+  `docs/contracts/operation-state-machine-v1.md`.
 - Workload teardown-only stale closure uses this repair contract.
 - Arbitrary SQL, generic state rewrite, unrestricted fence release, and
   workload-specific repair bypasses are forbidden.
@@ -703,14 +750,20 @@ the claim, profile, polarity, and selected/unselected semantics. Target commands
 must become real repo-local tests before replacement evidence is marked
 `implemented`/`closed`.
 
+Runtime behavior claims in this table require executable repo-local runtime
+evidence. Contract or helper tests may accompany them, but cannot be the only
+selector content for API admission, worker recovery, discovery, terminalization,
+or default-loop behavior.
+
 | Slice | Claim | Seed gap ID | Replacement evidence shape / ID | Type/profile | Target command rule | Seed/final behavior |
 | --- | --- | --- | --- | --- | --- | --- |
 | P1a admin bootstrap | `CLAIM_ADMIN_BOOTSTRAP_READY` | `seed_gap_admin_bootstrap_ready_open` | Current/closed-or-closing slice: `admin_bootstrap_ready_unit`; covers volume preflight, namespace binding, caller/operator role readiness, path redaction. | unit or contract / `default` | `go test -count=1 ./internal/api ./internal/apiapp ./internal/contractcheck -run 'Test.*(AdminBootstrap|Readiness.*Bootstrap|RedactsAdminBootstrap|Readiness|OpenAPI|Schema)'` | If manifest already has `admin_bootstrap_ready_unit` and no open admin seed gap, do not repeat P1a. Default-required final acceptance requires non-placeholder exact replacement. |
 | P1b repo create/projection/list | `CLAIM_DEFAULT_USER_LOOP` | `seed_gap_default_user_loop_open` | `default_user_loop_repo_projection_unit`; repo create/get/projection/list under authorized namespace with redacted projection. | unit/contract / `default` | `go test -count=1 ./internal/api ./internal/store/postgres -run '^Test(DefaultUserLoopRepo(Create|Get|Projection|List)|Repo(Create|Projection|List).*)$'` | Partial replacement only; does not close `CLAIM_DEFAULT_USER_LOOP` alone. Requires P2b runtime parity before final default-loop closure. Add guard such as `TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1b`. |
 | P1c JVS save/restore | `CLAIM_DEFAULT_USER_LOOP` | `seed_gap_default_user_loop_open` | `default_user_loop_jvs_save_restore_unit`; save/history/restore-preview/restore-run/discard with operation/audit/recovery trace. | unit/integration / `default` | `go test -count=1 ./internal/api ./internal/repoexec ./internal/workerapp ./internal/store/postgres -run '^Test(DefaultUserLoopJVS|SavePoint|RestorePreview|RestoreRun|RestoreDiscard|History)'` | Partial replacement only; does not close `CLAIM_DEFAULT_USER_LOOP` alone. Requires P2b runtime parity before final default-loop closure. Add guard such as `TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1c`. |
 | P1d WebDAV default access | `CLAIM_DEFAULT_USER_LOOP`, `CLAIM_WEBDAV_DEFAULT_ACCESS` | `seed_gap_default_user_loop_open`, `seed_gap_webdav_default_access_open` | `webdav_default_access_*`; first-create credential, gateway access, expiry/revoke, replay redaction, ledger/audit. | integration/contract / `default` | `go test -count=1 ./internal/api ./internal/exportaccess ./internal/exportgateway ./internal/exportreconcile ./internal/store/postgres -run '^Test(WebDAVDefaultAccess|Export(Create|Revoke|Expiry|Replay)|Gateway.*Policy)'` | Closes WebDAV default-access seed gap when exact replacement exists. Default user loop closes only with P1b/P1c/P1d plus P2b runtime parity. Add guard such as `TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1d`. |
+| Product-neutral conformance smoke | `CLAIM_DEFAULT_USER_LOOP`, `CLAIM_DISCOVERY_SURFACES`, selected optional fixture claims as applicable | Relevant manifest gaps only; not a sibling gate. | `product_neutral_conformance_*`; caller credential relay, connector WebDAV access/revoke, orchestrator default-denied/discovery, operation inspection negative cases, negative authorization. | smoke/fixture/contractcheck / `default` plus selected fixture | `go test -count=1 ./internal/contractcheck ./internal/api ./internal/exportgateway ./internal/exportaccess -run '^Test(ProductNeutral|ConnectorWebDAV|CallerCredentialRelay|Orchestrator.*Denied|OperationInspection.*Negative)'` | Repo-local fixture/smoke hook. It may support claim closure only when exact manifest evidence exists; it never waits for a sibling project. |
 | P2a capability/terminalization contract seed | `CLAIM_CAPABILITY_MATRIX_CONSISTENT`, `CLAIM_OPERATION_TERMINALIZATION` | Existing implemented evidence plus any new open seed gaps from manifest. | `capability_matrix_v1_contract_unit`, `operation_terminalization_contract_unit`; operation inventory/side-effect/decision table seed. | unit/contract / `default` | `go test -count=1 ./internal/capability ./internal/contractcheck -run 'Test.*DecisionRows|Test.*Operation.*Contract'` | Contract seed only. Must not be described as full API/worker/recovery runtime parity or full Finding 2 closure. |
-| P2b runtime parity | `CLAIM_CAPABILITY_MATRIX_CONSISTENT`, `CLAIM_OPERATION_TERMINALIZATION`, `CLAIM_DISCOVERY_SURFACES` | New P2b evidence or remaining open gaps from manifest. | `capability_runtime_parity_*`; API admission, worker executor registration, worker recovery historical visibility, unsupported/capability-disabled terminalization, actor discovery/evidence parity. | unit/contract / `default` | `go test -count=1 ./internal/api ./internal/workerapp ./internal/capability -run 'Test.*(RuntimeParity|Admission.*Disabled|Executor.*Registration|Historical.*Recovery|Unsupported.*Terminal|Discovery.*Parity)'` | Required before P1b/P1c/P1d can close the caller loop. Does not itself implement caller-loop positives. |
+| P2b runtime parity | `CLAIM_CAPABILITY_MATRIX_CONSISTENT`, `CLAIM_OPERATION_TERMINALIZATION`, `CLAIM_DISCOVERY_SURFACES` | New P2b evidence or remaining open gaps from manifest. | `capability_runtime_parity_*`, `operation_runtime_terminalization_*`; real API handler/intake disabled admission and real worker RunOnce/recovery terminalization evidence, with matrix/helper tests as auxiliary mapping coverage only. | unit/contract / `default` | API selector must include concrete handler tests such as WebDAV export, workload mount, repo template, and repo purge disabled admission replay/before-metadata/audit cases; worker selector must include concrete `RunOnce*Disabled*PersistsUnsupportedIntervention` and unavailable-runtime tests. Avoid broad helper-only regex. | Required before P1b/P1c/P1d can close the caller loop. Does not itself implement caller-loop positives. Does not close discovery unless caller/orchestrator/operator/readyz output surface tests are present. |
 | P3 operator repair | `CLAIM_OPERATOR_REPAIR_SAFE` | `seed_gap_operator_repair_safe_open` | `operator_repair_safe_*`; shared contract/test suite/audit schema, one API or CLI entry. | unit/contract / `default` | `go test -count=1 ./internal/api ./internal/workerapp ./internal/store/postgres -run 'Test.*Operator.*Inspection|Test.*Repair|Test.*Intervention|Test.*Audit'` | Seed accepts open marker until replacement exists. Final requires replacement for default safety claim. |
 | P4a retained lifecycle | `CLAIM_RETAINED_LIFECYCLE_DEFAULT` | No current open seed gap if `repo_lifecycle_retained_positive_unit` remains exact replacement. | `repo_lifecycle_retained_positive_unit` plus any schema/OpenAPI/runbook replacements needed for final. | unit/contract / `default` | `go test -count=1 ./internal/api ./internal/repoexec ./internal/store/postgres ./internal/workerapp -run 'Test.*RetainedLifecycle|Test.*Lifecycle'` | Keep default positive; do not move purge into retained lifecycle. |
 | P4b restore reconciliation | `CLAIM_RESTORE_RECONCILIATION` | `seed_gap_restore_reconciliation_open` | `restore_reconciliation_*`; reconciliation mode, no credential reissue, no purged resurrection, mismatch intervention. | integration/contract / `default` | `go test -count=1 ./internal/api ./internal/repoexec ./internal/store/postgres ./internal/workerapp -run 'Test.*Restore.*Reconciliation|Test.*Restore.*Drain'` | Final rejects open required restore reconciliation gap. |
@@ -723,16 +776,25 @@ must become real repo-local tests before replacement evidence is marked
 
 ### Open Seed Gap Backlog
 
-These rows keep visible gaps from being lost while preserving the default vs
-selected optional boundary.
+The manifest is authoritative. This table is a handoff highlight list, not a
+complete replacement for `docs/release-evidence/ga-manifest.json`. When the
+manifest and this table differ, update this table or the relevant work package;
+do not infer release status from this highlight list alone.
 
 | Seed gap | Claim | Owner | Default/runtime/optional semantics |
 | --- | --- | --- | --- |
+| `seed_gap_default_user_loop_open` | `CLAIM_DEFAULT_USER_LOOP` | P1/P2/P5 | Default caller loop remains open until repo, JVS, WebDAV, operation/audit/recovery trace, and P2b runtime parity are all exact non-placeholder evidence. |
+| `seed_gap_operator_repair_safe_open` | `CLAIM_OPERATOR_REPAIR_SAFE` | P3 | Default safety; final requires `docs/contracts/operator-repair-v1.md`, one API or CLI entry, stable audit/denial/intervention evidence, and no arbitrary SQL. |
+| `seed_gap_restore_reconciliation_open` | `CLAIM_RESTORE_RECONCILIATION` | P4b | Default safety; final requires reconciliation mode, dangerous-write denial, no credential reissue, no purged resurrection, and mismatch-to-intervention evidence. |
 | `seed_gap_webdav_default_access_open` | `CLAIM_WEBDAV_DEFAULT_ACCESS` | P1d/P5 | Default positive subclaim; final requires exact non-placeholder WebDAV replacement. |
 | `seed_gap_secret_path_redaction_open` | `CLAIM_SECRET_PATH_REDACTION` | P1/P2/P5 | Default safety; final requires redaction evidence for touched caller/operator/runtime/audit/evidence surfaces. |
 | `seed_gap_discovery_surfaces_open` | `CLAIM_DISCOVERY_SURFACES` | P2/P3 | Default safety; caller/orchestrator/operator/readyz surfaces must stay layered. |
 | `seed_gap_profile_boundary_open` | `CLAIM_PROFILE_BOUNDARY` | P0/P5 | Default release/profile guard; final requires profile boundary evidence. |
 | `seed_gap_residual_risk_catalog_open` | `CLAIM_RESIDUAL_RISK_CATALOG` | P3/P4/P5 | Default/runtime-risk safety; risk acceptance shape is repo-local schema/fixture/audit, not human approval. |
+| `seed_gap_optional_fixture_conformant_open` | `CLAIM_OPTIONAL_FIXTURE_CONFORMANT` | P4/P5 | Selected optional umbrella; does not block default final unless selector claims optional capability. |
+| `seed_gap_workload_fixture_ready_open` | `CLAIM_WORKLOAD_FIXTURE_READY` | P4c | Selected optional workload fixture; only required under `repo-local-fixture-enabled` when selected by `claimed_optional_capabilities`. |
+| `seed_gap_template_quota_boundary_open` | `CLAIM_TEMPLATE_QUOTA_BOUNDARY` | P4c/P5 | Default template/quota wording safety plus selected template positive boundary. Keep selected positive non-default. |
+| `seed_gap_purge_approval_safe_open` | `CLAIM_PURGE_APPROVAL_SAFE` | P4d | Selected optional purge positive; default purge denial remains separate always-required negative evidence. |
 | `seed_gap_workflow_hardening_guard_open` | `CLAIM_WORKFLOW_HARDENING_GUARD` | P5 | Release safety; repo-local workflow YAML/script declaration guard only. |
 | `seed_gap_deployment_risk_envelope_open` | `CLAIM_DEPLOYMENT_RISK_ENVELOPE` | P5 | Runtime support only; never local positive final proof. |
 
@@ -791,6 +853,18 @@ Do not:
 
 ## Evidence And Gate Policy
 
+Runtime behavior claims require executable repo-local evidence. Doc, contract,
+schema, and matrix/helper tests can seed or support runtime claims, but cannot
+close API admission, worker recovery, discovery, terminalization, default-loop,
+or WebDAV/JVS behavior unless the claim is explicitly contract-only.
+
+P2b evidence selectors must be narrow enough to prove production runtime wiring:
+real API handler/intake tests for before-queue denial and replay-before-denial,
+and real worker `RunOnce`/runtime/coordinator tests or the registry actually
+used by the runner for historical recovery visibility and persisted
+intervention/audit. Broad regexes that match only helper tests are invalid for
+P2b closure.
+
 Evidence status:
 
 | Status | Meaning |
@@ -807,7 +881,9 @@ Minimum evidence by area:
 | Retained lifecycle | Admission, session/fence predicate, worker recovery, stable errors, audit, schema/OpenAPI, runbook, manifest evidence. |
 | Default negatives | Denied/disabled/recovery/fail-closed tests and no permanent queued operations. |
 | Capability matrix | Matrix row tests across API, worker, recovery, readyz, discovery, operator inspection, evidence. |
-| Operation terminalization | Operation inventory, side-effect boundary, failed vs intervention, idempotent replay, historical visibility. |
+| API admission runtime parity | Real handler/intake tests proving disabled optional mutations deny before metadata lookup and before queueing, while existing operations replay before capability denial with audit/redaction. |
+| Worker runtime terminalization | Real RunOnce/runtime/coordinator tests proving historical operations remain visible when capability disabled or unavailable and persist stable `operator_intervention_required`/audit/error state. |
+| Operation terminalization | Operation inventory, side-effect boundary, failed vs intervention, idempotent replay, historical visibility. Contract-only evidence seeds this; runtime closure needs executable worker evidence. |
 | Operator repair | One shared contract/test suite/audit schema, API or CLI entry, no arbitrary SQL. |
 | Optional positives | Fixture-enabled evidence plus selector-selected final blocking. |
 | Runtime support | Envelope only: detection, config, redaction, runbook, risk acceptance. |
@@ -822,6 +898,10 @@ Current Slice DoD:
   guard, or manifest evidence expectation.
 - The PR updates only the touched code, docs, contracts, schemas, runbooks, and
   evidence needed for that slice.
+- Any PR that adds or replaces manifest evidence includes a manifest coverage
+  test that precisely asserts evidence ID, claim, subclaim, acceptance, profile,
+  polarity, status, required/default/optional semantics, target command, and
+  whether each related seed gap stays open or is closed by exact replacement.
 - The PR keeps default user loop, retained lifecycle, operator repair, optional
   positives, and release hardening as separate claims unless it explicitly owns
   those claims.
@@ -846,7 +926,9 @@ Final GA DoD:
 - Restore_archived/restore_tombstoned drain behavior is fixed and proven.
 - Operator repair has one shared contract/test suite/audit schema and one
   allowlisted API or CLI entry; no arbitrary SQL/state rewrite.
-- Capability matrix v1 drives all surfaces and P2b runtime parity is proven.
+- Capability matrix v1 drives all surfaces and P2b production runtime parity is
+  proven by real API handler/intake and worker RunOnce/runtime evidence, with
+  helper/matrix tests only as supporting coverage.
 - Operation terminalization rules are implemented and tested with historical
   recovery visibility.
 - Generated report/evidence artifacts are deterministic and digestable.

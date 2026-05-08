@@ -14,6 +14,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
@@ -201,6 +202,45 @@ func TestInternalAPIShellCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testin
 	}
 	if !strings.HasPrefix(got, "https://files.example.test/public/e/") || !strings.HasSuffix(got, "/") {
 		t.Fatalf("access.url = %q, want configured public base URL", got)
+	}
+}
+
+func TestCapabilityMatrixAdmissionDisabledDeniesMatrixOptionalMutationsBeforeQueue(t *testing.T) {
+	disabled := internalAPIDisabledAdmissionCapabilities(InternalAPIShellConfig{
+		WebDAVExportAdmissionDisabled:  false,
+		WorkloadMountAdmissionDisabled: true,
+		RepoTemplateAdmissionDisabled:  true,
+		RepoPurgeAdmissionDisabled:     true,
+	})
+
+	for _, row := range capability.DecisionRowsForSurface(capability.SurfaceAPIAdmission) {
+		if !row.OptionalGated {
+			continue
+		}
+		if !routeOperationAdmissionDisabled(disabled, row.OperationType) {
+			t.Fatalf("%s/%s optional api-admission row was not disabled before queue by matrix capability %s", row.OperationType, row.SurfaceType, row.CapabilityID)
+		}
+	}
+}
+
+func TestCapabilityMatrixAdmissionDisabledReplaysExistingOperationBeforeDenial(t *testing.T) {
+	disabled := internalAPIDisabledAdmissionCapabilities(InternalAPIShellConfig{
+		WebDAVExportAdmissionDisabled:  true,
+		WorkloadMountAdmissionDisabled: true,
+		RepoTemplateAdmissionDisabled:  true,
+		RepoPurgeAdmissionDisabled:     true,
+	})
+
+	for _, operationType := range []operations.OperationType{
+		operations.OperationExportCreate,
+		operations.OperationMountBindingCreate,
+		operations.OperationTemplateCreate,
+		operations.OperationTemplateClone,
+		operations.OperationRepoPurge,
+	} {
+		if !routeOperationAdmissionDisabled(disabled, operationType) {
+			t.Fatalf("%s must use matrix-derived disabled admission so handlers can replay by idempotency before denial", operationType)
+		}
 	}
 }
 

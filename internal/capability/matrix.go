@@ -199,6 +199,36 @@ func CapabilityMatrixV1DecisionRows() []DecisionRow {
 	return rows
 }
 
+func DecisionRowsForSurface(surface DecisionSurfaceType) []DecisionRow {
+	var rows []DecisionRow
+	for _, row := range capabilityMatrixV1DecisionRows {
+		if row.SurfaceType == surface {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+func DecisionRowsForOperationSurface(operationType operations.OperationType, surface DecisionSurfaceType) []DecisionRow {
+	var rows []DecisionRow
+	for _, row := range capabilityMatrixV1DecisionRows {
+		if row.OperationType == operationType && row.SurfaceType == surface {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+func DecisionRowsForEvidenceRef(evidenceRef string) []DecisionRow {
+	var rows []DecisionRow
+	for _, row := range capabilityMatrixV1DecisionRows {
+		if row.EvidenceRef == evidenceRef {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
 func CapabilityMatrixV1Row(id ID) (Row, bool) {
 	for _, row := range capabilityMatrixV1Rows {
 		if row.ID == id {
@@ -235,42 +265,44 @@ func buildCapabilityMatrixV1DecisionRows() []DecisionRow {
 				volumeRuntimeCapabilityForOperation(operationType),
 				denialCodeForCapability(row.ID),
 				"docs/contracts/operation-state-machine-v1.md",
-				"capability_matrix_v1_contract_unit",
+				"capability_runtime_parity_unit",
 			))
-			rows = append(rows, decisionRow(
-				SurfaceWorkerExecution,
-				operationType,
-				row.ID,
-				resourceScopeForOperation(operationType),
-				true,
-				row.DefaultGARequired,
-				false,
-				row.OptionalGated,
-				configuredForCapability(row.ID),
-				readyForCapability(row.ID),
-				namespacePolicyForOperation(operationType),
-				volumeRuntimeCapabilityForOperation(operationType),
-				"",
-				"docs/contracts/operation-state-machine-v1.md",
-				"operation_terminalization_contract_unit",
-			))
-			rows = append(rows, decisionRow(
-				SurfaceWorkerRecovery,
-				operationType,
-				OperationRecovery,
-				resourceScopeForOperation(operationType),
-				true,
-				true,
-				false,
-				false,
-				"runtime-derived",
-				"runtime-derived",
-				namespacePolicyForOperation(operationType),
-				volumeRuntimeCapabilityForOperation(operationType),
-				"OPERATION_RECOVERY_REQUIRED",
-				"docs/contracts/operation-state-machine-v1.md",
-				"operation_terminalization_contract_unit",
-			))
+			if workerRuntimeOperation(operationType) {
+				rows = append(rows, decisionRow(
+					SurfaceWorkerExecution,
+					operationType,
+					row.ID,
+					resourceScopeForOperation(operationType),
+					true,
+					row.DefaultGARequired,
+					false,
+					row.OptionalGated,
+					configuredForCapability(row.ID),
+					readyForCapability(row.ID),
+					namespacePolicyForOperation(operationType),
+					volumeRuntimeCapabilityForOperation(operationType),
+					"",
+					"docs/contracts/operation-state-machine-v1.md",
+					"operation_runtime_terminalization_unit",
+				))
+				rows = append(rows, decisionRow(
+					SurfaceWorkerRecovery,
+					operationType,
+					OperationRecovery,
+					resourceScopeForOperation(operationType),
+					true,
+					true,
+					false,
+					false,
+					"runtime-derived",
+					"runtime-derived",
+					namespacePolicyForOperation(operationType),
+					volumeRuntimeCapabilityForOperation(operationType),
+					"OPERATION_RECOVERY_REQUIRED",
+					"docs/contracts/operation-state-machine-v1.md",
+					"operation_runtime_terminalization_unit",
+				))
+			}
 			rows = append(rows, decisionRow(
 				SurfaceEvidence,
 				operationType,
@@ -286,21 +318,30 @@ func buildCapabilityMatrixV1DecisionRows() []DecisionRow {
 				volumeRuntimeCapabilityForOperation(operationType),
 				"",
 				"docs/GA_RELEASE_GATES.md",
-				"capability_matrix_v1_contract_unit",
+				"capability_runtime_parity_unit",
 			))
 		}
 	}
 
 	rows = append(rows,
-		decisionRow(SurfaceWorkerExecution, operations.OperationExportSessionReconcile, OperationRecovery, "export_session", true, true, false, false, "runtime-derived", "runtime-derived", "not-applicable", "not-applicable", "", "docs/contracts/export-access-webdav-v1.md", "operation_terminalization_contract_unit"),
-		decisionRow(SurfaceWorkerRecovery, operations.OperationExportSessionReconcile, OperationRecovery, "export_session", true, true, false, false, "runtime-derived", "runtime-derived", "not-applicable", "not-applicable", "OPERATION_RECOVERY_REQUIRED", "docs/contracts/export-access-webdav-v1.md", "operation_terminalization_contract_unit"),
-		decisionRow(SurfaceEvidence, operations.OperationExportSessionReconcile, OperationRecovery, "export_session", true, true, false, false, "static", "static", "not-applicable", "not-applicable", "", "docs/contracts/export-access-webdav-v1.md", "operation_terminalization_contract_unit"),
-		decisionRow(SurfaceWorkerExecution, operations.OperationMigrationCutover, OperationRecovery, "migration", false, false, false, false, "conditional", "unsupported", "operator", "not-applicable", "CAPABILITY_DENIED", "docs/contracts/operation-state-machine-v1.md", "operation_terminalization_contract_unit"),
-		decisionRow(SurfaceWorkerRecovery, operations.OperationMigrationCutover, OperationRecovery, "migration", false, false, false, false, "conditional", "recovery-only", "operator", "not-applicable", "OPERATION_RECOVERY_REQUIRED", "docs/contracts/operation-state-machine-v1.md", "operation_terminalization_contract_unit"),
-		decisionRow(SurfaceEvidence, operations.OperationMigrationCutover, OperationRecovery, "migration", false, false, false, false, "conditional", "recovery-only", "operator", "not-applicable", "", "docs/contracts/operation-state-machine-v1.md", "operation_terminalization_contract_unit"),
+		decisionRow(SurfaceWorkerExecution, operations.OperationExportSessionReconcile, OperationRecovery, "export_session", true, true, false, false, "runtime-derived", "runtime-derived", "not-applicable", "not-applicable", "", "docs/contracts/export-access-webdav-v1.md", "operation_runtime_terminalization_unit"),
+		decisionRow(SurfaceWorkerRecovery, operations.OperationExportSessionReconcile, OperationRecovery, "export_session", true, true, false, false, "runtime-derived", "runtime-derived", "not-applicable", "not-applicable", "OPERATION_RECOVERY_REQUIRED", "docs/contracts/export-access-webdav-v1.md", "operation_runtime_terminalization_unit"),
+		decisionRow(SurfaceEvidence, operations.OperationExportSessionReconcile, OperationRecovery, "export_session", true, true, false, false, "static", "static", "not-applicable", "not-applicable", "", "docs/contracts/export-access-webdav-v1.md", "operation_runtime_terminalization_unit"),
+		decisionRow(SurfaceWorkerExecution, operations.OperationMigrationCutover, OperationRecovery, "migration", false, false, false, false, "conditional", "unsupported", "operator", "not-applicable", "CAPABILITY_DENIED", "docs/contracts/operation-state-machine-v1.md", "operation_runtime_terminalization_unit"),
+		decisionRow(SurfaceWorkerRecovery, operations.OperationMigrationCutover, OperationRecovery, "migration", false, false, false, false, "conditional", "recovery-only", "operator", "not-applicable", "OPERATION_RECOVERY_REQUIRED", "docs/contracts/operation-state-machine-v1.md", "operation_runtime_terminalization_unit"),
+		decisionRow(SurfaceEvidence, operations.OperationMigrationCutover, OperationRecovery, "migration", false, false, false, false, "conditional", "recovery-only", "operator", "not-applicable", "", "docs/contracts/operation-state-machine-v1.md", "operation_runtime_terminalization_unit"),
 	)
 
 	return rows
+}
+
+func workerRuntimeOperation(operationType operations.OperationType) bool {
+	switch operationType {
+	case operations.OperationExportCreate, operations.OperationExportRevoke:
+		return false
+	default:
+		return true
+	}
 }
 
 func decisionRow(surface DecisionSurfaceType, operationType operations.OperationType, capabilityID ID, resourceScope string, supported, requiredDefault, requiredService, optionalGated bool, configured, ready, namespacePolicy, volumeRuntimeCapability, denialCode, runbookRef, evidenceRef string) DecisionRow {

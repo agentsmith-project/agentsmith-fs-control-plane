@@ -257,11 +257,20 @@ func TestCapabilityMatrixV1DecisionRowsExposeHandoffMinimumFields(t *testing.T) 
 
 func TestCapabilityMatrixV1DecisionRowsCoverRequiredSurfacesByOperationClass(t *testing.T) {
 	rows := CapabilityMatrixV1DecisionRows()
-	for _, operationType := range operations.RouteOperationTypes() {
+	for routeOperationID, operationType := range operations.RouteOperationTypes() {
 		assertDecisionRow(t, rows, operationType, SurfaceAPIAdmission, "", true)
-		assertDecisionRow(t, rows, operationType, SurfaceWorkerExecution, "", true)
-		assertDecisionRow(t, rows, operationType, SurfaceWorkerRecovery, OperationRecovery, true)
 		assertDecisionRow(t, rows, operationType, SurfaceEvidence, "", true)
+		if capabilityMatrixV1RuntimeWorkerOperation(operationType) {
+			assertDecisionRow(t, rows, operationType, SurfaceWorkerExecution, "", true)
+			assertDecisionRow(t, rows, operationType, SurfaceWorkerRecovery, OperationRecovery, true)
+			continue
+		}
+		if got := DecisionRowsForOperationSurface(operationType, SurfaceWorkerExecution); len(got) != 0 {
+			t.Fatalf("%s/%s worker-execution rows = %#v, want none for API/store boundary operation", routeOperationID, operationType, got)
+		}
+		if got := DecisionRowsForOperationSurface(operationType, SurfaceWorkerRecovery); len(got) != 0 {
+			t.Fatalf("%s/%s worker-recovery rows = %#v, want none for API/store boundary operation", routeOperationID, operationType, got)
+		}
 	}
 
 	for _, operationType := range []operations.OperationType{
@@ -275,6 +284,8 @@ func TestCapabilityMatrixV1DecisionRowsCoverRequiredSurfacesByOperationClass(t *
 		operations.OperationMountBindingRevoke,
 	} {
 		row := assertDecisionRow(t, rows, operationType, SurfaceAPIAdmission, "", true)
+		assertDecisionRow(t, rows, operationType, SurfaceWorkerExecution, "", true)
+		assertDecisionRow(t, rows, operationType, SurfaceWorkerRecovery, OperationRecovery, true)
 		if !row.OptionalGated || row.RequiredForDefaultGA {
 			t.Fatalf("%s api-admission row = %#v, want default-negative optional-gated", operationType, row)
 		}
@@ -322,6 +333,93 @@ func TestCapabilityMatrixV1DecisionRowsAlignWithRecoveryOnlyContractOperations(t
 	migrationRecovery := assertDecisionRow(t, rows, operations.OperationMigrationCutover, SurfaceWorkerRecovery, OperationRecovery, false)
 	if migrationRecovery.Configured != "conditional" || migrationRecovery.Ready != "recovery-only" {
 		t.Fatalf("migration_cutover worker-recovery row = %#v, want conditional recovery-only", migrationRecovery)
+	}
+}
+
+func TestCapabilityMatrixV1DecisionRowsKeepWebDAVExportAPIOperationsOutOfWorkerRecovery(t *testing.T) {
+	for _, operationType := range []operations.OperationType{operations.OperationExportCreate, operations.OperationExportRevoke} {
+		if rows := DecisionRowsForOperationSurface(operationType, SurfaceAPIAdmission); len(rows) != 1 {
+			t.Fatalf("%s api-admission rows = %#v, want exactly one API decision", operationType, rows)
+		}
+		if rows := DecisionRowsForOperationSurface(operationType, SurfaceEvidence); len(rows) != 1 {
+			t.Fatalf("%s evidence rows = %#v, want exactly one evidence decision", operationType, rows)
+		}
+		if rows := DecisionRowsForOperationSurface(operationType, SurfaceWorkerExecution); len(rows) != 0 {
+			t.Fatalf("%s worker-execution rows = %#v, want none; WebDAV create/revoke commit at API/store boundary", operationType, rows)
+		}
+		if rows := DecisionRowsForOperationSurface(operationType, SurfaceWorkerRecovery); len(rows) != 0 {
+			t.Fatalf("%s worker-recovery rows = %#v, want none; export_session_reconcile owns export worker recovery surface", operationType, rows)
+		}
+	}
+
+	if rows := DecisionRowsForOperationSurface(operations.OperationExportSessionReconcile, SurfaceWorkerRecovery); len(rows) != 1 {
+		t.Fatalf("export_session_reconcile worker-recovery rows = %#v, want explicit recovery surface", rows)
+	}
+	if rows := DecisionRowsForOperationSurface(operations.OperationExportSessionReconcile, SurfaceAPIAdmission); len(rows) != 0 {
+		t.Fatalf("export_session_reconcile api-admission rows = %#v, want none for internal recovery operation", rows)
+	}
+}
+
+func TestCapabilityMatrixV1DecisionRowsMapRouteAndWorkerOperationSurfaces(t *testing.T) {
+	for routeOperationID, operationType := range operations.RouteOperationTypes() {
+		admissionRows := DecisionRowsForOperationSurface(operationType, SurfaceAPIAdmission)
+		if len(admissionRows) != 1 {
+			t.Fatalf("%s/%s api-admission rows = %#v, want exactly one matrix decision", routeOperationID, operationType, admissionRows)
+		}
+		evidenceRows := DecisionRowsForOperationSurface(operationType, SurfaceEvidence)
+		if len(evidenceRows) != 1 {
+			t.Fatalf("%s/%s evidence rows = %#v, want exactly one matrix decision", routeOperationID, operationType, evidenceRows)
+		}
+		workerRows := DecisionRowsForOperationSurface(operationType, SurfaceWorkerExecution)
+		recoveryRows := DecisionRowsForOperationSurface(operationType, SurfaceWorkerRecovery)
+		if capabilityMatrixV1RuntimeWorkerOperation(operationType) {
+			if len(workerRows) != 1 {
+				t.Fatalf("%s/%s worker-execution rows = %#v, want exactly one worker decision", routeOperationID, operationType, workerRows)
+			}
+			if len(recoveryRows) != 1 {
+				t.Fatalf("%s/%s worker-recovery rows = %#v, want exactly one worker recovery decision", routeOperationID, operationType, recoveryRows)
+			}
+			if admissionRows[0].CapabilityID != workerRows[0].CapabilityID || admissionRows[0].CapabilityID != evidenceRows[0].CapabilityID {
+				t.Fatalf("%s matrix capability mismatch admission/worker/evidence = %s/%s/%s", operationType, admissionRows[0].CapabilityID, workerRows[0].CapabilityID, evidenceRows[0].CapabilityID)
+			}
+			if recoveryRows[0].CapabilityID != OperationRecovery {
+				t.Fatalf("%s worker-recovery capability = %s, want %s", operationType, recoveryRows[0].CapabilityID, OperationRecovery)
+			}
+			continue
+		}
+		if len(workerRows) != 0 || len(recoveryRows) != 0 {
+			t.Fatalf("%s/%s worker rows = execution %#v recovery %#v, want none for API/store boundary operation", routeOperationID, operationType, workerRows, recoveryRows)
+		}
+	}
+
+	migrationRecovery := DecisionRowsForOperationSurface(operations.OperationMigrationCutover, SurfaceWorkerRecovery)
+	if len(migrationRecovery) != 1 || migrationRecovery[0].Supported || migrationRecovery[0].Ready != "recovery-only" {
+		t.Fatalf("migration_cutover recovery row = %#v, want single conditional unsupported recovery-only decision", migrationRecovery)
+	}
+}
+
+func capabilityMatrixV1RuntimeWorkerOperation(operationType operations.OperationType) bool {
+	switch operationType {
+	case operations.OperationExportCreate, operations.OperationExportRevoke:
+		return false
+	default:
+		return true
+	}
+}
+
+func TestCapabilityMatrixV1DecisionRowsEvidenceRefsMapRuntimeSurfaces(t *testing.T) {
+	for _, evidenceRef := range []string{"capability_runtime_parity_unit", "operation_runtime_terminalization_unit"} {
+		rows := DecisionRowsForEvidenceRef(evidenceRef)
+		if len(rows) == 0 {
+			t.Fatalf("DecisionRowsForEvidenceRef(%q) returned no rows", evidenceRef)
+		}
+		for _, row := range rows {
+			switch row.SurfaceType {
+			case SurfaceAPIAdmission, SurfaceWorkerExecution, SurfaceWorkerRecovery, SurfaceEvidence:
+			default:
+				t.Fatalf("%s row for %s = %#v, want runtime parity surface", row.OperationType, evidenceRef, row)
+			}
+		}
 	}
 }
 

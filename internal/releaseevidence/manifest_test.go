@@ -784,6 +784,150 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForP2a(t *testing.T) 
 	}
 }
 
+func TestCurrentRepoManifestContainsP2bRuntimeParityEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	tests := []struct {
+		id           string
+		claimID      string
+		subclaimID   string
+		acceptanceID string
+		riskID       string
+		capabilityID string
+		wantPackages []string
+		wantTests    []string
+	}{
+		{
+			id:           "capability_runtime_parity_unit",
+			claimID:      "CLAIM_CAPABILITY_MATRIX_CONSISTENT",
+			subclaimID:   "capability_runtime_parity",
+			acceptanceID: "P2B_CAPABILITY_RUNTIME_PARITY",
+			riskID:       "F4",
+			wantPackages: []string{"./internal/capability", "./internal/api", "./internal/apiapp"},
+			wantTests: []string{
+				"TestCapabilityMatrixV1DecisionRowsMapRouteAndWorkerOperationSurfaces",
+				"TestCapabilityMatrixV1DecisionRowsEvidenceRefsMapRuntimeSurfaces",
+				"TestCapabilityMatrixAdmissionDisabledDeniesMatrixOptionalMutationsBeforeQueue",
+				"TestCapabilityMatrixAdmissionDisabledReplaysExistingOperationBeforeDenial",
+				"TestInternalAPIShellCreateExportCapabilityDeniedWhenWebDAVAdmissionDisabled",
+				"TestInternalAPIShellCreateExportAdmissionDisabledReplaysExistingOperation",
+				"TestInternalAPIShellCreateWorkloadMountAdmissionDisabledReplaysExistingOperation",
+				"TestInternalAPIShellCreateWorkloadMountAdmissionDisabledRejectsBrandNewBeforeMetadata",
+				"TestRepoTemplateAdmissionDisabledReplaysExistingOperationsBeforeMetadata",
+				"TestRepoTemplateAdmissionDisabledRejectsNewOperationsBeforeMetadataAndAudits",
+				"TestRepoTemplateAdmissionDisabledReturnsIdempotencyConflictBeforeCapabilityDenied",
+				"TestRepoLifecyclePurgeAdmissionDisabledRejectsNewBeforeMetadataAndAudits",
+				"TestInternalRuntimeAdmissionDisabledFlagsMatchCapabilityMatrix",
+			},
+		},
+		{
+			id:           "operation_runtime_terminalization_unit",
+			claimID:      "CLAIM_OPERATION_TERMINALIZATION",
+			subclaimID:   "operation_runtime_terminalization",
+			acceptanceID: "P2B_OPERATION_RUNTIME_TERMINALIZATION",
+			riskID:       "F6",
+			capabilityID: "operation_recovery",
+			wantPackages: []string{"./internal/workerapp"},
+			wantTests: []string{
+				"TestWorkerCapabilityMatrixExecutorRegistryMatchesDecisionRows",
+				"TestWorkerCapabilityMatrixRecoveryRegistryMatchesDecisionRows",
+				"TestWorkerCapabilityMatrixUnsupportedTerminalizationRegistryIncludesDisabledOperations",
+				"TestRunOnceExportSessionReconcileOnlyRunsWhenExplicitlyEnabled",
+				"TestRunOnceClaimsQueuedVolumeEnsureThroughDefaultRunner",
+				"TestRunOnceClaimsQueuedNamespaceUpsertThroughDefaultRunner",
+				"TestRunOnceClaimsQueuedNamespaceDisableThroughDefaultRunner",
+				"TestRunOnceClaimsQueuedNamespaceUpsertAndBindingPutThroughDefaultRunner",
+				"TestRunOnceRepoCreateDisabledScansAndPersistsUnsupportedIntervention",
+				"TestRunOnceRepoCreateEnabledButJVSUnavailableScansAndPersistsUnsupportedIntervention",
+				"TestRunOnceWorkloadMountBindingCreateClaimsThroughMountBindingExecutor",
+				"TestRunOnceWorkloadMountBindingStatusUpdateClaimsThroughMountBindingExecutor",
+				"TestRunOnceWorkloadMountBindingHeartbeatClaimsThroughMountBindingExecutor",
+				"TestRunOnceWorkloadMountBindingReleaseClaimsThroughMountBindingExecutor",
+				"TestRunOnceWorkloadMountBindingRevokeClaimsThroughMountBindingExecutor",
+				"TestRunOnceRepoLifecycleDisabledScansAndPersistsUnsupportedInterventions",
+				"TestRunOnceRepoPurgeDisabledScansAndPersistsUnsupportedIntervention",
+				"TestRunOnceSavePointCreateDisabledScansAndPersistsUnsupportedIntervention",
+				"TestRunOnceTemplateCreateDisabledScansAndPersistsUnsupportedIntervention",
+				"TestRunOnceTemplateCloneDisabledScansAndPersistsUnsupportedIntervention",
+				"TestRunOnceRestorePreviewDisabledScansAndPersistsUnsupportedIntervention",
+				"TestRunOnceRestorePreviewDiscardDisabledScansAndPersistsUnsupportedIntervention",
+				"TestRunOnceRestoreRunDisabledScansAndPersistsUnsupportedIntervention",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			item, ok := manifestItemByID(manifest, tt.id)
+			if !ok {
+				t.Fatalf("manifest missing %s", tt.id)
+			}
+			if item.EvidenceStatus != "implemented" ||
+				item.ClaimID != tt.claimID ||
+				item.SubclaimID != tt.subclaimID ||
+				item.AcceptanceID != tt.acceptanceID ||
+				item.RiskID != tt.riskID ||
+				item.CapabilityID != tt.capabilityID ||
+				item.EvidenceProfile != "default" ||
+				!item.DefaultMode ||
+				item.FixtureEnabledMode ||
+				!item.Required ||
+				item.DocOnlyAllowed ||
+				item.OptionalGated {
+				t.Fatalf("%s shape = %+v, want default required P2b runtime parity evidence", tt.id, item)
+			}
+			if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, tt.wantPackages) {
+				t.Fatalf("%s command packages = %#v, want %#v", item.ID, packages, tt.wantPackages)
+			}
+			selector, ok := goTestRunSelector(item.Command)
+			if !ok {
+				t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+			}
+			compiled, err := regexp.Compile(selector)
+			if err != nil {
+				t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+			}
+			for _, testName := range tt.wantTests {
+				if !compiled.MatchString(testName) {
+					t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+				}
+				assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+			}
+		})
+	}
+}
+
+func TestCurrentRepoManifestKeepsDefaultUserLoopAndDiscoverySeedGapsOpenForP2b(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+	for _, gapID := range []string{"seed_gap_default_user_loop_open", "seed_gap_discovery_surfaces_open"} {
+		item, ok := manifestItemByID(manifest, gapID)
+		if !ok {
+			t.Fatalf("manifest must keep %s open for P2b", gapID)
+		}
+		if item.EvidenceStatus != "placeholder" || item.PassCriteria.Kind != "seed_gap" || !containsString(item.PassCriteria.Assertions, "open") {
+			t.Fatalf("%s = %+v, want open placeholder seed gap", gapID, item)
+		}
+	}
+}
+
 func TestCurrentRepoManifestSeedModeAllowsOpenSeedGaps(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
@@ -810,11 +954,20 @@ func TestCurrentRepoManifestFinalModeRequiresSelector(t *testing.T) {
 }
 
 func goTestPackageForTestName(testName string) string {
+	if strings.HasPrefix(testName, "TestCapabilityMatrixAdmissionDisabled") {
+		return "./internal/api"
+	}
 	if strings.HasPrefix(testName, "TestCapability") {
 		return "./internal/capability"
 	}
 	if strings.HasPrefix(testName, "TestInternalRuntime") {
 		return "./internal/apiapp"
+	}
+	if strings.HasPrefix(testName, "TestRunOnce") {
+		return "./internal/workerapp"
+	}
+	if strings.HasPrefix(testName, "TestWorker") {
+		return "./internal/workerapp"
 	}
 	if strings.HasPrefix(testName, "TestCurrentRepoReadiness") {
 		return "./internal/contractcheck"
@@ -823,6 +976,15 @@ func goTestPackageForTestName(testName string) string {
 		return "./internal/contractcheck"
 	}
 	return "./internal/api"
+}
+
+func manifestItemByID(manifest Manifest, id string) (Item, bool) {
+	for _, item := range manifest.Items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return Item{}, false
 }
 
 func assertGoTestListIncludesTest(t *testing.T, repoRoot, itemID, selector, pkg, testName string) {
@@ -1059,6 +1221,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":true
     },
     {
+      "id":"operation_runtime_terminalization_unit",
+      "capability_id":"operation_recovery",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"default_ga_capability_classification_unit",
       "capability_id":"",
       "evidence_type":"unit",
@@ -1082,6 +1255,17 @@ func validReleaseEvidenceManifest() string {
     },
     {
       "id":"capability_matrix_v1_contract_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
+      "id":"capability_runtime_parity_unit",
       "capability_id":"",
       "evidence_type":"unit",
       "required":true,
@@ -1200,9 +1384,11 @@ var package0FixtureMetadata = []struct {
 	{"repo_purge_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_worker_recovery", "P0_OPTIONAL_DENIED_PURGE_RECOVERY", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "disabled repo purge recovery terminalizes unsupported historical operations"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
+	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},
 	{"default_ga_capability_classification_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "default_ga_capability_classification", "P0_CAPABILITY_MATRIX_DEFAULT_CLASSIFICATION", "F4", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "capability matrix classifies default and optional capabilities consistently"},
 	{"capability_admission_operation_coverage_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "capability_admission_operation_coverage", "P0_CAPABILITY_MATRIX_OPERATION_COVERAGE", "F4", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "capability admission operation coverage stays consistent"},
 	{"capability_matrix_v1_contract_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "capability_matrix_v1_contract", "P1_CAPABILITY_MATRIX_V1_CONTRACT", "F4", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "capability matrix v1 contract covers readyz workload split vocabulary"},
+	{"capability_runtime_parity_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "capability_runtime_parity", "P2B_CAPABILITY_RUNTIME_PARITY", "F4", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "actual API request-path tests prove matrix disabled admission behavior while worker runtime is carried by operation evidence"},
 	{"release_script_evidence_manifest_guard", "CLAIM_RELEASE_GATE_TRACEABLE", "release_gate_invokes_manifest_verifier", "P0_RELEASE_GATE_TRACEABLE_MANIFEST_VERIFIER", "F18", "", "default", "true", "false", "fast", "workflow-guard", "both", "false", "coverage_guard", "release gate invokes the manifest verifier and keeps evidence traceable"},
 }
 

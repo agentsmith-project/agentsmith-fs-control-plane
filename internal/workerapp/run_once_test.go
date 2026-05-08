@@ -14,6 +14,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
@@ -116,6 +117,108 @@ func TestRunOnceOperationAndAuditCanRunTogether(t *testing.T) {
 	}
 	if result.OperationRecovery.Claimed != 1 || result.AuditDelivery.Delivered != 1 {
 		t.Fatalf("result = %#v, want operation and audit work", result)
+	}
+}
+
+func TestWorkerCapabilityMatrixExecutorRegistryMatchesDecisionRows(t *testing.T) {
+	registered := workerCapabilityMatrixExecutionOperationTypes()
+	for _, row := range capability.DecisionRowsForSurface(capability.SurfaceWorkerExecution) {
+		if row.OperationType == "" || !row.Supported || workerAppSeparateWorkerSurface(row.OperationType) {
+			continue
+		}
+		if !registered[row.OperationType] {
+			t.Fatalf("%s worker-execution decision row has no worker runtime registration: %#v", row.OperationType, row)
+		}
+	}
+	if registered[operations.OperationMigrationCutover] {
+		t.Fatalf("migration_cutover must stay conditional unsupported, not registered as executable tooling")
+	}
+}
+
+func TestWorkerCapabilityMatrixRecoveryRegistryMatchesDecisionRows(t *testing.T) {
+	scanned := workerCapabilityMatrixRecoveryOperationTypes()
+	for _, row := range capability.DecisionRowsForSurface(capability.SurfaceWorkerRecovery) {
+		if row.OperationType == "" || !row.Supported || workerAppSeparateWorkerSurface(row.OperationType) {
+			continue
+		}
+		if !scanned[row.OperationType] {
+			t.Fatalf("%s worker-recovery decision row has no historical recovery scan registration: %#v", row.OperationType, row)
+		}
+	}
+	if scanned[operations.OperationMigrationCutover] {
+		t.Fatalf("migration_cutover must stay conditional unsupported/recovery-only until migration tooling exists")
+	}
+	if scanned[operations.OperationExportSessionReconcile] {
+		t.Fatalf("export_session_reconcile uses the export reconcile worker surface, not operation recovery registry")
+	}
+}
+
+func TestWorkerCapabilityMatrixUnsupportedTerminalizationRegistryIncludesDisabledOperations(t *testing.T) {
+	terminalized := workerCapabilityMatrixUnsupportedTerminalizationOperationTypes()
+	for _, operationType := range []operations.OperationType{
+		operations.OperationRepoCreate,
+		operations.OperationRepoPurge,
+		operations.OperationTemplateCreate,
+		operations.OperationTemplateClone,
+		operations.OperationRestorePreview,
+		operations.OperationRestorePreviewDiscard,
+		operations.OperationRestoreRun,
+	} {
+		if !terminalized[operationType] {
+			t.Fatalf("%s disabled or missing handler recovery must persist operator intervention and audit through matrix terminalization registry", operationType)
+		}
+	}
+}
+
+func workerAppSeparateWorkerSurface(operationType operations.OperationType) bool {
+	return operationType == operations.OperationExportSessionReconcile
+}
+
+func TestRunOnceWorkloadMountBindingCreateClaimsThroughMountBindingExecutor(t *testing.T) {
+	assertRunOnceWorkloadMountBindingOperationClaimsThroughExecutor(t, operations.OperationMountBindingCreate, audit.EventTypeMountBindingCreate)
+}
+
+func TestRunOnceWorkloadMountBindingStatusUpdateClaimsThroughMountBindingExecutor(t *testing.T) {
+	assertRunOnceWorkloadMountBindingOperationClaimsThroughExecutor(t, operations.OperationMountBindingStatusUpdate, audit.EventTypeMountBindingStatusUpdate)
+}
+
+func TestRunOnceWorkloadMountBindingHeartbeatClaimsThroughMountBindingExecutor(t *testing.T) {
+	assertRunOnceWorkloadMountBindingOperationClaimsThroughExecutor(t, operations.OperationMountBindingHeartbeat, audit.EventTypeMountBindingHeartbeat)
+}
+
+func TestRunOnceWorkloadMountBindingReleaseClaimsThroughMountBindingExecutor(t *testing.T) {
+	assertRunOnceWorkloadMountBindingOperationClaimsThroughExecutor(t, operations.OperationMountBindingRelease, audit.EventTypeMountBindingRelease)
+}
+
+func TestRunOnceWorkloadMountBindingRevokeClaimsThroughMountBindingExecutor(t *testing.T) {
+	assertRunOnceWorkloadMountBindingOperationClaimsThroughExecutor(t, operations.OperationMountBindingRevoke, audit.EventTypeMountBindingRevoke)
+}
+
+func assertRunOnceWorkloadMountBindingOperationClaimsThroughExecutor(t *testing.T, operationType operations.OperationType, eventType audit.EventType) {
+	t.Helper()
+
+	now := workerAppNow()
+	record := workerAppWorkloadMountBindingOperationRecord("op_"+operationType.String(), operationType, now)
+	store := newWorkerAppStore(record)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 1 || summary.Claimed != 1 || summary.Finalized != 0 || summary.Unsupported != 0 || summary.Manual != 0 || summary.Failed != 0 {
+		t.Fatalf("summary = %#v, want workload mount binding claim", summary)
+	}
+	if store.workloadMountBindingListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
+		t.Fatalf("list/acquire = %d/%#v, want workload mount binding list and acquire %s", store.workloadMountBindingListCalls, store.acquireIDs, record.ID)
+	}
+	got := store.records[record.ID]
+	if got.State != operations.OperationStateSucceeded || got.Phase != workerAppWorkloadMountBindingCommittedPhase(operationType) {
+		t.Fatalf("operation = %#v, want succeeded committed workload mount binding operation", got)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != eventType || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
+		t.Fatalf("audit events = %#v, want succeeded %s audit", store.auditEvents, eventType)
 	}
 }
 
@@ -2338,6 +2441,85 @@ func workerAppBindingOperationRecord(operationID string, now time.Time) operatio
 	}
 }
 
+func workerAppWorkloadMountBindingOperationRecord(operationID string, operationType operations.OperationType, now time.Time) operations.OperationRecord {
+	return operations.OperationRecord{
+		ID:               operationID,
+		Type:             operationType,
+		State:            operations.OperationStateQueued,
+		Phase:            workerAppWorkloadMountBindingValidatePhase(operationType),
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operationType, operationID).String(),
+		IdempotencyKey:   operationID,
+		RequestHash:      operations.RequestHash("sha256:workload-mount"),
+		CorrelationID:    "corr-alpha",
+		CallerService:    "product-caller",
+		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
+		Resource:         operations.ResourceRef{Type: "workload_mount_binding", ID: "wmb_alpha01"},
+		NamespaceID:      "ns_alpha01",
+		RepoID:           "repo_alpha01",
+		MountBindingID:   "wmb_alpha01",
+		InputSummary:     workerAppWorkloadMountBindingInputSummary(operationType, now),
+		CreatedAt:        now.Add(-time.Hour),
+	}
+}
+
+func workerAppWorkloadMountBindingInputSummary(operationType operations.OperationType, now time.Time) map[string]any {
+	switch operationType {
+	case operations.OperationMountBindingCreate:
+		return map[string]any{
+			"mount_binding_id": "wmb_alpha01",
+			"namespace_id":     "ns_alpha01",
+			"repo_id":          "repo_alpha01",
+			"volume_id":        "vol_123",
+			"mount_path":       "/mnt/repo",
+			"read_only":        true,
+			"lease_seconds":    float64(120),
+		}
+	case operations.OperationMountBindingStatusUpdate:
+		return map[string]any{
+			"status":           string(sessionstate.MountStatusActive),
+			"reason":           "mounted",
+			"observed_at":      now.Format(time.RFC3339),
+			"lease_expires_at": now.Add(2 * time.Minute).Format(time.RFC3339),
+		}
+	default:
+		return map[string]any{"mount_binding_id": "wmb_alpha01"}
+	}
+}
+
+func workerAppWorkloadMountBindingValidatePhase(operationType operations.OperationType) string {
+	switch operationType {
+	case operations.OperationMountBindingCreate:
+		return operations.OperationPhaseMountBindingCreateValidate
+	case operations.OperationMountBindingStatusUpdate:
+		return operations.OperationPhaseMountBindingStatusValidate
+	case operations.OperationMountBindingHeartbeat:
+		return operations.OperationPhaseMountBindingHeartbeatValidate
+	case operations.OperationMountBindingRelease:
+		return operations.OperationPhaseMountBindingReleaseValidate
+	case operations.OperationMountBindingRevoke:
+		return operations.OperationPhaseMountBindingRevokeValidate
+	default:
+		return ""
+	}
+}
+
+func workerAppWorkloadMountBindingCommittedPhase(operationType operations.OperationType) string {
+	switch operationType {
+	case operations.OperationMountBindingCreate:
+		return operations.OperationPhaseMountBindingCreateCommitted
+	case operations.OperationMountBindingStatusUpdate:
+		return operations.OperationPhaseMountBindingStatusCommitted
+	case operations.OperationMountBindingHeartbeat:
+		return operations.OperationPhaseMountBindingHeartbeatCommitted
+	case operations.OperationMountBindingRelease:
+		return operations.OperationPhaseMountBindingReleaseCommitted
+	case operations.OperationMountBindingRevoke:
+		return operations.OperationPhaseMountBindingRevokeCommitted
+	default:
+		return ""
+	}
+}
+
 func workerAppBindingInputSummary(namespaceID string) map[string]any {
 	return map[string]any{
 		"namespace_id":        namespaceID,
@@ -2388,6 +2570,7 @@ type fakeWorkerAppStore struct {
 	restorePreviewListCalls        int
 	restorePreviewDiscardListCalls int
 	restoreRunListCalls            int
+	workloadMountBindingListCalls  int
 	auditDelivered                 []string
 	auditFailed                    []workerAppAuditFailedCall
 	auditDeliverErr                error
@@ -2596,6 +2779,7 @@ func (store *fakeWorkerAppStore) ListNamespaceVolumeBindingPutOperationsForRecov
 }
 
 func (store *fakeWorkerAppStore) ListWorkloadMountBindingOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	store.workloadMountBindingListCalls++
 	if deadline, ok := ctx.Deadline(); ok {
 		store.listDeadline = deadline
 	}

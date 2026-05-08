@@ -772,6 +772,45 @@ func NewAuditEventID() string {
 	return fmt.Sprintf("evt_worker_%d_%d", time.Now().UTC().UnixNano(), counter)
 }
 
+func workerCapabilityMatrixExecutionOperationTypes() map[operations.OperationType]bool {
+	return workerRuntimeOperationTypes()
+}
+
+func workerCapabilityMatrixRecoveryOperationTypes() map[operations.OperationType]bool {
+	return workerRuntimeOperationTypes()
+}
+
+func workerCapabilityMatrixUnsupportedTerminalizationOperationTypes() map[operations.OperationType]bool {
+	return workerCapabilityMatrixRecoveryOperationTypes()
+}
+
+func workerRuntimeOperationTypes() map[operations.OperationType]bool {
+	operationTypes := map[operations.OperationType]bool{
+		operations.OperationVolumeEnsure:              true,
+		operations.OperationNamespaceUpsert:           true,
+		operations.OperationNamespaceDisable:          true,
+		operations.OperationNamespaceVolumeBindingPut: true,
+		operations.OperationRepoCreate:                true,
+		operations.OperationRepoArchive:               true,
+		operations.OperationRepoRestoreArchived:       true,
+		operations.OperationRepoDelete:                true,
+		operations.OperationRepoRestoreTombstoned:     true,
+		operations.OperationRepoPurge:                 true,
+		operations.OperationSavePointCreate:           true,
+		operations.OperationRestorePreview:            true,
+		operations.OperationRestorePreviewDiscard:     true,
+		operations.OperationRestoreRun:                true,
+		operations.OperationTemplateCreate:            true,
+		operations.OperationTemplateClone:             true,
+		operations.OperationMountBindingCreate:        true,
+		operations.OperationMountBindingStatusUpdate:  true,
+		operations.OperationMountBindingHeartbeat:     true,
+		operations.OperationMountBindingRelease:       true,
+		operations.OperationMountBindingRevoke:        true,
+	}
+	return operationTypes
+}
+
 func nowFunc(clock func() time.Time) func() time.Time {
 	if clock != nil {
 		return func() time.Time { return clock().UTC() }

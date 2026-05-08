@@ -620,6 +620,53 @@
       "scope": "package"
     },
     {
+      "id": "capability_runtime_parity_unit",
+      "evidence_status": "implemented",
+      "capability_id": "",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/capability",
+        "./internal/api",
+        "./internal/apiapp",
+        "-run",
+        "^Test(CapabilityMatrixV1DecisionRows(MapRouteAndWorkerOperationSurfaces|EvidenceRefsMapRuntimeSurfaces)|CapabilityMatrixAdmissionDisabled(DeniesMatrixOptionalMutationsBeforeQueue|ReplaysExistingOperationBeforeDenial)|InternalAPIShellCreateExport(CapabilityDeniedWhenWebDAVAdmissionDisabled|AdmissionDisabledReplaysExistingOperation)|InternalAPIShellCreateWorkloadMountAdmissionDisabled(ReplaysExistingOperation|RejectsBrandNewBeforeMetadata)|RepoTemplateAdmissionDisabled(ReplaysExistingOperationsBeforeMetadata|RejectsNewOperationsBeforeMetadataAndAudits|ReturnsIdempotencyConflictBeforeCapabilityDenied)|RepoLifecyclePurgeAdmissionDisabledRejectsNewBeforeMetadataAndAudits|InternalRuntimeAdmissionDisabledFlagsMatchCapabilityMatrix)$"
+      ],
+      "anchors": [
+        "internal/capability/matrix.go",
+        "internal/capability/matrix_test.go",
+        "internal/api/shell.go",
+        "internal/api/assembler_test.go",
+        "internal/apiapp/runtime.go",
+        "internal/apiapp/runtime_test.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "claim_id": "CLAIM_CAPABILITY_MATRIX_CONSISTENT",
+      "subclaim_id": "capability_runtime_parity",
+      "acceptance_id": "P2B_CAPABILITY_RUNTIME_PARITY",
+      "risk_id": "F4",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "pass_criteria": {
+        "kind": "coverage_guard",
+        "assertions": [
+          "capability matrix mapping covers api admission evidence and runtime config surfaces; worker execution and recovery are proven by operation_runtime_terminalization_unit",
+          "runtime readiness config derives disabled admission from the capability matrix vocabulary",
+          "actual API request-path tests prove optional disabled create mutations replay existing operations before denial or fail before metadata lookup queueing and audit safely"
+        ]
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
+    },
+    {
       "id": "operation_terminalization_contract_unit",
       "evidence_status": "implemented",
       "capability_id": "operation_recovery",
@@ -658,6 +705,49 @@
           "operation inventory covers every operation type including namespace_disable export_session_reconcile and migration_cutover",
           "side effect replay and terminal decision tables distinguish failed from operator_intervention_required",
           "capability decision rows cover api admission worker execution worker recovery readyz discovery operator inspection and evidence surfaces"
+        ]
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
+    },
+    {
+      "id": "operation_runtime_terminalization_unit",
+      "evidence_status": "implemented",
+      "capability_id": "operation_recovery",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/workerapp",
+        "-run",
+        "^Test(WorkerCapabilityMatrix(ExecutorRegistryMatchesDecisionRows|RecoveryRegistryMatchesDecisionRows|UnsupportedTerminalizationRegistryIncludesDisabledOperations)|RunOnceExportSessionReconcileOnlyRunsWhenExplicitlyEnabled|RunOnceClaimsQueued(VolumeEnsure|NamespaceUpsert|NamespaceDisable)ThroughDefaultRunner|RunOnceClaimsQueuedNamespaceUpsertAndBindingPutThroughDefaultRunner|RunOnceRepoCreate(DisabledScansAndPersistsUnsupportedIntervention|EnabledButJVSUnavailableScansAndPersistsUnsupportedIntervention)|RunOnceWorkloadMountBinding(Create|StatusUpdate|Heartbeat|Release|Revoke)ClaimsThroughMountBindingExecutor|RunOnceRepoLifecycleDisabledScansAndPersistsUnsupportedInterventions|RunOnceRepoPurgeDisabledScansAndPersistsUnsupportedIntervention|RunOnceSavePointCreateDisabledScansAndPersistsUnsupportedIntervention|RunOnceTemplate(Create|Clone)DisabledScansAndPersistsUnsupportedIntervention|RunOnceRestore(PreviewDisabledScansAndPersistsUnsupportedIntervention|PreviewDiscardDisabledScansAndPersistsUnsupportedIntervention|RunDisabledScansAndPersistsUnsupportedIntervention))$"
+      ],
+      "anchors": [
+        "internal/capability/matrix.go",
+        "internal/workerapp/run_once.go",
+        "internal/workerapp/run_once_test.go",
+        "internal/recovery/operation.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": true,
+      "claim_id": "CLAIM_OPERATION_TERMINALIZATION",
+      "subclaim_id": "operation_runtime_terminalization",
+      "acceptance_id": "P2B_OPERATION_RUNTIME_TERMINALIZATION",
+      "risk_id": "F6",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "pass_criteria": {
+        "kind": "coverage_guard",
+        "assertions": [
+          "real RunOnce tests cover supported default worker rows; worker registry coverage is auxiliary",
+          "actual RunOnce recovery tests scan historical queued operations even when capability handlers are disabled runtime is unavailable or workload mount binding operations must be committed by mountbinding executor",
+          "unsupported runtime terminalization persists operator intervention and audit for supported operation recovery rows; export_session_reconcile is covered as a separate worker surface and migration_cutover remains conditional unsupported"
         ]
       },
       "expected_runtime": "fast",

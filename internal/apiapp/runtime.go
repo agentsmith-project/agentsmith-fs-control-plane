@@ -130,6 +130,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 	if cfg.Capabilities.Mount.Available() && len(workloadMountRuntimeSecretRefs) == 0 {
 		return nil, errors.New("AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS is required when workload mount capability is available")
 	}
+	disabledAdmission := apiAdmissionDisabledCapabilities(cfg)
 
 	storeFactory := options.StoreFactory
 	if storeFactory == nil {
@@ -202,13 +203,29 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		Now:                            func() time.Time { return now().UTC() },
 		WebDAVExportPublicBaseURL:      webDAVExportPublicBaseURL,
 		ReadinessProvider:              internalReadinessProvider(cfg, handle.Ping),
-		WebDAVExportAdmissionDisabled:  !cfg.Capabilities.WebDAV.Available(),
-		WorkloadMountAdmissionDisabled: !cfg.Capabilities.Mount.Available(),
-		RepoTemplateAdmissionDisabled:  !cfg.Capabilities.RepoTemplate.Available(),
-		RepoPurgeAdmissionDisabled:     !cfg.Capabilities.RepoPurge.Available(),
+		WebDAVExportAdmissionDisabled:  apiAdmissionCapabilityDisabled(disabledAdmission, capability.WebDAVExport),
+		WorkloadMountAdmissionDisabled: apiAdmissionCapabilityDisabled(disabledAdmission, capability.WorkloadMountBinding),
+		RepoTemplateAdmissionDisabled:  apiAdmissionCapabilityDisabled(disabledAdmission, capability.RepoTemplate),
+		RepoPurgeAdmissionDisabled:     apiAdmissionCapabilityDisabled(disabledAdmission, capability.RepoPurge),
 	})
 
 	return &Runtime{Handler: handler, close: handle.Close}, nil
+}
+
+func apiAdmissionDisabledCapabilities(cfg config.Config) map[capability.ID]bool {
+	return map[capability.ID]bool{
+		capability.WebDAVExport:         !cfg.Capabilities.WebDAV.Available(),
+		capability.WorkloadMountBinding: !cfg.Capabilities.Mount.Available(),
+		capability.RepoTemplate:         !cfg.Capabilities.RepoTemplate.Available(),
+		capability.RepoPurge:            !cfg.Capabilities.RepoPurge.Available(),
+	}
+}
+
+func apiAdmissionCapabilityDisabled(disabled map[capability.ID]bool, capabilityID capability.ID) bool {
+	if disabled == nil {
+		return false
+	}
+	return disabled[capabilityID]
 }
 
 type volumeRootBackendHealthProbe struct {
