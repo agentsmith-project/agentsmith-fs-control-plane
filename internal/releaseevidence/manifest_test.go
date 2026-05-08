@@ -297,27 +297,21 @@ func TestValidateManifestChecksCapabilityClassification(t *testing.T) {
 		{
 			name: "default ga capability cannot be optional gated",
 			edit: func(body string) string {
-				body = strings.Replace(body, `"capability_id":"repo_template"`, `"capability_id":"storage"`, 1)
-				body = strings.Replace(body, `"default_ga_required":false`, `"default_ga_required":true`, 1)
-				return body
+				return appendReleaseEvidenceItem(body, `"id":"bad_storage_optional","capability_id":"storage","evidence_type":"unit","required":true,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":true,"default_ga_required":true`)
 			},
 			want: "optional_gated",
 		},
 		{
 			name: "default ga capability must be default required",
 			edit: func(body string) string {
-				body = strings.Replace(body, `"capability_id":"repo_template"`, `"capability_id":"jvs"`, 1)
-				body = strings.Replace(body, `"optional_gated":true`, `"optional_gated":false`, 1)
-				return body
+				return appendReleaseEvidenceItem(body, `"id":"bad_jvs_not_default","capability_id":"jvs","evidence_type":"unit","required":true,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":false,"default_ga_required":false`)
 			},
 			want: "default_ga_required",
 		},
 		{
 			name: "optional capability cannot be default required",
 			edit: func(body string) string {
-				body = strings.Replace(body, `"capability_id":"repo_template"`, `"capability_id":"workload_mount"`, 1)
-				body = strings.Replace(body, `"default_ga_required":false`, `"default_ga_required":true`, 1)
-				return body
+				return appendReleaseEvidenceItem(body, `"id":"bad_workload_default","capability_id":"workload_mount","evidence_type":"unit","required":true,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":true,"default_ga_required":true`)
 			},
 			want: "default_ga_required",
 		},
@@ -371,7 +365,7 @@ func TestCurrentRepoManifestContainsOptionalCapabilityDisabledAdmissionEvidence(
 		t.Fatalf("current manifest findings: %+v", findings)
 	}
 
-	for _, capabilityID := range []string{"repo_template", "repo_purge"} {
+	for _, capabilityID := range []string{"workload_mount", "repo_template", "repo_purge"} {
 		item, ok := manifest.OptionalDisabledAdmissionEvidence(capabilityID)
 		if !ok {
 			t.Fatalf("manifest missing optional-gated disabled admission evidence for %s", capabilityID)
@@ -379,6 +373,59 @@ func TestCurrentRepoManifestContainsOptionalCapabilityDisabledAdmissionEvidence(
 		if !item.Required || item.EvidenceType != "unit" || item.DocOnlyAllowed {
 			t.Fatalf("%s evidence = %+v, want required unit evidence with doc_only_allowed=false", capabilityID, item)
 		}
+	}
+	for _, capabilityID := range []string{"repo_template", "repo_purge"} {
+		item, ok := manifest.DisabledWorkerRecoveryEvidence(capabilityID)
+		if !ok {
+			t.Fatalf("manifest missing disabled worker recovery evidence for %s", capabilityID)
+		}
+		if !item.Required || item.EvidenceType != "unit" || item.DocOnlyAllowed {
+			t.Fatalf("%s worker recovery evidence = %+v, want required unit evidence with doc_only_allowed=false", capabilityID, item)
+		}
+	}
+}
+
+func TestValidateManifestRequiresExactReleaseEvidenceItems(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(string) string
+		want string
+	}{
+		{
+			name: "missing exact webdav admission id",
+			edit: func(body string) string {
+				return strings.Replace(body, `"id":"webdav_export_disabled_admission_unit"`, `"id":"webdav_export_disabled_admission_typo"`, 1)
+			},
+			want: "webdav_export_disabled_admission_unit",
+		},
+		{
+			name: "missing exact template create recovery id",
+			edit: func(body string) string {
+				return strings.Replace(body, `"id":"repo_template_create_disabled_worker_recovery_unit"`, `"id":"repo_template_disabled_worker_recovery_unit"`, 1)
+			},
+			want: "repo_template_create_disabled_worker_recovery_unit",
+		},
+		{
+			name: "wrong default ga metadata",
+			edit: func(body string) string {
+				return strings.Replace(body, `"default_ga_required":true`, `"default_ga_required":false`, 1)
+			},
+			want: "webdav_export_disabled_admission_unit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.edit(validReleaseEvidenceManifest()))
+
+			findings, err := VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.want)
+		})
 	}
 }
 
@@ -411,7 +458,51 @@ func validReleaseEvidenceManifest() string {
   "release_gate":"scripts/verify-ga-release.sh",
   "items":[
     {
+      "id":"webdav_export_disabled_admission_unit",
+      "capability_id":"webdav_export",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
+      "id":"workload_mount_disabled_admission_unit",
+      "capability_id":"workload_mount",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
       "id":"repo_template_disabled_admission_unit",
+      "capability_id":"repo_template",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
+      "id":"repo_template_create_disabled_worker_recovery_unit",
+      "capability_id":"repo_template",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
+      "id":"repo_template_clone_disabled_worker_recovery_unit",
       "capability_id":"repo_template",
       "evidence_type":"unit",
       "required":true,
@@ -431,6 +522,50 @@ func validReleaseEvidenceManifest() string {
       "doc_only_allowed":false,
       "optional_gated":true,
       "default_ga_required":false
+    },
+    {
+      "id":"repo_purge_disabled_worker_recovery_unit",
+      "capability_id":"repo_purge",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
+      "id":"default_ga_capability_classification_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
+      "id":"capability_admission_operation_coverage_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
+      "id":"release_script_evidence_manifest_guard",
+      "capability_id":"",
+      "evidence_type":"contract",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
     }
   ]
 }`
@@ -445,6 +580,10 @@ func writeReleaseEvidenceFile(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func appendReleaseEvidenceItem(body, item string) string {
+	return strings.Replace(body, "\n  ]\n}", ",\n    {"+item+"}\n  ]\n}", 1)
 }
 
 func assertReleaseEvidenceFindingContains(t *testing.T, findings []Finding, needle string) {

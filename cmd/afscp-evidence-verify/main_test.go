@@ -54,11 +54,55 @@ func evidenceCLIManifest(command, anchor string) string {
   "release_gate":"scripts/verify-ga-release.sh",
   "items":[
     {
+      "id":"webdav_export_disabled_admission_unit",
+      "capability_id":"webdav_export",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
+      "id":"workload_mount_disabled_admission_unit",
+      "capability_id":"workload_mount",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
       "id":"repo_template_disabled_admission_unit",
       "capability_id":"repo_template",
       "evidence_type":"unit",
       "required":true,
       "command":` + command + `,
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
+      "id":"repo_template_create_disabled_worker_recovery_unit",
+      "capability_id":"repo_template",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
+      "id":"repo_template_clone_disabled_worker_recovery_unit",
+      "capability_id":"repo_template",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
       "anchors":["` + anchor + `"],
       "doc_only_allowed":false,
       "optional_gated":true,
@@ -73,6 +117,50 @@ func evidenceCLIManifest(command, anchor string) string {
       "anchors":["` + anchor + `"],
       "doc_only_allowed":false,
       "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
+      "id":"repo_purge_disabled_worker_recovery_unit",
+      "capability_id":"repo_purge",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
+      "id":"default_ga_capability_classification_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
+      "id":"capability_admission_operation_coverage_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
+      "id":"release_script_evidence_manifest_guard",
+      "capability_id":"",
+      "evidence_type":"contract",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
       "default_ga_required":false
     }
   ]

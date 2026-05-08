@@ -92,6 +92,20 @@ func (manifest Manifest) OptionalDisabledAdmissionEvidence(capabilityID string) 
 	return Item{}, false
 }
 
+func (manifest Manifest) DisabledWorkerRecoveryEvidence(capabilityID string) (Item, bool) {
+	for _, item := range manifest.Items {
+		if item.CapabilityID == capabilityID &&
+			item.Required &&
+			item.EvidenceType == "unit" &&
+			!item.DocOnlyAllowed &&
+			item.OptionalGated &&
+			strings.Contains(item.ID, "disabled_worker_recovery") {
+			return item, true
+		}
+	}
+	return Item{}, false
+}
+
 type rawManifest struct {
 	SchemaVersion *string   `json:"schema_version"`
 	ReleaseGate   *string   `json:"release_gate"`
@@ -205,12 +219,56 @@ func validateManifest(manifest Manifest, repoRoot string) []Finding {
 	for _, item := range manifest.Items {
 		findings = append(findings, validateItem(item, repoRoot)...)
 	}
-	for _, capabilityID := range []string{"repo_template", "repo_purge"} {
-		if _, ok := manifest.OptionalDisabledAdmissionEvidence(capabilityID); !ok {
-			findings = append(findings, Finding{Code: "manifest.optional_disabled_admission_missing", Message: fmt.Sprintf("missing required unit disabled_admission evidence for %s", capabilityID)})
+	findings = append(findings, validateRequiredEvidenceItems(manifest)...)
+	return findings
+}
+
+type requiredEvidenceSpec struct {
+	ID                string
+	CapabilityID      string
+	EvidenceType      string
+	Required          bool
+	DocOnlyAllowed    bool
+	OptionalGated     bool
+	DefaultGARequired bool
+}
+
+func validateRequiredEvidenceItems(manifest Manifest) []Finding {
+	itemsByID := make(map[string]Item, len(manifest.Items))
+	for _, item := range manifest.Items {
+		itemsByID[item.ID] = item
+	}
+
+	var findings []Finding
+	for _, spec := range requiredEvidenceSpecs {
+		item, ok := itemsByID[spec.ID]
+		if !ok {
+			findings = append(findings, Finding{Code: "manifest.required_evidence_missing", Message: fmt.Sprintf("missing exact required evidence item %s", spec.ID)})
+			continue
+		}
+		if item.CapabilityID != spec.CapabilityID ||
+			item.EvidenceType != spec.EvidenceType ||
+			item.Required != spec.Required ||
+			item.DocOnlyAllowed != spec.DocOnlyAllowed ||
+			item.OptionalGated != spec.OptionalGated ||
+			item.DefaultGARequired != spec.DefaultGARequired {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.required_evidence_metadata_invalid", Message: fmt.Sprintf("required evidence item %s metadata does not match release contract", spec.ID)})
 		}
 	}
 	return findings
+}
+
+var requiredEvidenceSpecs = []requiredEvidenceSpec{
+	{ID: "webdav_export_disabled_admission_unit", CapabilityID: "webdav_export", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
+	{ID: "workload_mount_disabled_admission_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "repo_template_disabled_admission_unit", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "repo_purge_disabled_admission_unit", CapabilityID: "repo_purge", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "repo_template_create_disabled_worker_recovery_unit", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "repo_template_clone_disabled_worker_recovery_unit", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "repo_purge_disabled_worker_recovery_unit", CapabilityID: "repo_purge", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "default_ga_capability_classification_unit", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
+	{ID: "capability_admission_operation_coverage_unit", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
+	{ID: "release_script_evidence_manifest_guard", CapabilityID: "", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
 }
 
 func validateItem(item Item, repoRoot string) []Finding {

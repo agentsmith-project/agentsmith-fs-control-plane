@@ -43,3 +43,60 @@ func TestDefaultGARequirementClassifiesCoreAndOptionalCapabilities(t *testing.T)
 		}
 	}
 }
+
+func TestCapabilityAdmissionOperationCoverageContract(t *testing.T) {
+	tests := []struct {
+		capabilityID      ID
+		wantDefaultGA     bool
+		wantAdmissionOps  []operations.OperationType
+		wantOptionalGated bool
+	}{
+		{
+			capabilityID:     WebDAVExport,
+			wantDefaultGA:    true,
+			wantAdmissionOps: []operations.OperationType{operations.OperationExportCreate},
+		},
+		{
+			capabilityID:      WorkloadMount,
+			wantAdmissionOps:  []operations.OperationType{operations.OperationMountBindingCreate},
+			wantOptionalGated: true,
+		},
+		{
+			capabilityID:      RepoTemplate,
+			wantAdmissionOps:  []operations.OperationType{operations.OperationTemplateCreate, operations.OperationTemplateClone},
+			wantOptionalGated: true,
+		},
+		{
+			capabilityID:      RepoPurge,
+			wantAdmissionOps:  []operations.OperationType{operations.OperationRepoPurge},
+			wantOptionalGated: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.capabilityID), func(t *testing.T) {
+			got := AdmissionOperationTypesForCapability(tt.capabilityID)
+			if !operationTypeSlicesEqual(got, tt.wantAdmissionOps) {
+				t.Fatalf("AdmissionOperationTypesForCapability(%s) = %#v, want %#v", tt.capabilityID, got, tt.wantAdmissionOps)
+			}
+			if gotDefaultGA := RequiredForDefaultGA(tt.capabilityID); gotDefaultGA != tt.wantDefaultGA {
+				t.Fatalf("RequiredForDefaultGA(%s) = %v, want %v", tt.capabilityID, gotDefaultGA, tt.wantDefaultGA)
+			}
+			if tt.wantOptionalGated && RequiredForDefaultGA(tt.capabilityID) {
+				t.Fatalf("%s optional gated contract cannot be default GA required", tt.capabilityID)
+			}
+		})
+	}
+}
+
+func operationTypeSlicesEqual(got, want []operations.OperationType) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
+}

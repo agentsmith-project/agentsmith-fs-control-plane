@@ -3,6 +3,48 @@
   "release_gate": "scripts/verify-ga-release.sh",
   "items": [
     {
+      "id": "webdav_export_disabled_admission_unit",
+      "capability_id": "webdav_export",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/api",
+        "-run",
+        "^TestCreateExportAdmissionDisabledRejectsNewBeforeMetadataAndAudits$"
+      ],
+      "anchors": [
+        "internal/api/export_handler_test.go",
+        "internal/api/export_handler.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": true
+    },
+    {
+      "id": "workload_mount_disabled_admission_unit",
+      "capability_id": "workload_mount",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/api",
+        "-run",
+        "^TestCreateWorkloadMountBindingAdmissionDisabledRejectsNewBeforeMetadataAndAudits$"
+      ],
+      "anchors": [
+        "internal/api/workload_mount_handler_test.go",
+        "internal/api/workload_mount_handler.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": true,
+      "default_ga_required": false
+    },
+    {
       "id": "repo_template_disabled_admission_unit",
       "capability_id": "repo_template",
       "evidence_type": "unit",
@@ -13,7 +55,7 @@
         "-count=1",
         "./internal/api",
         "-run",
-        "TestRepoTemplateAdmissionDisabledRejectsNewOperationsBeforeMetadataAndAudits$"
+        "^TestRepoTemplateAdmissionDisabledRejectsNewOperationsBeforeMetadataAndAudits$"
       ],
       "anchors": [
         "internal/api/repo_template_handler_test.go",
@@ -34,11 +76,74 @@
         "-count=1",
         "./internal/api",
         "-run",
-        "TestRepoLifecyclePurgeAdmissionDisabledRejectsNewBeforeMetadataAndAudits$"
+        "^TestRepoLifecyclePurgeAdmissionDisabledRejectsNewBeforeMetadataAndAudits$"
       ],
       "anchors": [
         "internal/api/repo_lifecycle_handler_test.go",
         "internal/api/repo_lifecycle_handler.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": true,
+      "default_ga_required": false
+    },
+    {
+      "id": "repo_template_create_disabled_worker_recovery_unit",
+      "capability_id": "repo_template",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/workerapp",
+        "-run",
+        "^TestRunOnceTemplateCreateDisabledScansAndPersistsUnsupportedIntervention$"
+      ],
+      "anchors": [
+        "internal/workerapp/run_once_test.go",
+        "internal/workerapp/run_once.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": true,
+      "default_ga_required": false
+    },
+    {
+      "id": "repo_template_clone_disabled_worker_recovery_unit",
+      "capability_id": "repo_template",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/workerapp",
+        "-run",
+        "^TestRunOnceTemplateCloneDisabledScansAndPersistsUnsupportedIntervention$"
+      ],
+      "anchors": [
+        "internal/workerapp/run_once_test.go",
+        "internal/workerapp/run_once.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": true,
+      "default_ga_required": false
+    },
+    {
+      "id": "repo_purge_disabled_worker_recovery_unit",
+      "capability_id": "repo_purge",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/workerapp",
+        "-run",
+        "^TestRunOnceRepoPurgeDisabledScansAndPersistsUnsupportedIntervention$"
+      ],
+      "anchors": [
+        "internal/workerapp/run_once_test.go",
+        "internal/workerapp/run_once.go"
       ],
       "doc_only_allowed": false,
       "optional_gated": true,
@@ -55,7 +160,28 @@
         "-count=1",
         "./internal/capability",
         "-run",
-        "TestDefaultGARequirementClassifiesCoreAndOptionalCapabilities$"
+        "^TestDefaultGARequirementClassifiesCoreAndOptionalCapabilities$"
+      ],
+      "anchors": [
+        "internal/capability/matrix.go",
+        "internal/capability/matrix_test.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": false
+    },
+    {
+      "id": "capability_admission_operation_coverage_unit",
+      "capability_id": "",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/capability",
+        "-run",
+        "^TestCapabilityAdmissionOperationCoverageContract$"
       ],
       "anchors": [
         "internal/capability/matrix.go",
@@ -76,7 +202,7 @@
         "-count=1",
         "./internal/contractcheck",
         "-run",
-        "TestCurrentRepoGAVerificationScriptsAreAuthoritative$"
+        "^TestCurrentRepoGAVerificationScriptsAreAuthoritative$"
       ],
       "anchors": [
         "scripts/verify-ga-release.sh",

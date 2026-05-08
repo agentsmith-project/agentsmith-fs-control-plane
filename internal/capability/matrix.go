@@ -26,6 +26,16 @@ func AdmissionCapabilityForOperationType(operationType operations.OperationType)
 	return id, ok
 }
 
+func AdmissionOperationTypesForCapability(id ID) []operations.OperationType {
+	var operationTypes []operations.OperationType
+	for _, operationType := range operations.OperationTypes() {
+		if capabilityID, ok := admissionCapabilitiesByOperationType[operationType]; ok && capabilityID == id {
+			operationTypes = append(operationTypes, operationType)
+		}
+	}
+	return operationTypes
+}
+
 func RequiredForDefaultGA(id ID) bool {
 	switch id {
 	case Storage, JVS, WebDAVExport:
