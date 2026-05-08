@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ type ExportHandlerConfig struct {
 	VolumeReader      VolumeReader
 	FenceReader       RepoFenceReader
 	Store             ExportStore
+	IntakeLookupStore OperationIdempotencyLookupStore
 	PrincipalResolver PrincipalResolver
 	AllowedCallers    AllowedCallerPolicy
 	OperationID       OperationIDGenerator
@@ -43,12 +45,14 @@ type ExportHandlerConfig struct {
 	EventID           func() string
 	Now               func() time.Time
 	PublicBaseURL     string
+	AdmissionDisabled bool
 	AuditSink         audit.Sink
 }
 
 type createExportRequest struct {
-	Mode       string `json:"mode"`
-	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+	Mode          string
+	TTLSeconds    int
+	TTLSecondsSet bool
 }
 
 type exportCanonicalRequest struct {
@@ -59,21 +63,29 @@ type exportCanonicalRequest struct {
 
 func ExportHandler(config ExportHandlerConfig) http.Handler {
 	routes := exportRoutes()
+	lookup := config.IntakeLookupStore
+	if lookup == nil {
+		if typed, ok := config.Store.(OperationIdempotencyLookupStore); ok {
+			lookup = typed
+		}
+	}
 	leaf := exportLeafHandler{
-		routes:          routes,
-		repoReader:      config.RepoReader,
-		namespaceReader: config.NamespaceReader,
-		bindingReader:   config.BindingReader,
-		volumeReader:    config.VolumeReader,
-		fenceReader:     config.FenceReader,
-		store:           config.Store,
-		operationID:     config.OperationID,
-		exportID:        config.ExportID,
-		password:        config.Password,
-		eventID:         config.EventID,
-		now:             config.Now,
-		publicBaseURL:   config.PublicBaseURL,
-		sink:            config.AuditSink,
+		routes:            routes,
+		repoReader:        config.RepoReader,
+		namespaceReader:   config.NamespaceReader,
+		bindingReader:     config.BindingReader,
+		volumeReader:      config.VolumeReader,
+		fenceReader:       config.FenceReader,
+		store:             config.Store,
+		lookupStore:       lookup,
+		operationID:       config.OperationID,
+		exportID:          config.ExportID,
+		password:          config.Password,
+		eventID:           config.EventID,
+		now:               config.Now,
+		publicBaseURL:     config.PublicBaseURL,
+		admissionDisabled: config.AdmissionDisabled,
+		sink:              config.AuditSink,
 	}
 	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, exportRouteResolver{routes: routes}, config.AllowedCallers, config.AuditSink)
 }
@@ -108,20 +120,22 @@ func (resolver exportRouteResolver) ResolveRouteClass(r *http.Request) (RouteMet
 }
 
 type exportLeafHandler struct {
-	routes          []RouteMetadata
-	repoReader      RepoReader
-	namespaceReader NamespaceReader
-	bindingReader   NamespaceVolumeBindingReader
-	volumeReader    VolumeReader
-	fenceReader     RepoFenceReader
-	store           ExportStore
-	operationID     OperationIDGenerator
-	exportID        func() string
-	password        func() string
-	eventID         func() string
-	now             func() time.Time
-	publicBaseURL   string
-	sink            audit.Sink
+	routes            []RouteMetadata
+	repoReader        RepoReader
+	namespaceReader   NamespaceReader
+	bindingReader     NamespaceVolumeBindingReader
+	volumeReader      VolumeReader
+	fenceReader       RepoFenceReader
+	store             ExportStore
+	lookupStore       OperationIdempotencyLookupStore
+	operationID       OperationIDGenerator
+	exportID          func() string
+	password          func() string
+	eventID           func() string
+	now               func() time.Time
+	publicBaseURL     string
+	admissionDisabled bool
+	sink              audit.Sink
 }
 
 func (handler exportLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +162,7 @@ func (handler exportLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 }
 
 func (handler exportLeafHandler) create(w http.ResponseWriter, r *http.Request, route RouteMetadata, params map[string]string, requestContext auth.RequestContext) {
-	if handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.volumeReader == nil || handler.fenceReader == nil || handler.store == nil {
+	if handler.store == nil {
 		writeExportError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return
 	}
@@ -169,6 +183,21 @@ func (handler exportLeafHandler) create(w http.ResponseWriter, r *http.Request, 
 	mode, ok := parseExportMode(body.Mode)
 	if !ok {
 		writeValidationErrorWithAudit(w, r, route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid export mode", []string{"invalid_export_mode"}, handler.sink)
+		return
+	}
+	if body.TTLSecondsSet && body.TTLSeconds < exportaccess.MinTTLSeconds {
+		writeValidationErrorWithAudit(w, r, route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid export ttl", []string{"invalid_ttl_seconds"}, handler.sink)
+		return
+	}
+	if handler.writeExistingIdempotentExport(w, r, route, requestContext, namespaceID, repoID, body, mode) {
+		return
+	}
+	if handler.admissionDisabled {
+		writeWebDAVExportAdmissionDisabled(w, r, route, requestContext, handler.sink)
+		return
+	}
+	if handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.volumeReader == nil || handler.fenceReader == nil {
+		writeExportError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return
 	}
 	repo, namespace, binding, volume, held, ok := handler.loadCreateMetadata(w, r, route, requestContext, namespaceID, repoID)
@@ -248,6 +277,121 @@ func (handler exportLeafHandler) create(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	_ = writeJSON(w, http.StatusAccepted, envelope)
+}
+
+func (handler exportLeafHandler) writeExistingIdempotentExport(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, namespaceID, repoID string, body createExportRequest, mode sessionstate.AccessMode) bool {
+	if handler.lookupStore == nil {
+		return false
+	}
+	typ, ok := operations.OperationTypeForRouteOperationID(route.OperationID)
+	if !ok {
+		writeExportError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+		return true
+	}
+	scope := operations.NewIdempotencyScope(requestContext.CallerService, namespaceID, typ, requestContext.IdempotencyKey)
+	record, err := handler.lookupStore.GetOperationByIdempotencyScope(r.Context(), scope)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false
+		}
+		writeExportError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return true
+	}
+	canonical, ok := exportReplayCanonicalRequest(repoID, body, mode, record)
+	if !ok {
+		writeOperationIntakeHTTPError(w, r, &OperationIntakeError{Code: CodeIdempotencyConflict, Status: http.StatusConflict, Retryable: false, Message: "idempotency key conflicts with a different request"})
+		return true
+	}
+	hash, err := operations.HashRequest(canonical)
+	if err != nil {
+		writeExportError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+		return true
+	}
+	if record.Type != typ || record.RequestHash != hash {
+		writeExportReplayConflict(w, r)
+		return true
+	}
+	if !validExportReplayRecord(record, namespaceID, repoID) {
+		writeExportReplayConflict(w, r)
+		return true
+	}
+	session, err := handler.store.GetExportSession(r.Context(), record.ExportID)
+	if err != nil {
+		handler.writeStoreError(w, r, err)
+		return true
+	}
+	if !validExportReplaySession(session, namespaceID, repoID, record.ExportID, mode) {
+		writeExportReplayConflict(w, r)
+		return true
+	}
+	envelope := operationEnvelopeFromRecord(record)
+	envelope.Result = map[string]any{"export": session}
+	_ = writeJSON(w, http.StatusAccepted, envelope)
+	return true
+}
+
+func exportReplayCanonicalRequest(repoID string, body createExportRequest, mode sessionstate.AccessMode, record operations.OperationRecord) (exportCanonicalRequest, bool) {
+	ttlSeconds := body.TTLSeconds
+	if !body.TTLSecondsSet {
+		var ok bool
+		ttlSeconds, ok = exportOperationTTLSeconds(record.InputSummary)
+		if !ok {
+			return exportCanonicalRequest{}, false
+		}
+	}
+	return exportCanonicalRequest{RepoID: repoID, Mode: string(mode), TTLSeconds: ttlSeconds}, true
+}
+
+func validExportReplayRecord(record operations.OperationRecord, namespaceID, repoID string) bool {
+	return record.NamespaceID == namespaceID &&
+		record.RepoID == repoID &&
+		record.ExportID != "" &&
+		record.Resource.Type == "export" &&
+		record.Resource.ID == record.ExportID
+}
+
+func validExportReplaySession(session exportaccess.Session, namespaceID, repoID, exportID string, mode sessionstate.AccessMode) bool {
+	return session.ID == exportID &&
+		session.NamespaceID == namespaceID &&
+		session.RepoID == repoID &&
+		session.Protocol == exportaccess.ProtocolWebDAV &&
+		session.Mode == mode
+}
+
+func writeExportReplayConflict(w http.ResponseWriter, r *http.Request) {
+	writeOperationIntakeHTTPError(w, r, &OperationIntakeError{Code: CodeIdempotencyConflict, Status: http.StatusConflict, Retryable: false, Message: "idempotency key conflicts with a different request"})
+}
+
+func exportOperationTTLSeconds(summary map[string]any) (int, bool) {
+	if summary == nil {
+		return 0, false
+	}
+	value, ok := summary["ttl_seconds"]
+	if !ok {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed, typed > 0
+	case int64:
+		if typed <= 0 || int64(int(typed)) != typed {
+			return 0, false
+		}
+		return int(typed), true
+	case float64:
+		if typed <= 0 || typed != float64(int(typed)) {
+			return 0, false
+		}
+		return int(typed), true
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err != nil || parsed <= 0 {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
 }
 
 func (handler exportLeafHandler) get(w http.ResponseWriter, r *http.Request, route RouteMetadata, params map[string]string, requestContext auth.RequestContext) {
@@ -487,11 +631,18 @@ func (handler exportLeafHandler) exportURL(exportID string) string {
 }
 
 func decodeCreateExportRequest(r *http.Request) (createExportRequest, error) {
-	var body createExportRequest
-	if err := decodeStrictJSON(r, &body); err != nil {
-		return body, err
+	var wire struct {
+		Mode       string `json:"mode"`
+		TTLSeconds *int   `json:"ttl_seconds,omitempty"`
 	}
-	body.Mode = strings.TrimSpace(body.Mode)
+	if err := decodeStrictJSON(r, &wire); err != nil {
+		return createExportRequest{}, err
+	}
+	body := createExportRequest{Mode: strings.TrimSpace(wire.Mode)}
+	if wire.TTLSeconds != nil {
+		body.TTLSeconds = *wire.TTLSeconds
+		body.TTLSecondsSet = true
+	}
 	return body, nil
 }
 
@@ -547,6 +698,33 @@ func writeExportMetadataError(w http.ResponseWriter, r *http.Request, route Rout
 		return
 	}
 	writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeStorageUnavailable, http.StatusServiceUnavailable, true, "durable metadata store is unavailable", []string{"export_metadata_unavailable"}, sink)
+}
+
+func writeWebDAVExportAdmissionDisabled(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, sink audit.Sink) {
+	message := "webdav export create admission is disabled"
+	validationErrors := []string{"webdav_export_admission_disabled"}
+	var operationID *string
+	if route.OperationID != "" {
+		operationID = &route.OperationID
+	}
+	envelope := NewErrorEnvelope(
+		CodeCapabilityDenied,
+		message,
+		false,
+		CorrelationIDFromRequest(r),
+		operationID,
+		map[string]any{"validation_errors": validationErrors},
+	)
+	_ = WriteErrorEnvelope(w, http.StatusForbidden, envelope)
+	emitDeniedAuditEvent(r.Context(), sink, r, deniedAuditEvent{
+		Type:             audit.EventTypeCapabilityDenied,
+		Route:            route,
+		Status:           http.StatusForbidden,
+		Code:             CodeCapabilityDenied,
+		Reason:           message,
+		ValidationErrors: validationErrors,
+		RequestContext:   requestContext,
+	})
 }
 
 func writeExportError(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, message string, retryable bool) {

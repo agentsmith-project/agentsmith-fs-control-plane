@@ -14,9 +14,11 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
 )
 
@@ -205,13 +207,16 @@ func TestInternalAPIShellCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testin
 func TestInternalAPIShellCreateExportCapabilityDeniedWhenWebDAVAdmissionDisabled(t *testing.T) {
 	meta := exportMetaFixture()
 	store := &fakeExportStore{}
+	sink := &fakeAuditSink{}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		AuditSink:                     sink,
 		PrincipalResolver:             namespaceBindingPrincipalResolver(),
 		NamespaceBindingReader:        meta.bindingReader,
 		NamespaceReader:               meta.namespaceReader,
 		RepoReader:                    meta.repoReader,
 		VolumeReader:                  meta.volumeReader,
-		RepoFenceReader:               &fakeRepoFenceReader{fences: meta.fences},
+		RepoFenceReader:               fenceReader,
 		ExportStore:                   store,
 		GenerateOperationID:           func() string { return "op_export_shell" },
 		Now:                           fixedNamespaceNow,
@@ -229,8 +234,109 @@ func TestInternalAPIShellCreateExportCapabilityDeniedWhenWebDAVAdmissionDisabled
 	if env.Error.Code != CodeCapabilityDenied {
 		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeCapabilityDenied)
 	}
-	if store.createCalls != 0 {
-		t.Fatalf("create calls = %d, want denied before durable export create", store.createCalls)
+	if store.lookupCalls != 1 || store.createCalls != 0 || store.getCalls != 0 {
+		t.Fatalf("lookup/create/get calls = %d/%d/%d, want 1/0/0", store.lookupCalls, store.createCalls, store.getCalls)
+	}
+	if meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceReader.calls != 0 || meta.volumeReader.calls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/volume/fence = %d/%d/%d/%d, want none", meta.repoReader.getInNamespaceCalls, meta.namespaceReader.calls, meta.volumeReader.calls, fenceReader.calls)
+	}
+	if meta.bindingReader.calls != 1 {
+		t.Fatalf("binding reader calls = %d, want auth-only read", meta.bindingReader.calls)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied || sink.events[0].Reason != "webdav export create admission is disabled" {
+		t.Fatalf("audit events = %#v, want one denied admission audit", sink.events)
+	}
+	assertWebDAVExportAdmissionDisabledAudit(t, sink.events[0])
+}
+
+func TestInternalAPIShellCreateExportAdmissionDisabledReplaysExistingOperation(t *testing.T) {
+	hash, err := operations.HashRequest(exportCanonicalRequest{RepoID: "repo_123", Mode: string(sessionstate.AccessModeReadOnly), TTLSeconds: 120})
+	if err != nil {
+		t.Fatalf("hash export request: %v", err)
+	}
+	meta := exportMetaFixture()
+	store := &fakeExportStore{lookupRecord: existingExportOperationRecord("op_existing_export_shell", hash, map[string]any{"ttl_seconds": 120}), session: func() exportaccess.Session {
+		session := exportSessionFixture(sessionstate.ExportStatusActive)
+		session.Mode = sessionstate.AccessModeReadOnly
+		return session
+	}()}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:             namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:        meta.bindingReader,
+		NamespaceReader:               meta.namespaceReader,
+		RepoReader:                    meta.repoReader,
+		VolumeReader:                  meta.volumeReader,
+		RepoFenceReader:               fenceReader,
+		ExportStore:                   store,
+		GenerateOperationID:           func() string { return "op_export_shell" },
+		Now:                           fixedNamespaceNow,
+		WebDAVExportAdmissionDisabled: true,
+		WebDAVExportPublicBaseURL:     "https://files.example.test",
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202 existing operation", rec.Code, rec.Body.String())
+	}
+	envelope := decodeOperationEnvelope(t, rec.Body.Bytes())
+	if envelope.OperationID != "op_existing_export_shell" {
+		t.Fatalf("operation id = %q, want existing operation", envelope.OperationID)
+	}
+	if _, ok := envelope.Result["access"]; ok {
+		t.Fatalf("replay returned access secret: %#v", envelope.Result)
+	}
+	if store.lookupCalls != 1 || store.createCalls != 0 || store.getCalls != 1 {
+		t.Fatalf("lookup/create/get calls = %d/%d/%d, want 1/0/1", store.lookupCalls, store.createCalls, store.getCalls)
+	}
+	if meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceReader.calls != 0 || meta.volumeReader.calls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/volume/fence = %d/%d/%d/%d, want none", meta.repoReader.getInNamespaceCalls, meta.namespaceReader.calls, meta.volumeReader.calls, fenceReader.calls)
+	}
+	if meta.bindingReader.calls != 1 {
+		t.Fatalf("binding reader calls = %d, want auth-only read", meta.bindingReader.calls)
+	}
+	body := strings.ToLower(rec.Body.String())
+	for _, forbidden := range []string{"password", "export-password-once", "credential_hash", "credential_salt", "verifier"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("replay response leaked %q: %s", forbidden, rec.Body.String())
+		}
+	}
+}
+
+func TestInternalAPIShellCreateExportAdmissionDisabledWithoutLookupStoreFailsClosed(t *testing.T) {
+	meta := exportMetaFixture()
+	store := &fakeNoLookupExportStore{}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:             namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:        meta.bindingReader,
+		NamespaceReader:               meta.namespaceReader,
+		RepoReader:                    meta.repoReader,
+		VolumeReader:                  meta.volumeReader,
+		RepoFenceReader:               fenceReader,
+		ExportStore:                   store,
+		GenerateOperationID:           func() string { return "op_export_shell" },
+		Now:                           fixedNamespaceNow,
+		WebDAVExportAdmissionDisabled: true,
+		WebDAVExportPublicBaseURL:     "https://files.example.test",
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403 fail-closed fallback", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error = %#v, want capability denied", env.Error)
+	}
+	if store.createCalls != 0 || store.getCalls != 0 {
+		t.Fatalf("create/get calls = %d/%d, want none", store.createCalls, store.getCalls)
+	}
+	if meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceReader.calls != 0 || meta.bindingReader.calls != 0 || meta.volumeReader.calls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", meta.repoReader.getInNamespaceCalls, meta.namespaceReader.calls, meta.bindingReader.calls, meta.volumeReader.calls, fenceReader.calls)
 	}
 }
 

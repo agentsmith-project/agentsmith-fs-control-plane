@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
@@ -78,6 +79,386 @@ func TestCreateExportIdempotentReplayReturnsRedactedSessionWithoutPassword(t *te
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("replay response leaked %q: %s", forbidden, rec.Body.String())
 		}
+	}
+}
+
+func TestCreateExportAdmissionDisabledReplaysExistingOperationBeforeMetadata(t *testing.T) {
+	hash, err := operations.HashRequest(exportCanonicalRequest{RepoID: "repo_123", Mode: string(sessionstate.AccessModeReadOnly), TTLSeconds: 120})
+	if err != nil {
+		t.Fatalf("hash export request: %v", err)
+	}
+	meta := exportMetaFixture()
+	sink := &fakeAuditSink{}
+	passwordCalls := 0
+	store := &fakeExportStore{lookupRecord: existingExportOperationRecord("op_existing_export", hash, map[string]any{"ttl_seconds": 120}), session: func() exportaccess.Session {
+		session := exportSessionFixture(sessionstate.ExportStatusActive)
+		session.Mode = sessionstate.AccessModeReadOnly
+		return session
+	}()}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := ExportHandler(ExportHandlerConfig{
+		RepoReader:        meta.repoReader,
+		NamespaceReader:   meta.namespaceReader,
+		BindingReader:     meta.bindingReader,
+		VolumeReader:      meta.volumeReader,
+		FenceReader:       fenceReader,
+		Store:             store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleExportAdmin}}}},
+		OperationID:       func() string { return "op_export" },
+		ExportID:          func() string { return "export_new" },
+		Password: func() string {
+			passwordCalls++
+			return "export-password-once"
+		},
+		Now:               fixedNamespaceNow,
+		PublicBaseURL:     "https://files.example.com",
+		AdmissionDisabled: true,
+		AuditSink:         sink,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202 existing operation", rec.Code, rec.Body.String())
+	}
+	env := decodeOperationEnvelope(t, rec.Body.Bytes())
+	if env.OperationID != "op_existing_export" || env.OperationState != OperationStateSucceeded {
+		t.Fatalf("operation = %q/%q, want existing succeeded operation", env.OperationID, env.OperationState)
+	}
+	exportBody, ok := env.Result["export"].(map[string]any)
+	if !ok || exportBody["export_id"] != "export_123" {
+		t.Fatalf("result.export = %#v, want redacted export session", env.Result["export"])
+	}
+	if _, ok := env.Result["access"]; ok {
+		t.Fatalf("replay returned access secret: %#v", env.Result)
+	}
+	rendered := strings.ToLower(rec.Body.String())
+	for _, forbidden := range []string{"password", "export-password-once", "credential_hash", "credential_salt", "verifier"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("replay response leaked %q: %s", forbidden, rec.Body.String())
+		}
+	}
+	if store.lookupCalls != 1 || store.createCalls != 0 || store.getCalls != 1 || passwordCalls != 0 {
+		t.Fatalf("lookup/create/get/password calls = %d/%d/%d/%d, want 1/0/1/0", store.lookupCalls, store.createCalls, store.getCalls, passwordCalls)
+	}
+	if meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceReader.calls != 0 || meta.bindingReader.calls != 0 || meta.volumeReader.calls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", meta.repoReader.getInNamespaceCalls, meta.namespaceReader.calls, meta.bindingReader.calls, meta.volumeReader.calls, fenceReader.calls)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("audit events = %#v, want no denial audit for replay", sink.events)
+	}
+}
+
+func TestCreateExportAdmissionDisabledRejectsNewBeforeMetadataAndAudits(t *testing.T) {
+	meta := exportMetaFixture()
+	sink := &fakeAuditSink{}
+	store := &fakeExportStore{}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := ExportHandler(ExportHandlerConfig{
+		RepoReader:        meta.repoReader,
+		NamespaceReader:   meta.namespaceReader,
+		BindingReader:     meta.bindingReader,
+		VolumeReader:      meta.volumeReader,
+		FenceReader:       fenceReader,
+		Store:             store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleExportAdmin}}}},
+		OperationID:       func() string { return "op_export" },
+		ExportID:          func() string { return "export_new" },
+		Password:          func() string { t.Fatal("password generator must not be called for disabled new create"); return "" },
+		Now:               fixedNamespaceNow,
+		AdmissionDisabled: true,
+		AuditSink:         sink,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error = %#v, want capability denied", env.Error)
+	}
+	if store.lookupCalls != 1 || store.createCalls != 0 || store.getCalls != 0 {
+		t.Fatalf("lookup/create/get calls = %d/%d/%d, want 1/0/0", store.lookupCalls, store.createCalls, store.getCalls)
+	}
+	if meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceReader.calls != 0 || meta.bindingReader.calls != 0 || meta.volumeReader.calls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", meta.repoReader.getInNamespaceCalls, meta.namespaceReader.calls, meta.bindingReader.calls, meta.volumeReader.calls, fenceReader.calls)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied || sink.events[0].Reason != "webdav export create admission is disabled" {
+		t.Fatalf("audit events = %#v, want one denied admission audit", sink.events)
+	}
+	assertWebDAVExportAdmissionDisabledAudit(t, sink.events[0])
+}
+
+func TestCreateExportAdmissionDisabledReportsHashConflictBeforeCapabilityDenied(t *testing.T) {
+	meta := exportMetaFixture()
+	store := &fakeExportStore{lookupRecord: existingExportOperationRecord("op_existing_export", operations.RequestHash("sha256:different"), map[string]any{"ttl_seconds": 120})}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := ExportHandler(ExportHandlerConfig{
+		RepoReader:        meta.repoReader,
+		NamespaceReader:   meta.namespaceReader,
+		BindingReader:     meta.bindingReader,
+		VolumeReader:      meta.volumeReader,
+		FenceReader:       fenceReader,
+		Store:             store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleExportAdmin}}}},
+		OperationID:       func() string { return "op_export" },
+		ExportID:          func() string { return "export_new" },
+		Password:          func() string { t.Fatal("password generator must not be called for conflict"); return "" },
+		Now:               fixedNamespaceNow,
+		AdmissionDisabled: true,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeIdempotencyConflict {
+		t.Fatalf("error = %#v, want idempotency conflict", env.Error)
+	}
+	if store.lookupCalls != 1 || store.createCalls != 0 || store.getCalls != 0 {
+		t.Fatalf("lookup/create/get calls = %d/%d/%d, want 1/0/0", store.lookupCalls, store.createCalls, store.getCalls)
+	}
+	if meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceReader.calls != 0 || meta.bindingReader.calls != 0 || meta.volumeReader.calls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", meta.repoReader.getInNamespaceCalls, meta.namespaceReader.calls, meta.bindingReader.calls, meta.volumeReader.calls, fenceReader.calls)
+	}
+}
+
+func TestCreateExportAdmissionDisabledRejectsMismatchedReplaySessionWithoutLeaking(t *testing.T) {
+	hash, err := operations.HashRequest(exportCanonicalRequest{RepoID: "repo_123", Mode: string(sessionstate.AccessModeReadOnly), TTLSeconds: 120})
+	if err != nil {
+		t.Fatalf("hash export request: %v", err)
+	}
+	tests := []struct {
+		name string
+		edit func(*exportaccess.Session)
+		leak string
+	}{
+		{name: "namespace mismatch", edit: func(session *exportaccess.Session) { session.NamespaceID = "ns_other" }, leak: "ns_other"},
+		{name: "repo mismatch", edit: func(session *exportaccess.Session) { session.RepoID = "repo_other" }, leak: "repo_other"},
+		{name: "mode mismatch", edit: func(session *exportaccess.Session) { session.Mode = sessionstate.AccessModeReadWrite }, leak: string(sessionstate.AccessModeReadWrite)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := exportMetaFixture()
+			session := exportSessionFixture(sessionstate.ExportStatusActive)
+			session.Mode = sessionstate.AccessModeReadOnly
+			tt.edit(&session)
+			store := &fakeExportStore{lookupRecord: existingExportOperationRecord("op_existing_export", hash, map[string]any{"ttl_seconds": 120}), session: session}
+			fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+			handler := ExportHandler(ExportHandlerConfig{
+				RepoReader:        meta.repoReader,
+				NamespaceReader:   meta.namespaceReader,
+				BindingReader:     meta.bindingReader,
+				VolumeReader:      meta.volumeReader,
+				FenceReader:       fenceReader,
+				Store:             store,
+				PrincipalResolver: namespaceBindingPrincipalResolver(),
+				AllowedCallers:    fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleExportAdmin}}}},
+				OperationID:       func() string { return "op_export" },
+				Password: func() string {
+					t.Fatal("password generator must not be called for mismatched replay session")
+					return ""
+				},
+				Now:               fixedNamespaceNow,
+				AdmissionDisabled: true,
+			})
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+			}
+			if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeIdempotencyConflict {
+				t.Fatalf("error = %#v, want idempotency conflict", env.Error)
+			}
+			if strings.Contains(rec.Body.String(), tt.leak) || strings.Contains(rec.Body.String(), `"export":`) {
+				t.Fatalf("mismatched session leaked in response: %s", rec.Body.String())
+			}
+			if store.lookupCalls != 1 || store.getCalls != 1 || store.createCalls != 0 {
+				t.Fatalf("lookup/get/create calls = %d/%d/%d, want 1/1/0", store.lookupCalls, store.getCalls, store.createCalls)
+			}
+			if meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceReader.calls != 0 || meta.bindingReader.calls != 0 || meta.volumeReader.calls != 0 || fenceReader.calls != 0 {
+				t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", meta.repoReader.getInNamespaceCalls, meta.namespaceReader.calls, meta.bindingReader.calls, meta.volumeReader.calls, fenceReader.calls)
+			}
+		})
+	}
+}
+
+func TestCreateExportAdmissionDisabledRejectsMismatchedReplayRecordBeforeSessionFetch(t *testing.T) {
+	hash, err := operations.HashRequest(exportCanonicalRequest{RepoID: "repo_123", Mode: string(sessionstate.AccessModeReadOnly), TTLSeconds: 120})
+	if err != nil {
+		t.Fatalf("hash export request: %v", err)
+	}
+	record := existingExportOperationRecord("op_existing_export", hash, map[string]any{"ttl_seconds": 120})
+	record.Resource.ID = "export_other"
+	meta := exportMetaFixture()
+	store := &fakeExportStore{lookupRecord: record}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := ExportHandler(ExportHandlerConfig{
+		RepoReader:        meta.repoReader,
+		NamespaceReader:   meta.namespaceReader,
+		BindingReader:     meta.bindingReader,
+		VolumeReader:      meta.volumeReader,
+		FenceReader:       fenceReader,
+		Store:             store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleExportAdmin}}}},
+		OperationID:       func() string { return "op_export" },
+		Password: func() string {
+			t.Fatal("password generator must not be called for mismatched replay record")
+			return ""
+		},
+		Now:               fixedNamespaceNow,
+		AdmissionDisabled: true,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeIdempotencyConflict {
+		t.Fatalf("error = %#v, want idempotency conflict", env.Error)
+	}
+	if store.lookupCalls != 1 || store.getCalls != 0 || store.createCalls != 0 {
+		t.Fatalf("lookup/get/create calls = %d/%d/%d, want 1/0/0", store.lookupCalls, store.getCalls, store.createCalls)
+	}
+	if strings.Contains(rec.Body.String(), "export_other") || strings.Contains(rec.Body.String(), `"export":`) {
+		t.Fatalf("mismatched record leaked in response: %s", rec.Body.String())
+	}
+}
+
+func TestCreateExportAdmissionDisabledExplicitZeroTTLRejectedBeforeReplayLookup(t *testing.T) {
+	meta := exportMetaFixture()
+	store := &fakeExportStore{}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := ExportHandler(ExportHandlerConfig{
+		RepoReader:        meta.repoReader,
+		NamespaceReader:   meta.namespaceReader,
+		BindingReader:     meta.bindingReader,
+		VolumeReader:      meta.volumeReader,
+		FenceReader:       fenceReader,
+		Store:             store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleExportAdmin}}}},
+		OperationID:       func() string { return "op_export" },
+		Password:          func() string { t.Fatal("password generator must not be called for invalid ttl"); return "" },
+		Now:               fixedNamespaceNow,
+		AdmissionDisabled: true,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":0}`, "ns_123"))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s, want 400", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeInvalidID {
+		t.Fatalf("error = %#v, want invalid id", env.Error)
+	}
+	if store.lookupCalls != 0 || store.getCalls != 0 || store.createCalls != 0 {
+		t.Fatalf("lookup/get/create calls = %d/%d/%d, want 0/0/0", store.lookupCalls, store.getCalls, store.createCalls)
+	}
+	if meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceReader.calls != 0 || meta.bindingReader.calls != 0 || meta.volumeReader.calls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", meta.repoReader.getInNamespaceCalls, meta.namespaceReader.calls, meta.bindingReader.calls, meta.volumeReader.calls, fenceReader.calls)
+	}
+}
+
+func TestCreateExportAdmissionDisabledFailsClosedWhenExistingTTLIsUnavailable(t *testing.T) {
+	hash, err := operations.HashRequest(exportCanonicalRequest{RepoID: "repo_123", Mode: string(sessionstate.AccessModeReadOnly), TTLSeconds: 120})
+	if err != nil {
+		t.Fatalf("hash export request: %v", err)
+	}
+	record := existingExportOperationRecord("op_existing_export", hash, map[string]any{"ttl_seconds": 120})
+	delete(record.InputSummary, "ttl_seconds")
+	meta := exportMetaFixture()
+	store := &fakeExportStore{lookupRecord: record}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := ExportHandler(ExportHandlerConfig{
+		RepoReader:        meta.repoReader,
+		NamespaceReader:   meta.namespaceReader,
+		BindingReader:     meta.bindingReader,
+		VolumeReader:      meta.volumeReader,
+		FenceReader:       fenceReader,
+		Store:             store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleExportAdmin}}}},
+		OperationID:       func() string { return "op_export" },
+		ExportID:          func() string { return "export_new" },
+		Password: func() string {
+			t.Fatal("password generator must not be called when replay ttl is unavailable")
+			return ""
+		},
+		Now:               fixedNamespaceNow,
+		AdmissionDisabled: true,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want fail-closed 409", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeIdempotencyConflict {
+		t.Fatalf("error = %#v, want idempotency conflict", env.Error)
+	}
+	if store.lookupCalls != 1 || store.createCalls != 0 || store.getCalls != 0 {
+		t.Fatalf("lookup/create/get calls = %d/%d/%d, want 1/0/0", store.lookupCalls, store.createCalls, store.getCalls)
+	}
+	if meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceReader.calls != 0 || meta.bindingReader.calls != 0 || meta.volumeReader.calls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", meta.repoReader.getInNamespaceCalls, meta.namespaceReader.calls, meta.bindingReader.calls, meta.volumeReader.calls, fenceReader.calls)
+	}
+}
+
+func TestCreateExportAdmissionDisabledOmittedTTLRequiresExistingResolvedTTL(t *testing.T) {
+	hash, err := operations.HashRequest(exportCanonicalRequest{RepoID: "repo_123", Mode: string(sessionstate.AccessModeReadOnly), TTLSeconds: 120})
+	if err != nil {
+		t.Fatalf("hash export request: %v", err)
+	}
+	record := existingExportOperationRecord("op_existing_export", hash, map[string]any{"ttl_seconds": 120})
+	delete(record.InputSummary, "ttl_seconds")
+	meta := exportMetaFixture()
+	store := &fakeExportStore{lookupRecord: record}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := ExportHandler(ExportHandlerConfig{
+		RepoReader:        meta.repoReader,
+		NamespaceReader:   meta.namespaceReader,
+		BindingReader:     meta.bindingReader,
+		VolumeReader:      meta.volumeReader,
+		FenceReader:       fenceReader,
+		Store:             store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleExportAdmin}}}},
+		OperationID:       func() string { return "op_export" },
+		Password: func() string {
+			t.Fatal("password generator must not be called when explicit zero ttl cannot resolve")
+			return ""
+		},
+		Now:               fixedNamespaceNow,
+		AdmissionDisabled: true,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want fail-closed 409", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeIdempotencyConflict {
+		t.Fatalf("error = %#v, want idempotency conflict", env.Error)
+	}
+	if store.lookupCalls != 1 || store.getCalls != 0 || store.createCalls != 0 {
+		t.Fatalf("lookup/get/create calls = %d/%d/%d, want 1/0/0", store.lookupCalls, store.getCalls, store.createCalls)
 	}
 }
 
@@ -429,9 +810,11 @@ func exportMetaFixture() exportMeta {
 type fakeExportVolumeReader struct {
 	volume resources.Volume
 	err    error
+	calls  int
 }
 
 func (reader *fakeExportVolumeReader) GetVolume(context.Context, string) (resources.Volume, error) {
+	reader.calls++
 	if reader.err != nil {
 		return resources.Volume{}, reader.err
 	}
@@ -439,12 +822,26 @@ func (reader *fakeExportVolumeReader) GetVolume(context.Context, string) (resour
 }
 
 type fakeExportStore struct {
+	createCalls  int
+	revokeCalls  int
+	getCalls     int
+	create       exportaccess.CreateRequest
+	revoke       exportaccess.RevokeRequest
+	reused       bool
+	err          error
+	session      exportaccess.Session
+	lookupCalls  int
+	lookupErr    error
+	lookupRecord *operations.OperationRecord
+	lookupScope  operations.IdempotencyScope
+}
+
+type fakeNoLookupExportStore struct {
 	createCalls int
 	revokeCalls int
 	getCalls    int
 	create      exportaccess.CreateRequest
 	revoke      exportaccess.RevokeRequest
-	reused      bool
 	err         error
 	session     exportaccess.Session
 }
@@ -463,6 +860,18 @@ func (store *fakeExportStore) CreateOrReuseExport(_ context.Context, request exp
 	return result, nil
 }
 
+func (store *fakeExportStore) GetOperationByIdempotencyScope(_ context.Context, scope operations.IdempotencyScope) (operations.OperationRecord, error) {
+	store.lookupCalls++
+	store.lookupScope = scope
+	if store.lookupErr != nil {
+		return operations.OperationRecord{}, store.lookupErr
+	}
+	if store.lookupRecord != nil {
+		return store.lookupRecord.Sanitized(), nil
+	}
+	return operations.OperationRecord{}, sql.ErrNoRows
+}
+
 func (store *fakeExportStore) GetExportSession(_ context.Context, exportID string) (exportaccess.Session, error) {
 	store.getCalls++
 	if store.err != nil {
@@ -477,7 +886,83 @@ func (store *fakeExportStore) GetExportSession(_ context.Context, exportID strin
 	return exportSessionFixture(sessionstate.ExportStatusActive), nil
 }
 
+func existingExportOperationRecord(operationID string, requestHash operations.RequestHash, inputSummary map[string]any) *operations.OperationRecord {
+	now := fixedNamespaceNow()
+	summary := map[string]any{"export_id": "export_123", "namespace_id": "ns_123", "repo_id": "repo_123", "protocol": string(exportaccess.ProtocolWebDAV), "mode": string(sessionstate.AccessModeReadOnly), "ttl_seconds": 120, "expires_at": now.Add(120 * time.Second).Format(time.RFC3339)}
+	for key, value := range inputSummary {
+		summary[key] = value
+	}
+	return &operations.OperationRecord{
+		ID:                  operationID,
+		Type:                operations.OperationExportCreate,
+		State:               operations.OperationStateSucceeded,
+		Phase:               operations.OperationPhaseExportCreateCommitted,
+		Attempt:             1,
+		IdempotencyScope:    operations.NewIdempotencyScope("product-caller", "ns_123", operations.OperationExportCreate, "idem_export").String(),
+		IdempotencyKey:      "idem_export",
+		RequestHash:         requestHash,
+		CorrelationID:       "corr_export",
+		CallerService:       "product-caller",
+		AuthorizedActor:     operations.Actor{Type: "user", ID: "user_123"},
+		Resource:            operations.ResourceRef{Type: "export", ID: "export_123"},
+		NamespaceID:         "ns_123",
+		RepoID:              "repo_123",
+		ExportID:            "export_123",
+		ExternalResourceIDs: map[string]string{},
+		InputSummary:        summary,
+		CreatedAt:           now,
+		StartedAt:           &now,
+		FinishedAt:          &now,
+	}
+}
+
+func assertWebDAVExportAdmissionDisabledAudit(t *testing.T, event audit.Event) {
+	t.Helper()
+	if event.Type != audit.EventTypeCapabilityDenied {
+		t.Fatalf("audit event Type = %q, want %q", event.Type, audit.EventTypeCapabilityDenied)
+	}
+	if got := event.Details["route_operation_id"]; got != "createExport" {
+		t.Fatalf("audit route_operation_id = %#v, want createExport; details=%#v", got, event.Details)
+	}
+	if !auditValidationErrorsContain(event.Details["validation_errors"], "webdav_export_admission_disabled") {
+		t.Fatalf("audit validation_errors = %#v, want webdav_export_admission_disabled; details=%#v", event.Details["validation_errors"], event.Details)
+	}
+}
+
 func (store *fakeExportStore) RevokeExport(_ context.Context, request exportaccess.RevokeRequest) (exportaccess.RevokeResult, error) {
+	store.revokeCalls++
+	store.revoke = request
+	if store.err != nil {
+		return exportaccess.RevokeResult{}, store.err
+	}
+	session := exportSessionFixture(sessionstate.ExportStatusRevoking)
+	return exportaccess.RevokeResult{Operation: request.Operation, Session: session, Reused: store.revokeCalls > 1}, nil
+}
+
+func (store *fakeNoLookupExportStore) CreateOrReuseExport(_ context.Context, request exportaccess.CreateRequest) (exportaccess.CreateResult, error) {
+	store.createCalls++
+	store.create = request
+	if store.err != nil {
+		return exportaccess.CreateResult{}, store.err
+	}
+	return exportaccess.CreateResult{Operation: request.Operation, Session: request.Session}, nil
+}
+
+func (store *fakeNoLookupExportStore) GetExportSession(_ context.Context, exportID string) (exportaccess.Session, error) {
+	store.getCalls++
+	if store.err != nil {
+		return exportaccess.Session{}, store.err
+	}
+	if exportID != "export_123" {
+		return exportaccess.Session{}, sql.ErrNoRows
+	}
+	if store.session.ID != "" {
+		return store.session, nil
+	}
+	return exportSessionFixture(sessionstate.ExportStatusActive), nil
+}
+
+func (store *fakeNoLookupExportStore) RevokeExport(_ context.Context, request exportaccess.RevokeRequest) (exportaccess.RevokeResult, error) {
 	store.revokeCalls++
 	store.revoke = request
 	if store.err != nil {

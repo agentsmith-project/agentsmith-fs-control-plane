@@ -194,6 +194,12 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 			exportStore = typed
 		}
 	}
+	exportLookupStore := operationLookupStore
+	if exportLookupStore == nil {
+		if typed, ok := exportStore.(OperationIdempotencyLookupStore); ok {
+			exportLookupStore = typed
+		}
+	}
 	var restorePreviewPlanReader RestorePreviewPlanGateReader
 	if typed, ok := config.OperationIntakeStore.(RestorePreviewPlanGateReader); ok {
 		restorePreviewPlanReader = typed
@@ -424,16 +430,18 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		VolumeReader:      config.VolumeReader,
 		FenceReader:       config.RepoFenceReader,
 		Store:             exportStore,
+		IntakeLookupStore: exportLookupStore,
 		PrincipalResolver: config.PrincipalResolver,
 		AllowedCallers: RouteAwareAllowedCallerPolicy{
 			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
 			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
 			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
 		},
-		OperationID:   config.GenerateOperationID,
-		Now:           config.Now,
-		PublicBaseURL: config.WebDAVExportPublicBaseURL,
-		AuditSink:     config.AuditSink,
+		OperationID:       config.GenerateOperationID,
+		Now:               config.Now,
+		PublicBaseURL:     config.WebDAVExportPublicBaseURL,
+		AdmissionDisabled: config.WebDAVExportAdmissionDisabled,
+		AuditSink:         config.AuditSink,
 	})
 	createExportHandler := requestLogHandler(exportHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/exports", "createExport")
 	getExportHandler := requestLogHandler(exportHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/exports/{exportId}", "getExport")
@@ -479,12 +487,17 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	if config.VolumeReader != nil {
 		implemented["getVolumeHealth"] = volumeHealthHandler
 	}
-	if exportStore != nil && config.RepoReader != nil && config.NamespaceReader != nil && config.NamespaceBindingReader != nil && config.VolumeReader != nil && config.RepoFenceReader != nil {
-		if !config.WebDAVExportAdmissionDisabled {
+	if exportStore != nil && config.NamespaceBindingReader != nil {
+		if config.RepoReader != nil && config.NamespaceReader != nil && config.VolumeReader != nil && config.RepoFenceReader != nil && !config.WebDAVExportAdmissionDisabled {
 			implemented["createExport"] = createExportHandler
 		}
-		implemented["getExport"] = getExportHandler
-		implemented["revokeExport"] = revokeExportHandler
+		if config.WebDAVExportAdmissionDisabled && exportLookupStore != nil {
+			implemented["createExport"] = createExportHandler
+		}
+		if config.RepoReader != nil && config.NamespaceReader != nil && config.VolumeReader != nil && config.RepoFenceReader != nil {
+			implemented["getExport"] = getExportHandler
+			implemented["revokeExport"] = revokeExportHandler
+		}
 	}
 	mux.Handle("/", routeDispatchHandler(implemented, fallback))
 	return mux
