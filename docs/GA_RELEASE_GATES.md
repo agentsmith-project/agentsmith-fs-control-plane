@@ -14,12 +14,20 @@ passed; it does not mean final GA release acceptance has passed. Final GA
 release acceptance must use this same unique repo-local entrypoint and evaluate
 final acceptance, for example by switching the manifest verifier to or including
 `-mode final`. Any required/final claim, acceptance item, or evidence entry that
-still carries an open `seed_gap_*_open` marker or equivalent open seed gap must
-fail final acceptance. In final mode, release acceptance requires no open seed
-gaps. A seed-mode pass alone is only current repo-local seed/baseline evidence;
-it is never sufficient for final GA release. Manual review, consumer adoption,
-sibling project status, generated-client approval, security approval, owner
-approval, and runbook meetings are not independent GA gate conditions.
+still carries a required/default `seed_gap_*_open` marker without an exact
+implemented/closed replacement, or an equivalent unresolved required/default
+seed-gap marker, must fail final acceptance. Selected optional positive gaps
+block final only when the authoritative final selector claims that optional
+capability. Unselected optional positive gaps may remain visible as
+future/fixture work and must not become default GA blockers. A seed-mode pass
+alone is only current repo-local seed/baseline evidence; it is never sufficient
+for final GA release. In this repo, final mode requires no unresolved
+required/default seed-gap markers and no unresolved selected optional positive
+seed-gap markers; unselected optional future/fixture gaps may remain visible.
+The phrase "no open seed gaps" is a legacy shorthand for that final-mode rule.
+Manual review, consumer adoption, sibling project status, generated-client
+approval, security approval, owner approval, and runbook meetings are not
+independent GA gate conditions.
 
 The command may call lower-level checks such as `git diff --check`, `go test
 -count=1 ./...`, contract verification, schema/OpenAPI drift checks,
