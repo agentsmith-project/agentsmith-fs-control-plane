@@ -1,5 +1,5 @@
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "release_gate": "scripts/verify-ga-release.sh",
   "items": [
     {
@@ -21,7 +21,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": false,
-      "default_ga_required": true
+      "default_ga_required": true,
+      "claim_id": "CLAIM_DEFAULT_DENIAL_SAFE",
+      "subclaim_id": "webdav_export_disabled_admission",
+      "acceptance_id": "P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION",
+      "risk_id": "F5",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "disabled admission rejects before metadata and audits without queuing"
+        ]
+      }
     },
     {
       "id": "workload_mount_disabled_admission_unit",
@@ -42,7 +57,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": true,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_OPTIONAL_DENIED_SAFE",
+      "subclaim_id": "workload_mount_disabled_admission",
+      "acceptance_id": "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION",
+      "risk_id": "F5",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "optional disabled admission rejects before metadata and audits without queuing"
+        ]
+      }
     },
     {
       "id": "repo_lifecycle_retained_positive_unit",
@@ -69,7 +99,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": false,
-      "default_ga_required": true
+      "default_ga_required": true,
+      "claim_id": "CLAIM_RETAINED_LIFECYCLE_DEFAULT",
+      "subclaim_id": "retained_lifecycle_positive",
+      "acceptance_id": "P0_RETAINED_LIFECYCLE_DEFAULT_POSITIVE",
+      "risk_id": "F15",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "positive",
+      "pass_criteria": {
+        "kind": "positive_path",
+        "assertions": [
+          "retained lifecycle archive restore delete and tombstone flows pass without purge selectors"
+        ]
+      }
     },
     {
       "id": "workload_mount_plan_store_freshness_unit",
@@ -90,7 +135,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": true,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_OPTIONAL_DENIED_SAFE",
+      "subclaim_id": "workload_mount_plan_store_freshness",
+      "acceptance_id": "P0_OPTIONAL_DENIED_WORKLOAD_PLAN_STORE",
+      "risk_id": "F9",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "workload mount plan store fails closed on stale or unsupported default state"
+        ]
+      }
     },
     {
       "id": "workload_mount_runtime_secretref_config_unit",
@@ -116,7 +176,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": true,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_OPTIONAL_DENIED_SAFE",
+      "subclaim_id": "workload_mount_runtime_secretref_config",
+      "acceptance_id": "P0_OPTIONAL_DENIED_WORKLOAD_RUNTIME_SECRETREF",
+      "risk_id": "F10",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "runtime secretref configuration fails closed without leaking values"
+        ]
+      }
     },
     {
       "id": "workload_mount_secretref_redaction_unit",
@@ -137,7 +212,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": true,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_OPTIONAL_DENIED_SAFE",
+      "subclaim_id": "workload_mount_secretref_redaction",
+      "acceptance_id": "P0_OPTIONAL_DENIED_WORKLOAD_SECRETREF_REDACTION",
+      "risk_id": "F10",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "workload mount responses and audits redact secret references and raw paths"
+        ]
+      }
     },
     {
       "id": "repo_template_disabled_admission_unit",
@@ -158,7 +248,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": true,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_OPTIONAL_DENIED_SAFE",
+      "subclaim_id": "repo_template_disabled_admission",
+      "acceptance_id": "P0_OPTIONAL_DENIED_TEMPLATE_ADMISSION",
+      "risk_id": "F16",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "repo template disabled admission rejects before metadata and audits without queuing"
+        ]
+      }
     },
     {
       "id": "repo_purge_disabled_admission_unit",
@@ -179,7 +284,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": true,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_OPTIONAL_DENIED_SAFE",
+      "subclaim_id": "repo_purge_disabled_admission",
+      "acceptance_id": "P0_OPTIONAL_DENIED_PURGE_ADMISSION",
+      "risk_id": "F13",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "repo purge disabled admission rejects before metadata and audits without queuing"
+        ]
+      }
     },
     {
       "id": "repo_template_create_disabled_worker_recovery_unit",
@@ -200,7 +320,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": true,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_OPTIONAL_DENIED_SAFE",
+      "subclaim_id": "repo_template_create_disabled_worker_recovery",
+      "acceptance_id": "P0_OPTIONAL_DENIED_TEMPLATE_CREATE_RECOVERY",
+      "risk_id": "F6",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "disabled template create recovery terminalizes unsupported historical operations"
+        ]
+      }
     },
     {
       "id": "repo_template_clone_disabled_worker_recovery_unit",
@@ -221,7 +356,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": true,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_OPTIONAL_DENIED_SAFE",
+      "subclaim_id": "repo_template_clone_disabled_worker_recovery",
+      "acceptance_id": "P0_OPTIONAL_DENIED_TEMPLATE_CLONE_RECOVERY",
+      "risk_id": "F6",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "disabled template clone recovery terminalizes unsupported historical operations"
+        ]
+      }
     },
     {
       "id": "repo_purge_disabled_worker_recovery_unit",
@@ -242,7 +392,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": true,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_OPTIONAL_DENIED_SAFE",
+      "subclaim_id": "repo_purge_disabled_worker_recovery",
+      "acceptance_id": "P0_OPTIONAL_DENIED_PURGE_RECOVERY",
+      "risk_id": "F13",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "disabled repo purge recovery terminalizes unsupported historical operations"
+        ]
+      }
     },
     {
       "id": "default_ga_capability_classification_unit",
@@ -263,7 +428,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": false,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_CAPABILITY_MATRIX_CONSISTENT",
+      "subclaim_id": "default_ga_capability_classification",
+      "acceptance_id": "P0_CAPABILITY_MATRIX_DEFAULT_CLASSIFICATION",
+      "risk_id": "F4",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "pass_criteria": {
+        "kind": "coverage_guard",
+        "assertions": [
+          "capability matrix classifies default and optional capabilities consistently"
+        ]
+      }
     },
     {
       "id": "capability_admission_operation_coverage_unit",
@@ -284,7 +464,22 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": false,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_CAPABILITY_MATRIX_CONSISTENT",
+      "subclaim_id": "capability_admission_operation_coverage",
+      "acceptance_id": "P0_CAPABILITY_MATRIX_OPERATION_COVERAGE",
+      "risk_id": "F4",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "pass_criteria": {
+        "kind": "coverage_guard",
+        "assertions": [
+          "capability admission operation coverage stays consistent"
+        ]
+      }
     },
     {
       "id": "release_script_evidence_manifest_guard",
@@ -305,7 +500,246 @@
       ],
       "doc_only_allowed": false,
       "optional_gated": false,
-      "default_ga_required": false
+      "default_ga_required": false,
+      "claim_id": "CLAIM_RELEASE_GATE_TRACEABLE",
+      "subclaim_id": "release_gate_invokes_manifest_verifier",
+      "acceptance_id": "P0_RELEASE_GATE_TRACEABLE_MANIFEST_VERIFIER",
+      "risk_id": "F18",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "pass_criteria": {
+        "kind": "coverage_guard",
+        "assertions": [
+          "release gate invokes the manifest verifier and keeps evidence traceable"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_admin_bootstrap_ready_open",
+      "claim_id": "CLAIM_ADMIN_BOOTSTRAP_READY",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F3",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_default_user_loop_open",
+      "claim_id": "CLAIM_DEFAULT_USER_LOOP",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F2",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_workload_fixture_ready_open",
+      "claim_id": "CLAIM_WORKLOAD_FIXTURE_READY",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F9",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_operator_repair_safe_open",
+      "claim_id": "CLAIM_OPERATOR_REPAIR_SAFE",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F11",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_purge_approval_safe_open",
+      "claim_id": "CLAIM_PURGE_APPROVAL_SAFE",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F13",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_restore_reconciliation_open",
+      "claim_id": "CLAIM_RESTORE_RECONCILIATION",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F14",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_residual_risk_catalog_open",
+      "claim_id": "CLAIM_RESIDUAL_RISK_CATALOG",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F12",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_deployment_risk_envelope_open",
+      "claim_id": "CLAIM_DEPLOYMENT_RISK_ENVELOPE",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F17",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
     }
   ]
 }

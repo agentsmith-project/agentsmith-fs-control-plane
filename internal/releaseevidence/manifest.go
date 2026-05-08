@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	SchemaVersion = "1"
+	SchemaVersion = "2"
 	ReleaseGate   = "scripts/verify-ga-release.sh"
 )
 
@@ -25,15 +25,30 @@ type Manifest struct {
 }
 
 type Item struct {
-	ID                string   `json:"id"`
-	CapabilityID      string   `json:"capability_id"`
-	EvidenceType      string   `json:"evidence_type"`
-	Required          bool     `json:"required"`
-	Command           []string `json:"command"`
-	Anchors           []string `json:"anchors"`
-	DocOnlyAllowed    bool     `json:"doc_only_allowed"`
-	OptionalGated     bool     `json:"optional_gated"`
-	DefaultGARequired bool     `json:"default_ga_required"`
+	ID                 string       `json:"id"`
+	ClaimID            string       `json:"claim_id"`
+	SubclaimID         string       `json:"subclaim_id"`
+	AcceptanceID       string       `json:"acceptance_id"`
+	RiskID             string       `json:"risk_id"`
+	FixtureID          string       `json:"fixture_id"`
+	CapabilityID       string       `json:"capability_id"`
+	EvidenceProfile    string       `json:"evidence_profile"`
+	DefaultMode        bool         `json:"default_mode"`
+	FixtureEnabledMode bool         `json:"fixture_enabled_mode"`
+	NegativeOrPositive string       `json:"negative_or_positive"`
+	EvidenceType       string       `json:"evidence_type"`
+	Required           bool         `json:"required"`
+	Command            []string     `json:"command"`
+	Anchors            []string     `json:"anchors"`
+	DocOnlyAllowed     bool         `json:"doc_only_allowed"`
+	OptionalGated      bool         `json:"optional_gated"`
+	DefaultGARequired  bool         `json:"default_ga_required"`
+	PassCriteria       PassCriteria `json:"pass_criteria"`
+}
+
+type PassCriteria struct {
+	Kind       string   `json:"kind"`
+	Assertions []string `json:"assertions"`
 }
 
 type Finding struct {
@@ -113,15 +128,25 @@ type rawManifest struct {
 }
 
 type rawItem struct {
-	ID                *string  `json:"id"`
-	CapabilityID      *string  `json:"capability_id"`
-	EvidenceType      *string  `json:"evidence_type"`
-	Required          *bool    `json:"required"`
-	Command           []string `json:"command"`
-	Anchors           []string `json:"anchors"`
-	DocOnlyAllowed    *bool    `json:"doc_only_allowed"`
-	OptionalGated     *bool    `json:"optional_gated"`
-	DefaultGARequired *bool    `json:"default_ga_required"`
+	ID                 *string       `json:"id"`
+	ClaimID            *string       `json:"claim_id"`
+	SubclaimID         *string       `json:"subclaim_id"`
+	AcceptanceID       *string       `json:"acceptance_id"`
+	RiskID             *string       `json:"risk_id"`
+	FixtureID          *string       `json:"fixture_id"`
+	CapabilityID       *string       `json:"capability_id"`
+	EvidenceProfile    *string       `json:"evidence_profile"`
+	DefaultMode        *bool         `json:"default_mode"`
+	FixtureEnabledMode *bool         `json:"fixture_enabled_mode"`
+	NegativeOrPositive *string       `json:"negative_or_positive"`
+	EvidenceType       *string       `json:"evidence_type"`
+	Required           *bool         `json:"required"`
+	Command            []string      `json:"command"`
+	Anchors            []string      `json:"anchors"`
+	DocOnlyAllowed     *bool         `json:"doc_only_allowed"`
+	OptionalGated      *bool         `json:"optional_gated"`
+	DefaultGARequired  *bool         `json:"default_ga_required"`
+	PassCriteria       *PassCriteria `json:"pass_criteria"`
 }
 
 func decodeManifest(body []byte) (Manifest, []Finding, error) {
@@ -165,10 +190,47 @@ func decodeItem(index int, raw rawItem) (Item, []Finding) {
 		item.ID = *raw.ID
 		itemID = item.ID
 	}
+	if raw.ClaimID == nil || strings.TrimSpace(*raw.ClaimID) == "" {
+		findings = append(findings, Finding{ItemID: itemID, Code: "item.claim_id_missing", Message: "claim_id is required"})
+	} else {
+		item.ClaimID = *raw.ClaimID
+	}
+	if raw.SubclaimID == nil || strings.TrimSpace(*raw.SubclaimID) == "" {
+		findings = append(findings, Finding{ItemID: itemID, Code: "item.subclaim_id_missing", Message: "subclaim_id is required"})
+	} else {
+		item.SubclaimID = *raw.SubclaimID
+	}
+	if raw.AcceptanceID == nil || strings.TrimSpace(*raw.AcceptanceID) == "" {
+		findings = append(findings, Finding{ItemID: itemID, Code: "item.acceptance_id_missing", Message: "acceptance_id is required"})
+	} else {
+		item.AcceptanceID = *raw.AcceptanceID
+	}
+	if raw.RiskID != nil {
+		item.RiskID = *raw.RiskID
+	}
+	if raw.FixtureID != nil {
+		item.FixtureID = *raw.FixtureID
+	}
 	if raw.CapabilityID == nil {
 		findings = append(findings, Finding{ItemID: itemID, Code: "item.capability_id_missing", Message: "capability_id is required; use an empty string for workflow/schema evidence"})
 	} else {
 		item.CapabilityID = *raw.CapabilityID
+	}
+	if raw.EvidenceProfile == nil || strings.TrimSpace(*raw.EvidenceProfile) == "" {
+		findings = append(findings, Finding{ItemID: itemID, Code: "item.evidence_profile_missing", Message: "evidence_profile is required"})
+	} else {
+		item.EvidenceProfile = *raw.EvidenceProfile
+	}
+	if raw.DefaultMode != nil {
+		item.DefaultMode = *raw.DefaultMode
+	}
+	if raw.FixtureEnabledMode != nil {
+		item.FixtureEnabledMode = *raw.FixtureEnabledMode
+	}
+	if raw.NegativeOrPositive == nil || strings.TrimSpace(*raw.NegativeOrPositive) == "" {
+		findings = append(findings, Finding{ItemID: itemID, Code: "item.negative_or_positive_missing", Message: "negative_or_positive is required"})
+	} else {
+		item.NegativeOrPositive = *raw.NegativeOrPositive
 	}
 	if raw.EvidenceType == nil || strings.TrimSpace(*raw.EvidenceType) == "" {
 		findings = append(findings, Finding{ItemID: itemID, Code: "item.evidence_type_missing", Message: "evidence_type is required"})
@@ -179,6 +241,12 @@ func decodeItem(index int, raw rawItem) (Item, []Finding) {
 		findings = append(findings, Finding{ItemID: itemID, Code: "item.required_missing", Message: "required is required"})
 	} else {
 		item.Required = *raw.Required
+	}
+	if raw.Required != nil && *raw.Required && raw.DefaultMode == nil {
+		findings = append(findings, Finding{ItemID: itemID, Code: "item.default_mode_missing", Message: "default_mode must be explicit for required evidence"})
+	}
+	if raw.Required != nil && *raw.Required && raw.FixtureEnabledMode == nil {
+		findings = append(findings, Finding{ItemID: itemID, Code: "item.fixture_enabled_mode_missing", Message: "fixture_enabled_mode must be explicit for required evidence"})
 	}
 	if raw.DocOnlyAllowed == nil {
 		findings = append(findings, Finding{ItemID: itemID, Code: "item.doc_only_allowed_missing", Message: "doc_only_allowed is required"})
@@ -200,6 +268,14 @@ func decodeItem(index int, raw rawItem) (Item, []Finding) {
 	}
 	if raw.Anchors == nil {
 		findings = append(findings, Finding{ItemID: itemID, Code: "item.anchors_missing", Message: "anchors is required"})
+	}
+	if raw.PassCriteria == nil {
+		findings = append(findings, Finding{ItemID: itemID, Code: "item.pass_criteria_missing", Message: "pass_criteria is required"})
+	} else {
+		item.PassCriteria = PassCriteria{
+			Kind:       raw.PassCriteria.Kind,
+			Assertions: append([]string(nil), raw.PassCriteria.Assertions...),
+		}
 	}
 	return item, findings
 }
@@ -224,13 +300,22 @@ func validateManifest(manifest Manifest, repoRoot string) []Finding {
 }
 
 type requiredEvidenceSpec struct {
-	ID                string
-	CapabilityID      string
-	EvidenceType      string
-	Required          bool
-	DocOnlyAllowed    bool
-	OptionalGated     bool
-	DefaultGARequired bool
+	ID                 string
+	ClaimID            string
+	SubclaimID         string
+	AcceptanceID       string
+	RiskID             string
+	EvidenceProfile    string
+	DefaultMode        bool
+	FixtureEnabledMode bool
+	NegativeOrPositive string
+	PassCriteriaKind   string
+	CapabilityID       string
+	EvidenceType       string
+	Required           bool
+	DocOnlyAllowed     bool
+	OptionalGated      bool
+	DefaultGARequired  bool
 }
 
 func validateRequiredEvidenceItems(manifest Manifest) []Finding {
@@ -247,6 +332,15 @@ func validateRequiredEvidenceItems(manifest Manifest) []Finding {
 			continue
 		}
 		if item.CapabilityID != spec.CapabilityID ||
+			item.ClaimID != spec.ClaimID ||
+			item.SubclaimID != spec.SubclaimID ||
+			item.AcceptanceID != spec.AcceptanceID ||
+			item.RiskID != spec.RiskID ||
+			item.EvidenceProfile != spec.EvidenceProfile ||
+			item.DefaultMode != spec.DefaultMode ||
+			item.FixtureEnabledMode != spec.FixtureEnabledMode ||
+			item.NegativeOrPositive != spec.NegativeOrPositive ||
+			item.PassCriteria.Kind != spec.PassCriteriaKind ||
 			item.EvidenceType != spec.EvidenceType ||
 			item.Required != spec.Required ||
 			item.DocOnlyAllowed != spec.DocOnlyAllowed ||
@@ -255,28 +349,131 @@ func validateRequiredEvidenceItems(manifest Manifest) []Finding {
 			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.required_evidence_metadata_invalid", Message: fmt.Sprintf("required evidence item %s metadata does not match release contract", spec.ID)})
 		}
 	}
+	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest)...)
+	findings = append(findings, validateSeedGapMarkers(itemsByID)...)
 	return findings
 }
 
+type requiredClaimSubclaimSpec struct {
+	ClaimID    string
+	SubclaimID string
+}
+
+func validateRequiredClaimSubclaimCoverage(manifest Manifest) []Finding {
+	requiredCoverage := make(map[requiredClaimSubclaimSpec]bool, len(manifest.Items))
+	for _, item := range manifest.Items {
+		if !item.Required {
+			continue
+		}
+		requiredCoverage[requiredClaimSubclaimSpec{ClaimID: item.ClaimID, SubclaimID: item.SubclaimID}] = true
+	}
+
+	var findings []Finding
+	for _, spec := range requiredClaimSubclaimSpecs {
+		if !requiredCoverage[spec] {
+			findings = append(findings, Finding{
+				Code:    "manifest.required_claim_subclaim_missing",
+				Message: fmt.Sprintf("missing required seed claim/subclaim coverage %s/%s", spec.ClaimID, spec.SubclaimID),
+			})
+		}
+	}
+	return findings
+}
+
+type seedGapSpec struct {
+	ID      string
+	ClaimID string
+	RiskID  string
+}
+
+func validateSeedGapMarkers(itemsByID map[string]Item) []Finding {
+	var findings []Finding
+	for _, spec := range seedGapSpecs {
+		item, ok := itemsByID[spec.ID]
+		if !ok {
+			findings = append(findings, Finding{Code: "manifest.seed_gap_marker_missing", Message: fmt.Sprintf("missing open seed gap marker for %s", spec.ClaimID)})
+			continue
+		}
+		if item.ClaimID != spec.ClaimID ||
+			item.SubclaimID != "seed_gap_open" ||
+			item.AcceptanceID != "P0_SEED_GAP_OPEN" ||
+			item.RiskID != spec.RiskID ||
+			item.EvidenceProfile != "default" ||
+			!item.DefaultMode ||
+			item.FixtureEnabledMode ||
+			item.NegativeOrPositive != "both" ||
+			item.CapabilityID != "" ||
+			item.EvidenceType != "doc-guard" ||
+			item.Required ||
+			len(item.Command) != 0 ||
+			!item.DocOnlyAllowed ||
+			item.OptionalGated ||
+			item.DefaultGARequired ||
+			item.PassCriteria.Kind != "seed_gap" ||
+			!containsString(item.PassCriteria.Assertions, "open") {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.seed_gap_marker_invalid", Message: fmt.Sprintf("seed gap marker for %s must remain non-required, command-empty, doc-only, and marked open", spec.ClaimID)})
+		}
+	}
+	return findings
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 var requiredEvidenceSpecs = []requiredEvidenceSpec{
-	{ID: "webdav_export_disabled_admission_unit", CapabilityID: "webdav_export", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
-	{ID: "repo_lifecycle_retained_positive_unit", CapabilityID: "repo_lifecycle_retained", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
-	{ID: "workload_mount_disabled_admission_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "workload_mount_plan_store_freshness_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "workload_mount_runtime_secretref_config_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "workload_mount_secretref_redaction_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "repo_template_disabled_admission_unit", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "repo_purge_disabled_admission_unit", CapabilityID: "repo_purge", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "repo_template_create_disabled_worker_recovery_unit", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "repo_template_clone_disabled_worker_recovery_unit", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "repo_purge_disabled_worker_recovery_unit", CapabilityID: "repo_purge", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "default_ga_capability_classification_unit", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
-	{ID: "capability_admission_operation_coverage_unit", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
-	{ID: "release_script_evidence_manifest_guard", CapabilityID: "", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
+	{ID: "webdav_export_disabled_admission_unit", ClaimID: "CLAIM_DEFAULT_DENIAL_SAFE", SubclaimID: "webdav_export_disabled_admission", AcceptanceID: "P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION", RiskID: "F5", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "webdav_export", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
+	{ID: "repo_lifecycle_retained_positive_unit", ClaimID: "CLAIM_RETAINED_LIFECYCLE_DEFAULT", SubclaimID: "retained_lifecycle_positive", AcceptanceID: "P0_RETAINED_LIFECYCLE_DEFAULT_POSITIVE", RiskID: "F15", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "repo_lifecycle_retained", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
+	{ID: "workload_mount_disabled_admission_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_disabled_admission", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", RiskID: "F5", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "workload_mount_plan_store_freshness_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_plan_store_freshness", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_PLAN_STORE", RiskID: "F9", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "workload_mount_runtime_secretref_config_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_runtime_secretref_config", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_RUNTIME_SECRETREF", RiskID: "F10", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "workload_mount_secretref_redaction_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_secretref_redaction", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_SECRETREF_REDACTION", RiskID: "F10", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "repo_template_disabled_admission_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_template_disabled_admission", AcceptanceID: "P0_OPTIONAL_DENIED_TEMPLATE_ADMISSION", RiskID: "F16", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "repo_purge_disabled_admission_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_purge_disabled_admission", AcceptanceID: "P0_OPTIONAL_DENIED_PURGE_ADMISSION", RiskID: "F13", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_purge", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "repo_template_create_disabled_worker_recovery_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_template_create_disabled_worker_recovery", AcceptanceID: "P0_OPTIONAL_DENIED_TEMPLATE_CREATE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "repo_template_clone_disabled_worker_recovery_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_template_clone_disabled_worker_recovery", AcceptanceID: "P0_OPTIONAL_DENIED_TEMPLATE_CLONE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "repo_purge_disabled_worker_recovery_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_purge_disabled_worker_recovery", AcceptanceID: "P0_OPTIONAL_DENIED_PURGE_RECOVERY", RiskID: "F13", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_purge", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "default_ga_capability_classification_unit", ClaimID: "CLAIM_CAPABILITY_MATRIX_CONSISTENT", SubclaimID: "default_ga_capability_classification", AcceptanceID: "P0_CAPABILITY_MATRIX_DEFAULT_CLASSIFICATION", RiskID: "F4", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
+	{ID: "capability_admission_operation_coverage_unit", ClaimID: "CLAIM_CAPABILITY_MATRIX_CONSISTENT", SubclaimID: "capability_admission_operation_coverage", AcceptanceID: "P0_CAPABILITY_MATRIX_OPERATION_COVERAGE", RiskID: "F4", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
+	{ID: "release_script_evidence_manifest_guard", ClaimID: "CLAIM_RELEASE_GATE_TRACEABLE", SubclaimID: "release_gate_invokes_manifest_verifier", AcceptanceID: "P0_RELEASE_GATE_TRACEABLE_MANIFEST_VERIFIER", RiskID: "F18", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
+}
+
+var requiredClaimSubclaimSpecs = []requiredClaimSubclaimSpec{
+	{ClaimID: "CLAIM_DEFAULT_DENIAL_SAFE", SubclaimID: "webdav_export_disabled_admission"},
+	{ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_disabled_admission"},
+	{ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_plan_store_freshness"},
+	{ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_runtime_secretref_config"},
+	{ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_secretref_redaction"},
+	{ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_template_disabled_admission"},
+	{ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_template_create_disabled_worker_recovery"},
+	{ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_template_clone_disabled_worker_recovery"},
+	{ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_purge_disabled_admission"},
+	{ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_purge_disabled_worker_recovery"},
+	{ClaimID: "CLAIM_RETAINED_LIFECYCLE_DEFAULT", SubclaimID: "retained_lifecycle_positive"},
+	{ClaimID: "CLAIM_CAPABILITY_MATRIX_CONSISTENT", SubclaimID: "default_ga_capability_classification"},
+	{ClaimID: "CLAIM_CAPABILITY_MATRIX_CONSISTENT", SubclaimID: "capability_admission_operation_coverage"},
+	{ClaimID: "CLAIM_RELEASE_GATE_TRACEABLE", SubclaimID: "release_gate_invokes_manifest_verifier"},
+}
+
+var seedGapSpecs = []seedGapSpec{
+	{ID: "seed_gap_admin_bootstrap_ready_open", ClaimID: "CLAIM_ADMIN_BOOTSTRAP_READY", RiskID: "F3"},
+	{ID: "seed_gap_default_user_loop_open", ClaimID: "CLAIM_DEFAULT_USER_LOOP", RiskID: "F2"},
+	{ID: "seed_gap_workload_fixture_ready_open", ClaimID: "CLAIM_WORKLOAD_FIXTURE_READY", RiskID: "F9"},
+	{ID: "seed_gap_operator_repair_safe_open", ClaimID: "CLAIM_OPERATOR_REPAIR_SAFE", RiskID: "F11"},
+	{ID: "seed_gap_purge_approval_safe_open", ClaimID: "CLAIM_PURGE_APPROVAL_SAFE", RiskID: "F13"},
+	{ID: "seed_gap_restore_reconciliation_open", ClaimID: "CLAIM_RESTORE_RECONCILIATION", RiskID: "F14"},
+	{ID: "seed_gap_residual_risk_catalog_open", ClaimID: "CLAIM_RESIDUAL_RISK_CATALOG", RiskID: "F12"},
+	{ID: "seed_gap_deployment_risk_envelope_open", ClaimID: "CLAIM_DEPLOYMENT_RISK_ENVELOPE", RiskID: "F17"},
 }
 
 func validateItem(item Item, repoRoot string) []Finding {
 	var findings []Finding
+	findings = append(findings, validatePackage0Metadata(item)...)
 	if !validEvidenceTypes[item.EvidenceType] && item.EvidenceType != "" {
 		findings = append(findings, Finding{ItemID: item.ID, Code: "item.evidence_type_invalid", Message: fmt.Sprintf("unsupported evidence_type %q", item.EvidenceType)})
 	}
@@ -297,6 +494,70 @@ func validateItem(item Item, repoRoot string) []Finding {
 		}
 	}
 	return findings
+}
+
+func validatePackage0Metadata(item Item) []Finding {
+	var findings []Finding
+	if item.EvidenceProfile != "" && !validEvidenceProfiles[item.EvidenceProfile] {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.evidence_profile_invalid", Message: fmt.Sprintf("unsupported evidence_profile %q", item.EvidenceProfile)})
+	}
+	if item.NegativeOrPositive != "" && !validNegativeOrPositive[item.NegativeOrPositive] {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.negative_or_positive_invalid", Message: fmt.Sprintf("unsupported negative_or_positive %q", item.NegativeOrPositive)})
+	}
+	if item.PassCriteria.Kind != "" && !validPassCriteriaKinds[item.PassCriteria.Kind] {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.pass_criteria_kind_invalid", Message: fmt.Sprintf("unsupported pass_criteria.kind %q", item.PassCriteria.Kind)})
+	}
+	if item.PassCriteria.Kind == "" {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.pass_criteria_kind_missing", Message: "pass_criteria.kind is required"})
+	}
+	if len(nonEmptyStrings(item.PassCriteria.Assertions)) == 0 {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.pass_criteria_assertions_missing", Message: "pass_criteria.assertions must contain at least one non-empty assertion"})
+	}
+	if item.DefaultMode && item.FixtureEnabledMode {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.evidence_mode_invalid", Message: "default_mode=true and fixture_enabled_mode=true cannot both be set"})
+	}
+	if item.Required && item.EvidenceProfile == "deployment-runtime-support" {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.evidence_profile_required_invalid", Message: "deployment-runtime-support cannot be required local GA evidence"})
+	}
+	if item.OptionalGated && item.NegativeOrPositive == "positive" {
+		if item.EvidenceProfile != "repo-local-fixture-enabled" || !item.FixtureEnabledMode || item.DefaultMode {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "item.optional_positive_profile_invalid", Message: "optional positive evidence must use repo-local-fixture-enabled profile with fixture_enabled_mode=true and default_mode=false"})
+		}
+		if strings.TrimSpace(item.FixtureID) == "" {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "item.fixture_id_missing", Message: "optional fixture positive evidence requires fixture_id"})
+		}
+	}
+	if optionalCapability(item.CapabilityID) && item.EvidenceProfile == "default" && item.NegativeOrPositive != "" && item.NegativeOrPositive != "negative" {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.optional_default_polarity_invalid", Message: fmt.Sprintf("optional capability %s default profile evidence must be negative", item.CapabilityID)})
+	}
+	if item.Required && item.ClaimID == "CLAIM_DEFAULT_USER_LOOP" && (!item.DefaultMode || item.NegativeOrPositive == "negative") {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.default_user_loop_evidence_invalid", Message: "CLAIM_DEFAULT_USER_LOOP required evidence must be default_mode=true and positive or both"})
+	}
+	if item.Required && (strings.TrimSpace(item.RiskID) != "" || highRiskClaims[item.ClaimID]) {
+		if item.DocOnlyAllowed || item.EvidenceType == "doc-guard" || len(item.Anchors) == 0 || allDocAnchors(item.Anchors) {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "item.risk_bound_doc_only_invalid", Message: "risk-bound required evidence cannot be doc-only"})
+		}
+	}
+	return findings
+}
+
+func nonEmptyStrings(values []string) []string {
+	var nonEmpty []string
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			nonEmpty = append(nonEmpty, value)
+		}
+	}
+	return nonEmpty
+}
+
+func optionalCapability(capabilityID string) bool {
+	switch capabilityID {
+	case "workload_mount", "repo_template", "repo_purge":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateCapabilityClassification(item Item) []Finding {
@@ -583,11 +844,16 @@ func repoRootOrDefault(repoRoot string) string {
 
 func allDocAnchors(anchors []string) bool {
 	for _, anchor := range anchors {
-		if !strings.HasPrefix(anchor, "docs/") {
+		if !docOnlyAnchor(anchor) {
 			return false
 		}
 	}
 	return true
+}
+
+func docOnlyAnchor(anchor string) bool {
+	path := strings.Split(anchor, "#")[0]
+	return strings.HasPrefix(path, "docs/") || strings.HasSuffix(path, ".md")
 }
 
 func unsafeRepoLocalToken(value string) bool {
@@ -612,6 +878,33 @@ var validEvidenceTypes = map[string]bool{
 	"provenance":       true,
 	"race":             true,
 	"doc-guard":        true,
+}
+
+var validEvidenceProfiles = map[string]bool{
+	"default":                    true,
+	"repo-local-fixture-enabled": true,
+	"deployment-runtime-support": true,
+}
+
+var validNegativeOrPositive = map[string]bool{
+	"negative": true,
+	"positive": true,
+	"both":     true,
+}
+
+var validPassCriteriaKinds = map[string]bool{
+	"command_exit_zero": true,
+	"denial_safety":     true,
+	"positive_path":     true,
+	"coverage_guard":    true,
+	"seed_gap":          true,
+}
+
+var highRiskClaims = map[string]bool{
+	"CLAIM_DEFAULT_DENIAL_SAFE":          true,
+	"CLAIM_OPTIONAL_DENIED_SAFE":         true,
+	"CLAIM_CAPABILITY_MATRIX_CONSISTENT": true,
+	"CLAIM_RELEASE_GATE_TRACEABLE":       true,
 }
 
 var validCapabilities = map[string]bool{

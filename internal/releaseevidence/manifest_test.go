@@ -34,17 +34,17 @@ func TestValidateManifestRequiresTopLevelAndItemFields(t *testing.T) {
 		},
 		{
 			name: "missing release gate",
-			body: `{"schema_version":"1","items":[]}`,
+			body: `{"schema_version":"2","items":[]}`,
 			want: "release_gate",
 		},
 		{
 			name: "missing item id",
-			body: `{"schema_version":"1","release_gate":"scripts/verify-ga-release.sh","items":[{"capability_id":"storage","evidence_type":"unit","required":true,"command":["go","test","./internal/capability"],"anchors":["go.mod"],"doc_only_allowed":false,"optional_gated":false,"default_ga_required":true}]}`,
+			body: `{"schema_version":"2","release_gate":"scripts/verify-ga-release.sh","items":[{"capability_id":"storage","evidence_type":"unit","required":true,"command":["go","test","./internal/capability"],"anchors":["go.mod"],"doc_only_allowed":false,"optional_gated":false,"default_ga_required":true}]}`,
 			want: "id",
 		},
 		{
 			name: "missing command",
-			body: `{"schema_version":"1","release_gate":"scripts/verify-ga-release.sh","items":[{"id":"storage_unit","capability_id":"storage","evidence_type":"unit","required":true,"anchors":["go.mod"],"doc_only_allowed":false,"optional_gated":false,"default_ga_required":true}]}`,
+			body: `{"schema_version":"2","release_gate":"scripts/verify-ga-release.sh","items":[{"id":"storage_unit","capability_id":"storage","evidence_type":"unit","required":true,"anchors":["go.mod"],"doc_only_allowed":false,"optional_gated":false,"default_ga_required":true}]}`,
 			want: "command",
 		},
 	}
@@ -257,15 +257,12 @@ func TestValidateManifestRejectsGoTestRunSelectorThatOnlyMatchesBenchmark(t *tes
 
 func TestValidateManifestRejectsRetainedLifecyclePositivePurgeSelectors(t *testing.T) {
 	root := releaseEvidenceFixtureRoot(t)
-	body := strings.Replace(validReleaseEvidenceManifest(), `"id":"repo_lifecycle_retained_positive_unit",
-      "capability_id":"repo_lifecycle_retained",
-      "evidence_type":"unit",
-      "required":true,
-      "command":["bash","scripts/pass.sh"]`, `"id":"repo_lifecycle_retained_positive_unit",
-      "capability_id":"repo_lifecycle_retained",
-      "evidence_type":"unit",
-      "required":true,
-      "command":["go","test","./internal/evidencetest","-run","^TestRepoLifecycleHandlerCreatesDeleteAndPurgeOperations$"]`, 1)
+	body := replacePackage0FieldForItem(
+		validReleaseEvidenceManifest(),
+		"repo_lifecycle_retained_positive_unit",
+		`"command":["bash","scripts/pass.sh"]`,
+		`"command":["go","test","./internal/evidencetest","-run","^TestRepoLifecycleHandlerCreatesDeleteAndPurgeOperations$"]`,
+	)
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
@@ -457,6 +454,7 @@ func releaseEvidenceFixtureRoot(t *testing.T) string {
 	root := t.TempDir()
 	writeReleaseEvidenceFile(t, filepath.Join(root, "go.mod"), "module example.com/releaseevidencefixture\n\ngo 1.22\n")
 	writeReleaseEvidenceFile(t, filepath.Join(root, "docs", "READINESS_EVIDENCE.md"), "fixture\n")
+	writeReleaseEvidenceFile(t, filepath.Join(root, "docs", "GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"), "fixture\n")
 	writeReleaseEvidenceFile(t, filepath.Join(root, "scripts", "pass.sh"), "#!/usr/bin/env bash\nexit 0\n")
 	writeReleaseEvidenceFile(t, filepath.Join(root, "scripts", "fail.sh"), "#!/usr/bin/env bash\nexit 1\n")
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "evidencetest", "evidence_test.go"), `package evidencetest
@@ -475,8 +473,8 @@ func BenchmarkEvidenceOnly(b *testing.B) {}
 }
 
 func validReleaseEvidenceManifest() string {
-	return `{
-  "schema_version":"1",
+	return withPackage0SeedGapMarkers(withPackage0Metadata(`{
+  "schema_version":"2",
   "release_gate":"scripts/verify-ga-release.sh",
   "items":[
     {
@@ -634,7 +632,92 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":false
     }
   ]
-}`
+}`))
+}
+
+func withPackage0Metadata(body string) string {
+	for _, metadata := range package0FixtureMetadata {
+		body = strings.Replace(body, `"id":"`+metadata.id+`",`, `"id":"`+metadata.id+`",
+      "claim_id":"`+metadata.claimID+`",
+      "subclaim_id":"`+metadata.subclaimID+`",
+      "acceptance_id":"`+metadata.acceptanceID+`",
+      "risk_id":"`+metadata.riskID+`",
+      "fixture_id":"`+metadata.fixtureID+`",
+      "evidence_profile":"`+metadata.evidenceProfile+`",
+      "default_mode":`+metadata.defaultMode+`,
+      "fixture_enabled_mode":`+metadata.fixtureEnabledMode+`,
+      "negative_or_positive":"`+metadata.negativeOrPositive+`",`, 1)
+		body = insertPackage0PassCriteria(body, metadata.id, metadata.defaultGARequired, metadata.passCriteriaKind, metadata.passCriteriaAssertion)
+	}
+	return body
+}
+
+func insertPackage0PassCriteria(body, id, defaultGARequired, kind, assertion string) string {
+	idIndex := strings.Index(body, `"id":"`+id+`"`)
+	if idIndex < 0 {
+		return body
+	}
+	field := `"default_ga_required":` + defaultGARequired
+	fieldIndex := strings.Index(body[idIndex:], field)
+	if fieldIndex < 0 {
+		return body
+	}
+	insertAt := idIndex + fieldIndex + len(field)
+	return body[:insertAt] + `,
+      "pass_criteria":{"kind":"` + kind + `","assertions":["` + assertion + `"]}` + body[insertAt:]
+}
+
+func withPackage0SeedGapMarkers(body string) string {
+	for _, gap := range package0SeedGapFixtureMetadata {
+		body = appendReleaseEvidenceItem(body, `"id":"`+gap.id+`","claim_id":"`+gap.claimID+`","subclaim_id":"seed_gap_open","acceptance_id":"P0_SEED_GAP_OPEN","risk_id":"`+gap.riskID+`","fixture_id":"","capability_id":"","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"seed_gap","assertions":["open"]}`)
+	}
+	return body
+}
+
+var package0SeedGapFixtureMetadata = []struct {
+	id      string
+	claimID string
+	riskID  string
+}{
+	{"seed_gap_admin_bootstrap_ready_open", "CLAIM_ADMIN_BOOTSTRAP_READY", "F3"},
+	{"seed_gap_default_user_loop_open", "CLAIM_DEFAULT_USER_LOOP", "F2"},
+	{"seed_gap_workload_fixture_ready_open", "CLAIM_WORKLOAD_FIXTURE_READY", "F9"},
+	{"seed_gap_operator_repair_safe_open", "CLAIM_OPERATOR_REPAIR_SAFE", "F11"},
+	{"seed_gap_purge_approval_safe_open", "CLAIM_PURGE_APPROVAL_SAFE", "F13"},
+	{"seed_gap_restore_reconciliation_open", "CLAIM_RESTORE_RECONCILIATION", "F14"},
+	{"seed_gap_residual_risk_catalog_open", "CLAIM_RESIDUAL_RISK_CATALOG", "F12"},
+	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
+}
+
+var package0FixtureMetadata = []struct {
+	id                    string
+	claimID               string
+	subclaimID            string
+	acceptanceID          string
+	riskID                string
+	fixtureID             string
+	evidenceProfile       string
+	defaultMode           string
+	fixtureEnabledMode    string
+	negativeOrPositive    string
+	defaultGARequired     string
+	passCriteriaKind      string
+	passCriteriaAssertion string
+}{
+	{"webdav_export_disabled_admission_unit", "CLAIM_DEFAULT_DENIAL_SAFE", "webdav_export_disabled_admission", "P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION", "F5", "", "default", "true", "false", "negative", "true", "denial_safety", "disabled admission rejects before metadata and audits without queuing"},
+	{"workload_mount_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_disabled_admission", "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", "F5", "", "default", "true", "false", "negative", "false", "denial_safety", "optional disabled admission rejects before metadata and audits without queuing"},
+	{"repo_lifecycle_retained_positive_unit", "CLAIM_RETAINED_LIFECYCLE_DEFAULT", "retained_lifecycle_positive", "P0_RETAINED_LIFECYCLE_DEFAULT_POSITIVE", "F15", "", "default", "true", "false", "positive", "true", "positive_path", "retained lifecycle archive restore delete and tombstone flows pass without purge selectors"},
+	{"workload_mount_plan_store_freshness_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_plan_store_freshness", "P0_OPTIONAL_DENIED_WORKLOAD_PLAN_STORE", "F9", "", "default", "true", "false", "negative", "false", "denial_safety", "workload mount plan store fails closed on stale or unsupported default state"},
+	{"workload_mount_runtime_secretref_config_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_runtime_secretref_config", "P0_OPTIONAL_DENIED_WORKLOAD_RUNTIME_SECRETREF", "F10", "", "default", "true", "false", "negative", "false", "denial_safety", "runtime secretref configuration fails closed without leaking values"},
+	{"workload_mount_secretref_redaction_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_secretref_redaction", "P0_OPTIONAL_DENIED_WORKLOAD_SECRETREF_REDACTION", "F10", "", "default", "true", "false", "negative", "false", "denial_safety", "workload mount responses and audits redact secret references and raw paths"},
+	{"repo_template_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_template_disabled_admission", "P0_OPTIONAL_DENIED_TEMPLATE_ADMISSION", "F16", "", "default", "true", "false", "negative", "false", "denial_safety", "repo template disabled admission rejects before metadata and audits without queuing"},
+	{"repo_template_create_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_template_create_disabled_worker_recovery", "P0_OPTIONAL_DENIED_TEMPLATE_CREATE_RECOVERY", "F6", "", "default", "true", "false", "negative", "false", "denial_safety", "disabled template create recovery terminalizes unsupported historical operations"},
+	{"repo_template_clone_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_template_clone_disabled_worker_recovery", "P0_OPTIONAL_DENIED_TEMPLATE_CLONE_RECOVERY", "F6", "", "default", "true", "false", "negative", "false", "denial_safety", "disabled template clone recovery terminalizes unsupported historical operations"},
+	{"repo_purge_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_admission", "P0_OPTIONAL_DENIED_PURGE_ADMISSION", "F13", "", "default", "true", "false", "negative", "false", "denial_safety", "repo purge disabled admission rejects before metadata and audits without queuing"},
+	{"repo_purge_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_worker_recovery", "P0_OPTIONAL_DENIED_PURGE_RECOVERY", "F13", "", "default", "true", "false", "negative", "false", "denial_safety", "disabled repo purge recovery terminalizes unsupported historical operations"},
+	{"default_ga_capability_classification_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "default_ga_capability_classification", "P0_CAPABILITY_MATRIX_DEFAULT_CLASSIFICATION", "F4", "", "default", "true", "false", "both", "false", "coverage_guard", "capability matrix classifies default and optional capabilities consistently"},
+	{"capability_admission_operation_coverage_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "capability_admission_operation_coverage", "P0_CAPABILITY_MATRIX_OPERATION_COVERAGE", "F4", "", "default", "true", "false", "both", "false", "coverage_guard", "capability admission operation coverage stays consistent"},
+	{"release_script_evidence_manifest_guard", "CLAIM_RELEASE_GATE_TRACEABLE", "release_gate_invokes_manifest_verifier", "P0_RELEASE_GATE_TRACEABLE_MANIFEST_VERIFIER", "F18", "", "default", "true", "false", "both", "false", "coverage_guard", "release gate invokes the manifest verifier and keeps evidence traceable"},
 }
 
 func writeReleaseEvidenceFile(t *testing.T, path, body string) {
