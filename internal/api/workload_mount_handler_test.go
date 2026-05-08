@@ -463,6 +463,91 @@ func TestWorkloadMountPlanAuditUsesMinimalDetails(t *testing.T) {
 	}
 }
 
+func TestWorkloadMountPlanRejectsStaleIssuanceLeaseBeforePlanReader(t *testing.T) {
+	now := fixedNamespaceNow()
+	for _, tt := range []struct {
+		name     string
+		status   sessionstate.MountStatus
+		readOnly bool
+	}{
+		{name: "issued read write", status: sessionstate.MountStatusIssued, readOnly: false},
+		{name: "pending read write", status: sessionstate.MountStatusPending, readOnly: false},
+		{name: "active read write", status: sessionstate.MountStatusActive, readOnly: false},
+		{name: "active read only", status: sessionstate.MountStatusActive, readOnly: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := workloadMountMetaFixture()
+			meta.mount.Status = tt.status
+			meta.mount.ReadOnly = tt.readOnly
+			meta.mount.LeaseExpiresAt = now.Add(-time.Second)
+			meta.plan.ReadOnly = tt.readOnly
+			meta.plan.SecretRef = workloadmount.SecretRef{Namespace: "kube-secret-ns", Name: "secret-volume"}
+			planCalls := &fakeWorkloadMountPlanReaderCalls{}
+			sink := &fakeAuditSink{}
+			config := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
+				config.AuditSink = sink
+				config.MountReader = fakeWorkloadMountReader{binding: meta.mount}
+				config.PlanReader = fakeWorkloadMountPlanReader{plan: meta.plan, calls: planCalls}
+			})
+			config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
+			rec := httptest.NewRecorder()
+
+			WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "runtime-orchestrator"))
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("plan status = %d body = %s, want 409", rec.Code, rec.Body.String())
+			}
+			env := decodeErrorEnvelope(t, rec.Body.Bytes())
+			if env.Error.Code != CodeOperationRecoveryRequired || !env.Error.Retryable || env.Error.Message != "workload mount lease is stale; operator recovery is required" {
+				t.Fatalf("error = %#v, want retryable operation recovery required", env.Error)
+			}
+			if !auditValidationErrorsContain(env.Error.Details["validation_errors"], "workload_mount_lease_stale") {
+				t.Fatalf("validation_errors = %#v, want workload_mount_lease_stale", env.Error.Details["validation_errors"])
+			}
+			if planCalls.calls != 0 {
+				t.Fatalf("plan reader calls = %d, want stale lease denied before plan lookup", planCalls.calls)
+			}
+			for _, event := range sink.events {
+				if event.Type == audit.EventTypeMountPlanIssued {
+					t.Fatalf("audit events = %#v, want no MountPlanIssued success audit", sink.events)
+				}
+			}
+			assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+		})
+	}
+}
+
+func TestWorkloadMountPlanReleasingExpiredLeaseStillUsesTeardownPlan(t *testing.T) {
+	now := fixedNamespaceNow()
+	meta := workloadMountMetaFixture()
+	meta.mount.Status = sessionstate.MountStatusReleasing
+	meta.mount.LeaseExpiresAt = now.Add(-time.Hour)
+	meta.plan.SecurityPolicy.AllowPrivileged = false
+	planCalls := &fakeWorkloadMountPlanReaderCalls{}
+	config := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
+		config.MountReader = fakeWorkloadMountReader{binding: meta.mount}
+		config.PlanReader = fakeWorkloadMountPlanReader{plan: meta.plan, calls: planCalls}
+	})
+	config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
+	rec := httptest.NewRecorder()
+
+	WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "runtime-orchestrator"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plan status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if planCalls.calls != 1 || planCalls.namespaceID != "ns_123" || planCalls.mountBindingID != "wmb_123" {
+		t.Fatalf("plan reader calls/scope = %d %q/%q, want teardown plan lookup", planCalls.calls, planCalls.namespaceID, planCalls.mountBindingID)
+	}
+	var plan workloadmount.Plan
+	if err := json.Unmarshal(rec.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("decode plan: %v: %s", err, rec.Body.String())
+	}
+	if plan.SecurityPolicy.AllowPrivileged {
+		t.Fatalf("allow_privileged = true, want false for teardown plan: %#v", plan.SecurityPolicy)
+	}
+}
+
 func TestWorkloadMountAdmissionBlocksWriterFenceOnlyForReadWrite(t *testing.T) {
 	intake := &fakeOperationIntakeStore{}
 	meta := workloadMountMetaFixture()
@@ -629,6 +714,7 @@ func (reader fakeWorkloadMountReader) GetWorkloadMountBinding(context.Context, s
 }
 
 type fakeWorkloadMountPlanReaderCalls struct {
+	calls          int
 	namespaceID    string
 	mountBindingID string
 }
@@ -640,6 +726,7 @@ type fakeWorkloadMountPlanReader struct {
 
 func (reader fakeWorkloadMountPlanReader) GetOrchestratorMountPlan(_ context.Context, namespaceID, mountBindingID string) (workloadmount.Plan, error) {
 	if reader.calls != nil {
+		reader.calls.calls++
 		reader.calls.namespaceID = namespaceID
 		reader.calls.mountBindingID = mountBindingID
 	}

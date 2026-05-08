@@ -281,6 +281,10 @@ func (handler workloadMountLeafHandler) plan(w http.ResponseWriter, r *http.Requ
 	if !handler.bindingInRequestNamespace(w, r, route, requestContext, binding, namespaceID) {
 		return
 	}
+	if workloadmount.BindingPlanFreshnessDecision(binding, handler.currentTime()) == workloadmount.PlanFreshnessStaleIssuance {
+		writeWorkloadMountStaleLeaseRecoveryRequired(w, r, route, requestContext, handler.sink)
+		return
+	}
 	plan, err := handler.planReader.GetOrchestratorMountPlan(r.Context(), namespaceID, mountBindingID)
 	if err != nil {
 		handler.writeReadError(w, r, err)
@@ -674,6 +678,10 @@ func writeWorkloadMountAdmissionDisabled(w http.ResponseWriter, r *http.Request,
 		ValidationErrors: validationErrors,
 		RequestContext:   requestContext,
 	})
+}
+
+func writeWorkloadMountStaleLeaseRecoveryRequired(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, sink audit.Sink) {
+	writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeOperationRecoveryRequired, http.StatusConflict, true, "workload mount lease is stale; operator recovery is required", []string{"workload_mount_lease_stale"}, sink)
 }
 
 func writeWorkloadMountError(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, message string, retryable bool) {

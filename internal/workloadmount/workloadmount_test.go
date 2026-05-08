@@ -76,3 +76,32 @@ func TestBindingValidateRejectsInvalidMountPathBeforeStatusAndLease(t *testing.T
 		t.Fatalf("Binding.Validate() error = %v, want mount_path rejection before status/lease validation", err)
 	}
 }
+
+func TestBindingPlanFreshnessDecision(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name           string
+		status         sessionstate.MountStatus
+		leaseExpiresAt time.Time
+		want           PlanFreshnessDecision
+	}{
+		{name: "issued live lease allows issuance", status: sessionstate.MountStatusIssued, leaseExpiresAt: now.Add(time.Minute), want: PlanFreshnessAllowIssuance},
+		{name: "pending live lease allows issuance", status: sessionstate.MountStatusPending, leaseExpiresAt: now.Add(time.Minute), want: PlanFreshnessAllowIssuance},
+		{name: "active live lease allows issuance", status: sessionstate.MountStatusActive, leaseExpiresAt: now.Add(time.Minute), want: PlanFreshnessAllowIssuance},
+		{name: "issued expired lease is stale", status: sessionstate.MountStatusIssued, leaseExpiresAt: now, want: PlanFreshnessStaleIssuance},
+		{name: "pending expired lease is stale", status: sessionstate.MountStatusPending, leaseExpiresAt: now.Add(-time.Nanosecond), want: PlanFreshnessStaleIssuance},
+		{name: "active zero lease is stale", status: sessionstate.MountStatusActive, leaseExpiresAt: time.Time{}, want: PlanFreshnessStaleIssuance},
+		{name: "releasing expired lease allows teardown lookup", status: sessionstate.MountStatusReleasing, leaseExpiresAt: now.Add(-time.Hour), want: PlanFreshnessAllowTeardown},
+		{name: "released has no ordinary plan", status: sessionstate.MountStatusReleased, leaseExpiresAt: now.Add(time.Hour), want: PlanFreshnessNoOrdinaryPlan},
+		{name: "revoked has no ordinary plan", status: sessionstate.MountStatusRevoked, leaseExpiresAt: now.Add(time.Hour), want: PlanFreshnessNoOrdinaryPlan},
+		{name: "expired has no ordinary plan", status: sessionstate.MountStatusExpired, leaseExpiresAt: now.Add(time.Hour), want: PlanFreshnessNoOrdinaryPlan},
+		{name: "failed has no ordinary plan", status: sessionstate.MountStatusFailed, leaseExpiresAt: now.Add(time.Hour), want: PlanFreshnessNoOrdinaryPlan},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := BindingPlanFreshnessDecision(Binding{Status: tt.status, LeaseExpiresAt: tt.leaseExpiresAt}, now)
+			if got != tt.want {
+				t.Fatalf("BindingPlanFreshnessDecision() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}

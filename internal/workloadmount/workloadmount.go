@@ -171,6 +171,31 @@ func Terminal(status sessionstate.MountStatus) bool {
 	}
 }
 
+type PlanFreshnessDecision string
+
+const (
+	PlanFreshnessAllowIssuance  PlanFreshnessDecision = "allow_issuance"
+	PlanFreshnessStaleIssuance  PlanFreshnessDecision = "stale_issuance"
+	PlanFreshnessAllowTeardown  PlanFreshnessDecision = "allow_teardown"
+	PlanFreshnessNoOrdinaryPlan PlanFreshnessDecision = "no_ordinary_plan"
+)
+
+func BindingPlanFreshnessDecision(binding Binding, now time.Time) PlanFreshnessDecision {
+	switch binding.Status {
+	case sessionstate.MountStatusIssued,
+		sessionstate.MountStatusPending,
+		sessionstate.MountStatusActive:
+		if binding.LeaseExpiresAt.IsZero() || !binding.LeaseExpiresAt.After(now) {
+			return PlanFreshnessStaleIssuance
+		}
+		return PlanFreshnessAllowIssuance
+	case sessionstate.MountStatusReleasing:
+		return PlanFreshnessAllowTeardown
+	default:
+		return PlanFreshnessNoOrdinaryPlan
+	}
+}
+
 func ClonePolicy(in map[string]any) map[string]any {
 	if in == nil {
 		return nil
