@@ -12,15 +12,27 @@ import (
 func TestVerifyFileFailsForMissingAndMalformedManifest(t *testing.T) {
 	root := t.TempDir()
 
-	if findings, err := VerifyFile(filepath.Join(root, "missing.json"), Options{RepoRoot: root}); err == nil && len(findings) == 0 {
+	if findings, err := VerifyFile(filepath.Join(root, "missing.json"), Options{Mode: ManifestModeSeed, RepoRoot: root}); err == nil && len(findings) == 0 {
 		t.Fatal("VerifyFile accepted a missing manifest")
 	}
 
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, `{`)
-	if findings, err := VerifyFile(path, Options{RepoRoot: root}); err == nil && len(findings) == 0 {
+	if findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root}); err == nil && len(findings) == 0 {
 		t.Fatal("VerifyFile accepted malformed JSON")
 	}
+}
+
+func TestLoadAndValidateFileRequiresExplicitLibraryMode(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, validReleaseEvidenceManifest())
+
+	_, findings, err := LoadAndValidateFile(path, Options{RepoRoot: root})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned unexpected error: %v", err)
+	}
+	assertReleaseEvidenceFindingContains(t, findings, "manifest.mode_missing")
 }
 
 func TestValidateManifestRequiresTopLevelAndItemFields(t *testing.T) {
@@ -57,7 +69,7 @@ func TestValidateManifestRequiresTopLevelAndItemFields(t *testing.T) {
 			path := filepath.Join(root, "manifest.json")
 			writeReleaseEvidenceFile(t, path, tt.body)
 
-			findings, err := VerifyFile(path, Options{RepoRoot: root})
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root})
 			if err != nil {
 				t.Fatalf("VerifyFile returned unexpected error: %v", err)
 			}
@@ -86,7 +98,7 @@ func TestValidateManifestRejectsUnknownEvidenceTypesAndCapabilities(t *testing.T
 			path := filepath.Join(root, "manifest.json")
 			writeReleaseEvidenceFile(t, path, body)
 
-			findings, err := VerifyFile(path, Options{RepoRoot: root})
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root})
 			if err != nil {
 				t.Fatalf("VerifyFile returned unexpected error: %v", err)
 			}
@@ -117,7 +129,7 @@ func TestValidateManifestAllowsOnlyStableEvidenceTypeSet(t *testing.T) {
 			path := filepath.Join(root, "manifest.json")
 			writeReleaseEvidenceFile(t, path, body)
 
-			findings, err := VerifyFile(path, Options{RepoRoot: root})
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root})
 			if err != nil {
 				t.Fatalf("VerifyFile returned unexpected error: %v", err)
 			}
@@ -157,7 +169,7 @@ func TestValidateManifestRejectsUnsafeRequiredCommands(t *testing.T) {
 			path := filepath.Join(root, "manifest.json")
 			writeReleaseEvidenceFile(t, path, body)
 
-			findings, err := VerifyFile(path, Options{RepoRoot: root})
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root})
 			if err != nil {
 				t.Fatalf("VerifyFile returned unexpected error: %v", err)
 			}
@@ -173,7 +185,7 @@ func TestValidateManifestRejectsUnsafeCommandsOnNonRequiredItems(t *testing.T) {
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -205,7 +217,7 @@ func TestValidateManifestRejectsMissingRepoLocalCommandTargetsInCheckOnly(t *tes
 			body := strings.Replace(validReleaseEvidenceManifest(), `"command":["bash","scripts/pass.sh"]`, tt.command, 1)
 			writeReleaseEvidenceFile(t, path, body)
 
-			findings, err := VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: false})
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
 			if err != nil {
 				t.Fatalf("VerifyFile returned unexpected error: %v", err)
 			}
@@ -221,7 +233,7 @@ func TestValidateManifestRejectsGoTestRunSelectorThatMatchesNoTestsInCheckOnly(t
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -235,7 +247,7 @@ func TestValidateManifestRejectsGoTestAllPackagesRunSelectorThatMatchesNoTestsIn
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -249,7 +261,7 @@ func TestValidateManifestRejectsGoTestRunSelectorThatOnlyMatchesBenchmark(t *tes
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -268,7 +280,7 @@ func TestValidateManifestRejectsRetainedLifecyclePositivePurgeSelectors(t *testi
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -300,7 +312,7 @@ func TestValidateManifestRejectsDocOnlyEvidenceForNonDocItems(t *testing.T) {
 			path := filepath.Join(root, "manifest.json")
 			writeReleaseEvidenceFile(t, path, tt.body)
 
-			findings, err := VerifyFile(path, Options{RepoRoot: root})
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root})
 			if err != nil {
 				t.Fatalf("VerifyFile returned unexpected error: %v", err)
 			}
@@ -344,7 +356,7 @@ func TestValidateManifestChecksCapabilityClassification(t *testing.T) {
 			path := filepath.Join(root, "manifest.json")
 			writeReleaseEvidenceFile(t, path, tt.edit(validReleaseEvidenceManifest()))
 
-			findings, err := VerifyFile(path, Options{RepoRoot: root})
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root})
 			if err != nil {
 				t.Fatalf("VerifyFile returned unexpected error: %v", err)
 			}
@@ -358,7 +370,7 @@ func TestVerifyFileExecutesRequiredCommandsAndPropagatesFailure(t *testing.T) {
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, validReleaseEvidenceManifest())
 
-	findings, err := VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: true})
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: true})
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -367,7 +379,7 @@ func TestVerifyFileExecutesRequiredCommandsAndPropagatesFailure(t *testing.T) {
 	}
 
 	writeReleaseEvidenceFile(t, path, strings.Replace(validReleaseEvidenceManifest(), `"command":["bash","scripts/pass.sh"]`, `"command":["bash","scripts/fail.sh"]`, 1))
-	findings, err = VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: true})
+	findings, err = VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: true})
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -378,7 +390,7 @@ func TestCurrentRepoManifestContainsOptionalCapabilityDisabledAdmissionEvidence(
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
 
-	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{RepoRoot: repoRoot})
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
 	if err != nil {
 		t.Fatalf("LoadAndValidateFile returned error: %v", err)
 	}
@@ -410,7 +422,7 @@ func TestCurrentRepoManifestRepoCreateJVSEvidenceRunSelectorCoversRecoveryTests(
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
 
-	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{RepoRoot: repoRoot})
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
 	if err != nil {
 		t.Fatalf("LoadAndValidateFile returned error: %v", err)
 	}
@@ -468,7 +480,7 @@ func TestCurrentRepoManifestWorkloadMountDisabledAdmissionSelectorCoversCoreTest
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
 
-	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{RepoRoot: repoRoot})
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
 	if err != nil {
 		t.Fatalf("LoadAndValidateFile returned error: %v", err)
 	}
@@ -521,6 +533,34 @@ func TestCurrentRepoManifestWorkloadMountDisabledAdmissionSelectorCoversCoreTest
 			t.Fatalf("%s pass criteria %q does not mention %q", item.ID, passCriteria, required)
 		}
 	}
+}
+
+func TestCurrentRepoManifestSeedModeAllowsOpenSeedGaps(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	_, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("seed mode should allow the current repo manifest, got findings: %+v", findings)
+	}
+}
+
+func TestCurrentRepoManifestFinalModeRejectsOpenSeedGaps(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	_, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeFinal, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	assertReleaseEvidenceFindingContains(t, findings, "manifest.final_seed_gap_open")
+	assertReleaseEvidenceFindingContains(t, findings, "seed_gap_admin_bootstrap_ready_open")
+	assertReleaseEvidenceFindingContains(t, findings, "CLAIM_ADMIN_BOOTSTRAP_READY")
+	assertReleaseEvidenceFindingContains(t, findings, "seed_gap_optional_fixture_conformant_open")
+	assertNoReleaseEvidenceFindingContains(t, findings, "repo_create_jvs_runtime_unavailable_recovery_unit: item.capability_id_legacy_final_invalid")
 }
 
 func goTestPackageForTestName(testName string) string {
@@ -582,7 +622,7 @@ func TestValidateManifestRequiresExactReleaseEvidenceItems(t *testing.T) {
 			path := filepath.Join(root, "manifest.json")
 			writeReleaseEvidenceFile(t, path, tt.edit(validReleaseEvidenceManifest()))
 
-			findings, err := VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: false})
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
 			if err != nil {
 				t.Fatalf("VerifyFile returned unexpected error: %v", err)
 			}
@@ -743,7 +783,7 @@ func validReleaseEvidenceManifest() string {
     },
     {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
-      "capability_id":"jvs",
+      "capability_id":"repo_create",
       "evidence_type":"unit",
       "required":true,
       "command":["bash","scripts/pass.sh"],
@@ -800,6 +840,8 @@ func withPackage0Metadata(body string) string {
       "evidence_profile":"`+metadata.evidenceProfile+`",
       "default_mode":`+metadata.defaultMode+`,
       "fixture_enabled_mode":`+metadata.fixtureEnabledMode+`,
+      "expected_runtime":"`+metadata.expectedRuntime+`",
+      "scope":"`+metadata.scope+`",
       "negative_or_positive":"`+metadata.negativeOrPositive+`",`, 1)
 		body = insertPackage0PassCriteria(body, metadata.id, metadata.defaultGARequired, metadata.passCriteriaKind, metadata.passCriteriaAssertion)
 	}
@@ -823,7 +865,7 @@ func insertPackage0PassCriteria(body, id, defaultGARequired, kind, assertion str
 
 func withPackage0SeedGapMarkers(body string) string {
 	for _, gap := range package0SeedGapFixtureMetadata {
-		body = appendReleaseEvidenceItem(body, `"id":"`+gap.id+`","claim_id":"`+gap.claimID+`","subclaim_id":"seed_gap_open","acceptance_id":"P0_SEED_GAP_OPEN","risk_id":"`+gap.riskID+`","fixture_id":"","capability_id":"","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"seed_gap","assertions":["open"]}`)
+		body = appendReleaseEvidenceItem(body, `"id":"`+gap.id+`","claim_id":"`+gap.claimID+`","subclaim_id":"seed_gap_open","acceptance_id":"P0_SEED_GAP_OPEN","risk_id":"`+gap.riskID+`","fixture_id":"","capability_id":"","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"doc-guard","negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"seed_gap","assertions":["open"]}`)
 	}
 	return body
 }
@@ -841,6 +883,13 @@ var package0SeedGapFixtureMetadata = []struct {
 	{"seed_gap_restore_reconciliation_open", "CLAIM_RESTORE_RECONCILIATION", "F14"},
 	{"seed_gap_residual_risk_catalog_open", "CLAIM_RESIDUAL_RISK_CATALOG", "F12"},
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
+	{"seed_gap_profile_boundary_open", "CLAIM_PROFILE_BOUNDARY", "F1"},
+	{"seed_gap_discovery_surfaces_open", "CLAIM_DISCOVERY_SURFACES", "F7"},
+	{"seed_gap_webdav_default_access_open", "CLAIM_WEBDAV_DEFAULT_ACCESS", "F8"},
+	{"seed_gap_secret_path_redaction_open", "CLAIM_SECRET_PATH_REDACTION", "F10"},
+	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
+	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
+	{"seed_gap_workflow_hardening_guard_open", "CLAIM_WORKFLOW_HARDENING_GUARD", "F18"},
 }
 
 var package0FixtureMetadata = []struct {
@@ -853,26 +902,28 @@ var package0FixtureMetadata = []struct {
 	evidenceProfile       string
 	defaultMode           string
 	fixtureEnabledMode    string
+	expectedRuntime       string
+	scope                 string
 	negativeOrPositive    string
 	defaultGARequired     string
 	passCriteriaKind      string
 	passCriteriaAssertion string
 }{
-	{"webdav_export_disabled_admission_unit", "CLAIM_DEFAULT_DENIAL_SAFE", "webdav_export_disabled_admission", "P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION", "F5", "", "default", "true", "false", "negative", "true", "denial_safety", "disabled admission rejects before metadata and audits without queuing"},
-	{"workload_mount_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_disabled_admission", "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", "F5", "", "default", "true", "false", "negative", "false", "denial_safety", "optional disabled workload mount admission rejects create, status update, heartbeat, and ordinary orchestrator plan before metadata/runtime continuation while preserving idempotency replay/conflict precedence"},
-	{"repo_lifecycle_retained_positive_unit", "CLAIM_RETAINED_LIFECYCLE_DEFAULT", "retained_lifecycle_positive", "P0_RETAINED_LIFECYCLE_DEFAULT_POSITIVE", "F15", "", "default", "true", "false", "positive", "true", "positive_path", "retained lifecycle archive restore delete and tombstone flows pass without purge selectors"},
-	{"workload_mount_plan_store_freshness_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_plan_store_freshness", "P0_OPTIONAL_DENIED_WORKLOAD_PLAN_STORE", "F9", "", "default", "true", "false", "negative", "false", "denial_safety", "workload mount plan store fails closed on stale or unsupported default state"},
-	{"workload_mount_runtime_secretref_config_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_runtime_secretref_config", "P0_OPTIONAL_DENIED_WORKLOAD_RUNTIME_SECRETREF", "F10", "", "default", "true", "false", "negative", "false", "denial_safety", "runtime secretref configuration fails closed without leaking values"},
-	{"workload_mount_secretref_redaction_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_secretref_redaction", "P0_OPTIONAL_DENIED_WORKLOAD_SECRETREF_REDACTION", "F10", "", "default", "true", "false", "negative", "false", "denial_safety", "workload mount responses and audits redact secret references and raw paths"},
-	{"repo_template_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_template_disabled_admission", "P0_OPTIONAL_DENIED_TEMPLATE_ADMISSION", "F16", "", "default", "true", "false", "negative", "false", "denial_safety", "repo template disabled admission rejects before metadata and audits without queuing"},
-	{"repo_template_create_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_template_create_disabled_worker_recovery", "P0_OPTIONAL_DENIED_TEMPLATE_CREATE_RECOVERY", "F6", "", "default", "true", "false", "negative", "false", "denial_safety", "disabled template create recovery terminalizes unsupported historical operations"},
-	{"repo_template_clone_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_template_clone_disabled_worker_recovery", "P0_OPTIONAL_DENIED_TEMPLATE_CLONE_RECOVERY", "F6", "", "default", "true", "false", "negative", "false", "denial_safety", "disabled template clone recovery terminalizes unsupported historical operations"},
-	{"repo_purge_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_admission", "P0_OPTIONAL_DENIED_PURGE_ADMISSION", "F13", "", "default", "true", "false", "negative", "false", "denial_safety", "repo purge disabled admission rejects before metadata and audits without queuing"},
-	{"repo_purge_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_worker_recovery", "P0_OPTIONAL_DENIED_PURGE_RECOVERY", "F13", "", "default", "true", "false", "negative", "false", "denial_safety", "disabled repo purge recovery terminalizes unsupported historical operations"},
-	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
-	{"default_ga_capability_classification_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "default_ga_capability_classification", "P0_CAPABILITY_MATRIX_DEFAULT_CLASSIFICATION", "F4", "", "default", "true", "false", "both", "false", "coverage_guard", "capability matrix classifies default and optional capabilities consistently"},
-	{"capability_admission_operation_coverage_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "capability_admission_operation_coverage", "P0_CAPABILITY_MATRIX_OPERATION_COVERAGE", "F4", "", "default", "true", "false", "both", "false", "coverage_guard", "capability admission operation coverage stays consistent"},
-	{"release_script_evidence_manifest_guard", "CLAIM_RELEASE_GATE_TRACEABLE", "release_gate_invokes_manifest_verifier", "P0_RELEASE_GATE_TRACEABLE_MANIFEST_VERIFIER", "F18", "", "default", "true", "false", "both", "false", "coverage_guard", "release gate invokes the manifest verifier and keeps evidence traceable"},
+	{"webdav_export_disabled_admission_unit", "CLAIM_DEFAULT_DENIAL_SAFE", "webdav_export_disabled_admission", "P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION", "F5", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "disabled admission rejects before metadata and audits without queuing"},
+	{"workload_mount_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_disabled_admission", "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", "F5", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "optional disabled workload mount admission rejects create, status update, heartbeat, and ordinary orchestrator plan before metadata/runtime continuation while preserving idempotency replay/conflict precedence"},
+	{"repo_lifecycle_retained_positive_unit", "CLAIM_RETAINED_LIFECYCLE_DEFAULT", "retained_lifecycle_positive", "P0_RETAINED_LIFECYCLE_DEFAULT_POSITIVE", "F15", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "retained lifecycle archive restore delete and tombstone flows pass without purge selectors"},
+	{"workload_mount_plan_store_freshness_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_plan_store_freshness", "P0_OPTIONAL_DENIED_WORKLOAD_PLAN_STORE", "F9", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "workload mount plan store fails closed on stale or unsupported default state"},
+	{"workload_mount_runtime_secretref_config_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_runtime_secretref_config", "P0_OPTIONAL_DENIED_WORKLOAD_RUNTIME_SECRETREF", "F10", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "runtime secretref configuration fails closed without leaking values"},
+	{"workload_mount_secretref_redaction_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_secretref_redaction", "P0_OPTIONAL_DENIED_WORKLOAD_SECRETREF_REDACTION", "F10", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "workload mount responses and audits redact secret references and raw paths"},
+	{"repo_template_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_template_disabled_admission", "P0_OPTIONAL_DENIED_TEMPLATE_ADMISSION", "F16", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "repo template disabled admission rejects before metadata and audits without queuing"},
+	{"repo_template_create_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_template_create_disabled_worker_recovery", "P0_OPTIONAL_DENIED_TEMPLATE_CREATE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "disabled template create recovery terminalizes unsupported historical operations"},
+	{"repo_template_clone_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_template_clone_disabled_worker_recovery", "P0_OPTIONAL_DENIED_TEMPLATE_CLONE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "disabled template clone recovery terminalizes unsupported historical operations"},
+	{"repo_purge_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_admission", "P0_OPTIONAL_DENIED_PURGE_ADMISSION", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "repo purge disabled admission rejects before metadata and audits without queuing"},
+	{"repo_purge_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_worker_recovery", "P0_OPTIONAL_DENIED_PURGE_RECOVERY", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "disabled repo purge recovery terminalizes unsupported historical operations"},
+	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
+	{"default_ga_capability_classification_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "default_ga_capability_classification", "P0_CAPABILITY_MATRIX_DEFAULT_CLASSIFICATION", "F4", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "capability matrix classifies default and optional capabilities consistently"},
+	{"capability_admission_operation_coverage_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "capability_admission_operation_coverage", "P0_CAPABILITY_MATRIX_OPERATION_COVERAGE", "F4", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "capability admission operation coverage stays consistent"},
+	{"release_script_evidence_manifest_guard", "CLAIM_RELEASE_GATE_TRACEABLE", "release_gate_invokes_manifest_verifier", "P0_RELEASE_GATE_TRACEABLE_MANIFEST_VERIFIER", "F18", "", "default", "true", "false", "fast", "workflow-guard", "both", "false", "coverage_guard", "release gate invokes the manifest verifier and keeps evidence traceable"},
 }
 
 func writeReleaseEvidenceFile(t *testing.T, path, body string) {

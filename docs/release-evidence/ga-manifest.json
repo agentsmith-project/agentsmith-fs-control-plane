@@ -36,7 +36,9 @@
         "assertions": [
           "disabled admission rejects before metadata and audits without queuing"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "workload_mount_disabled_admission_unit",
@@ -78,7 +80,9 @@
           "optional disabled workload mount admission rejects create, status update, heartbeat, and ordinary orchestrator plan before metadata/runtime continuation while preserving idempotency replay/conflict precedence",
           "release and revoke remain explicit teardown exceptions under disabled workload mount admission"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "repo_lifecycle_retained_positive_unit",
@@ -120,7 +124,9 @@
         "assertions": [
           "retained lifecycle archive restore delete and tombstone flows pass without purge selectors"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "workload_mount_plan_store_freshness_unit",
@@ -156,7 +162,9 @@
         "assertions": [
           "workload mount plan store fails closed on stale or unsupported default state"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "workload_mount_runtime_secretref_config_unit",
@@ -197,7 +205,9 @@
         "assertions": [
           "runtime secretref configuration fails closed without leaking values"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "workload_mount_secretref_redaction_unit",
@@ -233,7 +243,9 @@
         "assertions": [
           "workload mount responses and audits redact secret references and raw paths"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "repo_template_disabled_admission_unit",
@@ -269,7 +281,9 @@
         "assertions": [
           "repo template disabled admission rejects before metadata and audits without queuing"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "repo_purge_disabled_admission_unit",
@@ -305,7 +319,9 @@
         "assertions": [
           "repo purge disabled admission rejects before metadata and audits without queuing"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "repo_template_create_disabled_worker_recovery_unit",
@@ -341,7 +357,9 @@
         "assertions": [
           "disabled template create recovery terminalizes unsupported historical operations"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "repo_template_clone_disabled_worker_recovery_unit",
@@ -377,7 +395,9 @@
         "assertions": [
           "disabled template clone recovery terminalizes unsupported historical operations"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "repo_purge_disabled_worker_recovery_unit",
@@ -413,11 +433,13 @@
         "assertions": [
           "disabled repo purge recovery terminalizes unsupported historical operations"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "repo_create_jvs_runtime_unavailable_recovery_unit",
-      "capability_id": "jvs",
+      "capability_id": "repo_create",
       "evidence_type": "unit",
       "required": true,
       "command": [
@@ -452,7 +474,9 @@
           "failed audit is written and no repo, JVS, or fence side effect executes",
           "checksum mismatch and generic or nil constructor failures remain fail-fast and do not enter recovery"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "default_ga_capability_classification_unit",
@@ -488,7 +512,9 @@
         "assertions": [
           "capability matrix classifies default and optional capabilities consistently"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "capability_admission_operation_coverage_unit",
@@ -524,7 +550,9 @@
         "assertions": [
           "capability admission operation coverage stays consistent"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "release_script_evidence_manifest_guard",
@@ -560,7 +588,9 @@
         "assertions": [
           "release gate invokes the manifest verifier and keeps evidence traceable"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "workflow-guard"
     },
     {
       "id": "seed_gap_admin_bootstrap_ready_open",
@@ -588,7 +618,9 @@
         "assertions": [
           "open"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "doc-guard"
     },
     {
       "id": "seed_gap_default_user_loop_open",
@@ -616,7 +648,9 @@
         "assertions": [
           "open"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "doc-guard"
     },
     {
       "id": "seed_gap_workload_fixture_ready_open",
@@ -644,7 +678,9 @@
         "assertions": [
           "open"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "doc-guard"
     },
     {
       "id": "seed_gap_operator_repair_safe_open",
@@ -672,7 +708,9 @@
         "assertions": [
           "open"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "doc-guard"
     },
     {
       "id": "seed_gap_purge_approval_safe_open",
@@ -700,7 +738,9 @@
         "assertions": [
           "open"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "doc-guard"
     },
     {
       "id": "seed_gap_restore_reconciliation_open",
@@ -728,7 +768,9 @@
         "assertions": [
           "open"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "doc-guard"
     },
     {
       "id": "seed_gap_residual_risk_catalog_open",
@@ -756,7 +798,9 @@
         "assertions": [
           "open"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "doc-guard"
     },
     {
       "id": "seed_gap_deployment_risk_envelope_open",
@@ -769,6 +813,218 @@
       "evidence_profile": "default",
       "default_mode": true,
       "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      },
+      "expected_runtime": "fast",
+      "scope": "doc-guard"
+    },
+    {
+      "id": "seed_gap_profile_boundary_open",
+      "claim_id": "CLAIM_PROFILE_BOUNDARY",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F1",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "expected_runtime": "fast",
+      "scope": "doc-guard",
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_discovery_surfaces_open",
+      "claim_id": "CLAIM_DISCOVERY_SURFACES",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F7",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "expected_runtime": "fast",
+      "scope": "doc-guard",
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_webdav_default_access_open",
+      "claim_id": "CLAIM_WEBDAV_DEFAULT_ACCESS",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F8",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "expected_runtime": "fast",
+      "scope": "doc-guard",
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_secret_path_redaction_open",
+      "claim_id": "CLAIM_SECRET_PATH_REDACTION",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F10",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "expected_runtime": "fast",
+      "scope": "doc-guard",
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_optional_fixture_conformant_open",
+      "claim_id": "CLAIM_OPTIONAL_FIXTURE_CONFORMANT",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F9",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "expected_runtime": "fast",
+      "scope": "doc-guard",
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_template_quota_boundary_open",
+      "claim_id": "CLAIM_TEMPLATE_QUOTA_BOUNDARY",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F16",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "expected_runtime": "fast",
+      "scope": "doc-guard",
+      "negative_or_positive": "both",
+      "evidence_type": "doc-guard",
+      "required": false,
+      "command": [],
+      "anchors": [
+        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      ],
+      "doc_only_allowed": true,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "pass_criteria": {
+        "kind": "seed_gap",
+        "assertions": [
+          "open"
+        ]
+      }
+    },
+    {
+      "id": "seed_gap_workflow_hardening_guard_open",
+      "claim_id": "CLAIM_WORKFLOW_HARDENING_GUARD",
+      "subclaim_id": "seed_gap_open",
+      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "risk_id": "F18",
+      "fixture_id": "",
+      "capability_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "expected_runtime": "fast",
+      "scope": "doc-guard",
       "negative_or_positive": "both",
       "evidence_type": "doc-guard",
       "required": false,

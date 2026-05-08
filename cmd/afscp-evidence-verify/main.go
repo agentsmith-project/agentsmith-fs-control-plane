@@ -19,12 +19,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	var manifestPath string
 	var repoRoot string
+	var mode string
 	var checkOnly bool
+	flags.StringVar(&mode, "mode", "", "manifest verification mode: seed or final")
 	flags.StringVar(&manifestPath, "manifest", "", "release evidence manifest path")
 	flags.StringVar(&repoRoot, "repo-root", "", "repository root; defaults to the current working directory")
 	flags.BoolVar(&checkOnly, "check-only", false, "validate manifest structure without executing required evidence commands")
 
 	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if mode != releaseevidence.ManifestModeSeed && mode != releaseevidence.ManifestModeFinal {
+		fmt.Fprintln(stderr, "-mode seed|final is required")
 		return 2
 	}
 	if manifestPath == "" {
@@ -34,6 +40,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	findings, err := releaseevidence.VerifyFile(manifestPath, releaseevidence.Options{
 		RepoRoot:        repoRoot,
+		Mode:            mode,
 		ExecuteRequired: !checkOnly,
 		Stdout:          stdout,
 		Stderr:          stderr,

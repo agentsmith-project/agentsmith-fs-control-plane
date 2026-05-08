@@ -1412,6 +1412,10 @@ func humanManagedGAGateTerm(line string) string {
 		"manual review",
 		"owner acceptance",
 		"owner approval",
+		"owner/security approval",
+		"owner / security approval",
+		"owner and security approval",
+		"owner or security approval",
 		"owner sign-off",
 		"owner signoff",
 		"security acceptance",
@@ -1451,8 +1455,9 @@ func humanManagedGAGateTerm(line string) string {
 	if !hasGAGateContext(lower) {
 		return ""
 	}
+	lowerForStatus := lineWithoutAllowedSeedGapOpenStatus(lower)
 	for _, status := range []string{"in_review", "open", "blocked", "pending", "tbd"} {
-		if containsDelimitedGateStatus(lower, status) {
+		if containsDelimitedGateStatus(lowerForStatus, status) {
 			return status
 		}
 	}
@@ -1502,13 +1507,30 @@ func hasNegatedHumanManagedGAGateContext(lowerLine string) bool {
 	return false
 }
 
+func lineWithoutAllowedSeedGapOpenStatus(lowerLine string) string {
+	lowerLine = seedGapOpenMarkerStatusPattern.ReplaceAllString(lowerLine, "seed gap marker")
+	replacer := strings.NewReplacer(
+		"no open seed gaps", "no seed gaps",
+		"no open seed gap", "no seed gap",
+		"no open seed", "no seed",
+		"open seed gaps", "seed gaps",
+		"open seed gap", "seed gap",
+	)
+	return replacer.Replace(lowerLine)
+}
+
+var seedGapOpenMarkerStatusPattern = regexp.MustCompile("open `seed_gap[^`]*_open` marker")
+
 func hasGAGateContext(lowerLine string) bool {
 	if !strings.Contains(lowerLine, "ga") &&
+		!strings.Contains(lowerLine, "final") &&
+		!strings.Contains(lowerLine, "mode") &&
+		!strings.Contains(lowerLine, "seed") &&
 		!strings.Contains(lowerLine, "release") &&
 		!strings.Contains(lowerLine, "readiness") {
 		return false
 	}
-	for _, term := range []string{"gate", "release", "acceptance", "blocker", "blocked", "condition", "closed", "readiness", "evidence"} {
+	for _, term := range []string{"gate", "mode", "seed", "release", "acceptance", "blocker", "blocked", "condition", "closed", "readiness", "evidence"} {
 		if strings.Contains(lowerLine, term) {
 			return true
 		}
@@ -1517,7 +1539,7 @@ func hasGAGateContext(lowerLine string) bool {
 }
 
 func hasGateClosureContext(lowerLine string) bool {
-	for _, term := range []string{"blocker", "blocked", "condition", "closed", "closes", "required"} {
+	for _, term := range []string{"blocker", "blocked", "blocks", "condition", "close", "closed", "closes", "gated", "required", "requires"} {
 		if strings.Contains(lowerLine, term) {
 			return true
 		}

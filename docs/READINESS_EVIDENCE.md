@@ -1,25 +1,40 @@
 # Readiness Evidence
 
-Status: active GA implementation-baseline evidence ledger.
+Status: active seed/baseline implementation evidence ledger.
 
-AFSCP GA release readiness is governed by one objective repo-local gate:
+AFSCP current release-readiness convergence is governed by one repo-local gate:
 
 ```bash
 bash scripts/verify-ga-release.sh
 ```
 
-The command exit code is the GA decision: exit code `0` means the GA release
-gate passes, and any nonzero exit code means GA is not releasable. Manual
-acceptance, role-based approval, generated-client approval, owner approval,
-runbook meetings, sibling project status, and first-consumer adoption are not
-GA gate conditions.
+The command currently runs the release evidence manifest verifier in `-mode
+seed`. Exit code `0` means the current repo-local seed/baseline evidence checks
+passed; it is not final GA release acceptance. Final GA release acceptance must
+use this same unique repo-local entrypoint and evaluate final acceptance, for
+example by switching the manifest verifier to or including `-mode final`. Any
+required/final claim, acceptance item, or evidence entry that still carries an
+open `seed_gap_*_open` marker or equivalent open seed gap must fail final
+acceptance. A seed-mode pass alone is only current repo-local seed/baseline
+evidence, not final GA release acceptance; final mode requires no open seed gaps.
+Manual acceptance, role-based
+approval, generated-client approval, owner approval, runbook meetings, sibling
+project status, and first-consumer adoption are not GA gate conditions.
 
 `docs/release-evidence/ga-manifest.json` is the repo-local machine-readable
 index for release evidence. It refines this ledger into enumerated evidence
 items with types, commands, capability IDs, and source anchors, and is executed
-by the same `scripts/verify-ga-release.sh` gate. The initial manifest slice is
-only a minimal skeleton over already-existing checks; it must not be read as
-complete Postgres, WebDAV, JVS provenance, or end-to-end evidence closure.
+by the same `scripts/verify-ga-release.sh` gate in seed mode today. The initial
+manifest slice is a seed/baseline ledger over already-existing checks; it must
+not be read as complete final-mode Postgres, WebDAV, JVS provenance, or
+end-to-end evidence closure.
+
+Optional capability positive evidence becomes a final blocker only when its
+manifest entry explicitly declares fixture conformance with
+`evidence_profile=repo-local-fixture-enabled`, `fixture_enabled_mode=true`,
+`default_mode=false`, `optional_gated=true`, and `required=true`. A plain
+`seed_gap_*_open` marker records missing seed/baseline coverage; it does not by
+itself make the optional capability part of default GA.
 
 AFSCP GA gates are internal to the shared filesystem control plane. Reference
 consumer adoption notes can inform compatibility work, but no first consumer or
@@ -61,8 +76,9 @@ implementation evidence also includes
 repo lifecycle workers, save/restore flows, namespace-scoped template
 create/clone, workload mount issuance and orchestrator plans, writer-session
 fences with shared repo-row serialization against read-write session admission,
-and an explicit workload mount stale-lease scan. These artifacts are GA evidence
-only through repo-local verification, not through manual acceptance.
+and an explicit workload mount stale-lease scan. These artifacts are current
+repo-local evidence only through repo-local verification, not final GA evidence
+or manual acceptance.
 
 ## Gate Ledger
 

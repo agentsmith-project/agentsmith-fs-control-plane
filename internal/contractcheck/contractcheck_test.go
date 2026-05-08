@@ -1216,6 +1216,7 @@ func TestFindHumanManagedGAGateFindingsAllowsNegatedGovernanceAndRuntimeSafetySe
 		"Manual review, generated-client approval, security approval, and owner approval are not independent GA gate conditions.",
 		"Owner roles do not add manual GA approval conditions.",
 		"GA-blocking risks cannot be bypassed by manual approval or subjective risk exception.",
+		"Final mode requires no open seed gaps.",
 		"Runtime operator controls remain product behavior, not GA release workflow.",
 		"Allowed product semantics: caller approval reference, purge approval reference, operation manual, and operator repair.",
 	}, "\n"))
@@ -1223,6 +1224,12 @@ func TestFindHumanManagedGAGateFindingsAllowsNegatedGovernanceAndRuntimeSafetySe
 	if len(findings) > 0 {
 		t.Fatalf("expected negated governance and runtime safety semantics to pass, got findings: %+v", findings)
 	}
+}
+
+func TestFindHumanManagedGAGateFindingsDoesNotLetNoOpenSeedNegateApprovalGate(t *testing.T) {
+	findings := findHumanManagedGAGateFindings("docs/GA_RELEASE_GATES.md", "Final mode requires owner/security approval and no open seed gaps.")
+
+	assertHasFinding(t, findings, CodeDocsHumanGAGateForbidden)
 }
 
 func TestCurrentRepoContractsPass(t *testing.T) {
@@ -1368,6 +1375,7 @@ func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
 		filepath.Join(repoRoot, "api", "schemas", "README.md"),
 		filepath.Join(repoRoot, "api", "openapi", "README.md"),
 		filepath.Join(repoRoot, "docs", "API_CONTRACT_DRAFT.md"),
+		filepath.Join(repoRoot, "docs", "DEVELOPER_HANDOFF.md"),
 		filepath.Join(repoRoot, "docs", "HANDOFF.md"),
 		filepath.Join(repoRoot, "docs", "JVS_INTEGRATION.md"),
 		filepath.Join(repoRoot, "docs", "REVIEW_CHECKLIST.md"),
@@ -1453,11 +1461,43 @@ func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
 					t.Fatalf("%s has stale current implementation status phrase %q", path, phrase)
 				}
 			}
-			if strings.Contains(text, "FINAL GA ACCEPTANCE REMAINS BLOCKED") {
-				t.Fatalf("%s must not keep final GA acceptance blocked status; repo-local script exit code is now the GA decision", path)
-			}
 			if !strings.Contains(text, "scripts/verify-ga-release.sh") {
 				t.Fatalf("%s must point GA release decisions at scripts/verify-ga-release.sh", path)
+			}
+			if filepath.Base(path) == "GA_RELEASE_GATES.md" {
+				normalizedText := strings.Join(strings.Fields(text), " ")
+				if !strings.Contains(normalizedText, "seed/baseline") ||
+					!strings.Contains(normalizedText, "final mode") ||
+					!strings.Contains(normalizedText, "no open seed gaps") {
+					t.Fatalf("%s must document the seed/final evidence boundary for scripts/verify-ga-release.sh", path)
+				}
+			}
+		})
+	}
+}
+
+func TestCurrentRepoEntryDocsDocumentSeedFinalEvidenceBoundary(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	for _, path := range []string{
+		filepath.Join(repoRoot, "README.md"),
+		filepath.Join(repoRoot, "docs", "DEVELOPER_HANDOFF.md"),
+	} {
+		t.Run(filepath.ToSlash(path), func(t *testing.T) {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("entry doc must exist at %s: %v", path, err)
+			}
+			normalizedText := strings.Join(strings.Fields(string(body)), " ")
+			for _, required := range []string{
+				"seed/baseline",
+				"not final GA release acceptance",
+				"final mode",
+				"no open seed gaps",
+				"scripts/verify-ga-release.sh",
+			} {
+				if !strings.Contains(normalizedText, required) {
+					t.Fatalf("%s must document seed/final evidence boundary phrase %q", path, required)
+				}
 			}
 		})
 	}
@@ -1474,19 +1514,19 @@ func TestCurrentRepoReadinessEvidenceHasCurrentImplementationStatus(t *testing.T
 	text := string(body)
 	normalizedText := strings.Join(strings.Fields(text), " ")
 
-	if strings.Contains(text, "FINAL GA ACCEPTANCE REMAINS BLOCKED") {
-		t.Fatalf("%s must not keep final GA acceptance blocked status; repo-local script exit code is now the GA decision", path)
-	}
 	if !strings.Contains(text, "scripts/verify-ga-release.sh") {
 		t.Fatalf("%s must point GA release decisions at scripts/verify-ga-release.sh", path)
 	}
-	if !strings.Contains(strings.ToLower(normalizedText), "exit code") &&
-		!strings.Contains(strings.ToLower(normalizedText), "exit status") {
-		t.Fatalf("%s must state the GA release script exit code/status is the GA decision", path)
-	}
-	if !strings.Contains(normalizedText, "GA implementation-baseline") &&
-		!strings.Contains(normalizedText, "implementation-baseline") {
-		t.Fatalf("%s must describe GA implementation-baseline status", path)
+	for _, required := range []string{
+		"-mode seed",
+		"seed/baseline",
+		"not final GA release acceptance",
+		"final mode",
+		"no open seed gaps",
+	} {
+		if !strings.Contains(normalizedText, required) {
+			t.Fatalf("%s must document seed/final evidence boundary phrase %q", path, required)
+		}
 	}
 	forbidden := []string{
 		"GA pre-dev",
@@ -1512,7 +1552,7 @@ func TestCurrentRepoGAVerificationScriptsAreAuthoritative(t *testing.T) {
 
 	releaseBody, err := os.ReadFile(releasePath)
 	if err != nil {
-		t.Fatalf("authoritative GA release gate must exist at %s: %v", releasePath, err)
+		t.Fatalf("authoritative seed/baseline convergence gate must exist at %s: %v", releasePath, err)
 	}
 	releaseText := string(releaseBody)
 	for _, required := range []string{
@@ -1527,7 +1567,7 @@ func TestCurrentRepoGAVerificationScriptsAreAuthoritative(t *testing.T) {
 		}
 	}
 	if !releaseScriptRunsEvidenceManifestVerifier(releaseText) {
-		t.Fatalf("%s must run evidence manifest verifier as a non-comment release gate command", releasePath)
+		t.Fatalf("%s must run evidence manifest verifier as a non-comment seed/baseline convergence command", releasePath)
 	}
 	for _, forbidden := range []string{
 		"mbos-sandbox",
@@ -1569,26 +1609,29 @@ func TestCurrentRepoGAVerificationScriptsAreAuthoritative(t *testing.T) {
 	readmeText := string(readmeBody)
 	if !strings.Contains(readmeText, "scripts/verify-ga-release.sh") ||
 		!strings.Contains(strings.ToLower(readmeText), "authoritative") ||
-		!strings.Contains(strings.ToLower(readmeText), "exit code") ||
+		!strings.Contains(readmeText, "-mode seed") ||
+		!strings.Contains(readmeText, "seed/baseline") ||
+		!strings.Contains(readmeText, "final mode") ||
+		!strings.Contains(readmeText, "no open seed gaps") ||
 		!strings.Contains(strings.ToLower(readmeText), "release-only governance checks") ||
 		!strings.Contains(readmeText, "scripts/verify-ga-baseline.sh") {
-		t.Fatalf("%s must document release-only governance checks, baseline checks, and scripts/verify-ga-release.sh as the authoritative GA gate whose exit code decides GA", readmePath)
+		t.Fatalf("%s must document release-only governance checks, baseline checks, and scripts/verify-ga-release.sh as the authoritative seed/baseline convergence gate with a final-mode boundary", readmePath)
 	}
 }
 
 func TestGAVerificationScriptManifestVerifierGuardIgnoresComments(t *testing.T) {
 	commentOnly := `
 #!/usr/bin/env bash
-# run go run ./cmd/afscp-evidence-verify -manifest docs/release-evidence/ga-manifest.json
+# run go run ./cmd/afscp-evidence-verify -mode seed -manifest docs/release-evidence/ga-manifest.json
 run echo not-the-verifier
 `
 	if releaseScriptRunsEvidenceManifestVerifier(commentOnly) {
-		t.Fatal("comment-only evidence verifier reference counted as an active release gate command")
+		t.Fatal("comment-only evidence verifier reference counted as an active convergence gate command")
 	}
 
 	active := `
 #!/usr/bin/env bash
-run go run ./cmd/afscp-evidence-verify -manifest docs/release-evidence/ga-manifest.json
+run go run ./cmd/afscp-evidence-verify -mode seed -manifest docs/release-evidence/ga-manifest.json
 `
 	if !releaseScriptRunsEvidenceManifestVerifier(active) {
 		t.Fatal("active evidence verifier command was not recognized")
@@ -1596,7 +1639,7 @@ run go run ./cmd/afscp-evidence-verify -manifest docs/release-evidence/ga-manife
 
 	suppressed := `
 #!/usr/bin/env bash
-run go run ./cmd/afscp-evidence-verify -manifest docs/release-evidence/ga-manifest.json || true
+run go run ./cmd/afscp-evidence-verify -mode seed -manifest docs/release-evidence/ga-manifest.json || true
 `
 	if releaseScriptRunsEvidenceManifestVerifier(suppressed) {
 		t.Fatal("evidence verifier command with failure-swallowing suffix counted as authoritative")
@@ -1604,7 +1647,7 @@ run go run ./cmd/afscp-evidence-verify -manifest docs/release-evidence/ga-manife
 }
 
 func releaseScriptRunsEvidenceManifestVerifier(text string) bool {
-	const required = "run go run ./cmd/afscp-evidence-verify -manifest docs/release-evidence/ga-manifest.json"
+	const required = "run go run ./cmd/afscp-evidence-verify -mode seed -manifest docs/release-evidence/ga-manifest.json"
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -1623,12 +1666,14 @@ func TestCurrentRepoGAReleaseWorkflowRunsAuthoritativeScript(t *testing.T) {
 
 	body, err := os.ReadFile(workflowPath)
 	if err != nil {
-		t.Fatalf("repo-local GA release workflow must exist at %s: %v", workflowPath, err)
+		t.Fatalf("repo-local seed/baseline convergence workflow must exist at %s: %v", workflowPath, err)
 	}
 	text := string(body)
 	for _, required := range []string{
+		"Seed/Baseline Convergence Gate",
 		"actions/checkout",
 		"actions/setup-go",
+		"Run seed/baseline convergence gate",
 		"bash scripts/verify-ga-release.sh",
 	} {
 		if !strings.Contains(text, required) {

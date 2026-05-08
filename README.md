@@ -16,15 +16,19 @@ exposes robust filesystem primitives and enforces storage boundaries.
 
 ## GA Release Gate
 
-AFSCP GA release decisions are made by this repo-local automated gate:
+AFSCP current release-readiness convergence is checked by this repo-local
+seed/baseline automated gate:
 
 ```bash
 bash scripts/verify-ga-release.sh
 ```
 
-The script exit code is authoritative: exit code `0` means the GA release gate
-passes, and any nonzero exit code means GA is not releasable. The baseline
-script is implementation evidence, but it is not the final GA gate.
+The script exit code is authoritative for the current seed/baseline checks:
+exit code `0` means repo-local convergence evidence passed, and any nonzero
+exit code means the current convergence gate failed. This is not final GA
+release acceptance. Final GA release acceptance must use the same repo-local
+entrypoint in final mode, require no open seed gaps, and reject any required or
+final evidence still represented only by `seed_gap_*_open` markers.
 
 ## Current Decision
 
@@ -85,12 +89,12 @@ script is implementation evidence, but it is not the final GA gate.
 
 ## Implementation Rule
 
-Pre-dev handoff has entered the GA implementation baseline. Core handlers and
-operations are being implemented incrementally against accepted schemas,
-OpenAPI, auth, JVS, operation/audit, export, mount, and writer-session
+Pre-dev handoff has entered the current GA implementation baseline. Core
+handlers and operations are being implemented incrementally against accepted
+schemas, OpenAPI, auth, JVS, operation/audit, export, mount, and writer-session
 contracts. New or modified handlers and storage mutations must keep repo-local
 release evidence, fences, operation leases, audit behavior, and focused tests
-aligned. Do not claim final production GA from the baseline script.
+aligned. Do not claim final production GA from the seed/baseline script.
 
 ## License
 

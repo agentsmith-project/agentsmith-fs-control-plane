@@ -1,15 +1,16 @@
 # Developer Handoff
 
-Status: neutral Go service, contract guardrails, resource metadata persistence,
-durable operation intake/recovery, repo/JVS execution, repo lifecycle recovery,
-save/restore flows, namespace-scoped template create/clone, WebDAV export
-create/get/revoke plus gateway serving, workload mount issuance/orchestrator
-plans, writer fences with shared repo-row serialization, workload mount
-stale-lease scanning, and explicit-gated audit outbox HTTP JSON delivery are in
-place. The AFSCP GA audit delivery scope is HTTP JSON; non-HTTP audit sink
-integrations are future extensions, not GA blockers. Final GA is governed by
-`docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and
-`scripts/verify-ga-release.sh`.
+Status: current implementation baseline with neutral Go service, contract
+guardrails, resource metadata persistence, durable operation intake/recovery,
+repo/JVS execution, repo lifecycle recovery, save/restore flows,
+namespace-scoped template create/clone, WebDAV export create/get/revoke plus
+gateway serving, workload mount issuance/orchestrator plans, writer fences with
+shared repo-row serialization, workload mount stale-lease scanning, and
+explicit-gated audit outbox HTTP JSON delivery in place. The AFSCP GA audit
+delivery scope is HTTP JSON; non-HTTP audit sink integrations are future
+extensions, not GA blockers. Current readiness is governed as seed/baseline
+evidence by `docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and
+`scripts/verify-ga-release.sh`; this is not final GA release acceptance.
 
 This is the current handoff document for the coding team. It assumes the team is
 building AFSCP directly toward GA, not through P0/P1 product stages, and should
@@ -88,9 +89,12 @@ bash scripts/verify-ga-release.sh
 bash scripts/verify-ga-baseline.sh
 ```
 
-`scripts/verify-ga-release.sh` is the GA release gate. The baseline script runs
-`git diff --check`, `go test -count=1 ./...`, and the internal API contract
-verifier as lower-level implementation evidence.
+`scripts/verify-ga-release.sh` is the current seed/baseline convergence gate.
+Final GA release acceptance must use the same repo-local entrypoint in final
+mode, require no open seed gaps, and reject any required or final evidence still
+represented only by `seed_gap_*_open` markers. The baseline script runs `git
+diff --check`, `go test -count=1 ./...`, and the internal API contract verifier
+as lower-level implementation evidence.
 
 Internal API deployments must set
 `AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL` only when the WebDAV export
