@@ -1,10 +1,12 @@
 # AFSCP GA 收敛工作计划
 
-Status: handoff-ready convergence plan.
+Status: background convergence map; not the active development execution handoff.
 
 本文档根据 `docs/research/afscp-product-architecture-review.md` 和产品、架构、安全运维、QA/release 四个审查视角整理。目标是把下一轮工作收敛到一个清晰结果：AFSCP 作为产品中立、可独立运行、可独立 gate、可独立 release 的共享文件系统控制面，达到可交给开发团队直接实现和验证的 GA 质量。
 
-本文档不是路线图，不定义复杂 rollout，也不把任何外部业务系统作为验收条件。所有 GA 通过条件必须由本仓库自己的代码、契约、schema、OpenAPI、测试、脚本和证据完成。
+当前唯一开发执行 handoff 是 `docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md`。本文档只保留为 research-to-workstream 背景映射和审查语境，不是并行执行入口，不覆盖 handoff 中的 P0-P5、claim/evidence、selector/final gate 或 next-slice 口径。
+
+本文档不是路线图，不定义复杂 rollout，也不把任何外部业务系统作为验收条件。所有 GA 通过条件必须由本仓库自己的代码、契约、schema、OpenAPI、测试、脚本和证据完成；具体开发切片、语义依赖和验收 owner 以 `docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md` 为准。
 
 ## 产品定位
 
@@ -71,6 +73,8 @@ AFSCP 的职责是提供稳定的 storage control plane primitive：
 - 不用 worker 扫不到、后台沉默或长期 pending 来表达能力不可用。
 
 ## 架构收敛方案
+
+以下 Workstream A-I 仅为背景分类和 research finding 映射；实际开发切片、语义依赖、claim/evidence owner 与 next-slice 选择以 `docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md` 的 P0-P5 为准。
 
 以下 Workstream A-I 是并行问题域，不是 rollout 阶段，也不要求分阶段交付；开发团队应围绕同一个目标一次性收敛到唯一 GA gate。
 
