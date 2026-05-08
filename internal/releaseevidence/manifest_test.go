@@ -781,6 +781,12 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenWithPartialEvidence(t
 			item.EvidenceStatus == "implemented" {
 			continue
 		}
+		if item.ID == "default_user_loop_jvs_save_restore_unit" &&
+			item.SubclaimID == "default_user_loop_jvs_save_restore" &&
+			item.AcceptanceID == "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE" &&
+			item.EvidenceStatus == "implemented" {
+			continue
+		}
 		if item.ID == "default_user_loop_positive_unit" ||
 			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
 			t.Fatalf("manifest must not close full CLAIM_DEFAULT_USER_LOOP while the seed gap remains open, found %+v", item)
@@ -984,6 +990,105 @@ func TestCurrentRepoManifestContainsP1bRepoProjectionEvidence(t *testing.T) {
 	}
 }
 
+func TestCurrentRepoManifestContainsP1cJVSSaveRestoreEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	item, ok := manifestItemByID(manifest, "default_user_loop_jvs_save_restore_unit")
+	if !ok {
+		t.Fatal("manifest missing default_user_loop_jvs_save_restore_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_DEFAULT_USER_LOOP" ||
+		item.SubclaimID != "default_user_loop_jvs_save_restore" ||
+		item.AcceptanceID != "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE" ||
+		item.RiskID != "F2" ||
+		item.CapabilityID != "jvs_save_restore" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.NegativeOrPositive != "positive" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		!item.DefaultGARequired ||
+		item.PassCriteria.Kind != "positive_path" {
+		t.Fatalf("%s shape = %+v, want default required P1c JVS save/restore positive evidence", item.ID, item)
+	}
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/api", "./internal/repoexec", "./internal/workerapp", "./internal/store/postgres"}) {
+		t.Fatalf("%s command packages = %#v, want api, repoexec, workerapp, and postgres store", item.ID, packages)
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range []string{
+		"TestSavePointCreateValidatesMessageAndCreatesQueuedOperation",
+		"TestSavePointCreateIdempotentReuseBeforeRepoStateChecks",
+		"TestSavePointCreateRejectsSecretShapedMessage",
+		"TestSavePointCreateRejectsDisabledNamespaceBeforeIntakeAndAudits",
+		"TestSavePointListReturnsHistoryAndFailsClosed",
+		"TestSavePointListGateConflictDoesNotReadHistory",
+		"TestSavePointListDeniesArchivedAndLifecycleFenceBeforeHistory",
+		"TestJVSBackedSavePointHistoryReaderResolvesRootAndReturnsSafeHistoryInJVSOrder",
+		"TestJVSBackedSavePointHistoryReaderFailsClosedWithoutLeakingRawPaths",
+		"TestRestorePreviewHandlerCreatesQueuedPreviewForSavePoint",
+		"TestRestorePreviewHandlerFailsClosedForActivePlanOrJVSMutation",
+		"TestRestorePreviewHandlerReusesExistingIdempotentOperationBeforePlanState",
+		"TestRestorePreviewHandlerRejectsDisabledNamespacePolicy",
+		"TestRestoreRunHandlerCreatesQueuedRunForPendingPlan",
+		"TestRestoreRunHandlerRejectsDisabledNamespaceBeforeIntake",
+		"TestRestoreRunHandlerRejectsLifecycleFenceBeforeIntake",
+		"TestRestoreRunHandlerRejectsPreviewMetadataMismatch",
+		"TestRestoreRunHandlerReusesExistingIdempotentOperationBeforePlanStateAndRunGate",
+		"TestRestorePreviewDiscardHandlerCreatesQueuedDiscardForPendingPlan",
+		"TestRestorePreviewDiscardHandlerRejectsCleanupAdmissionRisksBeforePreviewPlanAndIntake",
+		"TestRestorePreviewDiscardHandlerReusesExistingIdempotentOperationBeforePlanState",
+		"TestRestorePreviewDiscardHandlerAllowsDisabledNamespaceCleanupForPendingPlan",
+		"TestSavePointExecutorPersistsPreSaveMarkerThenSavesAndCommits",
+		"TestSavePointExecutorAdoptsCrashAfterSaveWithoutCallingSaveAgain",
+		"TestSavePointExecutorRejectsSecretShapedMessageBeforeJVS",
+		"TestRestorePreviewExecutorPersistsIdleMarkerBeforePreviewAndCommitsPlan",
+		"TestRestorePreviewExecutorNonIdleRecoveryStatusRequiresOperatorIntervention",
+		"TestRestorePreviewDiscardExecutorMarksPlanDiscardingBeforeJVSAndCommitsDiscarded",
+		"TestRestorePreviewDiscardExecutorAllowsDisabledNamespaceCleanupAndCommitsDiscarded",
+		"TestRestoreRunExecutorFencesWriterRunsDoctorChecksIdleAndCommitsConsumed",
+		"TestRestoreRunExecutorPreJVSWriterSessionDenialReleasesFenceAndKeepsPlanPending",
+		"TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor",
+		"TestRunOnceRestorePreviewEnabledClaimsThroughRestorePreviewExecutor",
+		"TestRunOnceRestorePreviewDiscardEnabledClaimsThroughDiscardExecutor",
+		"TestRunOnceRestoreRunEnabledClaimsThroughRestoreRunExecutor",
+		"TestRunOnceRestorePreviewEnabledRejectsUnpinnedJVSChecksum",
+		"TestNewJVSRunnerFromConfigVerifiesFileAgainstAcceptedPin",
+		"TestAcquireSavePointCreateOperationLeaseSerializesEarlierLifecycleAndJVSMutations",
+		"TestCommitSavePointCreateSucceededRequiresPreparedStoredMarkerBoundary",
+		"TestCreateOrReuseRestorePreviewOperationUsesAtomicGateAfterIdempotency",
+		"TestCreateOrReuseRestoreRunOperationUsesAtomicPlanAndDuplicateGatesAfterIdempotency",
+		"TestCreateOrReuseRestorePreviewDiscardOperationUsesAtomicPlanGateAfterIdempotency",
+		"TestCommitRestorePreviewSucceededWithLeaseInsertsPlanAuditAndOperationAtomically",
+		"TestCommitRestorePreviewDiscardSucceededWithLeaseDiscardsPlanAuditAndOperationAtomically",
+		"TestCommitRestoreRunSucceededWithLeaseConsumesPlanAuditAndReleasesFenceAtomically",
+	} {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
 func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1b(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
@@ -1014,6 +1119,41 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1b(t *test
 		if item.ID == "default_user_loop_positive_unit" ||
 			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
 			t.Fatalf("P1b repo projection is partial and must not close full default user loop: %+v", item)
+		}
+	}
+}
+
+func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1c(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	for _, gapID := range []string{
+		"seed_gap_default_user_loop_open",
+		"seed_gap_webdav_default_access_open",
+		"seed_gap_restore_reconciliation_open",
+		"seed_gap_secret_path_redaction_open",
+		"seed_gap_discovery_surfaces_open",
+	} {
+		item, ok := manifestItemByID(manifest, gapID)
+		if !ok {
+			t.Fatalf("manifest must keep %s open for partial P1c", gapID)
+		}
+		if item.EvidenceStatus != "placeholder" || item.PassCriteria.Kind != "seed_gap" || !containsString(item.PassCriteria.Assertions, "open") {
+			t.Fatalf("%s = %+v, want open placeholder seed gap", gapID, item)
+		}
+	}
+	for _, item := range manifest.Items {
+		if item.ID == "default_user_loop_positive_unit" ||
+			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
+			t.Fatalf("P1c JVS save/restore is partial and must not close full default user loop: %+v", item)
 		}
 	}
 }
@@ -1081,9 +1221,22 @@ func goTestPackageForTestName(testName string) string {
 	if strings.HasPrefix(testName, "TestWorker") {
 		return "./internal/workerapp"
 	}
+	if strings.HasPrefix(testName, "TestNewJVSRunner") {
+		return "./internal/workerapp"
+	}
+	if strings.HasPrefix(testName, "TestSavePointExecutor") ||
+		strings.HasPrefix(testName, "TestRestorePreviewExecutor") ||
+		strings.HasPrefix(testName, "TestRestorePreviewDiscardExecutor") ||
+		strings.HasPrefix(testName, "TestRestoreRunExecutor") {
+		return "./internal/repoexec"
+	}
 	if strings.HasPrefix(testName, "TestCreateGetAndListRepos") ||
 		strings.HasPrefix(testName, "TestCreateOrReuseRepoCreateOperation") ||
-		strings.HasPrefix(testName, "TestCommitRepoCreate") {
+		strings.HasPrefix(testName, "TestCommitRepoCreate") ||
+		strings.HasPrefix(testName, "TestAcquireSavePointCreateOperationLease") ||
+		strings.HasPrefix(testName, "TestCommitSavePointCreate") ||
+		strings.HasPrefix(testName, "TestCreateOrReuseRestore") ||
+		strings.HasPrefix(testName, "TestCommitRestore") {
 		return "./internal/store/postgres"
 	}
 	if strings.HasPrefix(testName, "TestCurrentRepoReadiness") {
@@ -1327,6 +1480,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":true
     },
     {
+      "id":"default_user_loop_jvs_save_restore_unit",
+      "capability_id":"jvs_save_restore",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -1511,6 +1675,7 @@ var package0FixtureMetadata = []struct {
 	{"repo_purge_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_admission", "P0_OPTIONAL_DENIED_PURGE_ADMISSION", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "repo purge disabled admission rejects before metadata and audits without queuing"},
 	{"repo_purge_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_worker_recovery", "P0_OPTIONAL_DENIED_PURGE_RECOVERY", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "disabled repo purge recovery terminalizes unsupported historical operations"},
 	{"default_user_loop_repo_projection_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_repo_projection", "P1B_DEFAULT_USER_LOOP_REPO_PROJECTION", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "repo create get list projection and repo-create worker positive path pass without closing the full default user loop"},
+	{"default_user_loop_jvs_save_restore_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_jvs_save_restore", "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "JVS save history restore-preview restore-run and discard paths pass without closing the full default user loop"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},
