@@ -4,7 +4,26 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 )
+
+func TestVolumeWorkloadMountCapabilityKeyIsResourceVocabularyNotMatrixRow(t *testing.T) {
+	volume := validVolume()
+	volume.Capabilities["workload_mount"] = true
+
+	if err := volume.Validate(); err != nil {
+		t.Fatalf("Validate with Volume.capabilities[workload_mount]: %v", err)
+	}
+	if _, ok := capability.CapabilityMatrixV1Row(capability.ID("workload_mount")); ok {
+		t.Fatal("capability matrix v1 must not contain legacy coarse workload_mount row; use workload_mount_binding/workload_mount_discovery/workload_teardown_plan")
+	}
+	for _, id := range []capability.ID{capability.WorkloadMountBinding, capability.WorkloadMountDiscovery, capability.WorkloadTeardownPlan} {
+		if _, ok := capability.CapabilityMatrixV1Row(id); !ok {
+			t.Fatalf("capability matrix v1 missing workload admission row %s", id)
+		}
+	}
+}
 
 func TestVolumeValidateAcceptsControlPlaneCapabilities(t *testing.T) {
 	volume := Volume{

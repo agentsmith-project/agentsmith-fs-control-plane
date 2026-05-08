@@ -364,20 +364,8 @@ func workloadMountAdmissionGatedMutation(route RouteMetadata) bool {
 	if !ok {
 		return false
 	}
-	if workloadMountTeardownExceptionOperation(operationType) {
-		return false
-	}
 	capabilityID, ok := capability.AdmissionCapabilityForOperationType(operationType)
-	return ok && capabilityID == capability.WorkloadMount
-}
-
-func workloadMountTeardownExceptionOperation(operationType operations.OperationType) bool {
-	for _, teardownOperationType := range capability.TeardownOperationTypesForCapability(capability.WorkloadMount) {
-		if operationType == teardownOperationType {
-			return true
-		}
-	}
-	return false
+	return ok && capabilityID == capability.WorkloadMountBinding
 }
 
 func (handler workloadMountLeafHandler) mutationCanonical(operationID, mountBindingID string, r *http.Request) (any, map[string]any, string, error) {

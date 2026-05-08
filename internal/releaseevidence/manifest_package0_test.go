@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 )
 
 func TestPackage0RequiredFieldsAndPassCriteria(t *testing.T) {
@@ -162,7 +164,7 @@ func TestPackage0ProfileInvariants(t *testing.T) {
 		{
 			name: "optional fixture positive requires fixture id",
 			edit: func(body string) string {
-				return appendReleaseEvidenceItem(body, `"id":"workload_mount_fixture_positive_unit","claim_id":"CLAIM_OPTIONAL_FIXTURE_CONFORMANT","subclaim_id":"workload_mount_fixture_smoke","acceptance_id":"P0_OPTIONAL_FIXTURE_POSITIVE","risk_id":"","fixture_id":"","capability_id":"workload_mount","evidence_profile":"repo-local-fixture-enabled","default_mode":false,"fixture_enabled_mode":true,"expected_runtime":"fast","scope":"package","negative_or_positive":"positive","evidence_type":"unit","required":false,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":true,"default_ga_required":false,"pass_criteria":{"kind":"positive_path","assertions":["fixture-enabled workload mount smoke passes"]}`)
+				return appendReleaseEvidenceItem(body, `"id":"workload_mount_fixture_positive_unit","claim_id":"CLAIM_OPTIONAL_FIXTURE_CONFORMANT","subclaim_id":"workload_mount_fixture_smoke","acceptance_id":"P0_OPTIONAL_FIXTURE_POSITIVE","risk_id":"","fixture_id":"","capability_id":"workload_mount_binding","evidence_profile":"repo-local-fixture-enabled","default_mode":false,"fixture_enabled_mode":true,"expected_runtime":"fast","scope":"package","negative_or_positive":"positive","evidence_type":"unit","required":false,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":true,"default_ga_required":false,"pass_criteria":{"kind":"positive_path","assertions":["fixture-enabled workload mount smoke passes"]}`)
 			},
 			want: "fixture_id",
 		},
@@ -381,18 +383,8 @@ func TestPackage0RequiresSeedGapMarkers(t *testing.T) {
 func TestPackage0SeedModeAllowsTargetCapabilityVocabulary(t *testing.T) {
 	root := releaseEvidenceFixtureRoot(t)
 	body := validReleaseEvidenceManifest()
-	for _, capabilityID := range []string{
-		"namespace_binding",
-		"volume_preflight",
-		"admin_bootstrap",
-		"caller_policy_readiness",
-		"repo_create",
-		"repo_projection",
-		"jvs_save_restore",
-		"operation_recovery",
-		"path_redaction",
-	} {
-		body = appendReleaseEvidenceItem(body, `"id":"target_capability_`+capabilityID+`","claim_id":"CLAIM_PROFILE_BOUNDARY","subclaim_id":"target_capability_vocabulary","acceptance_id":"P0_TARGET_CAPABILITY_VOCABULARY","risk_id":"","fixture_id":"","capability_id":"`+capabilityID+`","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"doc-guard","negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"coverage_guard","assertions":["target capability vocabulary remains accepted in seed mode"]}`)
+	for _, capability := range package0CapabilityMatrixV1Targets() {
+		body = appendReleaseEvidenceItem(body, package0CapabilityVocabularyItem(capability, capability.optionalGated, capability.defaultGARequired))
 	}
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
@@ -401,16 +393,54 @@ func TestPackage0SeedModeAllowsTargetCapabilityVocabulary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
+	if len(findings) != 0 {
+		t.Fatalf("VerifyFile returned findings for seed capability vocabulary: %+v", findings)
+	}
 	assertNoReleaseEvidenceFindingContains(t, findings, "capability_id")
 }
 
-func TestPackage0FinalModeRejectsLegacyStorageAndJVSCapabilities(t *testing.T) {
+func TestPackage0CapabilityMatrixV1ClassificationRejectsDrift(t *testing.T) {
+	for _, capability := range package0CapabilityMatrixV1Targets() {
+		t.Run(capability.id+"_optional_gated_drift", func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			body := validReleaseEvidenceManifest()
+			body = appendReleaseEvidenceItem(body, package0CapabilityVocabularyItem(capability, !capability.optionalGated, capability.defaultGARequired))
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, body)
+
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, "target_capability_"+capability.id)
+			assertReleaseEvidenceFindingContains(t, findings, "optional_gated")
+		})
+
+		t.Run(capability.id+"_default_ga_required_drift", func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			body := validReleaseEvidenceManifest()
+			body = appendReleaseEvidenceItem(body, package0CapabilityVocabularyItem(capability, capability.optionalGated, !capability.defaultGARequired))
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, body)
+
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, "target_capability_"+capability.id)
+			assertReleaseEvidenceFindingContains(t, findings, "default_ga_required")
+		})
+	}
+}
+
+func TestPackage0FinalModeRejectsLegacyCompatibilityCapabilities(t *testing.T) {
 	tests := []struct {
 		name         string
 		capabilityID string
 	}{
 		{name: "storage", capabilityID: "storage"},
 		{name: "jvs", capabilityID: "jvs"},
+		{name: "workload mount", capabilityID: "workload_mount"},
 	}
 
 	for _, tt := range tests {
@@ -428,6 +458,35 @@ func TestPackage0FinalModeRejectsLegacyStorageAndJVSCapabilities(t *testing.T) {
 			assertReleaseEvidenceFindingContains(t, findings, tt.capabilityID)
 		})
 	}
+}
+
+type package0CapabilityMatrixV1Target struct {
+	id                string
+	optionalGated     bool
+	defaultGARequired bool
+}
+
+func package0CapabilityMatrixV1Targets() []package0CapabilityMatrixV1Target {
+	var targets []package0CapabilityMatrixV1Target
+	for _, row := range capability.CapabilityMatrixV1Rows() {
+		targets = append(targets, package0CapabilityMatrixV1Target{
+			id:                string(row.ID),
+			optionalGated:     row.OptionalGated,
+			defaultGARequired: row.DefaultGARequired,
+		})
+	}
+	return targets
+}
+
+func package0CapabilityVocabularyItem(capability package0CapabilityMatrixV1Target, optionalGated, defaultGARequired bool) string {
+	return `"id":"target_capability_` + capability.id + `","claim_id":"CLAIM_PROFILE_BOUNDARY","subclaim_id":"target_capability_vocabulary","acceptance_id":"P0_TARGET_CAPABILITY_VOCABULARY","risk_id":"","fixture_id":"","capability_id":"` + capability.id + `","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"doc-guard","negative_or_positive":"negative","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":` + package0BoolLiteral(optionalGated) + `,"default_ga_required":` + package0BoolLiteral(defaultGARequired) + `,"pass_criteria":{"kind":"coverage_guard","assertions":["target capability vocabulary remains accepted in seed mode"]}`
+}
+
+func package0BoolLiteral(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func TestPackage0FinalModeRequiresReplacementEvidenceForRequiredSeedGaps(t *testing.T) {
@@ -576,7 +635,7 @@ func TestPackage0FinalModeRequiresTargetedOptionalFixtureClaimsWhenExplicitlyReq
 func TestPackage0FinalModeRequiresTargetedOptionalFixtureConformanceWhenExplicitlyRequired(t *testing.T) {
 	root := releaseEvidenceFixtureRoot(t)
 	body := withoutPackage0SeedGapMarker(validReleaseEvidenceManifest(), "seed_gap_optional_fixture_conformant_open")
-	body = appendReleaseEvidenceItem(body, `"id":"optional_fixture_fake_same_claim_unit","claim_id":"CLAIM_OPTIONAL_FIXTURE_CONFORMANT","subclaim_id":"optional_fixture_fake_smoke","acceptance_id":"P0_OPTIONAL_FIXTURE_FAKE_SMOKE","risk_id":"F99","fixture_id":"workload-fixture","capability_id":"workload_mount","evidence_profile":"repo-local-fixture-enabled","default_mode":false,"fixture_enabled_mode":true,"expected_runtime":"fast","scope":"package","negative_or_positive":"positive","evidence_type":"unit","required":true,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":true,"default_ga_required":false,"pass_criteria":{"kind":"positive_path","assertions":["fake optional fixture evidence must not close explicit fixture conformance"]}`)
+	body = appendReleaseEvidenceItem(body, `"id":"optional_fixture_fake_same_claim_unit","claim_id":"CLAIM_OPTIONAL_FIXTURE_CONFORMANT","subclaim_id":"optional_fixture_fake_smoke","acceptance_id":"P0_OPTIONAL_FIXTURE_FAKE_SMOKE","risk_id":"F99","fixture_id":"workload-fixture","capability_id":"workload_mount_binding","evidence_profile":"repo-local-fixture-enabled","default_mode":false,"fixture_enabled_mode":true,"expected_runtime":"fast","scope":"package","negative_or_positive":"positive","evidence_type":"unit","required":true,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":true,"default_ga_required":false,"pass_criteria":{"kind":"positive_path","assertions":["fake optional fixture evidence must not close explicit fixture conformance"]}`)
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
@@ -593,7 +652,7 @@ func TestPackage0FinalModeRequiresTargetedOptionalFixtureConformanceWhenExplicit
 func TestPackage0FinalModeDoesNotTreatNegativeNoFixtureItemAsOptionalFixtureConformance(t *testing.T) {
 	root := releaseEvidenceFixtureRoot(t)
 	body := withoutPackage0SeedGapMarker(validReleaseEvidenceManifest(), "seed_gap_optional_fixture_conformant_open")
-	body = appendReleaseEvidenceItem(body, `"id":"optional_fixture_negative_no_fixture_unit","claim_id":"CLAIM_OPTIONAL_FIXTURE_CONFORMANT","subclaim_id":"optional_fixture_negative_guard","acceptance_id":"P0_OPTIONAL_FIXTURE_NEGATIVE_GUARD","risk_id":"F9","fixture_id":"","capability_id":"workload_mount","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"package","negative_or_positive":"negative","evidence_type":"unit","required":true,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":true,"default_ga_required":false,"pass_criteria":{"kind":"denial_safety","assertions":["negative no-fixture evidence is not explicit optional fixture conformance"]}`)
+	body = appendReleaseEvidenceItem(body, `"id":"optional_fixture_negative_no_fixture_unit","claim_id":"CLAIM_OPTIONAL_FIXTURE_CONFORMANT","subclaim_id":"optional_fixture_negative_guard","acceptance_id":"P0_OPTIONAL_FIXTURE_NEGATIVE_GUARD","risk_id":"F9","fixture_id":"","capability_id":"workload_mount_binding","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"package","negative_or_positive":"negative","evidence_type":"unit","required":true,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":true,"default_ga_required":false,"pass_criteria":{"kind":"denial_safety","assertions":["negative no-fixture evidence is not explicit optional fixture conformance"]}`)
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 

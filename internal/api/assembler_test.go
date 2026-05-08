@@ -474,6 +474,125 @@ func TestInternalAPIShellCreateWorkloadMountAdmissionDisabledWithoutLookupStoreF
 	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
 }
 
+func TestInternalAPIShellWorkloadMountMutationsAdmissionDisabledWithoutLookupStoreFailsClosed(t *testing.T) {
+	meta := workloadMountMetaFixture()
+	store := &fakeNoLookupOperationIntakeStore{}
+	mountCalls := 0
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "runtime-orchestrator", Roles: []resources.CallerRole{resources.CallerRoleOrchestratorMount}})}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:              fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}},
+		NamespaceBindingReader:         bindingReader,
+		WorkloadMountBindingReader:     fakeWorkloadMountReader{binding: meta.mount, calls: &mountCalls},
+		OperationIntakeStore:           store,
+		GenerateOperationID:            func() string { return "op_mount_shell" },
+		Now:                            fixedNamespaceNow,
+		WorkloadMountAdmissionDisabled: true,
+	})
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "status", method: http.MethodPatch, path: "/internal/v1/workload-mount-bindings/wmb_123/status", body: `{"status":"active","observed_at":"2026-05-05T12:34:56Z"}`},
+		{name: "heartbeat", method: http.MethodPost, path: "/internal/v1/workload-mount-bindings/wmb_123:heartbeat"},
+		{name: "release", method: http.MethodPost, path: "/internal/v1/workload-mount-bindings/wmb_123:release"},
+		{name: "revoke", method: http.MethodPost, path: "/internal/v1/workload-mount-bindings/wmb_123:revoke"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, workloadMountRequestForCaller(tt.method, tt.path, tt.body, "ns_123", "runtime-orchestrator"))
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d body = %s, want 403 fail-closed fallback", rec.Code, rec.Body.String())
+			}
+			if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+				t.Fatalf("error = %#v, want capability denied", env.Error)
+			}
+			if store.calls != 0 || mountCalls != 0 || bindingReader.calls != 0 {
+				t.Fatalf("store/mount/auth-binding calls = %d/%d/%d, want none", store.calls, mountCalls, bindingReader.calls)
+			}
+			assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+		})
+	}
+}
+
+func TestInternalAPIShellWorkloadMountMutationsAdmissionDisabledWithLookupReplaysAndDenies(t *testing.T) {
+	hash, err := operations.HashRequest(map[string]string{"mount_binding_id": "wmb_123"})
+	if err != nil {
+		t.Fatalf("hash release request: %v", err)
+	}
+	tests := []struct {
+		name            string
+		lookupRecord    *operations.OperationRecord
+		wantStatus      int
+		wantOperationID string
+		wantLookupCalls int
+		wantAuditDenied bool
+	}{
+		{
+			name:            "release replay",
+			lookupRecord:    existingWorkloadMountMutationOperationRecord("op_existing_release_shell", operations.OperationMountBindingRelease, operations.OperationPhaseMountBindingReleaseValidate, hash),
+			wantStatus:      http.StatusAccepted,
+			wantOperationID: "op_existing_release_shell",
+			wantLookupCalls: 1,
+		},
+		{
+			name:            "release brand-new denied",
+			wantStatus:      http.StatusForbidden,
+			wantLookupCalls: 1,
+			wantAuditDenied: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := workloadMountMetaFixture()
+			store := &fakeOperationIntakeStore{lookupRecord: tt.lookupRecord}
+			sink := &fakeAuditSink{}
+			mountCalls := 0
+			handler := NewInternalAPIShell(InternalAPIShellConfig{
+				AuditSink:                      sink,
+				PrincipalResolver:              fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}},
+				NamespaceBindingReader:         &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "runtime-orchestrator", Roles: []resources.CallerRole{resources.CallerRoleOrchestratorMount}})},
+				WorkloadMountBindingReader:     fakeWorkloadMountReader{binding: meta.mount, calls: &mountCalls},
+				OperationIntakeStore:           store,
+				GenerateOperationID:            func() string { return "op_mount_shell" },
+				Now:                            fixedNamespaceNow,
+				WorkloadMountAdmissionDisabled: true,
+			})
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodPost, "/internal/v1/workload-mount-bindings/wmb_123:release", "", "ns_123", "runtime-orchestrator"))
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d body = %s, want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			if tt.wantOperationID != "" {
+				envelope := decodeOperationEnvelope(t, rec.Body.Bytes())
+				if envelope.OperationID != tt.wantOperationID {
+					t.Fatalf("operation id = %q, want %q", envelope.OperationID, tt.wantOperationID)
+				}
+			} else if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+				t.Fatalf("error = %#v, want capability denied", env.Error)
+			}
+			if store.calls != 0 || store.lookupCalls != tt.wantLookupCalls || mountCalls != 0 {
+				t.Fatalf("intake/lookup/mount calls = %d/%d/%d, want 0/%d/0", store.calls, store.lookupCalls, mountCalls, tt.wantLookupCalls)
+			}
+			if tt.wantAuditDenied {
+				if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+					t.Fatalf("audit events = %#v, want denied audit", sink.events)
+				}
+				assertWorkloadMountAdmissionDisabledAudit(t, sink.events[0], "releaseWorkloadMountBinding")
+			}
+			assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+		})
+	}
+}
+
 func TestInternalAPIShellWorkloadMountPlanAdmissionDisabled(t *testing.T) {
 	tests := []struct {
 		name          string

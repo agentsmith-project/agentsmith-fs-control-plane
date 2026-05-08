@@ -42,7 +42,7 @@
     },
     {
       "id": "workload_mount_disabled_admission_unit",
-      "capability_id": "workload_mount",
+      "capability_id": "workload_mount_binding",
       "evidence_type": "unit",
       "required": true,
       "command": [
@@ -77,8 +77,8 @@
       "pass_criteria": {
         "kind": "denial_safety",
         "assertions": [
-          "optional disabled workload mount admission rejects create, status update, heartbeat, and ordinary orchestrator plan before metadata/runtime continuation while preserving idempotency replay/conflict precedence",
-          "release and revoke remain explicit teardown exceptions under disabled workload mount admission"
+          "optional disabled workload mount binding admission rejects create, status update, heartbeat, release, and revoke before metadata/runtime continuation while preserving idempotency replay/conflict precedence",
+          "ordinary orchestrator plan is denied under disabled admission while releasing teardown-only plan remains available as the workload teardown plan discovery and repair surface"
         ]
       },
       "expected_runtime": "fast",
@@ -130,7 +130,7 @@
     },
     {
       "id": "workload_mount_plan_store_freshness_unit",
-      "capability_id": "workload_mount",
+      "capability_id": "workload_teardown_plan",
       "evidence_type": "unit",
       "required": true,
       "command": [
@@ -168,7 +168,7 @@
     },
     {
       "id": "workload_mount_runtime_secretref_config_unit",
-      "capability_id": "workload_mount",
+      "capability_id": "workload_teardown_plan",
       "evidence_type": "unit",
       "required": true,
       "command": [
@@ -211,7 +211,7 @@
     },
     {
       "id": "workload_mount_secretref_redaction_unit",
-      "capability_id": "workload_mount",
+      "capability_id": "workload_mount_discovery",
       "evidence_type": "unit",
       "required": true,
       "command": [
@@ -549,6 +549,47 @@
         "kind": "coverage_guard",
         "assertions": [
           "capability admission operation coverage stays consistent"
+        ]
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
+    },
+    {
+      "id": "capability_matrix_v1_contract_unit",
+      "capability_id": "",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/capability",
+        "-run",
+        "^Test(CapabilityMatrixV1(RowsMatchHandoffVocabulary|ExcludesLegacyCoarseCapabilities|SplitsJVSAndWebDAVProjectionFacets|SplitsWorkloadBindingDiscoveryAndTeardownPlanFacets|WebDAVExportAdmissionIncludesCreateAndRevoke|TeardownOnlyPlanDoesNotBypassNewMutationDenial)|AdmissionCapabilityForOperationTypeCoversEveryMatrixAdmissionOperation)$"
+      ],
+      "anchors": [
+        "internal/capability/matrix.go",
+        "internal/capability/matrix_test.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": false,
+      "claim_id": "CLAIM_CAPABILITY_MATRIX_CONSISTENT",
+      "subclaim_id": "capability_matrix_v1_contract",
+      "acceptance_id": "P1_CAPABILITY_MATRIX_V1_CONTRACT",
+      "risk_id": "F4",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "both",
+      "pass_criteria": {
+        "kind": "coverage_guard",
+        "assertions": [
+          "capability matrix v1 contract covers the handoff row vocabulary and excludes legacy coarse rows",
+          "JVS and WebDAV durable admissions are split from read projection facets, with WebDAV export covering create and revoke",
+          "workload binding, discovery, and teardown plan facets stay separate, and teardown-only plan has no admission operation bypass",
+          "every matrix admission operation reverse maps to the same capability row"
         ]
       },
       "expected_runtime": "fast",

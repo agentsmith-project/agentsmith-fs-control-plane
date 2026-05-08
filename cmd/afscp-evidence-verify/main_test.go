@@ -119,7 +119,7 @@ func evidenceCLIManifest(command, anchor string) string {
     },
     {
       "id":"workload_mount_disabled_admission_unit",
-      "capability_id":"workload_mount",
+      "capability_id":"workload_mount_binding",
       "evidence_type":"unit",
       "required":true,
       "command":["bash","scripts/pass.sh"],
@@ -141,7 +141,7 @@ func evidenceCLIManifest(command, anchor string) string {
     },
     {
       "id":"workload_mount_plan_store_freshness_unit",
-      "capability_id":"workload_mount",
+      "capability_id":"workload_teardown_plan",
       "evidence_type":"unit",
       "required":true,
       "command":["bash","scripts/pass.sh"],
@@ -152,7 +152,7 @@ func evidenceCLIManifest(command, anchor string) string {
     },
     {
       "id":"workload_mount_runtime_secretref_config_unit",
-      "capability_id":"workload_mount",
+      "capability_id":"workload_teardown_plan",
       "evidence_type":"unit",
       "required":true,
       "command":["bash","scripts/pass.sh"],
@@ -163,7 +163,7 @@ func evidenceCLIManifest(command, anchor string) string {
     },
     {
       "id":"workload_mount_secretref_redaction_unit",
-      "capability_id":"workload_mount",
+      "capability_id":"workload_mount_discovery",
       "evidence_type":"unit",
       "required":true,
       "command":["bash","scripts/pass.sh"],
@@ -352,7 +352,7 @@ var package0CLIMetadata = []struct {
 	passCriteriaAssertion string
 }{
 	{"webdav_export_disabled_admission_unit", "CLAIM_DEFAULT_DENIAL_SAFE", "webdav_export_disabled_admission", "P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION", "F5", "negative", "fast", "package", "true", "denial_safety", "disabled admission rejects before metadata and audits without queuing"},
-	{"workload_mount_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_disabled_admission", "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", "F5", "negative", "fast", "package", "false", "denial_safety", "optional disabled workload mount admission rejects create, status update, heartbeat, and ordinary orchestrator plan before metadata/runtime continuation while preserving idempotency replay/conflict precedence"},
+	{"workload_mount_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_disabled_admission", "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", "F5", "negative", "fast", "package", "false", "denial_safety", "optional disabled workload mount binding admission rejects create, status update, heartbeat, release, and revoke before metadata/runtime continuation while preserving idempotency replay/conflict precedence"},
 	{"repo_lifecycle_retained_positive_unit", "CLAIM_RETAINED_LIFECYCLE_DEFAULT", "retained_lifecycle_positive", "P0_RETAINED_LIFECYCLE_DEFAULT_POSITIVE", "F15", "positive", "fast", "package", "true", "positive_path", "retained lifecycle positive path passes"},
 	{"workload_mount_plan_store_freshness_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_plan_store_freshness", "P0_OPTIONAL_DENIED_WORKLOAD_PLAN_STORE", "F9", "negative", "fast", "package", "false", "denial_safety", "workload mount plan store fails closed"},
 	{"workload_mount_runtime_secretref_config_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_runtime_secretref_config", "P0_OPTIONAL_DENIED_WORKLOAD_RUNTIME_SECRETREF", "F10", "negative", "fast", "package", "false", "denial_safety", "runtime secretref config fails closed"},

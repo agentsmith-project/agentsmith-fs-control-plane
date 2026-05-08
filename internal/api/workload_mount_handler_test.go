@@ -151,29 +151,13 @@ func TestCreateWorkloadMountBindingAdmissionDisabledHashConflictBeforeCapability
 }
 
 func TestWorkloadMountAdmissionDisabledMutations(t *testing.T) {
-	for _, operationID := range []string{"updateWorkloadMountBindingStatus", "heartbeatWorkloadMountBinding"} {
+	for _, operationID := range []string{"updateWorkloadMountBindingStatus", "heartbeatWorkloadMountBinding", "releaseWorkloadMountBinding", "revokeWorkloadMountBinding"} {
 		route, ok := RouteMetadataByOperationID(operationID)
 		if !ok {
 			t.Fatalf("missing route metadata for %s", operationID)
 		}
 		if !workloadMountAdmissionGatedMutation(route) {
 			t.Fatalf("%s should be gated when workload mount admission is disabled", operationID)
-		}
-	}
-	for _, operationID := range []string{"releaseWorkloadMountBinding", "revokeWorkloadMountBinding"} {
-		route, ok := RouteMetadataByOperationID(operationID)
-		if !ok {
-			t.Fatalf("missing route metadata for %s", operationID)
-		}
-		operationType, ok := operations.OperationTypeForRouteOperationID(operationID)
-		if !ok {
-			t.Fatalf("missing operation type for %s", operationID)
-		}
-		if !workloadMountTeardownExceptionOperation(operationType) {
-			t.Fatalf("%s should be an explicit workload mount teardown exception", operationID)
-		}
-		if workloadMountAdmissionGatedMutation(route) {
-			t.Fatalf("%s should not be gated when workload mount admission is disabled", operationID)
 		}
 	}
 
@@ -192,6 +176,8 @@ func TestWorkloadMountAdmissionDisabledMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash heartbeat request: %v", err)
 	}
+	releaseHash := heartbeatHash
+	revokeHash := heartbeatHash
 
 	tests := []struct {
 		name             string
@@ -269,30 +255,58 @@ func TestWorkloadMountAdmissionDisabledMutations(t *testing.T) {
 			wantBindingCalls: 0,
 		},
 		{
-			name:             "release teardown exception",
+			name:             "release denied before binding",
 			method:           http.MethodPost,
 			path:             "/internal/v1/workload-mount-bindings/wmb_123:release",
 			callerService:    "runtime-orchestrator",
 			callerKind:       auth.CallerKindOrchestrator,
 			role:             auth.RoleOrchestratorMount,
-			wantStatus:       http.StatusAccepted,
-			wantIntakeCalls:  1,
+			wantStatus:       http.StatusForbidden,
+			wantErrorCode:    CodeCapabilityDenied,
 			wantLookupCalls:  1,
-			wantBindingCalls: 1,
-			wantPhase:        operations.OperationPhaseMountBindingReleaseValidate,
+			wantAuditDenied:  true,
+			wantAuditRouteID: "releaseWorkloadMountBinding",
+			wantBindingCalls: 0,
 		},
 		{
-			name:             "revoke teardown exception",
+			name:             "release replay before denial",
+			method:           http.MethodPost,
+			path:             "/internal/v1/workload-mount-bindings/wmb_123:release",
+			callerService:    "runtime-orchestrator",
+			callerKind:       auth.CallerKindOrchestrator,
+			role:             auth.RoleOrchestratorMount,
+			lookupRecord:     existingWorkloadMountMutationOperationRecord("op_existing_release", operations.OperationMountBindingRelease, operations.OperationPhaseMountBindingReleaseValidate, releaseHash),
+			wantStatus:       http.StatusAccepted,
+			wantOperationID:  "op_existing_release",
+			wantLookupCalls:  1,
+			wantBindingCalls: 0,
+		},
+		{
+			name:             "revoke denied before binding",
 			method:           http.MethodPost,
 			path:             "/internal/v1/workload-mount-bindings/wmb_123:revoke",
 			callerService:    "product-caller",
 			callerKind:       auth.CallerKindProduct,
 			role:             auth.RoleMountAdmin,
-			wantStatus:       http.StatusAccepted,
-			wantIntakeCalls:  1,
+			wantStatus:       http.StatusForbidden,
+			wantErrorCode:    CodeCapabilityDenied,
 			wantLookupCalls:  1,
-			wantBindingCalls: 1,
-			wantPhase:        operations.OperationPhaseMountBindingRevokeValidate,
+			wantAuditDenied:  true,
+			wantAuditRouteID: "revokeWorkloadMountBinding",
+			wantBindingCalls: 0,
+		},
+		{
+			name:             "revoke replay before denial",
+			method:           http.MethodPost,
+			path:             "/internal/v1/workload-mount-bindings/wmb_123:revoke",
+			callerService:    "product-caller",
+			callerKind:       auth.CallerKindProduct,
+			role:             auth.RoleMountAdmin,
+			lookupRecord:     existingWorkloadMountMutationOperationRecord("op_existing_revoke", operations.OperationMountBindingRevoke, operations.OperationPhaseMountBindingRevokeValidate, revokeHash),
+			wantStatus:       http.StatusAccepted,
+			wantOperationID:  "op_existing_revoke",
+			wantLookupCalls:  1,
+			wantBindingCalls: 0,
 		},
 	}
 

@@ -344,7 +344,7 @@ func TestValidateManifestChecksCapabilityClassification(t *testing.T) {
 		{
 			name: "optional capability cannot be default required",
 			edit: func(body string) string {
-				return appendReleaseEvidenceItem(body, `"id":"bad_workload_default","capability_id":"workload_mount","evidence_type":"unit","required":true,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":true,"default_ga_required":true`)
+				return appendReleaseEvidenceItem(body, `"id":"bad_workload_default","capability_id":"workload_mount_binding","evidence_type":"unit","required":true,"command":["bash","scripts/pass.sh"],"anchors":["scripts/pass.sh"],"doc_only_allowed":false,"optional_gated":true,"default_ga_required":true`)
 			},
 			want: "default_ga_required",
 		},
@@ -398,7 +398,7 @@ func TestCurrentRepoManifestContainsOptionalCapabilityDisabledAdmissionEvidence(
 		t.Fatalf("current manifest findings: %+v", findings)
 	}
 
-	for _, capabilityID := range []string{"workload_mount", "repo_template", "repo_purge"} {
+	for _, capabilityID := range []string{"workload_mount_binding", "repo_template", "repo_purge"} {
 		item, ok := manifest.OptionalDisabledAdmissionEvidence(capabilityID)
 		if !ok {
 			t.Fatalf("manifest missing optional-gated disabled admission evidence for %s", capabilityID)
@@ -528,10 +528,13 @@ func TestCurrentRepoManifestWorkloadMountDisabledAdmissionSelectorCoversCoreTest
 		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 	passCriteria := strings.Join(item.PassCriteria.Assertions, "\n")
-	for _, required := range []string{"status update", "heartbeat", "ordinary orchestrator plan", "release and revoke", "teardown exceptions"} {
+	for _, required := range []string{"workload mount binding", "status update", "heartbeat", "ordinary orchestrator plan", "workload teardown plan"} {
 		if !strings.Contains(passCriteria, required) {
 			t.Fatalf("%s pass criteria %q does not mention %q", item.ID, passCriteria, required)
 		}
+	}
+	if strings.Contains(passCriteria, "teardown exceptions") {
+		t.Fatalf("%s pass criteria %q must not describe release/revoke as teardown exceptions", item.ID, passCriteria)
 	}
 }
 
@@ -673,7 +676,7 @@ func validReleaseEvidenceManifest() string {
     },
     {
       "id":"workload_mount_disabled_admission_unit",
-      "capability_id":"workload_mount",
+      "capability_id":"workload_mount_binding",
       "evidence_type":"unit",
       "required":true,
       "command":["bash","scripts/pass.sh"],
@@ -695,7 +698,7 @@ func validReleaseEvidenceManifest() string {
     },
     {
       "id":"workload_mount_plan_store_freshness_unit",
-      "capability_id":"workload_mount",
+      "capability_id":"workload_teardown_plan",
       "evidence_type":"unit",
       "required":true,
       "command":["bash","scripts/pass.sh"],
@@ -706,7 +709,7 @@ func validReleaseEvidenceManifest() string {
     },
     {
       "id":"workload_mount_runtime_secretref_config_unit",
-      "capability_id":"workload_mount",
+      "capability_id":"workload_teardown_plan",
       "evidence_type":"unit",
       "required":true,
       "command":["bash","scripts/pass.sh"],
@@ -717,7 +720,7 @@ func validReleaseEvidenceManifest() string {
     },
     {
       "id":"workload_mount_secretref_redaction_unit",
-      "capability_id":"workload_mount",
+      "capability_id":"workload_mount_discovery",
       "evidence_type":"unit",
       "required":true,
       "command":["bash","scripts/pass.sh"],
@@ -910,7 +913,7 @@ var package0FixtureMetadata = []struct {
 	passCriteriaAssertion string
 }{
 	{"webdav_export_disabled_admission_unit", "CLAIM_DEFAULT_DENIAL_SAFE", "webdav_export_disabled_admission", "P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION", "F5", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "disabled admission rejects before metadata and audits without queuing"},
-	{"workload_mount_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_disabled_admission", "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", "F5", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "optional disabled workload mount admission rejects create, status update, heartbeat, and ordinary orchestrator plan before metadata/runtime continuation while preserving idempotency replay/conflict precedence"},
+	{"workload_mount_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_disabled_admission", "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", "F5", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "optional disabled workload mount binding admission rejects create, status update, heartbeat, release, and revoke before metadata/runtime continuation while preserving idempotency replay/conflict precedence"},
 	{"repo_lifecycle_retained_positive_unit", "CLAIM_RETAINED_LIFECYCLE_DEFAULT", "retained_lifecycle_positive", "P0_RETAINED_LIFECYCLE_DEFAULT_POSITIVE", "F15", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "retained lifecycle archive restore delete and tombstone flows pass without purge selectors"},
 	{"workload_mount_plan_store_freshness_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_plan_store_freshness", "P0_OPTIONAL_DENIED_WORKLOAD_PLAN_STORE", "F9", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "workload mount plan store fails closed on stale or unsupported default state"},
 	{"workload_mount_runtime_secretref_config_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_runtime_secretref_config", "P0_OPTIONAL_DENIED_WORKLOAD_RUNTIME_SECRETREF", "F10", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "runtime secretref configuration fails closed without leaking values"},

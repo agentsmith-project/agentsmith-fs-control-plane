@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 )
 
 const (
@@ -641,10 +643,10 @@ func containsString(values []string, want string) bool {
 var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "webdav_export_disabled_admission_unit", ClaimID: "CLAIM_DEFAULT_DENIAL_SAFE", SubclaimID: "webdav_export_disabled_admission", AcceptanceID: "P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION", RiskID: "F5", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "webdav_export", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "repo_lifecycle_retained_positive_unit", ClaimID: "CLAIM_RETAINED_LIFECYCLE_DEFAULT", SubclaimID: "retained_lifecycle_positive", AcceptanceID: "P0_RETAINED_LIFECYCLE_DEFAULT_POSITIVE", RiskID: "F15", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "repo_lifecycle_retained", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
-	{ID: "workload_mount_disabled_admission_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_disabled_admission", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", RiskID: "F5", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "workload_mount_plan_store_freshness_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_plan_store_freshness", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_PLAN_STORE", RiskID: "F9", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "workload_mount_runtime_secretref_config_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_runtime_secretref_config", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_RUNTIME_SECRETREF", RiskID: "F10", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
-	{ID: "workload_mount_secretref_redaction_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_secretref_redaction", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_SECRETREF_REDACTION", RiskID: "F10", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "workload_mount_disabled_admission_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_disabled_admission", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", RiskID: "F5", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_mount_binding", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "workload_mount_plan_store_freshness_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_plan_store_freshness", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_PLAN_STORE", RiskID: "F9", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_teardown_plan", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "workload_mount_runtime_secretref_config_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_runtime_secretref_config", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_RUNTIME_SECRETREF", RiskID: "F10", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_teardown_plan", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "workload_mount_secretref_redaction_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "workload_mount_secretref_redaction", AcceptanceID: "P0_OPTIONAL_DENIED_WORKLOAD_SECRETREF_REDACTION", RiskID: "F10", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "workload_mount_discovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
 	{ID: "repo_template_disabled_admission_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_template_disabled_admission", AcceptanceID: "P0_OPTIONAL_DENIED_TEMPLATE_ADMISSION", RiskID: "F16", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
 	{ID: "repo_purge_disabled_admission_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_purge_disabled_admission", AcceptanceID: "P0_OPTIONAL_DENIED_PURGE_ADMISSION", RiskID: "F13", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_purge", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
 	{ID: "repo_template_create_disabled_worker_recovery_unit", ClaimID: "CLAIM_OPTIONAL_DENIED_SAFE", SubclaimID: "repo_template_create_disabled_worker_recovery", AcceptanceID: "P0_OPTIONAL_DENIED_TEMPLATE_CREATE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
@@ -677,7 +679,7 @@ var requiredClaimSubclaimSpecs = []requiredClaimSubclaimSpec{
 var seedGapSpecs = []seedGapSpec{
 	{ID: "seed_gap_admin_bootstrap_ready_open", ClaimID: "CLAIM_ADMIN_BOOTSTRAP_READY", RiskID: "F3", FinalSubclaimID: "admin_bootstrap_ready", FinalAcceptanceID: "P0_ADMIN_BOOTSTRAP_READY", FinalCapabilityID: "admin_bootstrap", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "admin bootstrap readiness passes in default mode", FinalOptionalGated: false, FinalDefaultGARequired: true},
 	{ID: "seed_gap_default_user_loop_open", ClaimID: "CLAIM_DEFAULT_USER_LOOP", RiskID: "F2", FinalSubclaimID: "default_user_loop_positive", FinalAcceptanceID: "P0_DEFAULT_USER_LOOP_POSITIVE", FinalCapabilityID: "caller_policy_readiness", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "default user loop passes in default mode", FinalOptionalGated: false, FinalDefaultGARequired: true},
-	{ID: "seed_gap_workload_fixture_ready_open", ClaimID: "CLAIM_WORKLOAD_FIXTURE_READY", RiskID: "F9", FinalSubclaimID: "workload_fixture_ready", FinalAcceptanceID: "P0_WORKLOAD_FIXTURE_READY", FinalCapabilityID: "workload_mount", FinalEvidenceProfile: "repo-local-fixture-enabled", FinalDefaultMode: false, FinalFixtureEnabledMode: true, FinalExpectedRuntime: "integration", FinalScope: "repo-local-e2e", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "workload fixture readiness passes with repo-local fixture", FinalOptionalGated: true, FinalDefaultGARequired: false},
+	{ID: "seed_gap_workload_fixture_ready_open", ClaimID: "CLAIM_WORKLOAD_FIXTURE_READY", RiskID: "F9", FinalSubclaimID: "workload_fixture_ready", FinalAcceptanceID: "P0_WORKLOAD_FIXTURE_READY", FinalCapabilityID: "workload_mount_binding", FinalEvidenceProfile: "repo-local-fixture-enabled", FinalDefaultMode: false, FinalFixtureEnabledMode: true, FinalExpectedRuntime: "integration", FinalScope: "repo-local-e2e", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "workload fixture readiness passes with repo-local fixture", FinalOptionalGated: true, FinalDefaultGARequired: false},
 	{ID: "seed_gap_operator_repair_safe_open", ClaimID: "CLAIM_OPERATOR_REPAIR_SAFE", RiskID: "F11", FinalSubclaimID: "operator_repair_safe", FinalAcceptanceID: "P0_OPERATOR_REPAIR_SAFE", FinalCapabilityID: "operation_recovery", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "operator repair safety passes in default mode", FinalOptionalGated: false, FinalDefaultGARequired: true},
 	{ID: "seed_gap_purge_approval_safe_open", ClaimID: "CLAIM_PURGE_APPROVAL_SAFE", RiskID: "F13", FinalSubclaimID: "purge_approval_safe", FinalAcceptanceID: "P0_PURGE_APPROVAL_SAFE", FinalCapabilityID: "repo_purge", FinalEvidenceProfile: "repo-local-fixture-enabled", FinalDefaultMode: false, FinalFixtureEnabledMode: true, FinalExpectedRuntime: "integration", FinalScope: "repo-local-e2e", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "purge approval safety passes with repo-local fixture", FinalOptionalGated: true, FinalDefaultGARequired: false},
 	{ID: "seed_gap_restore_reconciliation_open", ClaimID: "CLAIM_RESTORE_RECONCILIATION", RiskID: "F14", FinalSubclaimID: "restore_reconciliation_safe", FinalAcceptanceID: "P0_RESTORE_RECONCILIATION_SAFE", FinalCapabilityID: "jvs_save_restore", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "restore reconciliation safety passes in default mode", FinalOptionalGated: false, FinalDefaultGARequired: true},
@@ -687,7 +689,7 @@ var seedGapSpecs = []seedGapSpec{
 	{ID: "seed_gap_discovery_surfaces_open", ClaimID: "CLAIM_DISCOVERY_SURFACES", RiskID: "F7", FinalSubclaimID: "discovery_surfaces_layered", FinalAcceptanceID: "P0_DISCOVERY_SURFACES_LAYERED", FinalCapabilityID: "repo_projection", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "discovery surfaces pass layered default checks", FinalOptionalGated: false, FinalDefaultGARequired: true},
 	{ID: "seed_gap_webdav_default_access_open", ClaimID: "CLAIM_WEBDAV_DEFAULT_ACCESS", RiskID: "F8", FinalSubclaimID: "webdav_default_access", FinalAcceptanceID: "P0_WEBDAV_DEFAULT_ACCESS", FinalCapabilityID: "webdav_export", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "webdav default access passes in default mode", FinalOptionalGated: false, FinalDefaultGARequired: true},
 	{ID: "seed_gap_secret_path_redaction_open", ClaimID: "CLAIM_SECRET_PATH_REDACTION", RiskID: "F10", FinalSubclaimID: "secret_path_redaction", FinalAcceptanceID: "P0_SECRET_PATH_REDACTION", FinalCapabilityID: "path_redaction", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "negative", FinalPassCriteriaKind: "denial_safety", FinalPassCriteriaAssert: "secret path redaction denies secret path disclosure", FinalOptionalGated: false, FinalDefaultGARequired: true},
-	{ID: "seed_gap_optional_fixture_conformant_open", ClaimID: "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", RiskID: "F9", FinalSubclaimID: "optional_fixture_conformant", FinalAcceptanceID: "P0_OPTIONAL_FIXTURE_CONFORMANT", FinalCapabilityID: "workload_mount", FinalEvidenceProfile: "repo-local-fixture-enabled", FinalDefaultMode: false, FinalFixtureEnabledMode: true, FinalExpectedRuntime: "integration", FinalScope: "repo-local-e2e", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "optional fixture conformance passes with repo-local fixture", FinalOptionalGated: true, FinalDefaultGARequired: false},
+	{ID: "seed_gap_optional_fixture_conformant_open", ClaimID: "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", RiskID: "F9", FinalSubclaimID: "optional_fixture_conformant", FinalAcceptanceID: "P0_OPTIONAL_FIXTURE_CONFORMANT", FinalCapabilityID: "workload_mount_binding", FinalEvidenceProfile: "repo-local-fixture-enabled", FinalDefaultMode: false, FinalFixtureEnabledMode: true, FinalExpectedRuntime: "integration", FinalScope: "repo-local-e2e", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "optional fixture conformance passes with repo-local fixture", FinalOptionalGated: true, FinalDefaultGARequired: false},
 	{ID: "seed_gap_template_quota_boundary_open", ClaimID: "CLAIM_TEMPLATE_QUOTA_BOUNDARY", RiskID: "F16", FinalSubclaimID: "template_quota_boundary", FinalAcceptanceID: "P0_TEMPLATE_QUOTA_BOUNDARY", FinalCapabilityID: "repo_template", FinalEvidenceProfile: "repo-local-fixture-enabled", FinalDefaultMode: false, FinalFixtureEnabledMode: true, FinalExpectedRuntime: "integration", FinalScope: "repo-local-e2e", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "template quota boundary passes with repo-local fixture", FinalOptionalGated: true, FinalDefaultGARequired: false},
 	{ID: "seed_gap_workflow_hardening_guard_open", ClaimID: "CLAIM_WORKFLOW_HARDENING_GUARD", RiskID: "F18", FinalSubclaimID: "workflow_hardening_guard", FinalAcceptanceID: "P0_WORKFLOW_HARDENING_GUARD", FinalCapabilityID: "", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "workflow-guard", FinalNegativeOrPositive: "both", FinalPassCriteriaKind: "coverage_guard", FinalPassCriteriaAssert: "workflow hardening guard covers final release evidence", FinalOptionalGated: false, FinalDefaultGARequired: false},
 }
@@ -785,24 +787,23 @@ func nonEmptyStrings(values []string) []string {
 }
 
 func optionalCapability(capabilityID string) bool {
-	switch capabilityID {
-	case "workload_mount", "repo_template", "repo_purge":
-		return true
-	default:
-		return false
-	}
+	return optionalGatedCapabilities[capabilityID]
 }
 
 func validateCapabilityClassification(item Item) []Finding {
-	switch item.CapabilityID {
-	case "storage", "jvs", "webdav_export", "repo_lifecycle_retained":
+	if defaultGARequiredCapabilities[item.CapabilityID] {
 		if item.OptionalGated {
 			return []Finding{{ItemID: item.ID, Code: "item.optional_gated_invalid", Message: fmt.Sprintf("%s is default GA required and cannot be optional_gated=true", item.CapabilityID)}}
 		}
 		if !item.DefaultGARequired {
 			return []Finding{{ItemID: item.ID, Code: "item.default_ga_required_invalid", Message: fmt.Sprintf("%s must have default_ga_required=true", item.CapabilityID)}}
 		}
-	case "workload_mount", "repo_template", "repo_purge":
+		return nil
+	}
+	if optionalGatedCapabilities[item.CapabilityID] {
+		if !item.OptionalGated {
+			return []Finding{{ItemID: item.ID, Code: "item.optional_gated_invalid", Message: fmt.Sprintf("%s is optional-gated and must have optional_gated=true", item.CapabilityID)}}
+		}
 		if item.DefaultGARequired {
 			return []Finding{{ItemID: item.ID, Code: "item.default_ga_required_invalid", Message: fmt.Sprintf("%s is optional-gated and cannot have default_ga_required=true", item.CapabilityID)}}
 		}
@@ -1194,29 +1195,54 @@ var validClaimIDs = map[string]bool{
 	"CLAIM_RELEASE_GATE_TRACEABLE":       true,
 }
 
-var validCapabilities = map[string]bool{
-	"":                        true,
-	"storage":                 true,
-	"jvs":                     true,
-	"webdav_export":           true,
-	"repo_lifecycle_retained": true,
-	"workload_mount":          true,
-	"repo_template":           true,
-	"repo_purge":              true,
-	"namespace_binding":       true,
-	"volume_preflight":        true,
-	"admin_bootstrap":         true,
-	"caller_policy_readiness": true,
-	"repo_create":             true,
-	"repo_projection":         true,
-	"jvs_save_restore":        true,
-	"operation_recovery":      true,
-	"path_redaction":          true,
-}
+var validCapabilities = releaseEvidenceValidCapabilities()
+
+var defaultGARequiredCapabilities = releaseEvidenceDefaultGARequiredCapabilities()
+
+var optionalGatedCapabilities = releaseEvidenceOptionalGatedCapabilities()
 
 var legacyFinalInvalidCapabilities = map[string]bool{
-	"storage": true,
-	"jvs":     true,
+	"storage":        true,
+	"jvs":            true,
+	"workload_mount": true,
+}
+
+func releaseEvidenceValidCapabilities() map[string]bool {
+	ids := map[string]bool{
+		"":                               true,
+		string(capability.Storage):       true,
+		string(capability.JVS):           true,
+		string(capability.WorkloadMount): true,
+	}
+	for _, row := range capability.CapabilityMatrixV1Rows() {
+		ids[string(row.ID)] = true
+	}
+	return ids
+}
+
+func releaseEvidenceDefaultGARequiredCapabilities() map[string]bool {
+	ids := map[string]bool{
+		string(capability.Storage): true,
+		string(capability.JVS):     true,
+	}
+	for _, row := range capability.CapabilityMatrixV1Rows() {
+		if row.DefaultGARequired {
+			ids[string(row.ID)] = true
+		}
+	}
+	return ids
+}
+
+func releaseEvidenceOptionalGatedCapabilities() map[string]bool {
+	ids := map[string]bool{
+		string(capability.WorkloadMount): true,
+	}
+	for _, row := range capability.CapabilityMatrixV1Rows() {
+		if row.OptionalGated {
+			ids[string(row.ID)] = true
+		}
+	}
+	return ids
 }
 
 var allowedExecutables = map[string]bool{

@@ -455,35 +455,35 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	// routes without handlers remain fail-closed instead of being silently absent.
 	fallback := internalAPIFallbackHandler(config.Logger, config.AuditSink)
 	implemented := map[string]http.Handler{
-		"createRepo":                       createRepoHandler,
-		"createSavePoint":                  createSavePointHandler,
-		"archiveRepo":                      archiveRepoHandler,
-		"restoreArchivedRepo":              restoreArchivedRepoHandler,
-		"deleteRepo":                       deleteRepoHandler,
-		"disableNamespace":                 disableNamespaceHandler,
-		"ensureVolume":                     volumeHandler,
-		"getNamespaceVolumeBinding":        getBindingHandler,
-		"getRepo":                          getRepoHandler,
-		"getWorkloadMountBinding":          getWorkloadMountHandler,
-		"heartbeatWorkloadMountBinding":    heartbeatWorkloadMountHandler,
-		"listRepos":                        listReposHandler,
-		"purgeRepo":                        purgeRepoHandler,
-		"restorePreview":                   restorePreviewHandler,
-		"restorePreviewDiscard":            restorePreviewDiscardHandler,
-		"restoreRun":                       restoreRunHandler,
-		"createRepoTemplate":               createRepoTemplateHandler,
-		"cloneRepoTemplate":                cloneRepoTemplateHandler,
-		"restoreTombstonedRepo":            restoreTombstonedRepoHandler,
-		"releaseWorkloadMountBinding":      releaseWorkloadMountHandler,
-		"revokeWorkloadMountBinding":       revokeWorkloadMountHandler,
-		"getOperation":                     operationInspectionHandler,
-		"listSavePoints":                   listSavePointsHandler,
-		"putNamespaceVolumeBinding":        putBindingHandler,
-		"upsertNamespace":                  upsertNamespaceHandler,
-		"updateWorkloadMountBindingStatus": updateWorkloadMountStatusHandler,
+		"createRepo":                createRepoHandler,
+		"createSavePoint":           createSavePointHandler,
+		"archiveRepo":               archiveRepoHandler,
+		"restoreArchivedRepo":       restoreArchivedRepoHandler,
+		"deleteRepo":                deleteRepoHandler,
+		"disableNamespace":          disableNamespaceHandler,
+		"ensureVolume":              volumeHandler,
+		"getNamespaceVolumeBinding": getBindingHandler,
+		"getRepo":                   getRepoHandler,
+		"getWorkloadMountBinding":   getWorkloadMountHandler,
+		"listRepos":                 listReposHandler,
+		"purgeRepo":                 purgeRepoHandler,
+		"restorePreview":            restorePreviewHandler,
+		"restorePreviewDiscard":     restorePreviewDiscardHandler,
+		"restoreRun":                restoreRunHandler,
+		"createRepoTemplate":        createRepoTemplateHandler,
+		"cloneRepoTemplate":         cloneRepoTemplateHandler,
+		"restoreTombstonedRepo":     restoreTombstonedRepoHandler,
+		"getOperation":              operationInspectionHandler,
+		"listSavePoints":            listSavePointsHandler,
+		"putNamespaceVolumeBinding": putBindingHandler,
+		"upsertNamespace":           upsertNamespaceHandler,
 	}
 	if !config.WorkloadMountAdmissionDisabled || operationLookupStore != nil {
 		implemented["createWorkloadMountBinding"] = createWorkloadMountHandler
+		implemented["heartbeatWorkloadMountBinding"] = heartbeatWorkloadMountHandler
+		implemented["releaseWorkloadMountBinding"] = releaseWorkloadMountHandler
+		implemented["revokeWorkloadMountBinding"] = revokeWorkloadMountHandler
+		implemented["updateWorkloadMountBindingStatus"] = updateWorkloadMountStatusHandler
 	}
 	if !config.WorkloadMountAdmissionDisabled || (mountReader != nil && mountPlanReader != nil) {
 		implemented["getOrchestratorMountPlan"] = getOrchestratorMountPlanHandler
