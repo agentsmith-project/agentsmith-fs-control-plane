@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -80,7 +84,7 @@ func TestRunReturnsTwoWhenModeFlagInvalid(t *testing.T) {
 	}
 }
 
-func TestRunFinalModeRejectsOpenSeedGaps(t *testing.T) {
+func TestRunFinalModeRequiresSelectorFlag(t *testing.T) {
 	root := t.TempDir()
 	writeEvidenceCLIScripts(t, root)
 	manifestPath := filepath.Join(root, "manifest.json")
@@ -88,6 +92,40 @@ func TestRunFinalModeRejectsOpenSeedGaps(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"-mode", "final", "-manifest", manifestPath, "-repo-root", root, "-check-only"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2, got %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "-selector") {
+		t.Fatalf("expected stderr to mention -selector, got %q", stderr.String())
+	}
+}
+
+func TestFinalCheckOnlyCannotDeclareFinalAcceptance(t *testing.T) {
+	root := t.TempDir()
+	writeEvidenceCLIScripts(t, root)
+	manifestPath := filepath.Join(root, "manifest.json")
+	writeEvidenceCLIFile(t, manifestPath, evidenceCLIManifest(`["bash","scripts/pass.sh"]`, "scripts/pass.sh"))
+	writeEvidenceCLISelector(t, root, "manifest.json", "final_candidate")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-mode", "final", "-manifest", manifestPath, "-repo-root", root, "-selector", "docs/release-evidence/ga-release-selector.json", "-check-only"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2, got %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "check-only") || !strings.Contains(stderr.String(), "final") {
+		t.Fatalf("expected stderr to distinguish final check-only from final acceptance, got %q", stderr.String())
+	}
+}
+
+func TestRunFinalModeWithSelectorRejectsOpenSeedGaps(t *testing.T) {
+	root := t.TempDir()
+	writeEvidenceCLIScripts(t, root)
+	manifestPath := filepath.Join(root, "manifest.json")
+	writeEvidenceCLIFile(t, manifestPath, evidenceCLIManifest(`["bash","scripts/pass.sh"]`, "scripts/pass.sh"))
+	writeEvidenceCLISelector(t, root, "manifest.json", "final_candidate")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-mode", "final", "-manifest", manifestPath, "-repo-root", root, "-selector", "docs/release-evidence/ga-release-selector.json"}, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("expected exit 1, got %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -289,6 +327,7 @@ func evidenceCLIManifest(command, anchor string) string {
 func withPackage0CLIMetadata(body string) string {
 	for _, metadata := range package0CLIMetadata {
 		body = strings.Replace(body, `"id":"`+metadata.id+`",`, `"id":"`+metadata.id+`",
+      "evidence_status":"implemented",
       "claim_id":"`+metadata.claimID+`",
       "subclaim_id":"`+metadata.subclaimID+`",
       "acceptance_id":"`+metadata.acceptanceID+`",
@@ -322,7 +361,7 @@ func insertPackage0CLIPassCriteria(body, id, defaultGARequired, kind, assertion 
 
 func withPackage0CLISeedGapMarkers(body string) string {
 	for _, gap := range package0CLISeedGapMetadata {
-		body = appendEvidenceCLIItem(body, `"id":"`+gap.id+`","claim_id":"`+gap.claimID+`","subclaim_id":"seed_gap_open","acceptance_id":"P0_SEED_GAP_OPEN","risk_id":"`+gap.riskID+`","fixture_id":"","capability_id":"","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"doc-guard","negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"seed_gap","assertions":["open"]}`)
+		body = appendEvidenceCLIItem(body, `"id":"`+gap.id+`","evidence_status":"placeholder","claim_id":"`+gap.claimID+`","subclaim_id":"seed_gap_open","acceptance_id":"P0_SEED_GAP_OPEN","risk_id":"`+gap.riskID+`","fixture_id":"","capability_id":"","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"doc-guard","negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"seed_gap","assertions":["open"]}`)
 	}
 	return body
 }
@@ -381,7 +420,122 @@ var package0CLIMetadata = []struct {
 }
 
 func appendEvidenceCLIItem(body, item string) string {
+	if !strings.Contains(item, `"evidence_status"`) {
+		item = `"evidence_status":"implemented",` + item
+	}
 	return strings.Replace(body, "\n  ]\n}", ",\n    {"+item+"}\n  ]\n}", 1)
+}
+
+func writeEvidenceCLISelector(t *testing.T, root, manifestPath, intent string) {
+	t.Helper()
+
+	writeEvidenceCLISelectorIdentityFiles(t, root)
+	body := `{
+  "schema_version":"1",
+  "release_intent":"` + intent + `",
+  "manifest_path":"` + manifestPath + `",
+  "seed_gap_policy":"reject_open_seed_gap",
+  "manifest_digest":"sha256:manifest",
+  "selector_input_digest":"sha256:selector",
+  "schema_migration_set_digest":"sha256:schema",
+  "policy_artifact_identity_digest":"sha256:policy",
+  "rollback_rollforward_policy_ref":"docs/release-evidence/rollback-rollforward.md",
+  "final_acceptance_selector":[],
+  "claimed_optional_capabilities":[]
+}`
+	body = replaceEvidenceCLISelectorField(t, body, "manifest_digest", sha256EvidenceCLIFileDigest(t, filepath.Join(root, filepath.FromSlash(manifestPath))))
+	body = replaceEvidenceCLISelectorField(t, body, "schema_migration_set_digest", sha256EvidenceCLIPathSetDigest(t, root, []string{
+		"api/openapi/internal-v1.openapi.yaml",
+		"api/schemas/afscp-internal-v1.schema.json",
+		"migrations/0001_test.sql",
+	}))
+	body = replaceEvidenceCLISelectorField(t, body, "policy_artifact_identity_digest", sha256EvidenceCLIPathSetDigest(t, root, []string{
+		".github/workflows/ga-release.yml",
+		"docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md",
+		"docs/GA_RELEASE_GATES.md",
+		"scripts/verify-ga-baseline.sh",
+		"scripts/verify-ga-release.sh",
+	}))
+	body = replaceEvidenceCLISelectorField(t, body, "selector_input_digest", sha256EvidenceCLISelectorInputDigest(t, body))
+	writeEvidenceCLIFile(t, filepath.Join(root, "docs", "release-evidence", "ga-release-selector.json"), body)
+}
+
+func writeEvidenceCLISelectorIdentityFiles(t *testing.T, root string) {
+	t.Helper()
+
+	for _, path := range []string{
+		"api/openapi/internal-v1.openapi.yaml",
+		"api/schemas/afscp-internal-v1.schema.json",
+		"migrations/0001_test.sql",
+		"scripts/verify-ga-release.sh",
+		"scripts/verify-ga-baseline.sh",
+		".github/workflows/ga-release.yml",
+		"docs/GA_RELEASE_GATES.md",
+	} {
+		writeEvidenceCLIFile(t, filepath.Join(root, filepath.FromSlash(path)), "fixture "+path+"\n")
+	}
+}
+
+func replaceEvidenceCLISelectorField(t *testing.T, body, field, value string) string {
+	t.Helper()
+
+	prefix := `"` + field + `":"`
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatalf("selector body missing %s", field)
+	}
+	valueStart := start + len(prefix)
+	valueEnd := strings.Index(body[valueStart:], `"`)
+	if valueEnd < 0 {
+		t.Fatalf("selector body malformed %s", field)
+	}
+	valueEnd += valueStart
+	return body[:valueStart] + value + body[valueEnd:]
+}
+
+func sha256EvidenceCLIFileDigest(t *testing.T, path string) string {
+	t.Helper()
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	sum := sha256.Sum256(body)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func sha256EvidenceCLIPathSetDigest(t *testing.T, root string, paths []string) string {
+	t.Helper()
+
+	sort.Strings(paths)
+	hash := sha256.New()
+	for _, path := range paths {
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		hash.Write([]byte(path))
+		hash.Write([]byte{0})
+		hash.Write(body)
+		hash.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func sha256EvidenceCLISelectorInputDigest(t *testing.T, body string) string {
+	t.Helper()
+
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		t.Fatalf("decode selector: %v", err)
+	}
+	delete(raw, "selector_input_digest")
+	canonical, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("canonical selector: %v", err)
+	}
+	sum := sha256.Sum256(canonical)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func writeEvidenceCLIScripts(t *testing.T, root string) {

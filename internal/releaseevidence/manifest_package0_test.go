@@ -450,7 +450,7 @@ func TestPackage0FinalModeRejectsLegacyCompatibilityCapabilities(t *testing.T) {
 			path := filepath.Join(root, "manifest.json")
 			writeReleaseEvidenceFile(t, path, body)
 
-			findings, err := VerifyFile(path, Options{Mode: ManifestModeFinal, RepoRoot: root, ExecuteRequired: false})
+			findings, err := VerifyFile(path, finalReleaseOptions(t, root, nil))
 			if err != nil {
 				t.Fatalf("VerifyFile returned unexpected error: %v", err)
 			}
@@ -495,7 +495,7 @@ func TestPackage0FinalModeRequiresReplacementEvidenceForRequiredSeedGaps(t *test
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{Mode: ManifestModeFinal, RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, finalReleaseOptions(t, root, nil))
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -514,7 +514,7 @@ func TestPackage0FinalModeRejectsFakeSameClaimReplacementForDeletedSeedGap(t *te
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{Mode: ManifestModeFinal, RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, finalReleaseOptions(t, root, nil))
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestPackage0FinalModeRejectsExactReplacementShapeWithFakeAssertionForDelete
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{Mode: ManifestModeFinal, RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, finalReleaseOptions(t, root, nil))
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestPackage0FinalModeAcceptsExpectedAssertionForDeletedAdminSeedGap(t *test
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{Mode: ManifestModeFinal, RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, finalReleaseOptions(t, root, nil))
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -566,7 +566,7 @@ func TestPackage0FinalModeDoesNotRequireOrdinaryOptionalFixtureSeedGapReplacemen
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{Mode: ManifestModeFinal, RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, finalReleaseOptions(t, root, nil))
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -620,7 +620,7 @@ func TestPackage0FinalModeRequiresTargetedOptionalFixtureClaimsWhenExplicitlyReq
 			path := filepath.Join(root, "manifest.json")
 			writeReleaseEvidenceFile(t, path, body)
 
-			findings, err := VerifyFile(path, Options{Mode: ManifestModeFinal, RepoRoot: root, ExecuteRequired: false})
+			findings, err := VerifyFile(path, finalReleaseOptions(t, root, []string{tt.capability}))
 			if err != nil {
 				t.Fatalf("VerifyFile returned unexpected error: %v", err)
 			}
@@ -639,7 +639,7 @@ func TestPackage0FinalModeRequiresTargetedOptionalFixtureConformanceWhenExplicit
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{Mode: ManifestModeFinal, RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, finalReleaseOptions(t, root, []string{"workload_mount_binding"}))
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
@@ -656,13 +656,13 @@ func TestPackage0FinalModeDoesNotTreatNegativeNoFixtureItemAsOptionalFixtureConf
 	path := filepath.Join(root, "manifest.json")
 	writeReleaseEvidenceFile(t, path, body)
 
-	findings, err := VerifyFile(path, Options{Mode: ManifestModeFinal, RepoRoot: root, ExecuteRequired: false})
+	findings, err := VerifyFile(path, finalReleaseOptions(t, root, []string{"workload_mount_binding"}))
 	if err != nil {
 		t.Fatalf("VerifyFile returned unexpected error: %v", err)
 	}
-	assertNoReleaseEvidenceFindingContains(t, findings, "seed_gap_optional_fixture_conformant_open")
-	assertNoReleaseEvidenceFindingContains(t, findings, "CLAIM_OPTIONAL_FIXTURE_CONFORMANT")
-	assertNoReleaseEvidenceFindingContains(t, findings, "optional_fixture_conformant")
+	assertReleaseEvidenceFindingContains(t, findings, "seed_gap_optional_fixture_conformant_open")
+	assertReleaseEvidenceFindingContains(t, findings, "CLAIM_OPTIONAL_FIXTURE_CONFORMANT")
+	assertReleaseEvidenceFindingContains(t, findings, "optional_fixture_conformant")
 }
 
 func TestPackage0DefaultUserLoopCannotBeSatisfiedByNegativeEvidence(t *testing.T) {

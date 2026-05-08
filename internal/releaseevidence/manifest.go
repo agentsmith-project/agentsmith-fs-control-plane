@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	SchemaVersion = "2"
-	ReleaseGate   = "scripts/verify-ga-release.sh"
+	SchemaVersion                    = "2"
+	ReleaseGate                      = "scripts/verify-ga-release.sh"
+	AuthoritativeReleaseSelectorPath = "docs/release-evidence/ga-release-selector.json"
 
 	ManifestModeSeed  = "seed"
 	ManifestModeFinal = "final"
@@ -37,6 +38,7 @@ type Item struct {
 	RiskID             string       `json:"risk_id"`
 	FixtureID          string       `json:"fixture_id"`
 	CapabilityID       string       `json:"capability_id"`
+	EvidenceStatus     string       `json:"evidence_status"`
 	EvidenceProfile    string       `json:"evidence_profile"`
 	DefaultMode        bool         `json:"default_mode"`
 	FixtureEnabledMode bool         `json:"fixture_enabled_mode"`
@@ -74,6 +76,7 @@ func (finding Finding) String() string {
 type Options struct {
 	RepoRoot        string
 	Mode            string
+	SelectorPath    string
 	ExecuteRequired bool
 	Stdout          io.Writer
 	Stderr          io.Writer
@@ -102,7 +105,13 @@ func LoadAndValidateFile(path string, options Options) (Manifest, []Finding, err
 	if len(modeFindings) > 0 {
 		return manifest, findings, nil
 	}
-	findings = append(findings, validateManifest(manifest, repoRootOrDefault(options.RepoRoot), mode)...)
+	repoRoot := repoRootOrDefault(options.RepoRoot)
+	selector, selectorFindings, err := loadReleaseSelectorForMode(path, options, mode, repoRoot)
+	if err != nil {
+		return manifest, findings, err
+	}
+	findings = append(findings, selectorFindings...)
+	findings = append(findings, validateManifest(manifest, repoRoot, mode, selector)...)
 	return manifest, findings, nil
 }
 
@@ -148,6 +157,7 @@ type rawItem struct {
 	RiskID             *string       `json:"risk_id"`
 	FixtureID          *string       `json:"fixture_id"`
 	CapabilityID       *string       `json:"capability_id"`
+	EvidenceStatus     *string       `json:"evidence_status"`
 	EvidenceProfile    *string       `json:"evidence_profile"`
 	DefaultMode        *bool         `json:"default_mode"`
 	FixtureEnabledMode *bool         `json:"fixture_enabled_mode"`
@@ -231,6 +241,11 @@ func decodeItem(index int, raw rawItem) (Item, []Finding) {
 	} else {
 		item.CapabilityID = *raw.CapabilityID
 	}
+	if raw.EvidenceStatus == nil || strings.TrimSpace(*raw.EvidenceStatus) == "" {
+		findings = append(findings, Finding{ItemID: itemID, Code: "item.evidence_status_missing", Message: "evidence_status is required"})
+	} else {
+		item.EvidenceStatus = *raw.EvidenceStatus
+	}
 	if raw.EvidenceProfile == nil || strings.TrimSpace(*raw.EvidenceProfile) == "" {
 		findings = append(findings, Finding{ItemID: itemID, Code: "item.evidence_profile_missing", Message: "evidence_profile is required"})
 	} else {
@@ -305,7 +320,7 @@ func decodeItem(index int, raw rawItem) (Item, []Finding) {
 	return item, findings
 }
 
-func validateManifest(manifest Manifest, repoRoot, mode string) []Finding {
+func validateManifest(manifest Manifest, repoRoot, mode string, selector *ReleaseSelector) []Finding {
 	var findings []Finding
 	if manifest.SchemaVersion != "" && manifest.SchemaVersion != SchemaVersion {
 		findings = append(findings, Finding{Code: "manifest.schema_version_invalid", Message: fmt.Sprintf("schema_version must be %q", SchemaVersion)})
@@ -320,7 +335,7 @@ func validateManifest(manifest Manifest, repoRoot, mode string) []Finding {
 	for _, item := range manifest.Items {
 		findings = append(findings, validateItem(item, repoRoot, mode)...)
 	}
-	findings = append(findings, validateRequiredEvidenceItems(manifest, mode)...)
+	findings = append(findings, validateRequiredEvidenceItems(manifest, mode, selector)...)
 	return findings
 }
 
@@ -345,7 +360,7 @@ type requiredEvidenceSpec struct {
 	DefaultGARequired  bool
 }
 
-func validateRequiredEvidenceItems(manifest Manifest, mode string) []Finding {
+func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *ReleaseSelector) []Finding {
 	itemsByID := make(map[string]Item, len(manifest.Items))
 	for _, item := range manifest.Items {
 		itemsByID[item.ID] = item
@@ -380,8 +395,8 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string) []Finding {
 	}
 	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest)...)
 	if mode == ManifestModeFinal {
-		findings = append(findings, validateFinalSeedGaps(manifest)...)
-		findings = append(findings, validateFinalRequiredClaimReplacements(manifest)...)
+		findings = append(findings, validateFinalSeedGaps(manifest, selector)...)
+		findings = append(findings, validateFinalRequiredClaimReplacements(manifest, selector)...)
 	} else {
 		findings = append(findings, validateSeedGapMarkers(itemsByID)...)
 	}
@@ -459,17 +474,23 @@ func validateSeedGapMarkers(itemsByID map[string]Item) []Finding {
 			item.OptionalGated ||
 			item.DefaultGARequired ||
 			item.PassCriteria.Kind != "seed_gap" ||
+			item.EvidenceStatus != "placeholder" ||
 			!containsString(item.PassCriteria.Assertions, "open") {
-			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.seed_gap_marker_invalid", Message: fmt.Sprintf("seed gap marker for %s must remain non-required, command-empty, doc-only, and marked open", spec.ClaimID)})
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.seed_gap_marker_invalid", Message: fmt.Sprintf("seed gap marker for %s must remain non-required, command-empty, doc-only, placeholder, and marked open", spec.ClaimID)})
 		}
 	}
 	return findings
 }
 
-func validateFinalSeedGaps(manifest Manifest) []Finding {
+func validateFinalSeedGaps(manifest Manifest, selector *ReleaseSelector) []Finding {
+	finalRequiredSeedGapIDs := make(map[string]bool)
+	for _, spec := range finalRequiredSeedGapSpecs(selector) {
+		finalRequiredSeedGapIDs[spec.ID] = true
+	}
+
 	var findings []Finding
 	for _, item := range manifest.Items {
-		if !isOpenSeedGap(item) {
+		if !isOpenSeedGap(item) || !finalRequiredSeedGapIDs[item.ID] {
 			continue
 		}
 		findings = append(findings, Finding{
@@ -481,9 +502,10 @@ func validateFinalSeedGaps(manifest Manifest) []Finding {
 	return findings
 }
 
-func validateFinalRequiredClaimReplacements(manifest Manifest) []Finding {
+func validateFinalRequiredClaimReplacements(manifest Manifest, selector *ReleaseSelector) []Finding {
 	var findings []Finding
-	for _, spec := range finalRequiredSeedGapSpecs(manifest) {
+	for _, spec := range finalRequiredSeedGapSpecs(selector) {
+		findings = append(findings, validateFinalReplacementStatus(manifest, spec)...)
 		if manifestHasFinalReplacementForSeedGap(manifest, spec) {
 			continue
 		}
@@ -495,20 +517,45 @@ func validateFinalRequiredClaimReplacements(manifest Manifest) []Finding {
 	return findings
 }
 
-func finalRequiredSeedGapSpecs(manifest Manifest) []seedGapSpec {
+func validateFinalReplacementStatus(manifest Manifest, spec seedGapSpec) []Finding {
+	var findings []Finding
+	for _, item := range manifest.Items {
+		if item.ID != finalReplacementIDForSeedGap(spec) {
+			continue
+		}
+		if item.EvidenceStatus != "implemented" && item.EvidenceStatus != "closed" {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.final_replacement_status_invalid", Message: "final replacement evidence_status must be implemented or closed"})
+		}
+	}
+	return findings
+}
+
+func finalRequiredSeedGapSpecs(selector *ReleaseSelector) []seedGapSpec {
 	specs := make([]seedGapSpec, 0, len(seedGapSpecs))
 	seen := make(map[string]bool)
 	for _, spec := range seedGapSpecs {
 		if seen[spec.ClaimID] {
 			continue
 		}
-		if optionalFixtureFinalShape(spec) && !manifestHasRequiredFixtureConformanceClaim(manifest, spec) {
+		if optionalFixtureFinalShape(spec) && !selectorSelectsFinalSeedGap(selector, spec) {
 			continue
 		}
 		specs = append(specs, spec)
 		seen[spec.ClaimID] = true
 	}
 	return specs
+}
+
+func selectorSelectsFinalSeedGap(selector *ReleaseSelector, spec seedGapSpec) bool {
+	if selector == nil {
+		return false
+	}
+	for _, capabilityID := range selector.ClaimedOptionalCapabilities {
+		if capabilityID == spec.FinalCapabilityID {
+			return true
+		}
+	}
+	return false
 }
 
 func optionalFixtureFinalShape(spec seedGapSpec) bool {
@@ -528,26 +575,9 @@ func manifestHasFinalReplacementForSeedGap(manifest Manifest, spec seedGapSpec) 
 	return false
 }
 
-func manifestHasRequiredFixtureConformanceClaim(manifest Manifest, spec seedGapSpec) bool {
-	for _, item := range manifest.Items {
-		if item.ClaimID == spec.ClaimID &&
-			finalClaimReplacementEvidenceHasRepoLocalCommandAndAnchor(item) &&
-			item.CapabilityID == spec.FinalCapabilityID &&
-			item.EvidenceProfile == spec.FinalEvidenceProfile &&
-			item.DefaultMode == spec.FinalDefaultMode &&
-			item.FixtureEnabledMode == spec.FinalFixtureEnabledMode &&
-			item.OptionalGated == spec.FinalOptionalGated &&
-			item.DefaultGARequired == spec.FinalDefaultGARequired &&
-			item.NegativeOrPositive == spec.FinalNegativeOrPositive &&
-			strings.TrimSpace(item.FixtureID) != "" {
-			return true
-		}
-	}
-	return false
-}
-
 func finalClaimReplacementEvidenceMatchesSeedGap(item Item, spec seedGapSpec) bool {
 	return finalClaimReplacementEvidenceHasRepoLocalCommandAndAnchor(item) &&
+		(item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed") &&
 		item.ID == finalReplacementIDForSeedGap(spec) &&
 		item.ClaimID == spec.ClaimID &&
 		item.SubclaimID == spec.FinalSubclaimID &&
@@ -618,6 +648,14 @@ func anchorsIncludeRepoLocalRuntimeEvidence(anchors []string) bool {
 
 func finalReplacementIDForSeedGap(spec seedGapSpec) string {
 	return spec.FinalSubclaimID + "_unit"
+}
+
+func optionalPositiveFixtureEvidence(item Item) bool {
+	return item.OptionalGated &&
+		item.NegativeOrPositive == "positive" &&
+		item.EvidenceProfile == "repo-local-fixture-enabled" &&
+		item.FixtureEnabledMode &&
+		!item.DefaultMode
 }
 
 func isOpenSeedGap(item Item) bool {
@@ -704,6 +742,12 @@ func validateItem(item Item, repoRoot, mode string) []Finding {
 	}
 	if !validCapabilities[item.CapabilityID] {
 		findings = append(findings, Finding{ItemID: item.ID, Code: "item.capability_id_invalid", Message: fmt.Sprintf("unsupported capability_id %q", item.CapabilityID)})
+	}
+	if !validEvidenceStatuses[item.EvidenceStatus] && item.EvidenceStatus != "" {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.evidence_status_invalid", Message: fmt.Sprintf("unsupported evidence_status %q; valid values are placeholder, implemented, or closed (static manifest state, not this command run result)", item.EvidenceStatus)})
+	}
+	if item.Required && item.EvidenceStatus == "placeholder" && !optionalPositiveFixtureEvidence(item) {
+		findings = append(findings, Finding{ItemID: item.ID, Code: "item.evidence_status_placeholder_required", Message: "required evidence cannot have evidence_status=placeholder"})
 	}
 	if mode == ManifestModeFinal && legacyFinalInvalidCapabilities[item.CapabilityID] {
 		findings = append(findings, Finding{ItemID: item.ID, Code: "item.capability_id_legacy_final_invalid", Message: fmt.Sprintf("legacy compatibility capability_id %q is not valid in final mode", item.CapabilityID)})
@@ -1040,10 +1084,14 @@ func executeRequiredCommands(path string, options Options) ([]Finding, error) {
 	if err != nil || len(findings) > 0 {
 		return findings, err
 	}
+	selector, _, err := loadReleaseSelectorForMode(path, options, options.Mode, repoRootOrDefault(options.RepoRoot))
+	if err != nil {
+		return findings, err
+	}
 
 	repoRoot := repoRootOrDefault(options.RepoRoot)
 	for _, item := range manifest.Items {
-		if !item.Required {
+		if !itemRequiredForExecution(item, selector) {
 			continue
 		}
 		if options.Stdout != nil {
@@ -1065,6 +1113,24 @@ func executeRequiredCommands(path string, options Options) ([]Finding, error) {
 		}
 	}
 	return findings, nil
+}
+
+func itemRequiredForExecution(item Item, selector *ReleaseSelector) bool {
+	if !item.Required {
+		return false
+	}
+	if !optionalPositiveFixtureEvidence(item) {
+		return true
+	}
+	if selector == nil {
+		return false
+	}
+	for _, capabilityID := range selector.ClaimedOptionalCapabilities {
+		if capabilityID == item.CapabilityID {
+			return true
+		}
+	}
+	return false
 }
 
 func repoRootOrDefault(repoRoot string) string {
@@ -1127,6 +1193,12 @@ var validEvidenceTypes = map[string]bool{
 	"provenance":       true,
 	"race":             true,
 	"doc-guard":        true,
+}
+
+var validEvidenceStatuses = map[string]bool{
+	"placeholder": true,
+	"implemented": true,
+	"closed":      true,
 }
 
 var validEvidenceProfiles = map[string]bool{

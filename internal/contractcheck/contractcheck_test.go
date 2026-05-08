@@ -1559,6 +1559,10 @@ func TestCurrentRepoGAVerificationScriptsAreAuthoritative(t *testing.T) {
 		"git diff --check",
 		"bash -n scripts/verify-ga-release.sh",
 		"bash -n scripts/verify-ga-baseline.sh",
+		"AFSCP_RELEASE_INTENT",
+		"final_candidate",
+		"docs/release-evidence/ga-release-selector.json",
+		"-selector",
 		"go test -count=1 ./internal/contractcheck",
 		"bash scripts/verify-ga-baseline.sh",
 	} {
@@ -1631,7 +1635,7 @@ run echo not-the-verifier
 
 	active := `
 #!/usr/bin/env bash
-run go run ./cmd/afscp-evidence-verify -mode seed -manifest docs/release-evidence/ga-manifest.json
+run go run ./cmd/afscp-evidence-verify -mode "$mode" -manifest docs/release-evidence/ga-manifest.json "${selector_args[@]}"
 `
 	if !releaseScriptRunsEvidenceManifestVerifier(active) {
 		t.Fatal("active evidence verifier command was not recognized")
@@ -1646,18 +1650,104 @@ run go run ./cmd/afscp-evidence-verify -mode seed -manifest docs/release-evidenc
 	}
 }
 
+func TestReleaseScriptConvergenceSelectorStaysSeed(t *testing.T) {
+	root := writeGAReleaseScriptBehaviorFixture(t, "convergence_seed")
+	output := runGAReleaseScriptFixture(t, root, nil, true)
+	if strings.Contains(output, "-mode final") {
+		t.Fatalf("convergence selector must not force final mode, log:\n%s", output)
+	}
+	if !strings.Contains(output, "-mode seed") {
+		t.Fatalf("convergence selector must keep seed mode, log:\n%s", output)
+	}
+}
+
+func TestReleaseScriptFinalIntentRequiresFinalCandidateSelector(t *testing.T) {
+	root := writeGAReleaseScriptBehaviorFixture(t, "convergence_seed")
+	output := runGAReleaseScriptFixture(t, root, []string{"AFSCP_RELEASE_INTENT=final_candidate"}, false)
+	if !strings.Contains(output, "final_candidate") || !strings.Contains(output, "selector") {
+		t.Fatalf("final intent with non-final selector should hard fail with selector/final_candidate message, log:\n%s", output)
+	}
+	if strings.Contains(output, "-mode final") {
+		t.Fatalf("script must fail before invoking final verifier for non-final selector, log:\n%s", output)
+	}
+}
+
 func releaseScriptRunsEvidenceManifestVerifier(text string) bool {
-	const required = "run go run ./cmd/afscp-evidence-verify -mode seed -manifest docs/release-evidence/ga-manifest.json"
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if trimmed == required {
+		if strings.Contains(trimmed, "run go run ./cmd/afscp-evidence-verify") &&
+			strings.Contains(trimmed, "-mode") &&
+			(strings.Contains(trimmed, "docs/release-evidence/ga-manifest.json") || strings.Contains(trimmed, "$manifest_path")) &&
+			!strings.Contains(trimmed, "|| true") {
 			return true
 		}
 	}
 	return false
+}
+
+func writeGAReleaseScriptBehaviorFixture(t *testing.T, selectorIntent string) string {
+	t.Helper()
+
+	sourcePath := filepath.Join("..", "..", "scripts", "verify-ga-release.sh")
+	body, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", sourcePath, err)
+	}
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "scripts", "verify-ga-release.sh"), string(body))
+	writeFile(t, filepath.Join(root, "scripts", "verify-ga-baseline.sh"), "#!/usr/bin/env bash\nexit 0\n")
+	writeFile(t, filepath.Join(root, "docs", "release-evidence", "ga-manifest.json"), "{}\n")
+	writeFile(t, filepath.Join(root, "docs", "release-evidence", "ga-release-selector.json"), `{"release_intent":"`+selectorIntent+`"}`+"\n")
+	binDir := filepath.Join(root, "bin")
+	writeFile(t, filepath.Join(binDir, "git"), "#!/usr/bin/env bash\nprintf 'git %s\\n' \"$*\" >> \"$GA_SCRIPT_LOG\"\nexit 0\n")
+	writeFile(t, filepath.Join(binDir, "go"), `#!/usr/bin/env bash
+printf 'go %s\n' "$*" >> "$GA_SCRIPT_LOG"
+if [[ "$*" == *"-selector-intent"* ]]; then
+  printf '%s\n' "$FAKE_SELECTOR_INTENT"
+fi
+exit 0
+`)
+	if err := os.Chmod(filepath.Join(root, "scripts", "verify-ga-release.sh"), 0o700); err != nil {
+		t.Fatalf("chmod release script: %v", err)
+	}
+	if err := os.Chmod(filepath.Join(root, "scripts", "verify-ga-baseline.sh"), 0o700); err != nil {
+		t.Fatalf("chmod baseline script: %v", err)
+	}
+	if err := os.Chmod(filepath.Join(binDir, "git"), 0o700); err != nil {
+		t.Fatalf("chmod fake git: %v", err)
+	}
+	if err := os.Chmod(filepath.Join(binDir, "go"), 0o700); err != nil {
+		t.Fatalf("chmod fake go: %v", err)
+	}
+	return root
+}
+
+func runGAReleaseScriptFixture(t *testing.T, root string, env []string, wantSuccess bool) string {
+	t.Helper()
+
+	logPath := filepath.Join(root, "ga-script.log")
+	cmd := exec.Command("bash", "scripts/verify-ga-release.sh")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"PATH="+filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GA_SCRIPT_LOG="+logPath,
+		"FAKE_SELECTOR_INTENT=convergence_seed",
+	)
+	cmd.Env = append(cmd.Env, env...)
+	output, err := cmd.CombinedOutput()
+	logBody, _ := os.ReadFile(logPath)
+	combined := string(output) + string(logBody)
+	if wantSuccess && err != nil {
+		t.Fatalf("release script fixture failed: %v\n%s", err, combined)
+	}
+	if !wantSuccess && err == nil {
+		t.Fatalf("release script fixture unexpectedly succeeded:\n%s", combined)
+	}
+	return combined
 }
 
 func TestCurrentRepoGAReleaseWorkflowRunsAuthoritativeScript(t *testing.T) {

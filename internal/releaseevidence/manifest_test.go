@@ -61,6 +61,11 @@ func TestValidateManifestRequiresTopLevelAndItemFields(t *testing.T) {
 			body: `{"schema_version":"2","release_gate":"scripts/verify-ga-release.sh","items":[{"id":"storage_unit","capability_id":"storage","evidence_type":"unit","required":true,"anchors":["go.mod"],"doc_only_allowed":false,"optional_gated":false,"default_ga_required":true}]}`,
 			want: "command",
 		},
+		{
+			name: "missing evidence status",
+			body: `{"schema_version":"2","release_gate":"scripts/verify-ga-release.sh","items":[{"id":"storage_unit","claim_id":"CLAIM_DEFAULT_DENIAL_SAFE","subclaim_id":"webdav_export_disabled_admission","acceptance_id":"P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION","capability_id":"webdav_export","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"package","negative_or_positive":"negative","evidence_type":"unit","required":true,"command":["go","test","./internal/capability"],"anchors":["go.mod"],"doc_only_allowed":false,"optional_gated":false,"default_ga_required":true,"pass_criteria":{"kind":"denial_safety","assertions":["disabled admission rejects before metadata and audits without queuing"]}}]}`,
+			want: "evidence_status",
+		},
 	}
 
 	for _, tt := range tests {
@@ -621,7 +626,7 @@ func TestCurrentRepoManifestSeedModeAllowsOpenSeedGaps(t *testing.T) {
 	}
 }
 
-func TestCurrentRepoManifestFinalModeRejectsOpenSeedGaps(t *testing.T) {
+func TestCurrentRepoManifestFinalModeRequiresSelector(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
 
@@ -629,10 +634,7 @@ func TestCurrentRepoManifestFinalModeRejectsOpenSeedGaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAndValidateFile returned error: %v", err)
 	}
-	assertReleaseEvidenceFindingContains(t, findings, "manifest.final_seed_gap_open")
-	assertReleaseEvidenceFindingContains(t, findings, "seed_gap_admin_bootstrap_ready_open")
-	assertReleaseEvidenceFindingContains(t, findings, "CLAIM_ADMIN_BOOTSTRAP_READY")
-	assertReleaseEvidenceFindingContains(t, findings, "seed_gap_optional_fixture_conformant_open")
+	assertReleaseEvidenceFindingContains(t, findings, "selector")
 	assertNoReleaseEvidenceFindingContains(t, findings, "repo_create_jvs_runtime_unavailable_recovery_unit: item.capability_id_legacy_final_invalid")
 }
 
@@ -919,6 +921,7 @@ func validReleaseEvidenceManifest() string {
 func withPackage0Metadata(body string) string {
 	for _, metadata := range package0FixtureMetadata {
 		body = strings.Replace(body, `"id":"`+metadata.id+`",`, `"id":"`+metadata.id+`",
+      "evidence_status":"implemented",
       "claim_id":"`+metadata.claimID+`",
       "subclaim_id":"`+metadata.subclaimID+`",
       "acceptance_id":"`+metadata.acceptanceID+`",
@@ -952,7 +955,7 @@ func insertPackage0PassCriteria(body, id, defaultGARequired, kind, assertion str
 
 func withPackage0SeedGapMarkers(body string) string {
 	for _, gap := range package0SeedGapFixtureMetadata {
-		body = appendReleaseEvidenceItem(body, `"id":"`+gap.id+`","claim_id":"`+gap.claimID+`","subclaim_id":"seed_gap_open","acceptance_id":"P0_SEED_GAP_OPEN","risk_id":"`+gap.riskID+`","fixture_id":"","capability_id":"","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"doc-guard","negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"seed_gap","assertions":["open"]}`)
+		body = appendReleaseEvidenceItem(body, `"id":"`+gap.id+`","evidence_status":"placeholder","claim_id":"`+gap.claimID+`","subclaim_id":"seed_gap_open","acceptance_id":"P0_SEED_GAP_OPEN","risk_id":"`+gap.riskID+`","fixture_id":"","capability_id":"","evidence_profile":"default","default_mode":true,"fixture_enabled_mode":false,"expected_runtime":"fast","scope":"doc-guard","negative_or_positive":"both","evidence_type":"doc-guard","required":false,"command":[],"anchors":["docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"],"doc_only_allowed":true,"optional_gated":false,"default_ga_required":false,"pass_criteria":{"kind":"seed_gap","assertions":["open"]}`)
 	}
 	return body
 }
@@ -1026,6 +1029,9 @@ func writeReleaseEvidenceFile(t *testing.T, path, body string) {
 }
 
 func appendReleaseEvidenceItem(body, item string) string {
+	if !strings.Contains(item, `"evidence_status"`) {
+		item = `"evidence_status":"implemented",` + item
+	}
 	return strings.Replace(body, "\n  ]\n}", ",\n    {"+item+"}\n  ]\n}", 1)
 }
 

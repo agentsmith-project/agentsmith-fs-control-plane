@@ -1,1652 +1,602 @@
-# AFSCP 下一阶段开发交接计划
+# AFSCP GA Next-Phase Development Handoff
 
-Status: development handoff plan for direct GA convergence.
+Status: PO-first authoritative development handoff for direct GA convergence.
 
-本文档交给下一轮开发团队使用。它基于
-`docs/research/afscp-product-architecture-review.md` 的问题清单，以及现有
-`docs/GA_CONVERGENCE_WORK_PLAN.md`、`docs/DEVELOPER_HANDOFF.md`、
-`docs/GA_RELEASE_GATES.md`、`docs/READINESS_EVIDENCE.md` 和
-`scripts/verify-ga-release.sh` 的当前口径。
+This document is the next development contract for AFSCP GA. It folds the
+product, architecture, and QA read-only reviews into executable work. It is not
+a new release gate, not a phase-gated roadmap, and not a request to wait for a
+sibling or business project.
 
-目标不是再做一张复杂路线图，而是把下一阶段工作压成可以直接开工、直接验收的
-开发包。开发团队应围绕这些包收敛到 GA，不扩大产品面，不引入外部业务项目，
-不把主观 review 或会议当作 gate。
+Primary source: `docs/research/afscp-product-architecture-review.md`.
 
-## Current status / Handoff boundary
+When this document conflicts with older planning wording, this document owns the
+next development contract. PRs should update the touched code, contracts,
+schemas, runbooks, tests, and evidence entries together.
 
-本文档是下一阶段开发交接计划，不是当前 GA release evidence。当前
-`docs/release-evidence/ga-manifest.json` 与 `scripts/verify-ga-release.sh` 仍是
-seed/baseline gate；当前 gate 通过只说明 baseline 约束通过，不表示最终 GA 或 release
-验收已满足。Package 0/5 中提到的 `seed_gap_*_open` final mode、workflow hardening、
-manifest final fields 都是后续开发必须实现、补证并接入唯一 gate 的工作项。
+## PO Contract
 
-最终 GA 的入口固定为：
+AFSCP is an independent shared file-system control plane. GA means this repo can
+ship a product-neutral control plane with a default, automatically proven user
+loop. It does not mean a business product, sibling repo, connector UI,
+orchestrator implementation, or production deployment has passed acceptance.
 
-```bash
-bash scripts/verify-ga-release.sh
-```
+The default GA product promise is:
 
-开发者、reviewer 或 release operator 不能绕过该入口手工调用某个 verifier 的
-`-mode final` 来声明 GA。Package 5 必须引入 repo-local、机器可审计的 release
-intent/manifest selector，让同一脚本在“final release 判定”时自动执行 final verifier，
-并拒绝 seed/baseline evidence 误通过。普通 convergence 可以继续使用 seed/baseline
-profile 追踪缺口；release final 不能用 seed 结果代替。
+- Operator/admin can complete Day-0 bootstrap for namespace-bound managed
+  storage.
+- Trusted caller can complete repo create/get/projection/list.
+- Trusted caller can complete pinned JVS save/history/restore-preview/
+  restore-run/discard.
+- Trusted caller can complete WebDAV export/gateway/revoke.
+- Caller/operator can trace operation, audit, and recovery state.
+- Retained lifecycle archive/restore_archived/delete-tombstone/
+  restore_tombstoned is default GA positive storage-state behavior.
 
-## Product Boundary / Ownership
+The default GA negative promise is equally required:
 
-AFSCP 是共享文件系统控制面，不是业务产品、client connector、编排平台或部署平台。
-后续开发必须按下表切边界；contract、release note、runbook 和证据 manifest 都不能把
-别人的责任写成 AFSCP 默认 GA 能力。
+- Workload mount, template/clone, purge/break-glass, and real deployment runtime
+  positives are not default GA.
+- In the default profile they must be disabled, denied, recovered, or failed
+  closed.
+- Unsupported or disabled mutations must not create permanent `queued`
+  operations.
+- Historical operations must be visible to recovery even after a capability is
+  disabled or configured false.
 
-| Owner | 负责什么 | 不负责什么 |
-| --- | --- | --- |
-| AFSCP | namespace/managed volume binding、repo storage-state、pinned JVS save/restore、WebDAV export gateway、operation/audit/recovery、capability/admission/worker/readyz/evidence 一致性。 | 业务 catalog、产品生命周期、业务审批流、client UI、外部 orchestrator 实现、真实部署权限配置。 |
-| trusted caller | 持有调用方身份和 namespace 授权；调用 AFSCP API；把 first-create WebDAV credential relay 给 client connector；维护业务侧用户、租户和 catalog 映射。 | 自行签发 AFSCP WebDAV password、看到 raw root path/SecretRef、绕过 namespace policy、把业务 lifecycle 直接塞进 AFSCP。 |
-| client connector | 接收 trusted caller relay 的短期 WebDAV credential；访问 AFSCP gateway；处理 credential 过期/revoke 后的用户侧体验。 | 直接调用 AFSCP admin/caller API、拿底层 storage credential、读取 `.jvs` 或 control root、生成或重放 raw password。 |
-| orchestrator | 在被授权的 orchestrator role 下消费 workload fixture/runtime plan；执行 heartbeat、release、revoke 和 terminal evidence。 | 普通 caller 可见的 mount plan、SecretRef/raw path 泄露、业务工作负载管理平台、默认 GA 正向能力。 |
-| operator/admin | 注册和预检 volume；配置 namespace binding policy、role/policy readiness、path redaction；查看 intervention queue/held fence/session/audit lag；按 allowlist 做 repair 并留审计。 | 人工批准 GA、任意 SQL 修复、任意状态改写、重发 raw secret、复活 purged repo。 |
-| deployment/runtime | 提供 PostgreSQL、managed volume、JVS runner、WebDAV runtime、audit sink、orchestrator runtime、CI service 等运行依赖和最小权限配置。 | 作为 repo-local GA gate 的前置条件；用真实 CSI/POSIX/subPath/branch protection/GitHub 环境状态替代本仓库自动证据。 |
+Release acceptance is repo-local, automated, and traceable. No manual approval,
+meeting, owner sign-off, sibling repo, business project, or production
+deployment state can become a GA blocker or substitute.
 
 ## Authoritative Handoff Contract
 
-这张表是本文档的权威交接口径。后续开发、review、manifest 和 doc-sync 都以它为准；下面更长的
-规则段落只能展开它，不能改写它。特别注意：本计划的 default GA slice 明确大于 research
-report 中“最小闭环”举例，因为 reviewer 共识是收窄到可证明的默认闭环，而不是删到只剩示例。
-因此 default user loop 和 retained lifecycle default 必须分别由
-`CLAIM_DEFAULT_USER_LOOP` 与 `CLAIM_RETAINED_LIFECYCLE_DEFAULT` 的 repo-local evidence 硬证明，
-不能只靠口径声明。
-
-| Contract lane | 权威内容 | Required proof / gate role | 禁止漂移 |
+| Lane | Default GA contract | Required evidence owner | Forbidden drift |
 | --- | --- | --- | --- |
-| default positive user loop | Day-0 admin/bootstrap 之后，trusted caller 可在授权 namespace 内完成 repo create/get/projection/list、pinned JVS save/history/restore-preview/restore-run/discard、WebDAV export/gateway/revoke、operation/audit/recovery trace。 | `CLAIM_ADMIN_BOOTSTRAP_READY` + `CLAIM_DEFAULT_USER_LOOP`；必须是 `evidence_profile=default`、`default_mode=true` 的 repo-local positive evidence。 | 不得降成只证明 research report 示例最小闭环；不得把 WebDAV/JVS 写成默认可选。 |
-| default safety/ops loop | capability/admission/worker recovery/readyz/operator inspection 使用同一 matrix；新 mutation fail-closed；历史 operation 可扫描并终态化或进入 intervention；operator 有最小 inspection/repair 安全路径。 | `CLAIM_CAPABILITY_MATRIX_CONSISTENT`、`CLAIM_OPERATION_TERMINALIZATION`、`CLAIM_DISCOVERY_SURFACES`、`CLAIM_OPERATOR_REPAIR_SAFE`。 | 不得用 readyz 替代 caller/orchestrator/operator contract；不得用临时 SQL 或人工确认关闭 claim。 |
-| default required negative paths | workload mount、template/clone、purge/break-glass purge 在 default profile 下 disabled/denied/recovery 安全；越权、policy deny、session/fence/lease/path/revoke/expiry 冲突 fail-closed。 | `CLAIM_DEFAULT_DENIAL_SAFE`、`CLAIM_OPTIONAL_DENIED_SAFE`、相关 negative verifier case；required/final blocking。 | 不得因为 optional positive 未声明而跳过 default negative；不得创建永久 `queued` operation。 |
-| optional positive fixture | workload fixture 正向、template same-namespace same-volume clone、purge structured approval positive 只在 repo-local fixture 显式启用且 release 明确声明 fixture-conformant 时阻塞 final。 | `CLAIM_OPTIONAL_FIXTURE_CONFORMANT` + capability-specific subclaims；必须 `evidence_profile=repo-local-fixture-enabled`、`fixture_enabled_mode=true`、`default_mode=false`、`optional_gated=true`、`required=true`。 | 未被 selector/manifest 显式声明时永远不是 default GA；不得用 seed gap 或 deployment support 让它变成默认需求。 |
-| deployment-runtime-support | 真实部署可启用的 runtime envelope：检测模型、模拟 fixture、redaction、path policy、runbook/escalation、最小配置说明。 | `CLAIM_DEPLOYMENT_RISK_ENVELOPE`；只能作为 support/envelope evidence，不进入 required local GA positive set。 | 不得把真实 CSI/POSIX/subPath、真实 orchestrator、真实 artifact、branch protection 或外部环境状态写成 repo-local final gate。 |
-| non-goals | 不做 business catalog、client UI、外部 orchestrator 实现、namespace delete、template marketplace、多语言 client matrix、通用运维搜索平台、人工 GA 审批。 | doc guard + final acceptance negative wording；Package 5 doc-sync 清理旧口径。 | 不得引入兄弟 repo、业务名或把调用方产品生命周期塞进 AFSCP。 |
+| Default positive | Day-0 bootstrap; trusted caller repo create/get/projection/list; pinned JVS save/history/restore-preview/restore-run/discard; WebDAV export/gateway/revoke; retained lifecycle archive/restore_archived/delete-tombstone/restore_tombstoned. | P1 owns bootstrap/caller/WebDAV/JVS; P4 owns retained lifecycle and restore reconciliation; P5 owns final release evidence wiring. | Do not shrink default GA to doc-only examples. Do not move WebDAV, JVS, or retained lifecycle out of default positive. |
+| Default safety/ops | Capability matrix, API admission, worker execution/recovery, readyz/discovery, operator inspection, stable errors, operation/audit/recovery terminalization. | P2 owns matrix and terminalization; P3 owns shared operator repair contract/test suite/audit schema. | Do not let readyz replace actor-specific contracts. Do not use ad hoc SQL or manual review as the safety mechanism. |
+| Default negatives | Workload mount, template/clone, purge/break-glass, and real deployment runtime are disabled/denied/recovery/fail-closed by default. | P2 owns default negative admission/recovery evidence; P4 owns purge approval fixture-positive and default denial evidence. | Do not skip default negative evidence because optional positives are unselected. |
+| Optional fixture positives | Optional positive capability evidence can block final only when selected by the final selector. | P4 owns repo-local fixture positive evidence; P0/P5 own selector semantics and final blocking. | Do not infer optional positive final-required from manifest shape alone. Do not use deployment runtime support as optional fixture conformance. |
+| Deployment-runtime-support | Runtime support is an envelope: detection, configuration, redaction, runbook, risk acceptance, fixture docs. It is never a required local GA positive gate. | P5 owns final wording and risk envelope evidence. | Do not let real CSI/POSIX/subPath/orchestrator/deployment state become repo-local final proof. |
+| Non-goals | No business catalog, connector UI, external orchestrator implementation, template marketplace, manual release approval, sibling gate, or production deployment gate. | All packages preserve this boundary; P5 doc-sync removes stale wording. | Do not introduce business project names or make caller product lifecycle an AFSCP gate. |
 
 ## Canonical Optional Rule
 
-optional 规则只看下表，不再按段落自由解释。长规则、manifest 字段和 package DoD 都必须与这张表一致。
-
-| Rule | Default final behavior | Explicit-claim behavior | Manifest minimum |
+| Rule | Default final behavior | Selected optional behavior | Manifest/evidence minimum |
 | --- | --- | --- | --- |
-| optional positive 永远 non-default | 不阻塞 default GA；不能作为默认正向能力写入 release note。 | 只有 selector/manifest 明确声明 capability fixture-conformant 后，才进入 final required set。 | `evidence_profile=repo-local-fixture-enabled`、`fixture_enabled_mode=true`、`default_mode=false`、`optional_gated=true`。 |
-| optional disabled negative 是 default required | 总是阻塞 final；必须证明 disabled、denied、recovery、audit、无永久 queued。 | 即使 optional positive 被声明，也不能跳过 default negative。 | `evidence_profile=default`、`default_mode=true`、`negative_or_positive=negative`、`required=true`。 |
-| `required=true` 的作用域 | 对 default required/negative 表示全局 required。 | 对 optional positive 只在 `claimed_optional_capabilities` 命中该 capability 后生效。 | verifier 必须能区分 default required 与 selected optional required。 |
-| seed gap 不等于需求扩大 | seed/convergence 可报告 gap。 | final 下 open seed gap hard fail，但不能把未声明 optional positive 解释成默认 GA。 | `seed_gap_policy=reject_open_seed_gap` only for final candidate。 |
+| Optional positive is non-default | Does not block default GA final. | Blocks final only when the authoritative final selector claims the capability. | Capability must be in `claimed_optional_capabilities`. |
+| Optional disabled negative is default required | Always blocks final until disabled/denied/recovery/fail-closed evidence passes. | Still required even when optional positive is selected. | `evidence_profile=default`, `default_mode=true`, negative or both polarity, non-placeholder evidence. |
+| Selected optional positive requires exact shape | Ignored unless selected. | Required replacement evidence must match exact capability/subclaim/acceptance and be non-placeholder. | `evidence_profile=repo-local-fixture-enabled`, `fixture_enabled_mode=true`, `default_mode=false`, `optional_gated=true`, `required=true`, non-placeholder, selected by `claimed_optional_capabilities`. |
+| Deployment-runtime-support is separate | Never a default positive gate. | Never becomes selected optional fixture conformance. | Runtime envelope only; no local positive final requirement. |
+| Seed gap is not a hidden requirement expansion | Seed/convergence may show open optional positive gaps. | Final rejects open required gaps; optional positive gaps reject only when selected. | `seed_gap_policy=reject_open_seed_gap` in final selector. |
+
+## Claim, Acceptance, And Evidence Taxonomy
+
+The manifest, selector, tests, and generated report must keep these claims
+compact and stable. Acceptance IDs below are canonical names for next work; exact
+test names may differ.
+
+| Claim | Default/optional | Acceptance coverage | Evidence owner |
+| --- | --- | --- | --- |
+| `CLAIM_ADMIN_BOOTSTRAP_READY` | Default positive prerequisite | Volume register/health/preflight; namespace binding; caller/operator role readiness; path redaction. | P1 |
+| `CLAIM_DEFAULT_USER_LOOP` | Default positive | Repo create/get/projection/list; pinned JVS save/history/restore-preview/restore-run/discard; WebDAV export/gateway/revoke; operation/audit/recovery trace. | P1 |
+| `CLAIM_RETAINED_LIFECYCLE_DEFAULT` | Default positive | Archive, restore_archived, delete-to-tombstone, restore_tombstoned; admission; session/fence predicate; worker recovery; stable errors; audit. | P4 |
+| `CLAIM_DEFAULT_DENIAL_SAFE` | Default negative | Unauthorized namespace, policy deny, revoked/expired WebDAV, path escape, secret/path redaction, no permanent queued operation. | P1/P2 |
+| `CLAIM_OPTIONAL_DENIED_SAFE` | Default negative | Workload mount, template/clone, purge/break-glass, and runtime positives deny/fail closed when not enabled. | P2/P4 |
+| `CLAIM_CAPABILITY_MATRIX_CONSISTENT` | Default safety | API, worker, recovery, readyz, discovery, operator inspection, evidence classification use one matrix. | P2 |
+| `CLAIM_OPERATION_TERMINALIZATION` | Default safety | Operation inventory; side-effect boundary; failed vs intervention decisions; idempotent replay; historical recovery visibility. | P2 |
+| `CLAIM_DISCOVERY_SURFACES` | Default safety | Caller, orchestrator, operator, and readyz discovery are layered and do not overexpose optional/runtime state. | P2/P3 |
+| `CLAIM_OPERATOR_REPAIR_SAFE` | Default safety | One shared repair contract/test suite/audit schema; API or CLI entry; reason/evidence/before-after/safety predicate. | P3 |
+| `CLAIM_OPTIONAL_FIXTURE_CONFORMANT` | Selected optional positive | Repo-local fixture positive for selected optional capabilities only. | P4 |
+| `CLAIM_PURGE_APPROVAL_SAFE` | Selected optional positive plus default negative | Default denial even with approval-like input; fixture approval object; expiry/scope/policy/hash/replay negatives; audit hash binding. | P4 |
+| `CLAIM_RESTORE_RECONCILIATION` | Default safety | Backup/restore reconciliation; dangerous writes denied; no credential reissue; no purged resurrection; mismatch to intervention. | P4 |
+| `CLAIM_RELEASE_GATE_TRACEABLE` | Release safety | Single release script; selector/digest/artifact identity; generated reports; seed vs final semantics. | P0/P5 |
+| `CLAIM_DEPLOYMENT_RISK_ENVELOPE` | Runtime support only | Runtime configuration, detection, redaction, rollback/roll-forward, runbook, residual-risk acceptance. Never required local positive. | P5 |
 
 ## Gate Mode Contract
 
-唯一入口始终是 `bash scripts/verify-ga-release.sh`；gate mode 由 repo-local selector 触发，不由人手工
-选择 verifier 参数。
-
-| Condition | Gate mode | Required behavior | Hard fail cases |
-| --- | --- | --- | --- |
-| 普通 convergence context 且无 authoritative final selector | seed/convergence | 运行 baseline/seed verifier，报告 gap，允许 `seed_gap_*_open` 作为未完成 marker。 | seed 报告声称 final GA；seed evidence 被标成最终覆盖。 |
-| release/tag/final-candidate context 期望 final selector 但缺 `docs/release-evidence/ga-release-selector.json` | no final | hard fail；不能降级成 seed pass。 | 缺 selector 时 release/tag/final candidate 仍通过。 |
-| 存在 `docs/release-evidence/ga-release-selector.json` 且 `release_intent=final_candidate` | final | 同一脚本自动执行 final verifier；消费 selector、manifest、schema/policy/artifact identity 输入 digest；生成并记录 report digest；按 final acceptance set 判定。 | open seed gap、required evidence 缺失、doc-only high-risk、optional positive 未显式声明却 blocking、digest mismatch。 |
-| selector 不是 final candidate | seed/convergence | 只能作为收敛状态报告；不得触发 final acceptance。 | seed/baseline selector 被用于 final。 |
-| selector path 或 digest 异常 | no final | final gate 必须拒绝 final-candidate selector 缺失、多份 authoritative selector、generated 副本冒充输入、digest 不匹配。 | 任何 digest mismatch、generated selector 覆盖 authoritative selector、人工 `-mode final` 绕过入口。 |
-
-seed/final 输出语义必须稳定：
-
-| Mode | Exit/report meaning | Report may contain | Report must not contain |
-| --- | --- | --- | --- |
-| seed/convergence | baseline 通过或 gap 可见；不表示 GA final。 | open seed gaps、placeholder evidence、non-blocking optional positive gaps。 | final pass wording、release artifact final identity。 |
-| final | final candidate 的 required evidence 全部通过。 | generated report digest、selector input digest、manifest/schema/policy/artifact identity digest、closed gap list。 | open required gap、open placeholder、doc-only high-risk pass、seed selector pass。 |
-
-P0/P5 的边界也由这张表固定：P0 负责 schema/parser/verifier contract seed、negative cases、
-claim taxonomy seed、placeholder selector contract 和 artifact layout；P5 负责真实 command
-execution、evidence artifact/report、final release wiring 和 coverage gap 清零。P5 不发明核心字段语义、
-不重命名 claim，也不把前置包漏掉的产品边界改到 release hardening 里。
-
-## PO brief / Product Slice
-
-下一阶段只交付一个产品切片：本仓库可独立发布的共享文件系统控制面 GA。默认首发闭环
-面向 trusted caller，先完成 admin preflight，再完成正向用户路径；高风险或部署相关能力
-默认关闭，只证明拒绝、恢复和证据边界安全。
-
-首发默认正向闭环：
-
-```text
-admin/operator
-  -> volume register/health/preflight
-  -> namespace-volume binding policy
-  -> trusted caller role/policy readiness
-  -> managed volume/path resolver redaction
-
-trusted caller
-  -> repo create/get/projection/list
-  -> pinned JVS save/history/restore-preview/restore-run/discard
-  -> WebDAV export/gateway/revoke
-  -> operation status + audit + recovery evidence
-```
-
-默认安全负路径：
-
-- workload mount、template/clone、purge/break-glass purge 默认 disabled/denied/fail-closed。
-- 关闭、未配置、未 ready 或 policy deny 时，新 mutation 不创建永久 `queued` operation。
-- 历史 operation 仍被 recovery 发现，并按 side-effect 边界进入 `failed` 或
-  `operator_intervention_required`。
-
-optional fixture 正向路径：
-
-- 只能通过 repo-local fixture capability 显式启用。
-- 只能作为 `repo-local-fixture-enabled` profile 的 conformance evidence；只有 release
-  通过 repo-local release claim selector 或 `claimed_optional_capabilities` 明确声明某
-  optional capability fixture-conformant 时才成为 final blocking required evidence。
-- `deployment-runtime-support` 只声明运行态支持 envelope；不能作为 required local GA evidence。
-
-optional fixture positive 的 final-blocking 语义必须按下表执行：
-
-| 类别 | 默认 GA 要求 | final blocking 条件 | 不得做什么 |
-| --- | --- | --- | --- |
-| 默认要求 | workload/template/purge 等 optional capability 在 `default` profile 下的 disabled、denied、recovery 负路径。 | 总是 required/final blocking；必须证明 fail-closed、不创建永久 queued、历史 operation 可终态化/intervention。 | 不得因为没有 optional positive fixture 就阻塞默认 GA。 |
-| 条件要求 | optional 正向 fixture，例如 workload plan fetch/heartbeat/release/revoke/terminal evidence、template same-namespace same-volume clone、purge structured approval positive。 | 只有 repo-local release claim selector 或 `claimed_optional_capabilities` 显式声明该 capability fixture-conformant，且 manifest 条目满足 `evidence_profile=repo-local-fixture-enabled`、`fixture_enabled_mode=true`、`default_mode=false`、`optional_gated=true`、`required=true` 时才 blocking。 | 不得用普通 seed gap marker、口头 release claim 或 deployment runtime support 让 optional positive 变成默认 GA 需求。 |
-| 不要求 | 真实 orchestrator、真实 CSI/POSIX/subPath、外部业务 e2e、兄弟 repo、生产 deployment 权限状态。 | 永不作为 required local GA final evidence；最多进入 `deployment-runtime-support` envelope。 | 不得把真实部署状态、人工审批或外部项目通过情况写进 required/final claim。 |
-
-对 optional positive 而言，`required=true` 只表示该 capability 被 final selector /
-`claimed_optional_capabilities` 选中后成为 required；它不是全局 final required，也不能把未声明的
-optional positive 变成默认 GA 阻塞项。
-
-当前 `docs/release-evidence/ga-manifest.json` 只是 baseline/seed，不代表最终 GA claim
-coverage。WebDAV/JVS/default user loop 必须补齐 positive evidence 后，才能满足最终验收。
-最终 GA release 仍只允许一个 repo-local entrypoint：`bash scripts/verify-ga-release.sh`。
-当前 convergence/seed 模式可以继续用 seed 判定；申请 final GA release 时，必须由
-repo-local release intent/manifest selector 让同一入口自动切换到或包含 final acceptance
-判定。任何 required/final claim、acceptance item 或 evidence entry 仍带
-`seed_gap_*_open` 或等价 open seed gap 时必须失败，不能只靠 seed 模式通过。
-
-## Scope alignment / source of truth
-
-本计划是下一阶段开发交接的执行口径，专门用来化解当前
-`docs/PRODUCT_REQUIREMENTS.md`、`docs/ARCHITECTURE.md` 与既有 GA 计划之间的
-默认边界冲突。PRD/Architecture 中已经描述的能力不等于默认 GA 全部启用；下一阶段
-开发应按本文的默认 GA 闭环与 optional-gated 规则实现、验收和补证。
-
-后续必须交付 doc-sync，但 doc-sync 是开发包完成后的对齐工作，不应在本轮先大范围
-改 PRD/Architecture/contracts/runbooks/README。以下三档能力口径是强约束，release note、
-doc-sync、contract wording、runbook 和 evidence manifest 必须全部遵守：
-
-- default GA：必须在无外部业务项目、无真实部署环境依赖的 repo-local gate 中证明；
-  release note 只能把默认 GA 正向能力写成默认可用。
-- `repo-local-fixture-enabled` optional：代码和契约可以保留，但默认关闭；默认 GA 只证明
-  disabled、denied、recovery 安全。只有 repo-local fixture capability 显式启用且
-  evidence 完整时，才能把该 optional capability 标记为 fixture-conformant；该正向路径成为
-  final 阻塞项的条件必须写在 manifest 条目上：`evidence_profile=repo-local-fixture-enabled`、
-  `fixture_enabled_mode=true`、`default_mode=false`、`optional_gated=true`、`required=true`。
-  普通 `seed_gap_*_open` marker 只表达待补 seed/baseline coverage，不等于默认 GA 需求。
-- `deployment-runtime-support`：只能要求本仓库证明检测模型、模拟 fixture、redaction、
-  path policy、runbook/escalation；不能把真实 CSI/POSIX/subPath 部署状态作为本仓库
-  release gate，也不能写进 required local GA evidence。
-
-Doc-sync exit criterion 是清理 wording，不是在本任务修改这些文件。PRD/Architecture/
-contracts/runbooks/README 中出现以下说法时，后续 doc-sync 不得判定完成：
-
-Doc-sync 时机固定：每个开发包合并时，必须同步更新该包直接触达的
-contracts/schema/OpenAPI/runbook 和 evidence manifest；PRD、Architecture、README
-这类全局 wording 的系统性清理在 Package 5 doc-sync 收口，不能前置成大范围文档重写。
-
-| 文档区域 | 必清理 wording |
-| --- | --- |
-| workload/template/purge | 不得把 workload/template/purge 写成默认正向可用；只能写默认 denied/recovery，fixture-enabled 才有正向验收。 |
-| caller credential issuer | 不得把 caller 写成 WebDAV credential issuer；AFSCP 签发 first-create 短期 credential，caller 只 relay 给 client connector。 |
-| lifecycle/catalog | 不得把 archive/delete/tombstone/restore/purge 写成业务 catalog workflow；它们只表达 storage-state mutation 和访问性/保留/清理状态。 |
-| quota enforcement | 不得暗示 quota 是默认硬 enforcement；schema/OpenAPI 必须暴露机器可读 enforcement status。 |
-| purge/default lifecycle | purge 与 break-glass purge 是 optional irreversible capability；retained lifecycle 才是默认 storage-state 正向能力。 |
-
-## 目标
-
-下一阶段只做一件事：把 AFSCP 收敛成产品中立、可独立发布、可自动证明的共享文件系统控制面 GA 闭环。
-
-完成后必须满足：
-
-- 默认 GA 能力边界固定、可证明、可自动验收。
-- 默认 GA 用户闭环前置：admin preflight 完成后，trusted caller 可以创建/查看 namespace-scoped repo，执行
-  save/history/restore-preview/restore-run/discard，通过 WebDAV export/gateway/revoke
-  访问 payload，并能用 operation/audit/recovery 追踪结果。
-- 独立 release 的 final acceptance 必须由 repo-local gate/manifest evidence 覆盖
-  release artifact identity、schema/migration compatibility、rollback/roll-forward policy；
-  不允许用人工审批、兄弟项目 gate 或真实部署环境状态替代。
-- 高风险能力可以保留在代码和契约中，但默认必须 capability-gated。
-- API admission、worker execution/recovery、readyz、operator inspection、release evidence 使用同一份 capability matrix。
-- 新 mutation 不会在不可执行时创建永久 `queued` operation。
-- 历史 operation 即使当前 capability 关闭，也会被 recovery 扫描并进入明确终态。
-- operator 有最小发现、定位、干预和审计闭环，不需要把临时 SQL 当作主要修复机制。
-- 每个高风险 GA 声明都有 repo-local 自动化证据，并被唯一 gate 覆盖；`deployment-runtime-support`
-  支持声明不能替代 required local GA evidence：
+The only release entrypoint is:
 
 ```bash
 bash scripts/verify-ga-release.sh
 ```
 
-## 非目标
+Developers and release operators must not manually run `-mode final` and claim
+GA. The script owns seed vs final selection.
 
-本轮不做以下事情：
-
-- 不引入任何业务项目名、调用方业务概念或兄弟 repo 依赖。
-- 不依赖人工审批、会议、主观 review、owner sign-off、consumer adoption 作为 GA gate。
-- 不做 UI、business catalog、业务生命周期、namespace delete、template marketplace。
-- 不做多语言 client matrix；只允许 repo-local 最小 generated-client/fixture 编译证据。
-- 不做通用运维搜索平台；只做 operator 必需的最小 inspection/repair 闭环。
-- 不让普通 caller、client connector 或 workload 看到 raw root path、metadata URL、SecretRef、底层 credential、`.jvs` 路径或 WebDAV raw password replay。
-- 不用文档声明替代高风险路径的自动化测试。
-
-运行态安全控制不是 release gate。`operator_intervention_required`、operator repair、purge approval evidence、residual-risk acceptance 都是产品运行安全机制；它们必须被自动化测试保护，但不是人工 GA 审批流程。
-
-## Actor Journeys
-
-这些 journeys 是 capability matrix 和 manifest claim 的阅读入口。后续测试可以拆散实现，
-但 release gate 必须能把证据重新聚合回这些路径。
-
-| Actor journey | 默认/fixture | 验收要点 | Manifest trace |
-| --- | --- | --- | --- |
-| Day-0 Admin Bootstrap | 默认前置 | operator/admin 完成 volume register/health/preflight；namespace binding policy 机器可验证；trusted caller 与 operator/admin role/policy readiness 可验证；optional orchestrator capability 在 `default` profile 下只证明 disabled discovery/deny contract，不要求 orchestrator role/policy readiness；path resolver/redaction 不暴露 raw root path、metadata URL、SecretRef、host path、底层 credential 或 `.jvs`；生成 admin bootstrap trace 并进入 manifest。 | `CLAIM_ADMIN_BOOTSTRAP_READY` |
-| trusted caller happy path | 默认正向 | admin preflight 已通过；caller 在授权 namespace 内 create/get/projection/list repo；完成 JVS save/history/restore-preview/run/discard；创建 WebDAV export，gateway 访问成功，revoke 后失效；operation/audit/recovery 可追踪。 | `CLAIM_ADMIN_BOOTSTRAP_READY`、`CLAIM_DEFAULT_USER_LOOP` |
-| trusted caller failure path | 默认负向 | 越权 namespace、policy deny、capability disabled、lifecycle/session/fence 冲突、WebDAV revoked/expired/path escape 都 fail-closed；无新永久 queued operation；有稳定 error/audit。 | `CLAIM_DEFAULT_DENIAL_SAFE`、`CLAIM_OPTIONAL_DENIED_SAFE` |
-| operator discovery -> repair path | 默认运行态安全 | operator 发现 intervention queue、held fence/session、stale lease、audit lag、runtime recovery status；只能用 allowlist repair；repair 需要 repo-local fixture/object evidence、safety predicate 和审计。 | `CLAIM_OPERATOR_REPAIR_SAFE` |
-| orchestrator default-disabled discovery | 默认负向 | orchestrator 或非授权 actor 只能看到 workload mount capability disabled/denied/status；不能拿到 mount plan、SecretRef、raw path 或底层 credential。 | `CLAIM_OPTIONAL_DENIED_SAFE` |
-| orchestrator fixture-enabled path | repo-local fixture 正向 | 显式 `repo-local-fixture-enabled` profile 下验证 plan fetch、heartbeat、release、revoke、terminal evidence 五个子声明；证据不能标成 `default_mode=true`。 | `CLAIM_WORKLOAD_FIXTURE_READY` |
-
-## Acceptance Journey Index
-
-这些 journey 是后续开发团队接手时的验收骨架，不是 UI story，也不是完整实现设计。每一行都必须在
-manifest 中落到 `acceptance_id`，并由 Package 0/P5 的 report 反查到 evidence `id`。
-
-| acceptance_id | Actor | Preconditions | Steps / fixtures | Expected user/system result | Error/audit expectations | Claim IDs |
-| --- | --- | --- | --- | --- | --- | --- |
-| `ACCEPT_DAY0_ADMIN_BOOTSTRAP` | operator/admin | clean repo-local runtime；managed volume fixture；admin role configured。 | register/health/preflight volume；put namespace binding；check caller/operator role readiness；request redacted path projection。 | service reports default bootstrap ready；namespace binding policy machine-checkable；no raw root/metadata/SecretRef material exposed。 | policy deny and path mismatch emit stable audit；missing preflight blocks default user loop。 | `CLAIM_ADMIN_BOOTSTRAP_READY`、`CLAIM_SECRET_PATH_REDACTION` |
-| `ACCEPT_DEFAULT_CALLER_HAPPY_PATH` | trusted caller | Day-0 bootstrap accepted；namespace policy allows default capabilities；WebDAV/JVS runtime fixture ready。 | create repo；get/list projection；create savepoint；history；restore-preview；restore-run；discard stale preview；create export；gateway read/write per policy；revoke；read operation/audit/recovery trace。 | caller completes default positive loop with namespace-scoped projections and no raw storage material；all positive mutation operations reach terminal `succeeded`。 | audit correlates create/save/restore/export/revoke；operation/audit/recovery traceability is additional observability, not a substitute for success；gateway ledger records access without raw password/path replay。 | `CLAIM_DEFAULT_USER_LOOP`、`CLAIM_WEBDAV_DEFAULT_ACCESS` |
-| `ACCEPT_DEFAULT_CALLER_DENIALS` | trusted caller / unauthorized caller | bootstrap present；negative fixtures for cross-namespace, policy deny, disabled capability, active/uncertain session/fence, path escape。 | attempt unauthorized namespace access；policy-denied mutation；session/fence-conflicting restore/lifecycle；path traversal/Destination escape；GET/replay redacted export。 | requests fail-closed with stable errors；no new permanent `queued` operation except idempotent replay hit。 | denied audit when actor/resource resolved；error family matches catalog；redaction guard passes。 | `CLAIM_DEFAULT_DENIAL_SAFE`、`CLAIM_SECRET_PATH_REDACTION` |
-| `ACCEPT_WEBDAV_REVOKE_EXPIRY` | trusted caller + fake connector fixture | export created through first-create path；ledger fixture active；connector only has relayed credential。 | use credential before expiry；replay create/get export；expire session；revoke export；attempt gateway access after expiry/revoke。 | first use succeeds within policy；replay/GET returns redacted only；expired/revoked access denied。 | no raw password stored or replayed；gateway denied audit records expiry/revoke reason。 | `CLAIM_WEBDAV_DEFAULT_ACCESS`、`CLAIM_DEFAULT_DENIAL_SAFE` |
-| `ACCEPT_OPERATOR_INTERVENTION_REPAIR` | operator/admin | historical operation/session/fence/stale lease fixture in intervention or blocking state；operator role only。 | inspect intervention queue；correlate operation/resource；submit allowlisted terminalize/release/revoke/acceptance repair with evidence；repeat idempotently。 | repair succeeds only when safety predicate and evidence object verify；blocking state cleared only for named scope；caller projections remain redacted。 | before/after, identity, reason, evidence ref, affected IDs and audit event IDs recorded；missing evidence/invalid transition fails。 | `CLAIM_OPERATOR_REPAIR_SAFE`、`CLAIM_OPERATION_TERMINALIZATION`、`CLAIM_RESIDUAL_RISK_CATALOG` |
-| `ACCEPT_OPTIONAL_DISABLED_NEGATIVE` | trusted caller / orchestrator role | default profile；workload/template/purge capabilities disabled；historical optional operation fixtures exist。 | request workload mount/template clone/purge positive path；request orchestrator disabled/status discovery；run recovery on historical optional operations。 | new optional mutation denied；no mount plan/SecretRef/raw path；historical operations terminalize or enter intervention。 | denied and recovery audit emitted；manifest marks this negative as default required。 | `CLAIM_OPTIONAL_DENIED_SAFE`、`CLAIM_OPERATION_TERMINALIZATION` |
-| `ACCEPT_WORKLOAD_FIXTURE_POSITIVE` | fake orchestrator fixture | `repo-local-fixture-enabled` profile；selector explicitly claims workload fixture-conformant。 | plan fetch；heartbeat；release；revoke；terminal evidence。 | workload fixture passes conformance without becoming default GA；unselected workload positive remains non-blocking。 | session/fence/audit evidence required；manifest uses `default_mode=false` and selected optional required semantics。 | `CLAIM_OPTIONAL_FIXTURE_CONFORMANT`、`CLAIM_WORKLOAD_FIXTURE_READY` |
-| `ACCEPT_TEMPLATE_CLONE_FIXTURE_POSITIVE` | trusted caller fixture | `repo-local-fixture-enabled` profile；selector explicitly claims template fixture-conformant。 | create template or fixture template；clone same-namespace same-volume；attempt cross-namespace/cross-volume negative controls。 | same-namespace same-volume clone passes fixture conformance without becoming default GA；cross-scope attempts remain denied。 | operation/audit evidence records fixture mode；manifest uses `default_mode=false` and selected optional required semantics。 | `CLAIM_OPTIONAL_FIXTURE_CONFORMANT`、`CLAIM_TEMPLATE_QUOTA_BOUNDARY` |
-| `ACCEPT_PURGE_APPROVAL_FIXTURE_POSITIVE` | operator-admin fixture | `repo-local-fixture-enabled` profile；selector explicitly claims purge fixture-conformant；structured approval fixture valid。 | submit purge with approval issuer/verifier/scope/expiry/hash/replay protection；run replay/expiry/scope negative controls。 | purge positive path passes only under selected fixture conformance；default profile remains disabled/denied。 | approval summary/hash bound to audit；manifest uses `default_mode=false` and selected optional required semantics。 | `CLAIM_OPTIONAL_FIXTURE_CONFORMANT`、`CLAIM_PURGE_APPROVAL_SAFE` |
-
-## 默认 GA 能力边界
-
-默认 GA 能力必须写死为以下闭环：
-
-- namespace 与 managed volume binding。
-- repo create/get，以及 namespace-scoped repo projection/list。
-- pinned JVS save/history。
-- restore-preview/restore-run/restore-discard。
-- WebDAV export/gateway/revoke。
-- retained repo lifecycle：archive、restore_archived、delete/tombstone、restore_tombstoned。
-- operation inspection、audit outbox、worker recovery。
-
-默认 GA 用户闭环必须在证据包前段就能被一眼追踪，而不是只埋在 evidence manifest 后段：
+Authoritative selector path:
 
 ```text
-trusted caller
-  -> namespace/binding policy
-  -> repo create/get/projection/list
-  -> JVS save/history/restore-preview/restore-run/discard
-  -> WebDAV export/gateway/revoke
-  -> operation status + audit + recovery evidence
+docs/release-evidence/ga-release-selector.json
 ```
 
-repo projection/list 的默认 GA 语义必须收窄：它只允许 caller 在授权 namespace 内查看 repo storage projection，带明确分页、过滤和权限边界；它不是 global search、aggregation、operator investigation 平台，也不承载业务 catalog 查询。
+| Condition | Gate mode | Required behavior | Hard fail |
+| --- | --- | --- | --- |
+| Ordinary seed/convergence context, no authoritative selector | Seed/convergence | Run baseline/seed checks; report gaps; allow placeholder seed gaps. | Output or docs claim final GA. |
+| Release/final-candidate context but selector missing | No final | Hard fail; do not downgrade to seed pass. | Final candidate passes without selector. |
+| Selector exists and `release_intent=final_candidate` | Final | Same script invokes final verifier and consumes selector/manifest/digest inputs. | Open required gaps, placeholder required evidence, digest mismatch, invalid selector. |
+| Selector exists but is not final candidate | Seed/convergence only | May inform convergence status; cannot trigger final. | Non-final selector accepted as final. |
+| Selector path or digest abnormal | No final | Reject absolute paths, `..`, non-authoritative paths, generated selector pretending to be same-run input, digest mismatch. | Any abnormal selector still passes final. |
 
-以下能力默认保留但必须 capability-gated：
+## Final Selector, Digest, And Artifact Identity
 
-- workload orchestrator、workload mount 与 orchestrator mount plan。
-- template/clone。
-- purge 与 break-glass purge。
-- 超出默认 GA 的 runtime variants，例如非 pinned JVS 运行方式、替代 gateway、特殊 orchestrator、特殊 storage-plane mutation。
+The final selector is an input artifact. Generated reports are outputs and must
+not become same-run authoritative inputs.
 
-pinned JVS runner 支撑的 save/history/restore-preview/run/discard，以及 AFSCP WebDAV gateway 支撑的 export/revoke，属于默认 GA 必证能力；不能因为它们依赖 runtime 就写成默认可选。optional-gated 只表达默认 GA 之外的高风险或变体能力。
+Final selector minimum fields:
 
-能力关闭、未配置、未 ready 或 namespace/volume policy 不允许时，新请求必须稳定拒绝，或在已有历史 operation 的 recovery 中终态化。不能把“能力暂不可用”表达成永久排队。
-
-Repo lifecycle 默认边界必须显式写入 contract、schema/OpenAPI、capability matrix 和证据：
-
-| Lifecycle action | 默认 GA 口径 | Admission default | Worker/recovery default | 说明 |
-| --- | --- | --- | --- | --- |
-| `archive` | 默认 GA storage-state | enabled when lifecycle capability ready | 可执行；session/fence 不确定时进入 intervention | 表达存储不可普通访问和保留，不是业务归档流程。 |
-| `restore_archived` | 默认 GA storage-state mutation，恢复访问性 | enabled only when lifecycle capability ready and absence of active/uncertain access/fence is proven | 可执行；无法证明无 active/uncertain session/fence 时 fail-closed 或进入 `operator_intervention_required` | 不改变 repo identity；为避免恢复期间重新授权不一致，默认 GA 与 archive/delete 同样受 session/fence blocking 约束。 |
-| `delete` / `tombstone` | 默认 GA storage-state | enabled when lifecycle capability ready | 可执行；必须 drain/revoke 或 fail-closed/intervention | 表达 retained tombstone/trash，不是产品删除 UX。 |
-| `restore_tombstoned` | 默认 GA storage-state mutation，恢复访问性 | enabled within retention/policy only when absence of active/uncertain access/fence is proven | 可执行；无法证明无 active/uncertain session/fence 时 fail-closed 或进入 `operator_intervention_required` | 不得恢复已 purge 的 repo；默认 GA 下同样受 session/fence blocking 约束。 |
-| `purge` | optional-gated irreversible capability | default profile 永远 disabled；只有 `repo-local-fixture-enabled` profile 且结构化 approval evidence 可验证时，显式 fixture conformance gate 才允许执行 | 历史 purge operation 必须被扫描并 failed/intervention；不能遗留 queued | 默认 GA 只证明 disabled/denied/recovery 安全；`deployment-runtime-support` 只可声明运行态支持，不得放入 required local GA 证据集合。 |
-| break-glass purge override | optional-gated break-glass | disabled by default；positive path 只能来自 `repo-local-fixture-enabled` profile，且不能作为 default GA 阻断条件 | 只有结构化 approval evidence 可验证时才允许执行 | 不是人工 GA 审批，也不是自由字符串；`deployment-runtime-support` 不计入 required local GA evidence。 |
-
-`restore_archived` 与 `restore_tombstoned` 的产品决策已固定：它们是恢复 repo 访问性的
-storage-state mutation，不是业务 catalog 恢复工作流。为了避免恢复期间重新授权不一致，
-contract、API admission、worker executor、recovery classifier、operator evidence 和 manifest
-必须同步执行同一约束：不能证明没有 active/uncertain export/workload session、writer fence
-或访问性不一致时，新请求 fail-closed；历史 operation 则按 side-effect boundary 进入
-`failed` 或 `operator_intervention_required`，不能静默恢复为 active。
-
-## Admin / Bootstrap Acceptance
-
-默认用户闭环的前置条件必须自动验收，不能靠 operator 口头确认。
-
-| Acceptance | 必证内容 |
+| Field | Requirement |
 | --- | --- |
-| volume register/health/preflight | managed volume 已注册、health 可读、preflight 能验证 root policy、path resolver、metadata store、audit sink、JVS/WebDAV 必需配置。 |
-| namespace-volume binding policy | namespace 只能绑定允许的 managed volume；cross-namespace/cross-volume mismatch fail-closed；policy deny 有稳定 error/audit。 |
-| caller/operator role/policy readiness | trusted caller 与 operator/admin 角色与权限可机器校验；caller 只能访问 namespace-scoped projection。optional orchestrator role/policy readiness 不属于默认 GA bootstrap，只能在 `repo-local-fixture-enabled` 或 `deployment-runtime-support` profile 中验证。 |
-| managed volume/path resolver redaction | caller、client connector、workload 不暴露 raw root path、metadata URL、SecretRef、host path、底层 credential 或 `.jvs` 路径。 |
-| manifest/admin bootstrap trace | 上述每项都有 `CLAIM_ADMIN_BOOTSTRAP_READY` 下的 `acceptance_id`、evidence command、anchors 和 pass criteria；缺任一项不能进入 default user loop 验收。 |
+| `schema_version` | Stable selector schema version. |
+| `release_intent` | Must be `final_candidate` for final mode. |
+| `manifest_path` | Must point to the current manifest. |
+| `final_acceptance_selector` | Claim/subclaim/acceptance rows selected for final acceptance. |
+| `claimed_optional_capabilities` | Optional capabilities selected for fixture-positive final blocking. |
+| `seed_gap_policy` | Must be `reject_open_seed_gap` for final candidates. |
+| manifest digest | Digest of authoritative manifest input. |
+| selector input digest | Digest of authoritative selector input after removing `selector_input_digest`, canonicalizing JSON, and hashing that non-self-referential form. |
+| schema/migration set digest | Digest of schema, OpenAPI, migrations, and generated-client relevant inputs. |
+| policy/artifact identity digest | Digest or identity set for policy, release artifact, JVS/runtime support records as applicable. |
+| rollback/roll-forward policy ref | Stable reference to the release rollback/roll-forward policy. |
 
-## Capability Discovery Surface
+Generated output minimum:
 
-capability discovery 分三类 contract，不能只靠 readyz 替代：
+| Output | Rule |
+| --- | --- |
+| Generated report digest | Output only. It cannot be a same-run input. |
+| Generated selector copy | Copy for audit only. It cannot override the authoritative selector. |
+| Generated coverage report | JSON plus Markdown. Must map claims to evidence IDs and statuses. |
+| Evidence artifact digest | Stable digest per evidence ID. |
 
-| Surface | Reader | Scope | 必须表达 |
-| --- | --- | --- | --- |
-| caller capability/status | trusted caller | namespace-scoped | 默认能力可用性、policy denial、repo lifecycle/session/fence blocking、稳定 error code；不得泄露全局 runtime 或 raw path。 |
-| orchestrator mount capability/plan readiness | orchestrator role | namespace/workload binding scoped | 默认 disabled discovery、fixture-enabled readiness、plan 是否可领取、heartbeat/release/revoke 状态；不得给普通 caller plan/SecretRef。 |
-| operator global capability/runtime/recovery/evidence profile | operator | global with filters | capability profile、runtime dependency、recovery discovery、intervention queue、evidence profile、runbook/ref 和 redacted runtime details。 |
-| readyz | platform/operator automation | service | 只表达 service-ready、default capability ready、optional disabled/fixture status、recovery ready；不能替代 caller/orchestrator API contract。 |
+## Generated Evidence Artifact Layout
 
-## Capability Profile / Evidence Profile
-
-| Profile | Runtime meaning | Local release evidence meaning | 可计入 required local GA gate 的正向路径 |
-| --- | --- | --- | --- |
-| default | 默认 GA 闭环开启；optional workload/template/purge disabled。 | 必须证明 admin bootstrap、trusted caller 正向闭环、optional denied/recovery、安全负路径。 | 仅默认 GA 能力正向路径。 |
-| repo-local-fixture-enabled | 在本仓库 fixture 中显式打开 optional capability。 | 用于证明 optional 正向路径的契约完整性/安全性，不是默认产品可用性声明；默认产品可用性仍只包含默认 GA 正向能力。 | 只有 release 在 manifest 条目显式声明该 optional capability fixture-conformant 时才 blocking；必须 `fixture_enabled_mode=true`、`default_mode=false`、`optional_gated=true`、`required=true`。 |
-| deployment-runtime-support | 真实部署可选择启用的运行态支持声明。 | 只能证明检测模型、模拟 fixture、redaction、path policy、runbook/escalation。 | 不得放入 required local GA 证据集合。 |
-
-这三档不能混用：
-
-- release note 只能把 `default` profile 的正向能力写成默认可用。
-- `repo-local-fixture-enabled` 正向证据只有在 manifest 条目同时标记
-  `fixture_enabled_mode=true`、`default_mode=false`、`optional_gated=true`、`required=true`
-  时才成为 final 阻塞项；不能让 optional positive 反向证明默认 GA。
-  这里的 `required=true` 只在该 optional capability 已被 selector/manifest 显式声明为
-  fixture-conformant 后生效，不是全局默认 GA required。
-- `deployment-runtime-support` 只能进入运行态支持说明、runbook/escalation 或
-  deployment envelope evidence；不能作为 required/final GA claim 的通过依据。
-- doc-sync、contract wording 和 README 必须使用同一套 profile 词汇；任何 wording 漂移都要由
-  doc guard 或 manifest verifier 报出。
-
-## 核心架构方案
-
-下一阶段的核心架构命题是统一控制链：
+Generated artifacts should live under:
 
 ```text
-capability -> admission -> operation -> worker recovery -> readiness -> evidence
+docs/release-evidence/generated/
 ```
 
-capability matrix 是以下所有判断的唯一事实源：
+Minimum layout:
 
-- API admission 是否接受新 mutation。
-- worker 是否注册 executor，以及 recovery 如何处理历史 operation。
-- readyz 如何表达 service-ready 与 optional gated 能力。
-- operator inspection 如何展示 capability/runtime/recovery 状态。
-- release evidence manifest 如何证明每条 GA 声明。
+```text
+docs/release-evidence/generated/
+  coverage-report.json
+  coverage-report.md
+  final-selector.generated.json
+  final-report.generated.json
+  evidence/
+    <evidence_id>/
+      command.json
+      stdout.txt
+      stderr.txt
+      metadata.json
+      redaction.json
+      digest.json
+```
 
-capability matrix 至少要区分：
+Artifact requirements:
 
-- `surface_type`: capability 暴露面类型，至少区分 `durable_operation`、
-  `read_projection`、`preflight`、`discovery`、`redaction`、`runtime_support`。
-- `operation_type`: 仅 `surface_type=durable_operation` 的 mutating durable operation
-  必填，用于 worker execution/recovery/terminalization。
-- `capability_id`: 跨 API、worker、readyz、operator、evidence 共用的稳定能力 ID。
-- `resource_scope`: capability 适用的 resource scope，例如 service、namespace、volume、repo。
-- `supported`: 当前版本是否实现该能力。
-- `configured`: runtime 是否有必要配置。
-- `ready`: 当前进程/依赖是否可安全执行。
-- `required_for_default_ga`: 是否属于默认 GA 闭环。
-- `required_for_service_ready`: 是否影响服务基础 readyz。
-- `optional_gated`: 是否为可保留但默认 gate 的高风险能力。
-- `namespace_policy`: namespace 是否允许使用该能力。
-- `volume_runtime_capability`: volume/runtime 是否具备执行条件。
-- `denial_code`: 不可用时返回的稳定错误码。
-- `runbook_ref`: operator 可定位的处理入口。
-- `evidence_ref`: release evidence manifest 中的证据 ID。
-
-一条 capability matrix decision row 只能表达一个 `surface_type` 和一个决策面。不要把
-admission mutation、worker recovery、caller read projection、readyz 状态和 evidence
-profile 混在同一行里。相同 product capability 可以拆出 durable/read/teardown/discovery
-等 facets，但这些 facets 必须在 contract、test 和 evidence 中分别表达，避免出现
-“API admission 是一种解释、worker/readyz/evidence 又是另一种解释”的分叉。matrix v1
-只服务本仓库 GA 收敛，不扩展成通用 feature flag 平台或运行时产品配置系统。
-
-read/status/preflight/discovery/redaction surface 不创建 durable operation，也不走 worker
-terminalization policy；它们只参与 admission、discovery、readyz 和 evidence。只有会改变
-持久状态的 mutating durable operation 才有 `operation_type`，并必须映射 terminalization
-policy。
-
-capability matrix v1 rows 只允许覆盖本仓库 GA 收敛所需能力，避免演变成通用 feature-flag 平台：
-
-| capability_id | surface_type | operation_type / surface 示例 | default_ga_required | optional_gated | service_ready 影响 | fixture-enabled 正向路径 |
-| --- | --- | --- | --- | --- | --- | --- |
-| `namespace_binding` | `durable_operation` | namespace create/bind/update policy | yes | no | yes | no |
-| `volume_preflight` | `preflight` | volume register/health/preflight | yes | no | yes | no |
-| `admin_bootstrap` | `preflight` | admin bootstrap/readiness check | yes | no | yes | no |
-| `caller_policy_readiness` | `discovery` | caller/operator role/policy readiness check | yes | no | yes | no |
-| `path_redaction` | `redaction` | redacted path/capability/status projection | yes | no | yes | no |
-| `repo_create` | `durable_operation` | repo create | yes | no | yes | no |
-| `repo_projection` | `read_projection` | repo get/list projection | yes | no | yes | no |
-| `jvs_save_restore` | `durable_operation` | save, restore run/discard | yes | no | yes | no |
-| `jvs_projection` | `read_projection` | history, restore preview/status projection | yes | no | yes | no |
-| `webdav_export` | `durable_operation` | export create/revoke | yes | no | yes | no |
-| `webdav_projection` | `read_projection` | export get/gateway status/redacted session projection | yes | no | yes | no |
-| `operation_recovery` | `runtime_support` | recovery/terminalize；operation status read does not create a new durable operation | yes | no | yes | no |
-| `repo_lifecycle_retained` | `durable_operation` | archive, restore archived, tombstone, restore tombstoned | yes | no | yes | no |
-| `repo_purge` | `durable_operation` | purge, purge recovery | no | yes | no when disabled | yes, only with verifiable approval fixture |
-| `repo_template` | `durable_operation` | template create, same-namespace same-volume clone | no | yes | no when disabled | yes, only with repo-local fixture enabled |
-| `workload_mount_binding` | `durable_operation` | mount binding create/revoke/release；default profile denies new mutation | no | yes | no when disabled | yes, only with repo-local fake orchestrator fixture enabled |
-| `workload_mount_discovery` | `discovery` | disabled/status/plan readiness projection；default profile exposes disabled/status only | no | yes | no when disabled | yes, only with repo-local fake orchestrator fixture enabled |
-| `workload_teardown_plan` | `discovery` | stale/expired/releasing binding 的 teardown-only release/revoke/terminal evidence shape | no | yes | no when disabled | yes, only with repo-local fake orchestrator fixture enabled |
-
-有效决策表：
-
-| supported | configured | ready | namespace/volume policy | default_ga_required | optional_gated | 有效决策 |
-| --- | --- | --- | --- | --- | --- | --- |
-| false | any | any | any | any | any | New admission denied; historical operations failed or intervention with unsupported code. |
-| true | false | any | any | yes | no | Service not ready; new default-GA mutation denied with config error; historical recovery still scans. |
-| true | false | any | any | no | yes | Service can be ready; new optional mutation denied; historical recovery scans and terminalizes/intervenes. |
-| true | true | false | any | yes | no | Service not ready for default GA; new mutation denied or retryable per error table; recovery still scans. |
-| true | true | false | any | no | yes | Optional capability not ready; service ready remains true; positive path cannot be marked ready. |
-| true | true | true | deny | any | any | New admission denied by policy; no operation created except idempotent replay. |
-| true | true | true | allow | yes | no | Default GA admission may proceed after fence/session/lifecycle checks. |
-| true | true | true | allow | no | yes | Admission may proceed only in explicit `repo-local-fixture-enabled` mode；`deployment-runtime-support` 只能作为运行态支持声明；default GA 仍证明 disabled/denied path。 |
-
-### API Admission 顺序
-
-所有 mutating API 必须按以下顺序处理：
-
-1. 认证、授权和 namespace 上下文先行。
-2. 幂等 replay 优先于 capability denial：同一 idempotency key/hash 命中既有 operation 时，先返回既有结果或 operation，不因当前 capability 变化改成 denied。
-3. 只有新 mutation 才进入 capability/fence/session/approval/lease/lifecycle 检查。
-4. 检查不通过时 fail-closed，返回稳定 error envelope，并写入必要 denied audit。
-5. 检查通过后才创建 durable operation。
-
-禁止行为：
-
-- capability 关闭时创建新的永久 `queued` operation。
-- worker 不扫描关闭 capability 的历史 operation。
-- 用后台沉默、无限 retry 或未知 handler 来表达不可执行。
-
-API admission denial 必须表格化，并由 schema/OpenAPI、contract tests 和 audit tests 共同保护：
-
-下表的 Error family 是目标稳定 catalog，不只是文档标签。Package 1 必须把这些 family
-新增或映射到 API error code/schema/OpenAPI 和 audit event schema；代码里的 error code
-不得与本文档 catalog 分叉。
-
-| Denial reason | Error family | Create operation? | Audit required? | Retry semantics |
-| --- | --- | --- | --- | --- |
-| authn/authz/caller role denied | `AUTH_DENIED` / `FORBIDDEN` | no | denied audit when actor/resource resolved | no until credentials/role change |
-| namespace disabled or namespace policy denies capability | `NAMESPACE_DISABLED` / `POLICY_DENIED` | no | yes | retry only after policy changes |
-| capability unsupported | `CAPABILITY_UNSUPPORTED` | no | yes for mutating request | no for this version |
-| capability disabled/unconfigured | `CAPABILITY_DENIED` / `CAPABILITY_NOT_CONFIGURED` | no | yes | retry only after config/capability changes |
-| runtime dependency not ready | `CAPABILITY_NOT_READY` | no for new mutation | yes | retryable after readyz recovers |
-| lifecycle state blocks mutation | `REPO_LIFECYCLE_CONFLICT` | no | yes | retry after lifecycle terminal state |
-| active/uncertain session or fence blocks mutation | `SESSION_CONFLICT` / `FENCE_HELD` | no | yes | retry after revoke/drain/recovery or operator repair |
-| purge approval missing/invalid/expired/replayed | `APPROVAL_REQUIRED` / `APPROVAL_INVALID` | no | yes | retry with valid structured approval evidence |
-| idempotency key/hash conflict | `IDEMPOTENCY_CONFLICT` | no new operation | yes when conflict is security-relevant | no unless caller uses correct key/hash |
-| idempotency replay hit | no denial | no new operation | no new denied audit | returns existing operation/result before capability checks |
-
-### Worker Recovery 语义
-
-worker recovery 必须覆盖历史 operation，不受“当前 capability 是否允许新 admission”的限制。
-
-recovery dispatcher、classifier 和 terminalizer 不应随 `ready=false` 或
-`configured=false` gate 被裁掉。所有已知 `operation_type` 的 classifier 和
-terminalizer 必须能发现历史 operation；`ready/configured=false` 只影响新 admission
-或真正执行外部 mutation 的路径，不能让 recovery 查询范围、分类范围或终态化路径消失。
-
-历史 operation 的处理原则：
-
-- 能安全执行且 handler/runtime ready：按原语义继续执行。
-- 当前 capability 已关闭、handler 不支持或 runtime 缺失：按 side-effect boundary 终态化，而不是按 capability 名称粗暴分类。
-- side effect 可证明未开始，或外部状态可证明安全且无需人工判断：进入 `failed` 并记录稳定 recovery audit。
-- side effect 可能已经开始、外部状态未知、或继续/回滚安全性不可自动证明：进入
-  `operator_intervention_required` 并保持 blocking。
-- fence/session/lease/storage 一致性不确定：进入 `operator_intervention_required` 并保持 blocking。
-- 每次终态化都必须 idempotent，并产生 audit/evidence。
-
-`operator_intervention_required` 是运行态安全状态，不是 GA 人工审批状态。它表示系统无法自动证明继续执行安全，因此保持阻断并等待受控 operator repair。
-
-Worker recovery/terminalization 必须表格化：
-
-| Historical operation condition | Recovery action | Terminal state | Audit/evidence | Operator action needed |
-| --- | --- | --- | --- | --- |
-| handler/runtime ready and safety predicates true | continue or retry idempotently | normal success/failure per executor | operation progress + audit | no |
-| operation type known but capability now disabled | do not execute external mutation | `failed` for safe no-op cases, otherwise `operator_intervention_required` | denied/unsupported recovery audit | only when state cannot be proven safe |
-| operation type known but handler unsupported in this binary | no external mutation | `failed` if no side effects started; otherwise intervention | unsupported handler audit | maybe |
-| runtime config missing before side effect | no external mutation | `failed` | config-denied recovery audit | no |
-| side effect may have started and runtime state unknown | keep blocking | `operator_intervention_required` | intervention record + runbook ref | yes |
-| lease expired before side effect and no external mutation possible | terminalize | `failed` | lease-expired audit | no |
-| fence/session/storage consistency uncertain | keep fence/session blocking | `operator_intervention_required` | intervention record + evidence requirement | yes |
-| audit outbox blocked after durable mutation | preserve durable state and retry audit/recovery | not success-visible until audit policy satisfied, or intervention if policy says so | audit lag evidence | maybe |
-| purged repo referenced by old operation | do not resurrect or reissue access | `failed` or intervention if storage residual exists | purge invariant audit | maybe |
-
-## Research Finding Trace Matrix
-
-下表先按 research 原始编号建索引，避免本文后续归并的 F1-F18 与
-`docs/research/afscp-product-architecture-review.md` 的 Finding 1-18 混淆。Package/claim 映射是
-交接覆盖要求，不代表当前代码或 manifest 已经完成。
-
-| Original finding # | Research title | Primary package / slice | Primary claim(s) | Acceptance anchor |
-| --- | --- | --- | --- | --- |
-| Finding 1 | 直接 GA 范围过宽，首发闭环难以证明 | P0, P1a, P5 | `CLAIM_PROFILE_BOUNDARY`、`CLAIM_DEFAULT_USER_LOOP`、`CLAIM_OPTIONAL_DENIED_SAFE` | `ACCEPT_DEFAULT_CALLER_HAPPY_PATH`、`ACCEPT_OPTIONAL_DISABLED_NEGATIVE` |
-| Finding 2 | API admission 与 worker capability gate 可能不一致 | P1a, P1b | `CLAIM_CAPABILITY_MATRIX_CONSISTENT`、`CLAIM_OPERATION_TERMINALIZATION` | `ACCEPT_DEFAULT_CALLER_DENIALS`、`ACCEPT_OPTIONAL_DISABLED_NEGATIVE` |
-| Finding 3 | Workload mount 安全闭环仍有运行态缺口 | P2b, P3a, P3b | `CLAIM_WORKLOAD_FIXTURE_READY`、`CLAIM_SECRET_PATH_REDACTION`、`CLAIM_OPERATOR_REPAIR_SAFE` | `ACCEPT_OPTIONAL_DISABLED_NEGATIVE`、`ACCEPT_OPERATOR_INTERVENTION_REPAIR` |
-| Finding 4 | 发布 gate 存在，但证据强度不足以覆盖部分声明 | P0, P5 | `CLAIM_RELEASE_GATE_TRACEABLE`、`CLAIM_RELEASE_ARTIFACT_IDENTITY`、`CLAIM_WORKFLOW_HARDENING_GUARD` | final gate/report acceptance |
-| Finding 5 | 独立 GA 与真实可用性被混在一起 | P0, P2a, P5 | `CLAIM_PROFILE_BOUNDARY`、`CLAIM_DEFAULT_USER_LOOP`、`CLAIM_DEPLOYMENT_RISK_ENVELOPE` | `ACCEPT_DEFAULT_CALLER_HAPPY_PATH` |
-| Finding 6 | Operator observability 需求与 GA API 面不匹配 | P1c, P3a | `CLAIM_DISCOVERY_SURFACES`、`CLAIM_OPERATOR_REPAIR_SAFE` | `ACCEPT_OPERATOR_INTERVENTION_REPAIR` |
-| Finding 7 | Operator repair/intervention 写路径未契约化 | P3b | `CLAIM_OPERATOR_REPAIR_SAFE`、`CLAIM_RESIDUAL_RISK_CATALOG` | `ACCEPT_OPERATOR_INTERVENTION_REPAIR` |
-| Finding 8 | Purge break-glass approval reference 仍偏弱 | P4a | `CLAIM_PURGE_APPROVAL_SAFE`、`CLAIM_OPTIONAL_DENIED_SAFE` | `ACCEPT_OPTIONAL_DISABLED_NEGATIVE`、`ACCEPT_PURGE_APPROVAL_FIXTURE_POSITIVE` |
-| Finding 9 | Backup/restore 缺少 control-plane 与 storage-plane 一致性边界 | P4b | `CLAIM_RESTORE_RECONCILIATION`、`CLAIM_OPERATOR_REPAIR_SAFE` | restore reconciliation acceptance |
-| Finding 10 | WebDAV credential issuer wording 不一致 | P2a, P5 | `CLAIM_WEBDAV_DEFAULT_ACCESS`、`CLAIM_SECRET_PATH_REDACTION` | `ACCEPT_WEBDAV_REVOKE_EXPIRY` |
-| Finding 11 | Template 能力范围与常见心智不匹配 | P4c | `CLAIM_TEMPLATE_QUOTA_BOUNDARY`、`CLAIM_OPTIONAL_FIXTURE_CONFORMANT` | `ACCEPT_OPTIONAL_DISABLED_NEGATIVE`、`ACCEPT_TEMPLATE_CLONE_FIXTURE_POSITIVE` |
-| Finding 12 | Lifecycle vocabulary 仍带产品工作流倾向 | P4c, P5 | `CLAIM_RETAINED_LIFECYCLE_DEFAULT`、`CLAIM_RELEASE_GATE_TRACEABLE` | doc guard / lifecycle acceptance |
-| Finding 13 | Quota 字段容易误导 | P4c | `CLAIM_TEMPLATE_QUOTA_BOUNDARY` | quota schema/OpenAPI acceptance |
-| Finding 14 | 概念模型暴露过多，调用方心智负担偏高 | P1c, P2a | `CLAIM_DISCOVERY_SURFACES`、`CLAIM_SECRET_PATH_REDACTION` | `ACCEPT_DAY0_ADMIN_BOOTSTRAP` |
-| Finding 15 | 缺少产品中立 happy paths 与 failure journeys | P0, P2a, P5 | `CLAIM_DEFAULT_USER_LOOP`、`CLAIM_DEFAULT_DENIAL_SAFE`、`CLAIM_RELEASE_GATE_TRACEABLE` | all `ACCEPT_*` journey rows |
-| Finding 16 | Restore archived/tombstoned 的 session drain 实现比契约更严格 | P2c, P4b | `CLAIM_RETAINED_LIFECYCLE_DEFAULT`、`CLAIM_RESTORE_RECONCILIATION` | retained lifecycle + reconciliation acceptance |
-| Finding 17 | 文档一致性存在旧 wording 和实现状态冲突 | P5 | `CLAIM_RELEASE_GATE_TRACEABLE`、`CLAIM_WORKFLOW_HARDENING_GUARD` | Package 5 doc-sync DoD |
-| Finding 18 | 共享卷多租户 residual risk threat model 不足 | P4b, P4c | `CLAIM_DEPLOYMENT_RISK_ENVELOPE`、`CLAIM_RESIDUAL_RISK_CATALOG` | shared-volume model fixture acceptance |
-
-这张表把 reviewer findings 收束到开发包、TDD/acceptance、manifest claim/subclaim 和 gate
-形状。Finding 名称按问题域归并，但覆盖 Finding 1-18；后续 generated report 必须能按同样
-维度反查 evidence `id`。Source anchor/source finding 是覆盖复核索引，不声明一一对应；
-一行可以覆盖多个原始 finding，一个原始 finding 也可以被多个验收行分摊。
-
-| Finding | Source anchor | Source finding | Package | TDD/acceptance | Manifest claim/subclaim | Gate command shape |
-| --- | --- | --- | --- | --- | --- | --- |
-| F1 默认 GA 与 optional 边界混淆 | `docs/research/afscp-product-architecture-review.md` Finding 1, 5 | 直接 GA 范围过宽；独立 GA 与真实可用性混在一起 | P0/P1 | profile schema、capability decision table、optional disabled admission | `CLAIM_PROFILE_BOUNDARY` | `bash scripts/verify-ga-release.sh` -> manifest verifier profile checks |
-| F2 默认 trusted caller 闭环不前置 | `docs/research/afscp-product-architecture-review.md` Finding 5, 15 | 产品中立链路可用性；缺少 happy/failure journeys | P2/P5 | create/get/list + JVS + WebDAV + operation/audit/recovery journey | `CLAIM_DEFAULT_USER_LOOP` | `bash scripts/verify-ga-release.sh` -> default journey evidence |
-| F3 admin/bootstrap 缺少验收 | `docs/research/afscp-product-architecture-review.md` Finding 5, 14, 15 | 真实可用性链路；调用方心智收敛；journey 验收缺口 | P1/P2 | volume preflight、namespace binding、caller role/policy、path redaction | `CLAIM_ADMIN_BOOTSTRAP_READY` | `bash scripts/verify-ga-release.sh` -> bootstrap claim evidence |
-| F4 capability 判断分散 | `docs/research/afscp-product-architecture-review.md` Finding 2, 4 | API admission 与 worker gate 不一致；证据强度不足 | P1 | API/worker/readyz/operator/manifest 共用 matrix contract | `CLAIM_CAPABILITY_MATRIX_CONSISTENT` | `bash scripts/verify-ga-release.sh` -> contract/schema tests |
-| F5 admission 可能创建永久 queued | `docs/research/afscp-product-architecture-review.md` Finding 2 | mutating API 与 worker capability gate 不共享判断 | P1 | capability-off mutation、idempotency replay、denial audit | `CLAIM_DEFAULT_DENIAL_SAFE`、`CLAIM_OPTIONAL_DENIED_SAFE` | `bash scripts/verify-ga-release.sh` -> admission negative evidence |
-| F6 historical operation recovery 缺终态 | `docs/research/afscp-product-architecture-review.md` Finding 2, 7 | worker 不扫描关闭能力的历史 operation；repair/intervention 写路径缺口 | P1 | disabled/unsupported/unconfigured/side-effect boundary recovery | `CLAIM_OPERATION_TERMINALIZATION` | `bash scripts/verify-ga-release.sh` -> recovery terminalization evidence |
-| F7 readyz 被误用为 caller/orchestrator contract | `docs/research/afscp-product-architecture-review.md` Finding 6, 14 | operator observability 面不匹配；概念暴露过多 | P1/P2 | caller status、orchestrator discovery、operator global surface | `CLAIM_DISCOVERY_SURFACES` | `bash scripts/verify-ga-release.sh` -> discovery contract evidence |
-| F8 WebDAV credential/gateway 边界不清 | `docs/research/afscp-product-architecture-review.md` Finding 5, 10 | 产品中立 export 链路；credential issuer wording 不一致 | P2 | first-create-only、revoke/expiry、path policy、ledger e2e | `CLAIM_WEBDAV_DEFAULT_ACCESS` | `bash scripts/verify-ga-release.sh` -> WebDAV e2e evidence |
-| F9 workload mount 正向路径过粗 | `docs/research/afscp-product-architecture-review.md` Finding 3, 5 | workload mount 安全闭环缺口；产品中立 orchestrator 链路 | P2 | plan fetch、heartbeat、release、revoke、terminal evidence | `CLAIM_WORKLOAD_FIXTURE_READY` subclaims | `bash scripts/verify-ga-release.sh` -> fixture-enabled workload evidence |
-| F10 SecretRef/raw path 泄露风险 | `docs/research/afscp-product-architecture-review.md` Finding 3, 14, 18 | SecretRef 推导/暴露边界；分层心智；shared-volume residual risk | P2/P4 | RBAC/redaction、path resolver、raw path deny | `CLAIM_SECRET_PATH_REDACTION` | `bash scripts/verify-ga-release.sh` -> redaction/path policy evidence |
-| F11 operator discovery/repair 不成闭环 | `docs/research/afscp-product-architecture-review.md` Finding 6, 7 | operator discovery 面不足；repair/intervention 写路径未契约化 | P3 | inspection queue、allowed repair、identity/reason/evidence/audit | `CLAIM_OPERATOR_REPAIR_SAFE` | `bash scripts/verify-ga-release.sh` -> operator repair evidence |
-| F12 residual-risk acceptance 可能绕过安全 | `docs/research/afscp-product-architecture-review.md` Finding 7, 18 | operator repair safety；shared-volume residual risk threat model 不足 | P3/P4 | risk catalog、named predicate、default record-only、blocking tests | `CLAIM_RESIDUAL_RISK_CATALOG` | `bash scripts/verify-ga-release.sh` -> residual-risk negative evidence |
-| F13 purge approval 只是自由字符串 | `docs/research/afscp-product-architecture-review.md` Finding 8 | purge break-glass approval reference 偏弱 | P4 | structured approval fixture、expiry/scope/hash/replay negative | `CLAIM_PURGE_APPROVAL_SAFE` | `bash scripts/verify-ga-release.sh` -> purge approval evidence |
-| F14 restore reconciliation 状态边界不足 | `docs/research/afscp-product-architecture-review.md` Finding 9, 16 | control-plane/storage-plane 一致性；restore session drain contract 不一致 | P4 | mode entry/exit、read-only allowed、writes denied、不一致 intervention | `CLAIM_RESTORE_RECONCILIATION` | `bash scripts/verify-ga-release.sh` -> reconciliation evidence |
-| F15 lifecycle wording 混入业务 catalog | `docs/research/afscp-product-architecture-review.md` Finding 12, 16 | lifecycle vocabulary 偏产品工作流；restore drain 口径需对齐 | P4/P5 | retained lifecycle positive、purge excluded、doc/contract guard | `CLAIM_RETAINED_LIFECYCLE_DEFAULT` | `bash scripts/verify-ga-release.sh` -> lifecycle evidence |
-| F16 template/clone/quota 默认语义不稳 | `docs/research/afscp-product-architecture-review.md` Finding 11, 13 | template 心智不匹配；quota 字段误导 | P4 | default denied、same-namespace same-volume fixture、quota status | `CLAIM_TEMPLATE_QUOTA_BOUNDARY` | `bash scripts/verify-ga-release.sh` -> template/quota evidence |
-| F17 deployment-only 风险混入本地 gate | `docs/research/afscp-product-architecture-review.md` Finding 5, 18 | 独立 GA 与真实部署可用性边界；shared-volume deployment residual risk | P0/P4/P5 | evidence profile check、model fixture、runbook/escalation guard | `CLAIM_DEPLOYMENT_RISK_ENVELOPE` | `bash scripts/verify-ga-release.sh` -> deployment envelope evidence |
-| F18 manifest/gate 颗粒度不足 | `docs/research/afscp-product-architecture-review.md` Finding 4, 17 | evidence manifest/gate 颗粒度不足；旧 wording 与 gate 口径冲突 | P0/P5 | schema/verifier negative、claim report、high-risk non-doc-only | `CLAIM_RELEASE_GATE_TRACEABLE` | `bash scripts/verify-ga-release.sh` -> generated claim/evidence report |
-
-## 开发包局部验收规则
-
-这些开发包是合并单元，不是 release 阶段，也不存在 package-level GA。每个包只能声明
-“局部可合并”，不能声明“该包已 GA”。局部验收必须同时满足 DoD、依赖、可合并条件和
-manifest 追踪要求。package 0/1 必须先把 manifest schema/verifier seed 前移；packages
-2-4 每包都必须新增 manifest claim/evidence entries，并至少补一个 verifier negative
-case；package 5 只做 hardening、coverage gap 清零和 generated report，不再承载主要
-功能发现。
-
-P0/P5 边界必须压实：
-
-- Package 0 只做 schema/verifier seed、verifier negative cases、claim taxonomy seed 和
-  capability vocabulary seed；不实现产品能力，不重写业务 contract，不把 seed manifest
-  当成 final coverage。
-- Package 5 只做 evidence entries 收口、generated report、final mode selector/gate wiring
-  和 hardening；不重命名 claim，不重塑 vocabulary，不承载主要功能发现，也不把前四包漏掉的
-  产品语义决策塞进 release hardening。
-- 如果 P5 发现需要新增或改名 claim/capability，默认结论是前置包未完成；应回到对应包补
-  contract/test/evidence，而不是在 P5 直接改 taxonomy。
-
-| 开发包 | 依赖 | DoD | 可合并条件 | 局部验收边界 |
-| --- | --- | --- | --- | --- |
-| Package 0: Evidence Manifest Seed | 现有 manifest baseline、唯一 gate 脚本 | 最终 manifest 字段和 claim taxonomy 前置，包括 `claim_id`、`subclaim_id`、`acceptance_id`、`risk_id`、`capability_id`、`evidence_type`、`evidence_profile`、`evidence_status`、`default_mode`、`fixture_enabled_mode`、`optional_gated`、`required`、`expected_runtime`、`scope`、`command`、`anchors`、`pass_criteria`、`release_intent`、`final_acceptance_selector`、`claimed_optional_capabilities`、`seed_gap_policy`、`rollback_rollforward_policy_ref`、retry/flake policy 字段或引用；verifier negative seed | gate 能识别缺 claim、缺 required evidence、profile 混用、doc-only high-risk、命令缺失或命令不可 repo-local 运行、selector 缺失/多份/digest 不匹配、seed selector 被用于 final、placeholder/open placeholder 被用于 final required claim | 只建立证据骨架；不声称现有 baseline 已覆盖最终 GA，也不把字段留到 Package 5 才补。 |
-| Package 1: Capability & Operation Terminalization | package 0、现有 operation store、capability tests | capability matrix v1 rows、effective decision table、admission denial table、worker terminalization table、per-operation phase side-effect boundary table 有 contract/schema/test 覆盖 | 默认 GA 与 optional-gated 的 admission/recovery/readyz 状态一致；disabled optional 不创建永久 queued；历史 operation 可发现和终态化/intervention；新增 manifest entries 与 verifier negative case | 只证明 capability/admission/recovery 语义可合并，不证明 access、purge、operator repair 全闭环 GA。 |
-| Package 2: Access Sessions Safety | package 1 的 capability/admission 语义 | WebDAV credential first-create-only、gateway policy、ledger e2e、workload lease freshness、SecretRef redaction/RBAC、session/fence 联动测试通过 | 默认 WebDAV 正向路径有真实 Postgres ledger + repo-local fixture；workload mount 默认 disabled/denied/recovery 安全，positive 只作为 `repo-local-fixture-enabled` conformance evidence；stale binding 只能证明进入 blocking/intervention trace，不能单独声明 closure；新增 manifest entries 与 verifier negative case | 不实现 caller connector、真实 orchestrator 或真实部署 mount；stale/intervention closure 必须由 Package 3 联合闭环。 |
-| Package 3: Operator Intervention | package 1 的 recovery/intervention 状态；package 2 的 session/fence/stale binding 证据 | operator-only inspection/repair contract、allowlist、safety predicate、required fixture/object evidence、audit/redaction/idempotency tests 完成 | repair contract 明确 operator-only，不暴露给普通 caller；缺证据 repair fail-closed；能闭环 Package 2 留下的 stale/intervention queue；新增 manifest entries 与 verifier negative case | 只证明最小运行态修复闭环，不做通用运维平台或 dashboard。 |
-| Package 4: Irreversible Lifecycle Safety | package 1-3 的 capability、session、operator repair | purge approval evidence、restore consistency、repo lifecycle session-drain decision、template/quota/lifecycle wording、shared-volume residual-risk gate 完成 | purge 默认 disabled；retained lifecycle 默认 enabled 且 contract/test 一致；deployment-only 风险只以 repo-local 模拟/检测/runbook/escalation 证明；新增 manifest entries 与 verifier negative case | 不做 namespace delete、template marketplace、真实部署 CSI/POSIX 验证。 |
-| Package 5: Evidence Hardening & Coverage Report | 前四包的 claim/evidence 条目 | 扩展现有 manifest coverage、gap report、gate wiring、generated mapping | 每个最终验收 bullet 可追溯到 manifest `claim_id`、`acceptance_id` 或 `subclaim_id`、evidence `id`；高风险 claim 不能 doc-only | 只填 coverage/report/wiring；沿用 Package 0 schema、selector 和 policy 字段，不重新发明 final mode 字段；不依赖兄弟 repo、人工审批或外部 release dashboard。 |
-
-### Package / PR Slice Execution Index
-
-保留 P0-P5 大包作为 ownership 边界；实际 PR 应按下表切片。每个 slice 至少先提交失败测试或
-verifier negative case，再补实现和 manifest delta。
-
-| Slice | 目标 | 非目标 | 首个失败测试方向 | Manifest delta / claim | 完成定义 |
-| --- | --- | --- | --- | --- | --- |
-| P0a schema/parser seed | 固定 manifest final 字段、profile enum、selector parser、artifact layout。 | 不证明任何产品能力已 final。 | selector 缺失/多份/digest mismatch、profile 混用、unknown field。 | `CLAIM_RELEASE_GATE_TRACEABLE` seed；placeholder selector contract。 | seed/convergence 能报告 gap；final 规则存在但不误报 GA。 |
-| P0b taxonomy/verifier seed | 固定 claim/capability allowlist、optional rule verifier、doc-only high-risk guard。 | 不改 API/worker 行为。 | optional positive 标成 default、deployment support 放入 required local GA、unknown claim。 | `CLAIM_PROFILE_BOUNDARY`、claim taxonomy seed。 | 后续包只能引用既有 claim/capability；新增必须回 P0/P1。 |
-| P1a capability/admission matrix | API admission 使用同一 capability decision table；新 mutation fail-closed。 | 不实现 WebDAV/workload/purge 主路径。 | disabled optional mutation 创建 queued；default JVS/WebDAV 被误当 optional。 | `CLAIM_CAPABILITY_MATRIX_CONSISTENT`、`CLAIM_DEFAULT_DENIAL_SAFE`、`CLAIM_OPTIONAL_DENIED_SAFE`。 | admission denial catalog、schema/OpenAPI/audit 映射一致。 |
-| P1b recovery terminalization | worker recovery 覆盖所有 operation type；disabled/unsupported/unconfigured 有终态规则。 | 不写 operator repair 入口。 | 历史 operation 因 capability disabled 不被扫描；unsupported handler 无限 pending。 | `CLAIM_OPERATION_TERMINALIZATION`。 | operation inventory 中每个 type 有 recovery behavior、terminal/intervention evidence placeholder。 |
-| P1c discovery/readyz surfaces | caller/orchestrator/operator/readyz discovery 分层。 | 不把 readyz 当 caller/orchestrator contract。 | optional disabled 污染 service_ready；caller 看到 operator/global runtime material。 | `CLAIM_DISCOVERY_SURFACES`、`CLAIM_SECRET_PATH_REDACTION`。 | surfaces 有权限、scope、redaction 和 manifest anchors。 |
-| P2a WebDAV default access | first-create credential、Postgres ledger、gateway policy、revoke/expiry 默认正向闭环。 | 不实现外部 connector。 | replay/GET 泄漏 raw secret；revoked/expired access 仍成功；path escape。 | `CLAIM_WEBDAV_DEFAULT_ACCESS`、`CLAIM_DEFAULT_USER_LOOP`。 | `ACCEPT_WEBDAV_REVOKE_EXPIRY` 和 WebDAV 子证据可由 gate 追踪。 |
-| P2b workload access safety | workload default disabled/denied/recovery；lease freshness、teardown-only、SecretRef redaction。 | 不声明 workload positive 为默认 GA；不关闭 stale repair。 | expired/stale 返回普通 plan；普通 caller 看到 SecretRef/raw path。 | `CLAIM_OPTIONAL_DENIED_SAFE`、`CLAIM_WORKLOAD_FIXTURE_READY`、`CLAIM_SECRET_PATH_REDACTION`。 | stale binding 只产生 P3 依赖的 intervention trace；fixture positive 非 default。 |
-| P2c shared session/fence/lease predicate | 提供通用 active/uncertain session、writer fence、lease freshness predicate，供 WebDAV/workload/restore/lifecycle 调用。 | 不在 P2 实现 purge/restore reconciliation/template/quota。 | active/uncertain session 允许 restore/lifecycle writer；predicate 只在某一 executor 生效。 | `CLAIM_DEFAULT_DENIAL_SAFE`、`CLAIM_OPERATION_TERMINALIZATION`。 | predicate contract 可被 P4 复用；P2 只证明 access safety 和阻断语义。 |
-| P3a operator inspection | intervention queue、held fence/session、stale lease、audit lag、recovery status 可发现。 | 不做 dashboard 或通用搜索。 | operator 只能按 operation ID 查；caller 看到 global inspection。 | `CLAIM_DISCOVERY_SURFACES`、`CLAIM_OPERATOR_REPAIR_SAFE`。 | inspection 有分页/过滤/权限/脱敏和 evidence anchors。 |
-| P3b controlled repair | terminalize operation、release fence、revoke/terminalize session、residual-risk acceptance 的 allowlist repair。 | 不允许任意 SQL/任意状态改写。 | 缺 evidence/自由文本 risk/错误 transition repair 成功。 | `CLAIM_OPERATOR_REPAIR_SAFE`、`CLAIM_RESIDUAL_RISK_CATALOG`。 | repair durable record + before/after + audit；P2 stale/intervention 可闭环。 |
-| P4a purge approval safety | purge/break-glass default disabled；structured approval positive 仅 fixture-selected。 | 不把 purge 放入 retained lifecycle default。 | 自由文本 approval、过期/重放/scope mismatch 通过。 | `CLAIM_PURGE_APPROVAL_SAFE`、`CLAIM_OPTIONAL_FIXTURE_CONFORMANT`。 | default negative required；positive 只在 selected fixture final required。 |
-| P4b restore reconciliation | control-plane/storage-plane consistency、reconciliation mode、purged invariant。 | 不重发 credential、不静默 active。 | reconciliation 中发新 credential/mount/restore-run/purge；purged repo 复活。 | `CLAIM_RESTORE_RECONCILIATION`、`CLAIM_OPERATOR_REPAIR_SAFE`。 | dangerous writes blocked；不一致进入 intervention。 |
-| P4c retained lifecycle/template/quota/deployment envelope | 将 P2 predicate 应用到 retained lifecycle；template/quota 边界和 shared-volume residual risk。 | 不做 template marketplace、真实 CSI/POSIX gate、业务 lifecycle。 | retained lifecycle/purge 混 claim；quota 无机器状态；cross-namespace clone 成功。 | `CLAIM_RETAINED_LIFECYCLE_DEFAULT`、`CLAIM_TEMPLATE_QUOTA_BOUNDARY`、`CLAIM_DEPLOYMENT_RISK_ENVELOPE`。 | retained lifecycle positive default evidence；optional/template positive non-default；deployment support 不进 required local positive。 |
-| P5 final evidence/report/doc-sync | 真实 command execution、coverage report、artifact identity、rollback policy、final wiring、旧口径清理。 | 不新增核心字段语义、不重命名 claim、不补发产品范围决策。 | open seed gap final 通过；doc-only high-risk 通过；doc wording guard 漏旧口径。 | `CLAIM_RELEASE_ARTIFACT_IDENTITY`、`CLAIM_ROLLBACK_ROLLFORWARD_POLICY`、`CLAIM_WORKFLOW_HARDENING_GUARD`、`CLAIM_RELEASE_GATE_TRACEABLE`。 | clean checkout 唯一 gate 可自动 final；report 可追溯每个 acceptance/claim/evidence。 |
-
-### P2 / P4 Boundary Contract
-
-P2 与 P4 的边界必须按 predicate 的 ownership 切开，避免两边互相补洞。
-
-| Boundary | P2 owns | P4 owns | 不得混淆 |
-| --- | --- | --- | --- |
-| session/fence/lease predicate | 定义并验证通用 active/uncertain session、writer fence、lease freshness、teardown-only、SecretRef redaction predicate。 | 将这些 predicate 应用到 purge、restore reconciliation、retained lifecycle、template/quota。 | P2 不声明 purge/restore/template 完成；P4 不重写 predicate 语义。 |
-| WebDAV/workload access safety | WebDAV default positive、workload default disabled/denied/recovery、fixture access safety。 | lifecycle/purge/template 在 access 不确定时 fail-closed/intervention。 | workload stale closure 需要 P3；不能在 P2 单独关闭。 |
-| evidence profile | default WebDAV positive；optional workload disabled negative；workload fixture positive non-default。 | retained lifecycle default positive；purge/template optional positive non-default；deployment envelope support。 | `deployment-runtime-support` 不能替代 P2/P4 required local evidence。 |
-
-## 开发启动执行视图
-
-第一批 PR 不做复杂阶段路线图，只按最小文件面把后续开发拉进 TDD：
-
-| PR | 最小文件面 | 先失败测试/检查 | 建议命令 | 禁止动的范围 |
-| --- | --- | --- | --- | --- |
-| PR-0A evidence seed | manifest schema/verifier、当前 manifest、唯一 gate 脚本接入点、对应 contractcheck | 缺 required evidence、profile 混用、doc-only high-risk、命令不存在、seed gap 在 final selector 下未失败 | `go test ./internal/releaseevidence ./internal/contractcheck` | 不改产品代码语义；不改 PRD/Architecture 大段 wording；不把 seed 说成 final。 |
-| PR-0B taxonomy/vocabulary seed | claim/capability allowlist、generated report skeleton、verifier negative cases | claim 重名/未知、capability row 混合多个 surface、optional positive 被标成 default | `go test ./internal/releaseevidence -run 'Test.*Taxonomy|Test.*Capability|Test.*Selector'` | 不重命名既有业务 API；不引入通用 feature flag 平台。 |
-| PR-1 first behavior red tests | capability/admission/recovery contract tests、readyz/operator surface tests | optional disabled mutation 创建 queued、历史 operation 因 disabled 不被扫描、readyz 被 optional 污染 | `go test ./internal/... -run 'Test.*Capability|Test.*Recovery|Test.*Ready'` | 不碰 access session、purge、operator repair 主实现。 |
-
-启动期禁止把 `internal/*`、`scripts/*`、manifest JSON 以外的宽范围文档同步当成第一批 PR
-主目标；doc-sync 只跟随被开发包直接触达的 contract/schema/runbook/evidence，系统性 wording
-清理留到 Package 5 收口。
-
-## 开发包 0: Evidence Manifest Seed
-
-| Package card | 内容 |
+| Artifact | Requirement |
 | --- | --- |
-| claim_id | `CLAIM_PROFILE_BOUNDARY`、`CLAIM_RELEASE_GATE_TRACEABLE`、`CLAIM_WORKFLOW_HARDENING_GUARD` seed。 |
-| subclaim / acceptance | selector parser contract、profile enum、claim/capability allowlist、artifact layout、`ACCEPT_*` placeholder mapping。 |
-| evidence command shape | `go test ./internal/releaseevidence -run 'Test.*Manifest|Test.*Selector|Test.*Profile|Test.*Taxonomy'`；`bash scripts/verify-ga-release.sh` seed mode。 |
-| anchors | `docs/release-evidence/ga-manifest.json`、`docs/release-evidence/ga-release-selector.json`、`scripts/verify-ga-release.sh`。 |
-| negative verifier case | selector 缺失/多份/digest mismatch、profile 混用、doc-only high-risk、optional positive default、deployment support required local。 |
+| `command.json` | Command, cwd, env allowlist, timeout, exit code, start/end time. |
+| `stdout.txt` / `stderr.txt` | Captured output with stable ordering and redaction. |
+| `metadata.json` | Evidence ID, claim/subclaim/acceptance, evidence type, profile, mode, status, repo revision. |
+| `redaction.json` | Redaction status and proof no raw secret/path material is emitted. |
+| `digest.json` | Stable digests for command, metadata, stdout, stderr, and combined artifact. |
+| Reports | Deterministic ordering by claim, subclaim, acceptance, evidence ID. |
 
-### 要解决的问题
+## Actor Boundary
 
-- 当前 manifest 是 baseline/seed，容易被误读成最终 GA claim coverage。
-- 如果等到最后才定义 schema/verifier，packages 2-4 的证据会缺少统一 claim/subclaim/profile 语言。
-
-### 方案
-
-- 在第一轮开发前扩展 manifest schema seed，最终字段必须一次前置，至少支持
-  `claim_id`、`subclaim_id`、`acceptance_id`、`risk_id`、`fixture_id`、`capability_id`、
-  `evidence_type`、`evidence_profile`、`evidence_status`、`default_mode`、`fixture_enabled_mode`、
-  `optional_gated`、`required`、`negative_or_positive`、`expected_runtime`、`scope`、
-  `command`、`anchors`、`pass_criteria`、`release_intent`、
-  `final_acceptance_selector`、`claimed_optional_capabilities`、`seed_gap_policy`、
-  `rollback_rollforward_policy_ref`，以及 retry/flake policy 字段或 policy ref。
-  Package 5 只能补 coverage、generated report 和 gate wiring，不能才开始补字段。
-- Package 0 必须固定 authoritative final selector 输入位置：
-  `docs/release-evidence/ga-release-selector.json`。`docs/release-evidence/generated/ga-final-selector.json`
-  只能是 gate 生成的报告/副本，不能作为 final 判定的权威输入。final gate 必须拒绝 selector
-  缺失、多份 authoritative selector、selector input digest 与 manifest/schema/policy/artifact
-  identity digest 不匹配，以及
-  `release_intent` 仍是 seed/baseline 的 selector 被用于 final。
-- verifier seed 接入唯一 gate，并先提供 negative cases：缺 required evidence、把
-  运行态支持 profile 误放入本地必需证据集合、high-risk doc-only、命令不存在、
-  profile 标记冲突、selector 缺失/多份/digest 不匹配、seed selector 用于 final。
-- 建立唯一 Claim Taxonomy / Capability Vocabulary 权威表。后续文档、manifest、
-  verifier 和 generated report 只能引用这张表中的 `claim_id`，不得另起一套 claim
-  名称或把 acceptance/subclaim 写成新的 claim。
-- verifier 必须支持 seed mode 与 final mode：baseline 期间 `seed_gap_*_open` 只允许作为
-  seed marker；final mode 下 required/final claim 不允许 open marker，必须被具体 evidence
-  替代、关闭，否则 gate fail。
-- placeholder evidence 必须机器可见：manifest 中必须有 `evidence_status=placeholder|implemented|closed`
-  或等价字段。P1 inventory 中的 `EV_P1_*` 只是计划占位；final 下 required claim 仍引用
-  `placeholder` 或 open placeholder 时必须 fail。`closed` 表示 placeholder 已被具体 evidence
-  替代并关闭，不表示跳过证据。
-
-Claim taxonomy seed 必须先给后续包可引用的稳定 ID：
-
-| Taxonomy | 用途 | Package 0 最低要求 |
+| Actor | Owns | Must not own for AFSCP GA |
 | --- | --- | --- |
-| `claim_id` | 聚合 GA 声明，例如 `CLAIM_DEFAULT_USER_LOOP` | 必须稳定、可在 generated report 中反查。 |
-| `subclaim_id` | 拆分 claim 的子能力，例如 workload plan fetch/heartbeat/revoke | required claim 有多个子能力时必填。 |
-| `acceptance_id` | 映射最终验收 bullet 或 journey acceptance | 每个最终验收 bullet 至少能落到一个 acceptance。 |
-| `risk_id` | 映射 risk register 或本计划风险 | 高风险 claim 必填，不能只有文档说明。 |
-| `capability_id` | 连接 capability matrix、API、worker、readyz 和 evidence | mutating/recovery 相关 evidence 必填。 |
-| `evidence_type` | unit、contract、schema、openapi、generated-client、integration、e2e、provenance、race、doc-guard | verifier 必须拒绝未知类型。 |
-| `evidence_profile` | `default`、`repo-local-fixture-enabled`、`deployment-runtime-support` | verifier 必须拒绝 profile 混用。 |
-| `evidence_status` | `placeholder`、`implemented`、`closed` 或等价机器枚举 | final required evidence 不能引用 `placeholder` 或 open placeholder；seed/convergence 可报告 placeholder gap。 |
-| `default_mode` / `fixture_enabled_mode` | 防止 optional positive 被写成默认可用 | optional positive 必须 `default_mode=false`。 |
-| `optional_gated` / `required` | 区分默认 required、optional disabled negative 和被 selector 选中的 optional positive | optional positive 的 `required=true` 只在 `claimed_optional_capabilities` 选中后生效。 |
-| `expected_runtime` / `scope` | 说明命令耗时和覆盖范围 | 必须是 repo-local 可运行范围，不能要求人工 DSN 或真实部署状态。 |
-| `command` / `anchors` / `pass_criteria` | 让证据可执行、可定位、可判定 | command 必须被唯一 gate 覆盖；pass criteria 必须结构化。关键高风险断言不能只放自由文本 assertion，必须拆成 verifier-checkable subclaim、acceptance、required selector 或 negative case；机器可判定字段优先于 prose。 |
-| `release_intent` / `final_acceptance_selector` / `claimed_optional_capabilities` | final selector 权威输入字段 | 必须来自 `docs/release-evidence/ga-release-selector.json`；final 只接受 final candidate，不接受 seed/baseline selector。 |
-| `seed_gap_policy` / `rollback_rollforward_policy_ref` | final release guard | final 必须 `reject_open_seed_gap`，且 selector 必须引用机器可校验 rollback/roll-forward policy evidence。 |
-| retry/flake policy 字段或引用 | evidence 运行稳定性 | required/final evidence 出现 `flake_observed` 一律 fail；non-blocking rationale 只允许非 required evidence。 |
+| AFSCP | Namespace/volume binding, repo storage state, pinned JVS save/restore, WebDAV export gateway, retained lifecycle, operation/audit/recovery, capability/admission/worker/readyz/evidence consistency. | Business catalog, product lifecycle UX, connector UI, real orchestrator implementation, deployment permission state. |
+| Trusted caller | Caller identity, namespace authorization, AFSCP API calls, relaying first-create WebDAV credentials to a connector. | Issuing WebDAV passwords, seeing raw root paths or SecretRefs, bypassing namespace policy. |
+| Client connector | Receiving short-lived WebDAV credentials from the trusted caller and accessing the AFSCP gateway. | Calling AFSCP admin/caller APIs directly, reading `.jvs`, replaying raw passwords, managing storage credentials. |
+| Orchestrator | Consuming workload plans only when an orchestrator capability is explicitly enabled. | Being a default GA dependency or exposing mount plans to ordinary callers. |
+| Operator/admin | Bootstrap, preflight, inspection, intervention queue review, one allowlisted repair entry, audit review. | Manual GA approval, arbitrary SQL repair, arbitrary state rewrite. |
+| Deployment/runtime | Providing Postgres, managed volume, JVS binary, WebDAV runtime, audit sink, CI, and optional orchestrator runtime. | Serving as this repo's release gate or replacing repo-local evidence. |
 
-Package 0 的唯一 claim taxonomy 如下。`CLAIM_WORKLOAD_FIXTURE_READY` 是 workload
-fixture 的子能力聚合 claim，不表示默认 GA ready；所有 optional 正向 conformance 由
-`CLAIM_OPTIONAL_FIXTURE_CONFORMANT` 约束 `evidence_profile=repo-local-fixture-enabled`、
-`default_mode=false`、`fixture_enabled_mode=true`、`optional_gated=true`、`required=true`。
+## Product Decisions
 
-| claim_id | Authority / meaning | Gate profile role | Capability vocabulary anchor |
-| --- | --- | --- | --- |
-| `CLAIM_PROFILE_BOUNDARY` | 三档 evidence profile、default/fixture/deployment 边界一致 | `default` required；拒绝 profile 混用 | all |
-| `CLAIM_ADMIN_BOOTSTRAP_READY` | 默认闭环前置 admin/bootstrap 已就绪 | `default` required | `volume_preflight`、`namespace_binding`、`admin_bootstrap`、`caller_policy_readiness`、`path_redaction` |
-| `CLAIM_DEFAULT_USER_LOOP` | trusted caller 默认正向闭环可用 | `default` required | `repo_create`、`repo_projection`、`jvs_save_restore`、`jvs_projection`、`webdav_export`、`webdav_projection`、`operation_recovery` |
-| `CLAIM_DEFAULT_DENIAL_SAFE` | 默认能力负路径 fail-closed | `default` required negative | default durable operations + admission denial catalog |
-| `CLAIM_OPTIONAL_DENIED_SAFE` | optional capability 默认关闭时 disabled/denied/recovery 安全 | `default` required negative | `workload_mount_binding`、`workload_mount_discovery`、`workload_teardown_plan`、`repo_template`、`repo_purge` |
-| `CLAIM_CAPABILITY_MATRIX_CONSISTENT` | API、worker、readyz、operator、manifest 共用同一 matrix | `default` required | all capability rows |
-| `CLAIM_OPERATION_TERMINALIZATION` | 历史 durable operation 可扫描并终态化/intervention | `default` required | durable operation rows |
-| `CLAIM_DISCOVERY_SURFACES` | caller/orchestrator/operator/readyz discovery surface 分层 | `default` required；optional 只暴露 disabled/status | discovery/read projection rows |
-| `CLAIM_WEBDAV_DEFAULT_ACCESS` | 默认 WebDAV export/gateway/revoke 链路安全可用 | `default` required | `webdav_export`、`webdav_projection` |
-| `CLAIM_SECRET_PATH_REDACTION` | raw path、SecretRef、host path、credential 不泄漏 | `default` required | `path_redaction`、`workload_mount_discovery`、`workload_teardown_plan` |
-| `CLAIM_WORKLOAD_FIXTURE_READY` | workload fixture 的 plan/heartbeat/release/revoke/terminal evidence 子声明完整 | `repo-local-fixture-enabled` conformance only | `workload_mount_binding`、`workload_mount_discovery`、`workload_teardown_plan` |
-| `CLAIM_OPTIONAL_FIXTURE_CONFORMANT` | release 明确声明的 optional 正向 fixture conformance 可验证 | only when explicitly claimed；never `default_mode=true` | `workload_mount_binding`、`workload_mount_discovery`、`workload_teardown_plan`、`repo_template`、`repo_purge` |
-| `CLAIM_OPERATOR_REPAIR_SAFE` | operator repair 有 allowlist、safety predicate、evidence、audit | `default` required runtime-safety evidence | `operation_recovery` + repair surfaces |
-| `CLAIM_RESIDUAL_RISK_CATALOG` | residual-risk acceptance 受预登记 catalog 约束 | `default` required negative/guard | deployment/runtime risk catalog |
-| `CLAIM_PURGE_APPROVAL_SAFE` | purge/break-glass approval 结构化且可验证 | default denied required；positive only `repo-local-fixture-enabled` | `repo_purge` |
-| `CLAIM_RESTORE_RECONCILIATION` | restore reconciliation mode 防止危险写入 | `default` required | `repo_lifecycle_retained`、`operation_recovery` |
-| `CLAIM_RETAINED_LIFECYCLE_DEFAULT` | retained lifecycle 是默认 storage-state 正向能力 | `default` required | `repo_lifecycle_retained` |
-| `CLAIM_TEMPLATE_QUOTA_BOUNDARY` | template 默认 denied，quota status 机器可读 | default denied required；positive only explicit fixture conformance | `repo_template` |
-| `CLAIM_DEPLOYMENT_RISK_ENVELOPE` | deployment-only 风险只以 repo-local 模型/模拟/脱敏/升级证明 | `deployment-runtime-support` not required local GA positive | runtime support rows |
-| `CLAIM_WORKFLOW_HARDENING_GUARD` | workflow hardening 只验证 repo-local 可检查事实 | `default` required guard | release gate workflow |
-| `CLAIM_RELEASE_ARTIFACT_IDENTITY` | release artifact identity 可机器追踪到 git revision、manifest digest、schema/migration set 和 generated report | `default` required final guard | release artifact identity |
-| `CLAIM_ROLLBACK_ROLLFORWARD_POLICY` | rollback/roll-forward policy 与 artifact/schema/migration compatibility 绑定 | `default` required final guard | release policy |
-| `CLAIM_RELEASE_GATE_TRACEABLE` | 最终验收 bullet 可追溯到 manifest/generated report | `default` required | all claims |
-
-Capability vocabulary v1 是一个收敛任务，不是假设当前代码已经一致。当前代码、manifest
-或 verifier allowlist 可能仍出现 `storage`、`jvs`、`webdav_export`、`workload_mount`、
-`repo_template`、`repo_purge`、`repo_lifecycle_retained` 等粒度；Package 1 必须把代码、
-manifest verifier allowlist 和 evidence manifest 共同更新到同一 vocabulary。目标 row
-可以包括 `namespace_binding`、`volume_preflight`、`admin_bootstrap`、
-`caller_policy_readiness`、`repo_create`、`repo_projection`、`jvs_save_restore`、
-`jvs_projection`、`webdav_export`、`webdav_projection`、`operation_recovery`、`path_redaction`、`repo_lifecycle_retained`、
-`repo_purge`、`repo_template`、`workload_mount_binding`、`workload_mount_discovery`、
-`workload_teardown_plan`。任何临时兼容映射都必须在 verifier
-report 中显式标记为 migration compatibility，不能作为最终 claim vocabulary。
-
-### 局部验收
-
-- `bash scripts/verify-ga-release.sh` 能调用 manifest verifier seed。
-- seed 报告明确标记 WebDAV/JVS/default user loop 仍需 positive evidence，不能误报最终 GA
-  coverage 完成。
-- seed mode 可以保留 `seed_gap_*_open` marker 作为 baseline gap；final mode 必须反转规则，
-  required/final claim 一旦仍有 open marker 就 fail，并报告需要替代/关闭的 evidence ID。
-- package 0 不修改产品能力，只建立后续包必须填充的证据 contract。
-
-## 开发包 1: Capability & Operation Terminalization
-
-| Package card | 内容 |
-| --- | --- |
-| claim_id | `CLAIM_CAPABILITY_MATRIX_CONSISTENT`、`CLAIM_OPERATION_TERMINALIZATION`、`CLAIM_DISCOVERY_SURFACES`、`CLAIM_DEFAULT_DENIAL_SAFE`、`CLAIM_OPTIONAL_DENIED_SAFE`。 |
-| subclaim / acceptance | capability decision table、admission denial catalog、operation inventory、readyz/discovery surface、`ACCEPT_DEFAULT_CALLER_DENIALS`。 |
-| evidence command shape | `go test ./internal/... -run 'Test.*Capability|Test.*Admission|Test.*Recovery|Test.*Ready|Test.*Discovery'`。 |
-| anchors | `internal/operations/types.go`、capability matrix contract/schema、operation-state-machine contract、API error/audit schema。 |
-| negative verifier case | disabled optional creates queued、historical operation skipped、readyz polluted by optional disabled、unknown operation type lacks terminalization row。 |
-
-### 要解决的问题
-
-- API、worker、readyz、release evidence 可能各自判断 capability，导致 admission 与 execution 不一致。
-- 新 mutation 可能进入 operation 队列，但 worker 因 gate 关闭或 handler 不存在而永远不处理。
-- 历史 operation 在 capability 变化后缺少统一终态规则。
-
-### 方案
-
-- 实现或收敛一份 capability matrix contract，并让 API、worker、readyz、operator inspection、evidence manifest 共用。
-- 将代码、manifest verifier allowlist 和 evidence manifest 收敛到 Package 0 定义的同一 capability
-  vocabulary；旧的 `storage`、`jvs` 等粗粒度 ID 只能作为迁移兼容映射，不能作为最终 vocabulary。
-- admission 按本文的固定顺序执行，确保 idempotent replay 优先于 capability denial。
-- 每类 operation 定义 terminalization policy：`succeeded`、`failed`、`operator_intervention_required`。
-- 每类 operation/phase 定义 side-effect boundary：side effect 未开始、已开始、未知三类边界必须能机器判断或进入 intervention。
-- worker recovery dispatcher/classifier/terminalizer 覆盖所有已知 operation type；扫描历史 operation 时，不以当前 `ready/configured` gate 作为跳过理由。
-- unsupported handler、runtime unavailable、capability now disabled、lease expired、fence uncertain、audit outbox blocked 都必须有稳定分类、错误码和审计事件。
-- readyz 区分 default GA required capability 与 optional gated capability；optional gated 关闭不能让基础服务误报 not ready。
-- 移除 `workload_mount` 对默认 fallback service-ready 集合的污染，或强制所有生产 readyz
-  都从 capability matrix 注入 required 集合；optional disabled 不能使 service not ready。
-
-### Operation Terminalization Inventory
-
-下表从 `internal/operations/types.go` 的 `OperationType` 列表建立交接覆盖清单。它是 P1
-必须补齐的目标覆盖要求，不声明当前代码、测试或 manifest 已经完成。每个 operation type
-都必须在 capability matrix、admission、worker recovery、audit/error、manifest evidence 中有一致
-落点；没有 public route 的 type 也不能从历史 recovery inventory 消失。
-
-inventory 是当前/历史 operation record 的 recovery/admission 覆盖清单，不等同于 capability
-matrix v1 的 admission row。P1 必须把每个 operation type 明确分类到一个 coverage lane：
-
-| coverage lane | 含义 | 与 surface_type 的关系 |
+| Decision area | Package/owner | Decision |
 | --- | --- | --- |
-| `admission_mapped` | 有当前 admission route 或会新建 durable operation record。 | 必须映射到 durable/runtime-support coverage；不能把 read/preflight projection row 当作 mutating admission row。 |
-| `internal_or_recovery_only` | 由 worker/reconciler/operator 内部生成或只在受控 recovery/repair 中推进。 | 可以锚定 runtime-support/recovery capability，但不得暴露成 caller mutation。 |
-| `legacy_historical_recovery_only` | 只为历史 operation record 的 recovery/terminalization 保留。 | 不产生新的 admission row；只证明历史扫描、分类、终态化/intervention。 |
+| Operator repair entry | P3 | GA requires one shared repair contract, one test suite, and one audit schema. The entry can be API or CLI. GA does not require both. Ad hoc SQL and arbitrary state rewrite are forbidden. |
+| Purge release-note posture | P4/P5 | Purge and break-glass purge are optional, irreversible, capability-gated, and not default GA. Default release notes say purge is denied/fail-closed unless explicitly enabled with structured approval evidence. |
+| Purge approval reference | P4 | Approval is a controlled evidence object or verifiable reference with subject, policy version, scope, expiry, reason, hash/correlation, audit binding, and anti-replay semantics. |
+| Template naming/mental model | P4/P5 | For GA, position template as same-namespace/same-volume clone primitive unless controlled admin import/publish is explicitly designed. Do not imply marketplace or cross-namespace reusable templates by default. |
+| Quota fields | P1/P5 | Do not imply hard quota enforcement from `quota_bytes_default`. Add or align machine-readable status such as `quota_enforcement_status`, `effective_quota_bytes`, or `enforced=false`, or rename toward policy wording. |
+| Restore session drain | P4 | Fixed decision: `restore_archived` and `restore_tombstoned` restore access. Default GA must prove no active or uncertain session/fence; otherwise fail closed or enter `operator_intervention_required`. Contract, implementation, errors, tests, runbook, and evidence must agree. |
+| Product-neutral conformance | P1/P2/P4 | Minimum scope is caller credential relay semantics, connector WebDAV access/revoke semantics, orchestrator denied/default-disabled semantics, operation inspection, and negative authorization cases. It is repo-local and product-neutral, not a sibling gate. |
+| Capability discovery layering | P2/P3 | Caller, orchestrator, operator, and readyz surfaces expose different decisions from the same matrix. Readyz is not the only contract. |
+| Shared-volume residual risk | P4/P5 | Define namespace isolation assumptions, volume admin misconfiguration risk, backup/restore mismatch, POSIX/CSI drift, detection metrics, compensating controls, and when dedicated volume is required. |
 
-`volume_ensure`、`restore_preview`、`export_session_reconcile`、`migration_cutover` 这类与
-preflight/read/runtime support 相邻的 operation type 必须选择 durable/runtime-support coverage
-lane 或 recovery-only lane；不能把 `preflight`、`read_projection` 或 `runtime_support`
-surface row 本身当成 mutating admission row。下表的第一列是 coverage lane，不是
-`surface_type`。
+## User Journeys
 
-| coverage lane / operation_type | coverage anchor / default-or-optional | new admission behavior | historical recovery behavior | expected terminal state when disabled/unsupported | manifest claim / evidence placeholder |
-| --- | --- | --- | --- | --- | --- |
-| `admission_mapped` / `volume_ensure` | coverage: `volume_preflight` durable admin operation / default admin bootstrap | 仅 operator/admin；capability/config/volume policy ready 后才创建 operation。 | 始终扫描；可安全校验则继续，否则按 preflight/config side-effect 边界分类。 | 未开始外部 mutation 为 `failed`；volume state 不确定为 `operator_intervention_required`。 | `CLAIM_ADMIN_BOOTSTRAP_READY` / `EV_P1_TERMINALIZE_VOLUME_ENSURE` |
-| `admission_mapped` / `namespace_upsert` | coverage: `namespace_binding` durable admin operation / default admin bootstrap | 仅 operator/admin；policy schema、idempotency 和 namespace scope 通过后 admission。 | 始终扫描；namespace metadata 写入边界不确定时保持 intervention。 | 未写入为 `failed`；部分写入或 policy drift 为 `operator_intervention_required`。 | `CLAIM_CAPABILITY_MATRIX_CONSISTENT` / `EV_P1_TERMINALIZE_NAMESPACE_UPSERT` |
-| `admission_mapped` / `namespace_disable` | coverage: `namespace_binding` durable admin operation / default admin safety | 仅 operator/admin；需证明 disable 不会跳过 session/fence safety。 | 始终扫描；disable 与 active operation/session 冲突时 intervention。 | 未开始为 `failed`；access/fence 不确定为 `operator_intervention_required`。 | `CLAIM_OPERATION_TERMINALIZATION` / `EV_P1_TERMINALIZE_NAMESPACE_DISABLE` |
-| `admission_mapped` / `namespace_volume_binding_put` | coverage: `namespace_binding` durable admin operation / default admin bootstrap | 仅 operator/admin；cross-namespace/cross-volume policy 通过后 admission。 | 始终扫描；binding 写入或 volume policy 不确定时 intervention。 | 未写入为 `failed`；binding/policy mismatch 为 `operator_intervention_required`。 | `CLAIM_ADMIN_BOOTSTRAP_READY` / `EV_P1_TERMINALIZE_NAMESPACE_BINDING` |
-| `admission_mapped` / `repo_create` | coverage: `repo_create` durable operation / default user loop | trusted caller allowed namespace；capability ready 且 policy allows 后 admission。 | 始终扫描；repo/materialization 边界按 side-effect evidence 判定。 | 未创建为 `failed`；repo identity/storage 不确定为 `operator_intervention_required`。 | `CLAIM_DEFAULT_USER_LOOP` / `EV_P1_TERMINALIZE_REPO_CREATE` |
-| `admission_mapped` / `repo_archive` | coverage: `repo_lifecycle_retained` durable operation / default retained lifecycle | active/uncertain session/fence predicate clear 后 admission。 | 始终扫描；无法证明 access drained 时 intervention。 | 未开始为 `failed`；access/storage-state 不确定为 `operator_intervention_required`。 | `CLAIM_RETAINED_LIFECYCLE_DEFAULT` / `EV_P1_TERMINALIZE_REPO_ARCHIVE` |
-| `admission_mapped` / `repo_restore_archived` | coverage: `repo_lifecycle_retained` durable operation / default retained lifecycle | 仅在 archived 且 no active/uncertain access/fence 可证明时 admission。 | 始终扫描；恢复访问性边界不确定时 intervention。 | 未开始为 `failed`；accessibility/session state 不确定为 `operator_intervention_required`。 | `CLAIM_RETAINED_LIFECYCLE_DEFAULT` / `EV_P1_TERMINALIZE_RESTORE_ARCHIVED` |
-| `admission_mapped` / `repo_delete` | coverage: `repo_lifecycle_retained` durable operation / default retained lifecycle | active/uncertain access/fence clear 后 admission；表达 retained tombstone。 | 始终扫描；tombstone/storage marker 不确定时 intervention。 | 未开始为 `failed`；storage/accessibility 不确定为 `operator_intervention_required`。 | `CLAIM_RETAINED_LIFECYCLE_DEFAULT` / `EV_P1_TERMINALIZE_REPO_DELETE` |
-| `admission_mapped` / `repo_restore_tombstoned` | coverage: `repo_lifecycle_retained` durable operation / default retained lifecycle | retention/policy valid 且 no active/uncertain access/fence 可证明时 admission。 | 始终扫描；不得恢复 purged repo；不确定时 intervention。 | 未开始为 `failed`；purge/tombstone/storage state 不确定为 `operator_intervention_required`。 | `CLAIM_RETAINED_LIFECYCLE_DEFAULT` / `EV_P1_TERMINALIZE_RESTORE_TOMBSTONED` |
-| `admission_mapped` / `repo_purge` | coverage: `repo_purge` durable optional operation / optional gated | default profile 新 admission 永远 denied；fixture-selected positive 需 structured approval。 | 始终扫描历史 purge；不得因 capability disabled 消失。 | 未开始或 approval invalid 为 `failed`；可能已删除/残留不确定为 `operator_intervention_required`。 | `CLAIM_OPTIONAL_DENIED_SAFE`、`CLAIM_PURGE_APPROVAL_SAFE` / `EV_P1_TERMINALIZE_REPO_PURGE` |
-| `admission_mapped` / `save_point_create` | coverage: `jvs_save_restore` durable operation / default user loop | trusted caller allowed namespace；JVS runtime ready、writer fence predicate 通过后 admission。 | 始终扫描；JVS side-effect/provenance 不确定时 intervention。 | 未开始为 `failed`；savepoint/control-root state 不确定为 `operator_intervention_required`。 | `CLAIM_DEFAULT_USER_LOOP` / `EV_P1_TERMINALIZE_SAVE_POINT_CREATE` |
-| `admission_mapped` / `restore_preview` | coverage: `jvs_projection` durable preview operation / default user loop | capability ready 且 repo state allows preview 后 admission；不得把 read projection row 当成 admission row。 | 始终扫描；preview artifact/read projection 边界可安全清理则 failed/success。 | 未开始为 `failed`；preview artifact 状态不确定为 `operator_intervention_required`。 | `CLAIM_DEFAULT_USER_LOOP` / `EV_P1_TERMINALIZE_RESTORE_PREVIEW` |
-| `admission_mapped` / `restore_preview_discard` | coverage: `jvs_save_restore` durable cleanup operation / default user loop | existing preview scoped to namespace/repo 且 capability ready 后 admission。 | 始终扫描；discard cleanup idempotent，无法证明时 intervention。 | 未开始或 preview absent safe no-op 为 `failed`/terminal per contract；cleanup 不确定为 `operator_intervention_required`。 | `CLAIM_DEFAULT_USER_LOOP` / `EV_P1_TERMINALIZE_RESTORE_PREVIEW_DISCARD` |
-| `admission_mapped` / `restore_run` | coverage: `jvs_save_restore` durable operation / default user loop | session/fence predicate clear、restore preview valid、JVS ready 后 admission。 | 始终扫描；writer fence/JVS mutation 边界不确定时 intervention。 | 未开始为 `failed`；storage mutation 可能已开始时为 `operator_intervention_required`。 | `CLAIM_DEFAULT_USER_LOOP`、`CLAIM_RESTORE_RECONCILIATION` / `EV_P1_TERMINALIZE_RESTORE_RUN` |
-| `admission_mapped` / `template_create` | coverage: `repo_template` durable optional operation / optional gated | default profile denied；fixture-selected positive 需 same-namespace/same-volume and safety predicate。 | 始终扫描历史 template operations；disabled 不跳过 recovery。 | 未开始为 `failed`；template artifact/fence state 不确定为 `operator_intervention_required`。 | `CLAIM_OPTIONAL_DENIED_SAFE`、`CLAIM_TEMPLATE_QUOTA_BOUNDARY` / `EV_P1_TERMINALIZE_TEMPLATE_CREATE` |
-| `admission_mapped` / `template_clone` | coverage: `repo_template` durable optional operation / optional gated | default profile denied；fixture positive only same-namespace same-volume。 | 始终扫描；clone side-effect/storage identity 不确定时 intervention。 | 未开始/cross-scope invalid 为 `failed`；partial clone 为 `operator_intervention_required`。 | `CLAIM_OPTIONAL_DENIED_SAFE`、`CLAIM_TEMPLATE_QUOTA_BOUNDARY` / `EV_P1_TERMINALIZE_TEMPLATE_CLONE` |
-| `admission_mapped` / `export_create` | coverage: `webdav_export` durable operation / default user loop | trusted caller allowed namespace；first-create credential policy and session predicate ready 后 admission。 | 始终扫描；credential/session ledger boundary 判定 raw secret 不可重发。 | 未开始为 `failed`；credential/session issuance uncertain 为 `operator_intervention_required` without reissue。 | `CLAIM_WEBDAV_DEFAULT_ACCESS` / `EV_P1_TERMINALIZE_EXPORT_CREATE` |
-| `admission_mapped` / `export_revoke` | coverage: `webdav_export` durable operation / default user loop | export scoped to namespace/repo 且 revoke policy ready 后 admission。 | 始终扫描；revoke idempotent，gateway ledger 不确定时 intervention。 | 未开始 or already revoked terminal per contract；revoke state unknown 为 `operator_intervention_required`。 | `CLAIM_WEBDAV_DEFAULT_ACCESS` / `EV_P1_TERMINALIZE_EXPORT_REVOKE` |
-| `internal_or_recovery_only` / `export_session_reconcile` | coverage: `webdav_projection` runtime/recovery lane / default safety/ops | internal/operator-controlled reconcile；new caller mutation 不应伪装成普通 user action。 | 始终扫描；ledger/revoke/expiry reconciliation 可安全推进。 | runtime ledger absent before side-effect 为 `failed`；access state uncertain 为 `operator_intervention_required`。 | `CLAIM_WEBDAV_DEFAULT_ACCESS`、`CLAIM_OPERATION_TERMINALIZATION` / `EV_P1_TERMINALIZE_EXPORT_RECONCILE` |
-| `admission_mapped` / `mount_binding_create` | coverage: `workload_mount_binding` durable optional operation / optional gated | default profile denied；fixture positive only with explicit orchestrator capability。 | 始终扫描；disabled 不跳过；lease/fence state 不确定时 intervention。 | 未开始为 `failed`；mount/session may exist 为 `operator_intervention_required`。 | `CLAIM_OPTIONAL_DENIED_SAFE`、`CLAIM_WORKLOAD_FIXTURE_READY` / `EV_P1_TERMINALIZE_MOUNT_CREATE` |
-| `admission_mapped` / `mount_binding_status_update` | coverage: `workload_mount_binding` durable optional operation / optional gated | default profile denied except controlled teardown/status contract if explicitly allowed。 | 始终扫描；status update side-effect bounded by binding/session evidence。 | 未开始或 invalid status 为 `failed`；binding state uncertain 为 `operator_intervention_required`。 | `CLAIM_OPTIONAL_DENIED_SAFE`、`CLAIM_WORKLOAD_FIXTURE_READY` / `EV_P1_TERMINALIZE_MOUNT_STATUS` |
-| `admission_mapped` / `mount_binding_heartbeat` | coverage: `workload_mount_binding` durable optional operation / optional gated | default profile denied；fixture positive only refreshes lease for authorized binding。 | 始终扫描；expired/unsupported heartbeat does not resurrect session。 | missed/unsupported heartbeat 为 `failed`；lease/session ambiguity 为 `operator_intervention_required`。 | `CLAIM_OPTIONAL_DENIED_SAFE`、`CLAIM_WORKLOAD_FIXTURE_READY` / `EV_P1_TERMINALIZE_MOUNT_HEARTBEAT` |
-| `internal_or_recovery_only` / `mount_binding_release` | coverage: `workload_mount_binding` teardown/recovery lane / optional gated | default positive denied；teardown-only release allowed only under controlled recovery/repair surface。 | 始终扫描；release evidence terminalizes stale session when verifiable。 | no mount material issued and no active session 为 `failed`/terminal per contract；uncertain access 为 `operator_intervention_required`。 | `CLAIM_OPTIONAL_DENIED_SAFE`、`CLAIM_WORKLOAD_FIXTURE_READY`、`CLAIM_OPERATOR_REPAIR_SAFE` / `EV_P1_TERMINALIZE_MOUNT_RELEASE` |
-| `internal_or_recovery_only` / `mount_binding_revoke` | coverage: `workload_mount_binding` teardown/recovery lane / optional gated | default positive denied；controlled revoke may be operator/recovery teardown-only。 | 始终扫描；revoke should block future plan and preserve audit。 | 无 side-effect 时按 contract 进入 `failed` 或等价终态；revoke/access state unknown 为 `operator_intervention_required`。 | `CLAIM_OPTIONAL_DENIED_SAFE`、`CLAIM_WORKLOAD_FIXTURE_READY`、`CLAIM_OPERATOR_REPAIR_SAFE` / `EV_P1_TERMINALIZE_MOUNT_REVOKE` |
-| `internal_or_recovery_only` / `migration_cutover` | coverage: release/schema migration runtime-support lane / default final guard, not user loop | 不作为 trusted caller mutation；只有 admin/release capability ready 且 policy/selector permits 才可 admit。 | 始终扫描历史 cutover；schema/storage compatibility 不确定时 intervention。 | 未开始为 `failed`；partial cutover/schema drift 为 `operator_intervention_required`。 | `CLAIM_RELEASE_ARTIFACT_IDENTITY`、`CLAIM_ROLLBACK_ROLLFORWARD_POLICY` / `EV_P1_TERMINALIZE_MIGRATION_CUTOVER` |
-
-P1 完成时，manifest/verifier 至少能检查每个 `operation_type` 有 inventory row、capability row、
-coverage lane、new-admission policy、historical-recovery policy 和 terminal/intervention evidence
-placeholder。真正的 domain positive evidence 可由 P2-P5 补齐，但 inventory 缺项、coverage lane
-缺项或 placeholder 状态不可机读，不能留到后续包再发现。
-
-### TDD/自动验收
-
-- 先写 capability-off admission 测试：关闭 workload/template/purge 等 optional-gated 能力时，新 mutation 不创建永久 queued operation；默认 GA 的 pinned JVS 与 WebDAV gateway 不得被当作默认可选能力跳过。
-- 先写 idempotency replay 测试：同 key/hash replay 返回既有 operation，不受当前 capability 状态影响。
-- 先写 worker recovery 测试：历史 queued/running operation 在 capability 关闭或 handler 不支持时会终态化或进入 intervention。
-- 先写 recovery discovery 测试：`ready/configured=false` 时，已知 operation type 仍会被 classifier/terminalizer 发现并处理。
-- contract tests 覆盖 API、worker、readyz 暴露的 capability 状态一致。
-- readyz P1 测试覆盖 `workload_mount` disabled 时 `service_ready` 仍按默认 required 集合判断，
-  且生产 readyz 不使用包含 optional capability 的 fallback required 集合。
-- operation state machine tests 覆盖 unsupported、runtime unavailable、crash/retry、audit replay、lease lost、fence uncertain。
-- 精确 race/concurrency tests 覆盖同 repo save/restore/template/lifecycle 的串行化；不扩大到无关包。
-
-### 交付物
-
-- capability matrix contract/schema。
-- stable capability denial error、API error code/schema/OpenAPI 映射与 audit event catalog。
-- operation terminalization contract。
-- per-operation phase side-effect boundary table，覆盖每类 operation/phase 的 side effect 未开始、已开始、未知边界，用于决定 `failed` vs `operator_intervention_required`。
-- recovery dispatcher/classifier/terminalizer coverage tests。
-- API admission 与 worker recovery 测试。
-- readyz/operator/evidence 读取同一 capability matrix 的证据。
-
-### 范围防蔓延
-
-- 不把 capability matrix 做成通用 feature flag 平台。
-- 不做 UI 配置界面。
-- 不把 optional gated 能力关闭解释成服务整体不可用。
-- 不新增业务项目或部署侧专有名称。
-
-## 开发包 2: Access Sessions Safety
-
-| Package card | 内容 |
-| --- | --- |
-| claim_id | `CLAIM_WEBDAV_DEFAULT_ACCESS`、`CLAIM_SECRET_PATH_REDACTION`、`CLAIM_DEFAULT_USER_LOOP`、`CLAIM_WORKLOAD_FIXTURE_READY`、`CLAIM_OPTIONAL_DENIED_SAFE`。 |
-| subclaim / acceptance | WebDAV first-create/revoke/expiry、workload lease freshness、teardown-only plan、shared session/fence predicate、`ACCEPT_WEBDAV_REVOKE_EXPIRY`。 |
-| evidence command shape | `go test ./internal/exportaccess ./internal/exportgateway -run 'Test.*FirstCreate|Test.*Replay|Test.*Revoke|Test.*Path'`；workload/session predicate tests。 |
-| anchors | WebDAV export contract、gateway policy、workload mount contract、session/fence predicate contract。 |
-| negative verifier case | raw secret replay、revoked/expired access succeeds、stale plan leaks mount material、P2 claims stale closure without P3 repair。 |
-
-### 要解决的问题
-
-- WebDAV credential issuer 口径需要统一，secret replay 和 gateway policy boundary 要有真实证据。
-- workload mount plan 领取必须检查 lease freshness；expired/stale binding 不能继续发普通 plan。default GA 只要求 disabled/denied/recovery；fixture positive 仅在显式 fixture-conformant 声明时 blocking。
-- SecretRef 不能由普通 caller 可见数据推导，必须来自 operator/orchestrator-only runtime config。
-- restore、lifecycle、purge 在 session 不确定时必须 fail-closed。
-
-### 方案
-
-WebDAV：
-
-- AFSCP 向 trusted caller 签发短期 WebDAV credential；caller relay 给 client connector。
-- client connector 不直接调用 AFSCP，caller 不自行生成 WebDAV password。
-- raw credential 只在 first-create response 返回；idempotent replay 和 GET export 只能返回 redacted session。
-- AFSCP 存 verifier，不存 raw password。
-- gateway 是 policy boundary，必须拒绝 `.jvs`、control root、raw path、path traversal、Destination escape。
-- revoke/expiry 后 future request 必须失败；runtime request ledger 不存 password、host path 或敏感路径材料。
-
-Workload access：
-
-- plan 领取必须检查 lease freshness。
-- expired/stale binding 不能返回普通 plan；只能返回 blocking 结果或 teardown-only plan。
-- stale binding 进入 operator-visible inspection/intervention，并保留 fence/session blocking。
-- SecretRef 来自 operator/orchestrator-only runtime config，配置有 schema、RBAC 和 redaction。
-- 普通 caller 不得看到 SecretRef、mount secret、host path 或底层 credential。
-- fixture-enabled 正向路径拆成五个子声明：plan fetch 返回 redacted mount plan；heartbeat 刷新 lease
-  freshness；release 进入受控释放状态；revoke 终止访问并阻止后续 plan；terminal evidence 证明
-  session/fence/audit 已终态化。
-
-teardown-only plan 的最低安全 shape 必须单独契约化，不能沿用普通 mount plan：
-
-在 `default` profile 下，teardown-only plan 只是一块历史/stale recovery 的受限
-teardown/discovery/repair surface，用来安全释放或终态化已经存在的问题绑定；它不是默认正向
-workload mount 能力，也不能被普通 workload 当作可领取的 mount plan。只有
-`repo-local-fixture-enabled` profile 才能证明正向 orchestrator flow。
-
-| 字段/行为 | 最低要求 |
-| --- | --- |
-| Reader | 只有授权 orchestrator role 可领取；普通 caller、client connector、workload 侧 user projection 不可见。 |
-| Purpose | 只允许 release、revoke、terminal evidence 所需字段；不得包含新 mount、续租、写入或业务 workload 调度语义。 |
-| Allowed fields | binding/session ID、repo/namespace redacted ref、action `release`/`revoke`/`terminal_evidence`、lease/fence correlation、deadline/expiry、audit correlation、redacted runbook/ref。 |
-| Forbidden fields | SecretRef、raw root path、host path、payload subdir、metadata URL、底层 credential、WebDAV raw password、可推导 SecretRef 的 path material。 |
-| Audit | 每次领取、拒绝、release、revoke、terminal evidence 都必须写 audit；stale/expired 普通 plan 被拒绝也必须可追踪。 |
-| Negative guard | 普通 plan、stale plan 或 expired lease 不得误发 mount material；teardown-only plan 不能被标成默认 GA 正向能力。 |
-
-P2 不能单独宣称 workload stale binding 完成。P2 只证明默认 disabled/denied/recovery、
-lease freshness、fixture access safety，以及 stale binding 会稳定进入 blocking/intervention
-trace；真正的 stale/intervention closure 必须和 P3 operator inspection/repair 联合验收，
-由 `CLAIM_OPERATOR_REPAIR_SAFE` 补齐发现、定位、allowlist repair、evidence 和 audit。
-
-### TDD/自动验收
-
-先失败测试/命令方向：
-
-- `go test ./internal/exportaccess ./internal/exportgateway -run 'Test.*FirstCreate|Test.*Replay|Test.*Revoke|Test.*Path'`：先看到 raw credential replay、revoked/expired access 或 path escape 测试失败，再补实现。
-- `go test ./internal/workloadmount ./internal/mountbindingexec -run 'Test.*Lease|Test.*Teardown|Test.*Plan'`：先证明 stale/expired lease 会错误返回普通 plan，再收敛为 blocking 或 teardown-only。
-- `go test ./internal/sessionstate ./internal/fences ./internal/restoreplan -run 'Test.*Active|Test.*Uncertain|Test.*Fence'`：先让 active/uncertain session 阻断 restore/template/lifecycle writer。
-- `bash scripts/verify-ga-release.sh` 在 seed/convergence 下必须能报告 P2 evidence gap；final selector 下缺 P2 required evidence 必须失败。
-
-- WebDAV first-create-only credential 测试。
-- idempotent replay 不返回 raw secret 测试。
-- revoke/expiry deny 测试。
-- gateway path policy 测试：`.jvs`、path traversal、Destination escape、control-root access 全部拒绝。
-- WebDAV e2e 使用真实 Postgres ledger 和 repo-local gateway/runtime fixture，不能只靠 mock。
-- workload expired lease 不返回普通 plan。
-- stale/releasing binding 只能 blocking 或 teardown-only。
-- stale binding 的 closure 不在 P2 单独关闭；P2 manifest 只能标记为 P3 依赖的
-  intervention trace，缺 P3 repair evidence 时 verifier 不得把 stale path 判定完成。
-- SecretRef redaction/RBAC/schema 测试。
-- active/uncertain export 和 workload session 阻止 restore-run、template writer、archive/delete/purge 的危险推进。
-- manifest 新增 `CLAIM_WORKLOAD_FIXTURE_READY` 的 plan fetch、heartbeat、release、revoke、
-  terminal evidence 五个 subclaim；这些证据必须是 `evidence_profile=repo-local-fixture-enabled`、
-  `fixture_enabled_mode=true`、`default_mode=false`、`optional_gated=true`、`required=true`，
-  并由 `CLAIM_OPTIONAL_FIXTURE_CONFORMANT` 聚合到显式 fixture conformance 声明；verifier
-  negative case 覆盖缺任一子声明时失败。
-
-不算完成的反例：
-
-- WebDAV 只用 mock ledger，没有真实 Postgres ledger 或 repo-local 等价 fixture。
-- idempotent replay、GET export 或 runtime ledger 中仍能看到 raw password、host path 或敏感路径材料。
-- stale/expired workload binding 仍返回普通 mount plan，或 teardown-only plan 含 SecretRef/raw path/payload subdir。
-- optional workload positive test 没有 release claim selector/`claimed_optional_capabilities` 声明，却被 final gate 当作 required。
-- P2 把 stale/intervention closure 自己标成完成，没有 P3 operator inspection/repair evidence。
-
-### 交付物
-
-- WebDAV export credential contract wording 更新。
-- WebDAV gateway + ledger e2e 证据。
-- workload mount binding/plan freshness contract。
-- runtime config schema、RBAC、redaction tests。
-- session safety 与 writer/lifecycle fence 联动测试。
-
-### 范围防蔓延
-
-- 不实现调用方 client connector。
-- 不把 WebDAV gateway 换成外部 stock gateway 作为 GA policy boundary。
-- 不绑定具体编排平台。
-- 不把 mount plan API 扩展成业务工作负载管理 API。
-
-## 开发包 3: Operator Intervention
-
-| Package card | 内容 |
-| --- | --- |
-| claim_id | `CLAIM_OPERATOR_REPAIR_SAFE`、`CLAIM_RESIDUAL_RISK_CATALOG`、`CLAIM_DISCOVERY_SURFACES`。 |
-| subclaim / acceptance | intervention queue、held fence/session、stale lease、audit lag、allowlist repair、`ACCEPT_OPERATOR_INTERVENTION_REPAIR`。 |
-| evidence command shape | `go test ./internal/inspection ./internal/recovery ./internal/audit -run 'Test.*Intervention|Test.*Repair|Test.*Residual|Test.*Audit|Test.*Redaction'`。 |
-| anchors | operator inspection contract、repair/intervention contract、residual-risk catalog、audit schema。 |
-| negative verifier case | repair without evidence succeeds、free-text risk accepted、caller sees global queue、temporary SQL/runbook prose used as claim evidence。 |
-
-### 要解决的问题
-
-- operator 需要先发现问题，再定位 operation/resource；单纯 operation by ID 不足以闭环。
-- `operator_intervention_required` 如果没有受控 repair，就会变成长久卡死状态。
-- repair 如果靠临时 SQL，会破坏身份、reason、before/after 和 audit 证据。
-
-### 方案
-
-最小 operator inspection surface：
-
-- correlated operation lookup。
-- intervention queue。
-- held fence/session view。
-- stale mount lease view。
-- audit outbox lag。
-- runtime recovery status。
-
-所有 inspection surface 都必须有分页、过滤、权限和脱敏边界。operator 可以跨 namespace 定位运行态问题；namespace-scoped caller 只能看到自己授权范围内的 redacted projection。
-
-最小受控 repair 写路径只允许：
-
-- terminalize operation。
-- release fence。
-- revoke/terminalize session。
-- residual-risk acceptance。
-
-每类 repair 都必须定义 allowed transition 和 safety predicate。没有满足对应安全谓词时，repair 请求失败并保留 blocking；不能把任意 operator 权限解释为任意状态改写。
-
-Operator repair 的交付形态可以是 API、CLI 或 repo-local tooling，但三者必须调用同一份
-受控 repair/intervention contract，并生成 durable repair/intervention record 与 audit。
-无论最终选择 API、CLI 还是 tooling 作为入口，manifest evidence 都必须指向同一个
-operator repair contract test suite，不能让不同入口各自用一套验收口径。
-临时 SQL 可以作为 break-fix 运维逃生说明存在，但不能作为主产品路径、不能关闭 manifest
-claim，也不能替代 identity/reason/evidence/before-after/audit。Operator repair 必须表格化
-为 operator-only contract；它不是 caller API，不是普通 admin update，也不是通用运维平台。
-
-| Repair action | Allowlist scope | Safety predicate | Required evidence | Audit requirement |
-| --- | --- | --- | --- | --- |
-| terminalize operation | known operation in non-terminal or intervention state | no unaccounted external mutation, or mutation result is independently proven | operation ID, before state, executor/recovery evidence, reason, correlation ID | before/after state, actor, reason, evidence ref, stable event ID |
-| release fence | held fence tied to known operation/session | all protected sessions terminal, or specific residual-risk contract authorizes unblock | fence ID, protected resource IDs, session terminal evidence, runbook/ref | release decision, affected IDs, expiry/scope if risk acceptance used |
-| revoke/terminalize session | export/workload session in active/uncertain/stale state | credential expired/revoked or orchestrator/gateway terminal evidence proves no access | session ID, runtime ledger/heartbeat/revoke evidence, actor reason | terminal state, redacted runtime evidence, no raw secret/path |
-| residual-risk acceptance | explicitly named residual risk only | cannot prove full safety, but contract says bounded acceptance may unblock a named condition | scope, expiry/review point, affected IDs, risk ID, evidence available, reason | immutable acceptance audit; must not auto-clear unrelated writer/credential/mount/restore/purge blocks |
-
-repo-local 可验证 evidence fixture/object 不能只是“字段存在”。最少要有这些对象形态：
-
-| Evidence object | 用途 | 必须可验证 |
+| Journey | Default/optional | Acceptance |
 | --- | --- | --- |
-| terminal operation fixture | terminalize operation repair | operation before/after、side-effect boundary、executor/recovery trace、audit event。 |
-| session terminal fixture | release fence、revoke session | WebDAV ledger revoke/expiry，或 workload heartbeat/release/revoke/terminal evidence。 |
-| purge approval fixture | purge/break-glass positive path | 结构化 approval token/record 的 issuer/verifier、scope、expiry、hash/correlation、防重放。 |
-| residual-risk acceptance fixture | bounded acceptance | 预登记 `risk_id`、scope、expiry/review point、blocking 类型、命名 safety predicate、audit。 |
+| Day-0 bootstrap | Default prerequisite | Volume health/preflight, namespace binding, caller/operator role readiness, path redaction, machine-checkable bootstrap evidence. |
+| Trusted caller default loop | Default positive | Repo create/get/projection/list; JVS save/history/restore-preview/restore-run/discard; WebDAV export/gateway/revoke; operation/audit/recovery trace. |
+| Retained lifecycle | Default positive | Archive, restore_archived, delete-tombstone, restore_tombstoned with admission, session/fence predicate, worker recovery, stable errors, audit, schema/OpenAPI, runbook, manifest evidence. |
+| Default failure loop | Default negative | Unauthorized, policy denied, capability disabled, stale, revoked, expired, unsupported, and redaction paths fail closed and audit. |
+| Workload teardown-only | Default safety for optional capability | Only scoped orchestrator/operator reader can see teardown-only plan; no mount material; audit emitted; stale closure depends on P3 repair. |
+| Optional fixture positive | Selected optional | Fixture evidence only after selector claims capability. |
 
-residual-risk catalog 是一等 contract：
+## Capability Matrix V1 Contract
 
-- 只有预登记 `risk_id` 可以被 acceptance；自由文本 risk 不可验收。
-- 每个 `risk_id` 必须定义 scope、expiry/review point、evidence requirement、可解除/不可解除的
-  blocking 类型。
-- residual-risk acceptance 默认只记录和审计，不自动 unblock。
-- 只有 catalog 中命名的 safety predicate 明确允许时，acceptance 才能解除指定 blocking；不得
-  解除未列名的 writer、credential、mount、restore、purge 阻断。
+One matrix must drive API admission, worker execution, worker recovery, readyz,
+actor discovery, operator inspection, and evidence classification.
 
-禁止 repair 类型：
+Minimum fields:
 
-- 普通 caller 可调用的 repair。
-- 任意 SQL、任意状态改写、任意 raw path 修复。
-- 重发 WebDAV raw secret、生成底层 storage credential、复活 purged repo。
-- 把 uncertain session 直接当作 terminal，除非有对应 terminal evidence 或 bounded residual-risk contract。
-
-每个 repair 必须记录：
-
-- operator identity。
-- reason。
-- evidence reference。
-- scope、expiry 和 affected IDs；没有合理 expiry 的 acceptance 必须明确说明为什么。
-- before/after state。
-- correlation ID。
-- audit event IDs。
-
-release fence 只能在安全谓词满足时执行；或者由具体 repair contract 明确定义带 scope、expiry、affected IDs、evidence 和 audit 的 residual-risk unblocking。residual-risk acceptance 不能自动绕过 active/uncertain writer、credential、mount、restore 或 purge 阻断。
-
-repair 后不得重发 raw secret、复活 purged repo、把 uncertain session 当 terminal，也不得把 metadata/storage 不一致静默修成 active。无法证明安全状态时默认保持 blocking。operator repair 是运行态修复机制，不是 GA 审批机制。
-
-### TDD/自动验收
-
-先失败测试/命令方向：
-
-- `go test ./internal/inspection ./internal/operationinspect -run 'Test.*Intervention|Test.*Fence|Test.*Session|Test.*AuditLag'`：先证明 operator discovery 面缺口，再补分页、过滤、脱敏和权限。
-- `go test ./internal/inspection ./internal/recovery -run 'Test.*Repair|Test.*Terminalize|Test.*Residual'`：先让缺 evidence、错误 transition、自由文本 risk 的 repair 失败。
-- `go test ./internal/audit ./internal/inspection -run 'Test.*Repair.*Audit|Test.*Redaction'`：先证明 repair 不能无审计或泄漏 raw material。
-- `bash scripts/verify-ga-release.sh` 在 final selector 下必须拒绝只有临时 SQL/runbook 文案、没有 controlled contract/evidence 的 operator repair claim。
-
-- 只有 operator/admin role 能访问 global inspection 和 repair。
-- namespace-scoped caller 不能读取 global intervention queue、held fence/session 或 audit lag。
-- 缺少 identity/reason/evidence/before state 的 repair 请求失败。
-- 每类 repair 的 allowed transition/safety predicate 有 contract tests。
-- release fence 前必须证明关联 operation/session/runtime/audit 状态安全，或命中具体 repair contract 定义的 residual-risk unblocking。
-- residual-risk acceptance 不能让 active/uncertain writer、credential、mount、restore、purge 阻断自动放行。
-- repair 后不重发 raw secret、不复活 purged repo、不把 uncertain session 当 terminal。
-- repair idempotency 测试：重复提交同一 repair 不产生重复外部语义。
-- 所有 repair 都产生审计事件，并通过 redaction guard。
-- manifest 新增 operator repair、purge approval fixture、residual-risk catalog claim/evidence entries；
-  verifier negative case 覆盖未预登记 `risk_id`、缺 fixture/object、acceptance 自动 unblock 时失败。
-
-不算完成的反例：
-
-- 只有 runbook 写“执行 SQL 修复”，没有 API/CLI/tooling 共享的受控 contract 和 durable repair record。
-- repair 成功但没有 before/after、operator identity、reason、evidence ref、audit event ID。
-- residual-risk acceptance 用自由文本 `risk_id`，或默认自动解除 active/uncertain writer、credential、mount、restore、purge 阻断。
-- inspection 只能按 operation ID 查，不能发现 intervention queue、held fence/session、stale lease 或 audit lag。
-
-### 交付物
-
-- operator inspection contract。
-- operator repair/intervention contract。
-- allowed transition 与 safety predicate decision table。
-- repair request/response schema 或 CLI/tooling contract。
-- authorization、audit、redaction、idempotency tests。
-- runbook 与 API/CLI 契约对齐。
-
-### 范围防蔓延
-
-- 不做通用搜索平台。
-- 不做 UI dashboard。
-- 不允许任意 SQL/任意状态改写作为产品契约。
-- 不把 residual-risk acceptance 当作绕过安全检查的普通开关。
-
-## 开发包 4: Irreversible Lifecycle Safety
-
-| Package card | 内容 |
+| Field | Meaning |
 | --- | --- |
-| claim_id | `CLAIM_PURGE_APPROVAL_SAFE`、`CLAIM_RESTORE_RECONCILIATION`、`CLAIM_RETAINED_LIFECYCLE_DEFAULT`、`CLAIM_TEMPLATE_QUOTA_BOUNDARY`、`CLAIM_DEPLOYMENT_RISK_ENVELOPE`。 |
-| subclaim / acceptance | structured purge approval、restore reconciliation mode、retained lifecycle positive、template/quota boundary、shared-volume residual risk。 |
-| evidence command shape | `go test ./internal/repoaccess ./internal/resources ./internal/exportreconcile ./internal/restoreplan ./internal/pathresolver -run 'Test.*Purge|Test.*Reconcile|Test.*Lifecycle|Test.*Template|Test.*Quota|Test.*Traversal|Test.*Redaction'`。 |
-| anchors | repo lifecycle contract、restore consistency contract、template/quota schema/OpenAPI、threat model/runbook envelope。 |
-| negative verifier case | purge approval free text、deployment support required local、retained lifecycle and purge mixed、reconciliation allows dangerous writes。 |
+| `surface_type` | API, worker, recovery, readyz, caller-discovery, orchestrator-discovery, operator-inspection, evidence. |
+| `operation_type` | Stable operation inventory key. |
+| `capability_id` | Capability controlled by the row. |
+| `resource_scope` | Namespace, repo, volume, operation, export, lifecycle, restore, or runtime scope. |
+| `supported` | Code supports the operation type. |
+| `configured` | Runtime configuration is present. |
+| `ready` | Runtime is healthy enough to execute. |
+| `required_for_default_ga` | Default GA positive or default negative required evidence. |
+| `required_for_service_ready` | Service readiness dependency. |
+| `optional_gated` | Positive behavior is optional and selector-controlled. |
+| `namespace_policy` | Policy predicate or policy class required. |
+| `volume_runtime_capability` | Volume/runtime prerequisite. |
+| `denial_code` | Stable denial code when unavailable. |
+| `runbook_ref` | Stable runbook reference for denial/intervention. |
+| `evidence_ref` | Manifest evidence ID or claim reference. |
 
-### 要解决的问题
+One row must answer one surface decision. Do not hide multiple actor decisions in
+one row. If caller API, worker recovery, and operator inspection make different
+decisions for the same capability, they need separate `surface_type` rows with
+the same `capability_id` and explicit evidence.
 
-- purge/break-glass 是不可逆路径，approval reference 不能只是自由字符串。
-- backup/restore 需要 control-plane 与 storage-plane 一致性边界。
-- 恢复后未完成 reconciliation 前，不能发新 credential、mount plan、restore-run 或 purge。
-- purged repo 不得被备份恢复复活。
-- template/clone 默认模式只证明 stable denied/fail-closed/recovery；若 fixture-enabled/optional capability 显式启用，正向路径只允许 same-namespace same-volume primitive。
-- quota 必须暴露机器可读 enforcement status。
-- archive/delete/tombstone/purge 是 storage-state，不是业务 catalog lifecycle。
-- restore archived/tombstoned 的产品决策已经固定：它们恢复访问性，默认 GA 必须证明无
-  active/uncertain session/fence；无法证明时 fail-closed 或 `operator_intervention_required`。
-- shared managed volume 的残余风险必须显式建模和验收，不能藏在普通 capability 文案里。
+Surface rules:
 
-### 方案
-
-Purge approval：
-
-- break-glass 默认关闭。
-- purge default profile 永远 disabled；required local gate 的 purge positive path 只能在
-  `repo-local-fixture-enabled` profile 且结构化 approval evidence 可验证时成立。`deployment-runtime-support` 只声明运行态
-  支持 envelope，不得进入 required local GA 证据集合。
-- release manifest 中的 purge positive evidence 必须标成非 default，且 `default_mode=false`。
-- 未启用上述显式 profile 或缺少可验证 approval capability 时 fail-closed。
-- approval evidence 必须结构化，至少包含 approval issuer/verifier、approver、subject、audience、policy、version、scope、repo/action、reason、expires_at、hash/correlation、replay protection。
-- audit 绑定 approval 摘要或 hash，不记录敏感审批材料。
-- purge 前必须证明没有 active/uncertain export/workload access session。
-
-Backup/restore：
-
-- 定义 restore consistency contract，覆盖 control-plane snapshot timestamp、storage generation 或等价 marker、tombstone/purge marker、reconciliation mode。
-- 恢复后进入 reconciliation mode。
-- reconciliation 完成前禁止新 credential、mount plan、restore-run、purge。
-- 不自动重发 WebDAV credential。
-- metadata 与 storage 不一致进入 intervention。
-- metadata 标记 purged 但 storage residual 存在时，禁止访问并进入 intervention；不能复活 repo。
-
-Restore reconciliation mode 状态边界：
-
-| Boundary | 行为 |
+| Surface | Rule |
 | --- | --- |
-| 入口 | backup/restore 完成、metadata/storage generation 不一致、snapshot marker 缺失或 purge/tombstone marker 需要复核时进入。 |
-| 允许只读操作 | operator inspection、caller redacted status、audit/recovery evidence 查询、只读 consistency check。 |
-| 禁止写操作 | 新 WebDAV credential、mount plan、restore-run、save/template writer、archive/delete/purge、任何会改变 storage 或重新发访问权的动作。 |
-| metadata active / storage missing | 禁止访问，进入 `operator_intervention_required`；不得静默创建 storage 或当作 active 成功。 |
-| metadata purged / storage residual | 禁止访问和复活 repo，进入 intervention；只能走 purge invariant repair 或 residual-risk catalog 指定路径。 |
-| 退出条件 | metadata、storage marker、session/fence/audit 状态一致，且所有 blocking predicate 清除或由命名 safety predicate 授权解除。 |
-| operator repair 关系 | repair 只能补证、终态化或保持 blocking；不能把不一致状态直接改成 active。 |
+| API admission | Deny unsupported or disabled new mutations before queuing, unless the operation can be safely terminalized. |
+| Worker execution | Register executors only for supported/configured/ready operation types. |
+| Worker recovery | Historical operations remain queryable even if `configured=false` or capability disabled. |
+| Readyz | Summarizes service readiness; does not replace actor-specific denial contracts. |
+| Caller discovery | Shows default usable capability and stable denial state, not optional mount material. |
+| Orchestrator discovery | Shows mount/teardown state only to authorized scoped readers. |
+| Operator inspection | Shows matrix state, intervention, held fence/session, stale lease, recovery state, and audit lag. |
+| Evidence | Maps claim/subclaim/acceptance to exact matrix rows. |
 
-Template/quota/lifecycle：
+## Operation Terminalization Contract
 
-- template/clone 默认模式只证明 stable denied/fail-closed/recovery；若 fixture-enabled/optional capability 显式启用，正向路径只允许 same-namespace same-volume primitive。
-- cross-namespace、cross-volume 默认稳定拒绝。
-- 如果未来需要跨 namespace 发布，另行定义受控 admin import/publish；不混入本轮。
-- quota schema/OpenAPI 暴露机器可读 enforcement status，例如 policy-only、not-enforced、runtime-enforced、effective_quota_bytes。
-- lifecycle wording 统一为 storage-state：archive/delete/tombstone/purge 只表达存储可访问性、保留、恢复和清理状态。
-- restore archived/tombstoned 的 session/fence blocking 必须写入 contract/API/worker/recovery/evidence：
-  admission 无法证明无 active/uncertain access 时返回 stable error/audit；历史 operation 无法证明安全时进入 intervention。
+P2 owns the operation terminalization contract. It is a default GA safety claim.
 
-Shared-volume residual risk：
+Required rules:
 
-- 同一 managed volume 内的 namespace 隔离依赖 AFSCP 生成并校验路径；caller 不得提供 raw path。
-- path traversal、double-encoded traversal、symlink escape、`.jvs` access、cross-namespace resource mismatch 必须 fail-closed。
-- 普通 caller、client connector 和 workload 不得看到 raw root path、metadata URL、SecretRef、host path 或底层 credential。
-- backup/restore residual data、volume-level admin 误配置、POSIX/CSI/subPath 权限漂移必须进入 threat model、operator inspection 或 residual-risk acceptance 证据；本仓库 gate 只能证明检测模型、模拟 fixture、redaction、path policy、runbook/escalation，不能要求真实部署环境。
-- 当 shared-volume 隔离证据不足、合规要求需要 volume 级隔离，或 operator 无法接受残余风险时，必须升级到 dedicated-volume deployment policy。
-- residual-risk acceptance 必须记录 scope、expiry/review point、reason、evidence、affected IDs 和 audit；它不能自动解除 active/uncertain session、writer fence、restore 或 purge 阻断。
+- Maintain operation_type inventory for repo create, save, restore-preview,
+  restore-run, discard, WebDAV export/revoke, retained lifecycle, workload
+  mount, template/clone, purge, repair, and recovery-only terminalization.
+- Define side-effect boundary for each operation type: before side effect, after
+  durable side effect, uncertain side effect, and replay-safe side effect.
+- Prefer idempotent replay before capability denial when an operation already
+  has durable side-effect evidence.
+- New disabled/unsupported operations fail before queueing when no safe
+  terminalization path exists.
+- Historical operations do not disappear from recovery queries because
+  capability is disabled or `configured=false`.
+- Use `failed` when no side effect happened or replay can prove safe failure.
+- Use `operator_intervention_required` when side effect is uncertain, fence or
+  session state is uncertain, storage/control-plane state mismatches, or repair
+  proof is needed.
+- Emit stable errors, runbook references, and audit for denial,
+  terminalization, and intervention.
 
-### TDD/自动验收
+## Workload Teardown-Only Plan Contract
 
-先失败测试/命令方向：
+Default GA does not require workload mount positive behavior. It does require a
+safe teardown-only shape for stale/cleanup paths.
 
-- `go test ./internal/repoaccess ./internal/resources -run 'Test.*Purge|Test.*Lifecycle|Test.*Template|Test.*Quota'`：先让 purge approval 缺字段/过期/重放、template cross-namespace/cross-volume、quota status 漂移失败。
-- `go test ./internal/exportreconcile ./internal/restoreplan -run 'Test.*Reconcile|Test.*Backup|Test.*Restore|Test.*Purged'`：先证明 reconciliation mode 会错误发新 credential/mount/restore-run/purge，再补阻断。
-- `go test ./internal/pathresolver ./internal/exportgateway -run 'Test.*Traversal|Test.*Symlink|Test.*Namespace|Test.*Redaction'`：先覆盖 shared-volume path escape 和 raw material 泄漏。
-- `bash scripts/verify-ga-release.sh` 在 final selector 下必须拒绝自由文本 purge approval、缺 reconciliation 状态边界、deployment runtime support 被放入 required local GA 的 manifest。
+Minimum shape:
 
-- purge approval 缺失、过期、scope 不匹配、policy/version 不匹配、hash 不匹配、replay 全部拒绝。
-- purge success 后 purged repo 不可 restore、export、mount、save、template/clone。
-- purged repo 在 backup/restore 后不得复活。
-- 恢复后 reconciliation mode 阻止新 credential、mount plan、restore-run、purge。
-- metadata active 但 storage 缺失，进入 intervention。
-- metadata purged 但 storage residual 存在，进入 intervention 并禁止访问。
-- restore archived/tombstoned 的 active/uncertain session/fence blocking 有 contract/API/worker/recovery/evidence 测试。
-- cross-namespace/cross-volume clone 稳定拒绝。
-- quota enforcement status 进入 schema/OpenAPI/generated fixture。
-- lifecycle wording 由 doc guard 或 contractcheck 防回退到业务 catalog 语义。
-- shared-volume 测试覆盖 path traversal、symlink escape、cross-namespace mismatch、raw path/SecretRef redaction、backup restore residual data simulation、POSIX/CSI/subPath drift detection model fixture、dedicated-volume escalation、runbook/escalation guard、residual-risk acceptance audit；不要求真实 CSI/POSIX 部署作为 repo-local gate。
-- manifest 新增 purge、restore reconciliation、template/quota/lifecycle、shared-volume residual-risk
-  claim/evidence entries；verifier negative case 覆盖运行态支持 profile 被误放入本地必需证据集合、
-  restore reconciliation 缺状态边界、purge approval 只有自由文本时失败。
+- Visible only to orchestrator/operator scoped readers.
+- Contains only fields required for release, revoke, and terminal evidence.
+- Does not contain SecretRef, raw path, payload subdir, credential, or material
+  from which mount access can be derived.
+- Emits audit on read and terminal evidence write.
+- Denies ordinary caller visibility.
+- Uses stable denial codes and runbook refs when unavailable.
+- Stale closure depends on the P3 shared operator repair contract; do not invent
+  a second workload-specific repair path.
 
-不算完成的反例：
+## Purge Approval Acceptance
 
-- purge positive 证据没有 `repo-local-fixture-enabled` profile、`default_mode=false` 或结构化 approval verifier。
-- backup/restore 只记录文档风险，没有 repo-local reconciliation fixture 和危险写入阻断测试。
-- retained lifecycle 与 purge 混成同一个 default claim，或 archive/delete wording 重新漂移成业务 catalog lifecycle。
-- shared-volume 风险只写 runbook，没有 path traversal/symlink/cross-namespace/redaction/model fixture evidence。
-- quota 只写“未来 enforcement”，schema/OpenAPI 没有机器可读 enforcement status。
+Purge is optional, irreversible, and selected optional fixture positive only.
 
-### 交付物
+Default profile:
 
-- purge approval evidence contract。
-- restore consistency/reconciliation contract。
-- repo lifecycle/session drain decision record。
-- template/clone contract 更新。
-- quota enforcement schema/OpenAPI 更新。
-- backup/restore simulation 或 integration fixture。
-- purge、restore、template、quota、lifecycle 的自动化证据。
-- shared-volume residual risk threat model、dedicated-volume escalation rule、acceptance audit contract。
+- Deny purge even if input looks like an approval.
+- Deny break-glass purge unless capability selected and fixture approval object
+  verifies.
+- Audit denial without treating the approval-like input as valid.
 
-### 范围防蔓延
+Fixture-positive profile:
 
-- 不做 namespace delete。
-- 不做 template marketplace。
-- 不做业务 catalog lifecycle。
-- 不把 break-glass 开成默认能力。
-- 不用人工审批记录代替可校验 approval evidence。
+- Blocks final only when `repo_purge` is selected in
+  `claimed_optional_capabilities`.
+- Approval evidence includes expiry, scope, policy version, subject, reason,
+  hash/correlation, and anti-replay marker.
+- Negative tests cover expired approval, wrong scope, wrong policy, hash
+  mismatch, replay, missing reason, unauthorized subject, retention conflict,
+  and audit hash binding.
+- Purged repo must not be resurrected by restore/reconciliation.
 
-## 开发包 5: Evidence Hardening & Coverage Report
+## Backup And Restore Consistency
 
-| Package card | 内容 |
-| --- | --- |
-| claim_id | `CLAIM_RELEASE_ARTIFACT_IDENTITY`、`CLAIM_ROLLBACK_ROLLFORWARD_POLICY`、`CLAIM_WORKFLOW_HARDENING_GUARD`、`CLAIM_RELEASE_GATE_TRACEABLE`。 |
-| subclaim / acceptance | final selector wiring、artifact identity、rollback/roll-forward policy、coverage report、doc-sync DoD、all `ACCEPT_*` mapping。 |
-| evidence command shape | `go test ./internal/releaseevidence ./internal/contractcheck -run 'Test.*Final|Test.*Selector|Test.*Report|Test.*Workflow|Test.*Doc'`；`bash scripts/verify-ga-release.sh`。 |
-| anchors | `docs/release-evidence/ga-manifest.json`、selector/report generated layout、workflow YAML、doc-sync guard allowlist。 |
-| negative verifier case | open seed gap final passes、manual `-mode final` required、doc-only high-risk passes、old default GA wording remains unguarded。 |
+P4 owns default restore reconciliation evidence and P5 owns release/runtime
+wording.
 
-### 要解决的问题
+Acceptance:
 
-- 当前 `auto_verified` 颗粒度太粗，容易把 unit/text/contract baseline 误读为完整生产证据。
-- 高风险项不能只有 doc guard。
-- JVS provenance、真实 Postgres、WebDAV ledger e2e、generated-client、race/concurrency 等需要进入唯一 GA gate。
-- 已有 `docs/release-evidence/ga-manifest.json` 是 seed/baseline，不能把 manifest 当作空白新建物并覆盖现实。
-- 前四包应已经交付主要 claim/evidence；本包只做 hardening、coverage gap、generated report 和 gate wiring。
+- Reconciliation mode is explicit after backup/restore.
+- Dangerous writes are denied until metadata/storage consistency is known.
+- No WebDAV credential is automatically reissued after restore.
+- Purged repos are not resurrected.
+- Metadata/storage mismatch enters `operator_intervention_required`.
+- Storage generation, snapshot timestamp, tombstone/purge marker, and audit
+  state are part of the reconciliation evidence.
+- Runbook explains safe recovery and escalation.
 
-### 方案
+## Architecture Convergence
 
-- 保留唯一 authoritative gate：
+Implementation should converge around these shared contracts:
+
+| Contract | Owner | Closure condition |
+| --- | --- | --- |
+| Capability matrix | P2 | API, worker, recovery, readyz, discovery, operator inspection, and evidence agree. |
+| Operation terminalization | P2 | New disabled work fails before queue; historical unsupported work terminalizes or intervenes. |
+| Access/session/fence predicates | P1/P4 | WebDAV, restore, lifecycle, workload cleanup, and retained lifecycle share stable predicate semantics. |
+| Operator repair | P3 | One shared repair contract/test suite/audit schema; API or CLI entry; no arbitrary SQL. |
+| Retained lifecycle | P4 | Default positive archive/restore_archived/delete-tombstone/restore_tombstoned evidence covers admission, predicate, worker, errors, audit, schema/OpenAPI, runbook, manifest. |
+| Release hardening | P5 | Single script, selector, digests, generated artifacts, workflow hardening, rollback/roll-forward, doc-sync. |
+
+## Work Packages
+
+These packages are ownership slices, not stage GA gates. However, their semantic
+dependencies matter:
+
+```text
+P0 -> capability/terminalization -> access/session -> operator repair
+   -> irreversible lifecycle/restore -> release hardening
+```
+
+Do not land work that depends on an unclosed earlier semantic contract unless the
+PR includes the missing contract seed and evidence.
+
+### P0: Evidence, Selector, And Manifest Contract
+
+Owner: release/evidence.
+
+Work:
+
+- Final selector parser and authoritative selector path.
+- `evidence_status`: `placeholder`, `implemented`, `closed`.
+- Required placeholder rejection.
+- Seed gap placeholder semantics.
+- Optional-positive final blocking selected only by selector.
+- Unknown field rejection for generated report/digest inputs.
+- Seed/final gate mode contract tests.
+
+Expected red tests:
 
 ```bash
+go test -count=1 ./internal/releaseevidence -run 'Test.*Selector|Test.*EvidenceStatus|Test.*Final'
+go test -count=1 ./cmd/afscp-evidence-verify -run 'Test.*Selector|Test.*Final|Test.*Mode'
+go test -count=1 ./internal/contractcheck -run 'Test.*GA|Test.*Release|Test.*Evidence'
+```
+
+### P1: Bootstrap, Default Caller Loop, And Access Predicates
+
+Owner: API/store/WebDAV/JVS.
+
+Work:
+
+- Day-0 bootstrap.
+- Repo create/get/projection/list.
+- Pinned JVS save/history/restore-preview/restore-run/discard.
+- WebDAV export/gateway/revoke.
+- Shared access/session/fence predicate seed for restore/lifecycle.
+- Quota machine-readable status or conservative naming.
+- Product-neutral conformance for caller credential relay and connector
+  WebDAV access/revoke.
+
+Expected red tests:
+
+```bash
+go test -count=1 ./internal/api ./internal/store/postgres ./internal/exportgateway ./internal/exportaccess ./internal/exportreconcile -run 'Test.*DefaultUserLoop|Test.*Bootstrap|Test.*WebDAV.*Revoke|Test.*Quota'
+go test -count=1 ./internal/contractcheck -run 'Test.*OpenAPI|Test.*Schema|Test.*Readiness'
+```
+
+### P2: Capability Matrix And Operation Terminalization
+
+Owner: capability/API/worker/recovery.
+
+Work:
+
+- Capability matrix v1 fields and surface rows.
+- API admission and worker capability parity.
+- Worker recovery sees historical operations after capability/config changes.
+- Stable denial codes and runbook refs.
+- Operation_type inventory.
+- Side-effect boundary rules.
+- Default negatives for workload mount, template/clone, purge, deployment
+  runtime.
+- Discovery surfaces split by actor.
+
+Expected red tests:
+
+```bash
+go test -count=1 ./internal/capability ./internal/api ./internal/workerapp -run 'Test.*Capability.*Matrix|Test.*Admission.*Disabled|Test.*Recovery.*Unsupported|Test.*Terminal'
+go test -count=1 ./internal/contractcheck -run 'Test.*Capability|Test.*Discovery'
+```
+
+### P3: Operator Inspection And Shared Repair
+
+Owner: operator/admin surface.
+
+Work:
+
+- Inspection for correlated operation lookup, intervention queue, held
+  fence/session, stale lease, recovery state, and audit lag.
+- One shared repair contract/test suite/audit schema.
+- One entry implementation: API or CLI. GA does not require both.
+- Reason, evidence reference, affected IDs, before/after state, safety
+  predicate, audit event.
+- Workload teardown-only stale closure uses this repair contract.
+
+Expected red tests:
+
+```bash
+go test -count=1 ./internal/api ./internal/workerapp ./internal/store/postgres -run 'Test.*Operator.*Inspection|Test.*Repair|Test.*Intervention|Test.*Audit'
+go test -count=1 ./internal/contractcheck -run 'Test.*Runbook|Test.*Repair'
+```
+
+### P4: Retained Lifecycle, Restore Reconciliation, And Optional Fixture Positives
+
+Owner: lifecycle/restore/optional capabilities.
+
+Work:
+
+- Default retained lifecycle positive evidence:
+  archive/restore_archived/delete-tombstone/restore_tombstoned.
+- Admission, session/fence predicate, worker recovery, stable errors, audit,
+  schema/OpenAPI, runbook, and manifest evidence for retained lifecycle.
+- Fixed restore drain decision for restore_archived/restore_tombstoned.
+- Backup/restore reconciliation evidence.
+- Workload mount fixture positive only when selected.
+- Template/clone fixture positive or clone-primitive naming alignment.
+- Purge approval fixture positive and default denial evidence.
+
+Expected red tests:
+
+```bash
+go test -count=1 ./internal/api ./internal/repoexec ./internal/store/postgres ./internal/workerapp -run 'Test.*RetainedLifecycle|Test.*Restore.*Drain|Test.*Restore.*Reconciliation|Test.*Purge.*Approval|Test.*Template'
+go test -count=1 ./internal/releaseevidence -run 'Test.*Optional|Test.*Final'
+```
+
+### P5: Release Hardening, Runtime Envelope, And Doc Sync
+
+Owner: release/docs/workflow.
+
+Work:
+
+- Final selector/digest/artifact identity.
+- Generated report and evidence artifact layout.
+- Workflow hardening: permissions, artifact retention, final-candidate
+  trigger/context, no manual final bypass, branch/tag identity.
+- Rollback/roll-forward policy reference and evidence.
+- Runtime/flake/retry policy: deterministic retries only where safe, no
+  evidence masking, explicit timeout and flake classification.
+- High-risk release evidence: JVS provenance/smoke, Postgres integration,
+  WebDAV gateway plus ledger e2e, generated-client compile, and precise
+  race/concurrency gate.
+- Deployment-runtime-support envelope for real runtime prerequisites.
+- Doc-sync targets:
+  - `cmd/README.md`
+  - `docs/PRODUCT_REQUIREMENTS.md`
+  - `docs/READINESS_EVIDENCE.md` `auto_verified`, seed-vs-final, and profile
+    wording
+  - `docs/ARCHITECTURE.md`
+  - `docs/API_CONTRACT_DRAFT.md`
+  - `docs/contracts/`
+  - `docs/runbooks/`
+  - `scripts/README.md`
+
+Expected red tests:
+
+```bash
+go test -count=1 ./internal/contractcheck -run 'Test.*GA|Test.*Release|Test.*Workflow|Test.*Readiness|Test.*Docs'
+go test -count=1 ./internal/releaseevidence ./cmd/afscp-evidence-verify
 bash scripts/verify-ga-release.sh
 ```
 
-- 扩展现有 `docs/release-evidence/ga-manifest.json`，把 seed/baseline 提升为 machine-readable evidence manifest，映射：
-  - GA claim。
-  - 风险项。
-  - capability ID。
-  - evidence type。
-  - 覆盖命令。
-  - repo-local fixture 或 generated artifact。
-  - evidence command 的 expected runtime 与 scope。
-  - pass/fail 判定。
-- 补齐或扩展 manifest verifier，并由 `scripts/verify-ga-release.sh` 直接或间接调用。
-- 将 Package 0 的 verifier seed mode 切到 final mode：任何 required/final claim 仍引用
-  `seed_gap_*_open` 或等价 open marker 时失败，除非该 marker 已被具体 evidence 替代并关闭。
-- final GA release 不新增第二套命令；唯一 repo-local entrypoint 仍是
-  `bash scripts/verify-ga-release.sh`。申请 final 时不能靠人工选择 `-mode final`；必须由
-  repo-local、机器可审计的 release intent/manifest selector 声明 release intent，
-  `claimed_optional_capabilities` 和 final acceptance set，让同一脚本自动执行 final verifier。
-  seed 模式只说明 current repo-local seed/baseline evidence 通过；release final 不能接受
-  seed/baseline selector 或 open seed gap。
-- final selector 的 authoritative input path 固定为
-  `docs/release-evidence/ga-release-selector.json`。`docs/release-evidence/generated/ga-final-selector.json`
-  只是 gate 生成的报告/副本，用来审计本次运行实际消费的 selector 与 digest；它不能作为
-  reviewer 手填输入，也不能覆盖 authoritative selector。final gate 必须拒绝 selector 缺失、
-  多份 authoritative selector、selector input digest 与 manifest/schema/policy/artifact identity
-  digest 不匹配，以及
-  seed/baseline selector 被用于 final。
-- manifest schema 字段应沿用 Package 0 已前置的最终字段；本包只补 coverage，不重新发明字段：
-  - `claim_id`: 稳定 GA 声明 ID。
-  - `acceptance_id` 或 `subclaim_id`: 稳定子声明 ID，用于把最终验收 bullet 拆成可追踪、可聚合的子声明。
-  - `risk_id`: 对应 risk register 或本计划风险 ID。
-  - `fixture_id`: 使用的 repo-local fixture ID；无 fixture 时显式为空。
-  - `capability_id`: 对应 capability matrix、API、worker、readyz 和 operator surface。
-  - `evidence_type`: unit、contract、schema、openapi、generated-client、integration、e2e、provenance、race、doc-guard。
-  - `evidence_profile`: `default`、`repo-local-fixture-enabled` 或 `deployment-runtime-support`。
-  - `evidence_status`: `placeholder`、`implemented`、`closed` 或等价机器枚举；final required evidence
-    不能仍是 placeholder/open placeholder。
-  - `expected_runtime`: 证据命令预期耗时分级，例如 fast、integration、e2e、race。
-  - `scope`: unit、package、service、repo-local e2e、doc guard 等覆盖范围。
-  - `negative_or_positive`: negative、positive 或 both。
-  - `default_mode`: 证据是否覆盖默认 GA 模式。
-  - `fixture_enabled_mode`: 证据是否只在 repo-local fixture capability 启用时成立。
-  - `optional_gated`: 证据是否属于默认关闭、需显式声明的 optional capability。
-  - `required`: 是否进入当前 selector 的阻塞集合；optional positive 的 `required=true`
-    只在 `claimed_optional_capabilities` 选中该 capability 后生效。
-  - retry/flake policy 字段或引用：每条 evidence 的 retry 上限、允许重试类别和 flake
-    处理规则必须机器可读。
-  - `pass_criteria`: verifier-checkable structured criteria；不能只是自由文本或“文字可检查”说明；高风险断言必须拆成 subclaim、acceptance、required selector 或 negative case。
-  - `anchors`: 源码、schema、contract、runbook 或生成物锚点。
-  - `command`: repo-local 可执行命令；不能要求人工 DSN、兄弟 repo 或真实部署状态。
-- release intent/manifest selector 字段必须 repo-local、可 diff、可审计，至少表达：
-  - `release_intent`: `convergence_seed`、`final_candidate` 或等价枚举；final 只接受 final candidate。
-  - `release_artifact_id`: 由 git revision、manifest digest、schema/migration set、selector input digest
-    和 policy/artifact identity digest 组合出的稳定 input identity。
-  - `final_acceptance_selector`: required/final claim 与 acceptance/subclaim set。
-  - `claimed_optional_capabilities`: 被声明为 fixture-conformant 的 optional capability 列表；未列入者不要求 positive fixture。
-  - `seed_gap_policy`: final 下必须为 `reject_open_seed_gap`。
-  - `rollback_rollforward_policy_ref`: 指向可机器校验的 rollback/roll-forward policy evidence。
-- evidence type 至少支持：unit、contract、schema、openapi、generated-client、integration、e2e、provenance、race、doc-guard。
-- 高风险项必须有非 doc-only evidence。
-- Postgres integration gate 在 clean checkout 下必须能自启动临时 Postgres，或使用 repo-local 可复现 fixture；CI service 只是 CI 中的等价自动 provisioning，不能要求人工 DSN、预配置外部 DB 或部署侧状态。
-- WebDAV GA evidence 必须使用真实 Postgres ledger 和 repo-local gateway/runtime fixture。
-- JVS pinned binary provenance 和最小 smoke 自动验证；如果上游缺少某类 signature/bundle，manifest 必须记录可自动验证的替代证据，不能只写说明。
-- product-neutral conformance/smoke 必须区分默认能力与 optional-gated 正向验证：默认模式验证 workload/template/purge 关闭时 stable denied/fail-closed/recovery；只有启用 repo-local fixture capability 后，才验证 mount plan、template/clone、purge 的正向路径；purge positive evidence 必须来自 `repo-local-fixture-enabled` profile、`default_mode=false` 且结构化 approval evidence 可验证。这不改变默认 GA 边界，也不依赖真实外部 orchestrator 或兄弟 repo。
-- optional fixture 正向 evidence 只有在 manifest 条目显式声明
-  `evidence_profile=repo-local-fixture-enabled`、`fixture_enabled_mode=true`、
-  `default_mode=false`、`optional_gated=true`、`required=true` 时，才成为 final 阻塞项；
-  普通 seed gap marker 不得被 verifier 或 reviewer 解读为默认 GA 正向需求。
-- product-neutral conformance fixture 边界必须完全 repo-local：credential relay 用 fake trusted
-  caller + fake connector fixture；mount plan consumption 用 fake orchestrator fixture；runtime
-  connector 用 fake connector/runtime fixture。不得依赖兄弟 repo、真实 orchestrator、真实部署权限或外部业务 e2e。
-- product-neutral happy/failure journeys 作为验收索引，覆盖默认 create/get/projection/list、save/history、restore-preview/run/discard、WebDAV export/gateway/revoke、operation/audit/recovery，以及 optional-gated denied 和 fixture-enabled positive paths。
+## TDD Rules
 
-Gate runtime/flake policy 必须写入 manifest verifier 或相邻配置，不能靠 reviewer 记忆：
+Every PR starts with a failing test, schema assertion, contract guard, doc guard,
+or manifest evidence expectation that names the claim being closed.
 
-| Policy | 要求 |
+Required PR shape:
+
+1. Add failing evidence/test/guard.
+2. Implement the smallest code, schema, doc, or manifest change.
+3. Update touched contract/schema/OpenAPI/runbook/evidence entries.
+4. Run package-level targeted tests.
+5. Run the relevant release gate subset.
+
+Do not:
+
+- Turn optional positive capabilities into default GA.
+- Add sibling repo checks.
+- Use manual approval as a release gate.
+- Use deployment-runtime-support as local positive final proof.
+- Let placeholder evidence satisfy required final acceptance.
+- Leave high-risk claims as doc-only evidence.
+
+## Evidence And Gate Policy
+
+Evidence status:
+
+| Status | Meaning |
 | --- | --- |
-| Runtime budget | 每条 evidence 有 `expected_runtime`；fast/contract/schema/openapi/generated-client/race/integration/e2e 分档；final report 汇总总耗时和超预算项。 |
-| Retry | 默认不重试 unit/contract/schema/openapi/doc-guard；integration/e2e/race 只允许 manifest 中显式标注的有限重试，并记录每次尝试。 |
-| Flake classification | flaky 不能算 pass；观测到 `flake_observed` 的 required/final evidence 一律 fail。non-blocking rationale 只允许非 required evidence，且不得满足 final required claim。 |
-| External dependency | final gate 不允许人工 DSN、真实部署环境、兄弟 repo 或真实 GitHub artifact 状态；Postgres 等依赖必须 repo-local 自动 provision 或使用可复现 fixture。 |
-| Report determinism | generated report 必须稳定排序，包含 command、duration、exit code、claim/evidence mapping、selector 和 digest，方便 reviewer diff。 |
+| `placeholder` | Static manifest marker for an open gap. Never a passing final result. |
+| `implemented` | Static manifest says repo-local evidence exists and should run or be checked. |
+| `closed` | Static manifest says the gap is closed by evidence. It does not mean the current command run passed. |
 
-generated report 与 evidence artifact layout 的计划要求：
+Minimum evidence by area:
 
-```text
-docs/release-evidence/
-  ga-manifest.json
-  ga-release-selector.json
-  generated/
-    ga-claim-coverage-report.json
-    ga-claim-coverage-report.md
-    ga-final-selector.json
-    evidence-artifacts/
-      <evidence_id>/
-        command.txt
-        stdout.txt
-        stderr.txt
-        metadata.json
-```
+| Area | Minimum evidence |
+| --- | --- |
+| Default caller loop | Positive repo-local tests covering bootstrap, repo, JVS, WebDAV, operation/audit/recovery. |
+| Retained lifecycle | Admission, session/fence predicate, worker recovery, stable errors, audit, schema/OpenAPI, runbook, manifest evidence. |
+| Default negatives | Denied/disabled/recovery/fail-closed tests and no permanent queued operations. |
+| Capability matrix | Matrix row tests across API, worker, recovery, readyz, discovery, operator inspection, evidence. |
+| Operation terminalization | Operation inventory, side-effect boundary, failed vs intervention, idempotent replay, historical visibility. |
+| Operator repair | One shared contract/test suite/audit schema, API or CLI entry, no arbitrary SQL. |
+| Optional positives | Fixture-enabled evidence plus selector-selected final blocking. |
+| Runtime support | Envelope only: detection, config, redaction, runbook, risk acceptance. |
+| Release | Selector, digests, artifact identity, generated reports, workflow hardening, rollback/roll-forward. |
 
-`metadata.json` 至少包含 evidence ID、claim/subclaim/acceptance IDs、capability ID、profile、
-selector input digest、command digest、started/ended/duration、exit code、artifact digest、
-generated report digest 和 redaction status。final selector 输入只绑定 manifest/schema/policy/
-artifact identity digest；generated report digest 是本次 gate 执行后的输出记录，不能作为同一次
-selector 输入的一部分，避免循环。如果未来需要复验冻结 artifact，应另设 replay mode；本计划不要求
-replay mode。report path 可以在 Package 0 seed 中先固定；P5 只补齐内容和 gate wiring，不在末尾临时换目录结构。
+## Handoff Definition Of Done
 
-Workflow hardening guard 是 repo-local DoD，不是 GitHub 环境审计。它只检查仓库内可证明事实，
-锚点至少包括 `.github/workflows/ga-release.yml`、`internal/contractcheck/contractcheck_test.go`
-和 `scripts/verify-ga-release.sh`：
+The handoff is complete when:
 
-| Guard | 必须检查 | 不得作为本地 gate 通过条件 |
-| --- | --- | --- |
-| 唯一脚本调用 | `.github/workflows/ga-release.yml` 的 workflow/release entrypoint 直接或间接调用 `bash scripts/verify-ga-release.sh`，并由 `internal/contractcheck/contractcheck_test.go` 防止维护另一套 GA 命令。 | 人工声称 CI 已跑过。 |
-| 最小权限 | workflow YAML 声明最小 `permissions`，不默认扩大 token 权限；contractcheck 覆盖权限漂移。 | GitHub org/repo 实际权限截图或人工确认。 |
-| release/tag trigger 与 artifact upload 配置声明 | 仓库内 workflow 声明 release/tag trigger 和 evidence artifact upload 配置；contractcheck 验证 trigger/upload key 存在且指向唯一 gate 产物。 | 真实 artifact 已存在、branch protection 已配置、GitHub environment rule 已设置。 |
+- PO contract is reflected in product, architecture, contracts, schema/OpenAPI,
+  runbooks, release notes, and evidence manifest.
+- Default positive loop has repo-local evidence.
+- Retained lifecycle default positive has explicit evidence owner and coverage
+  for admission, session/fence predicate, worker recovery, stable errors, audit,
+  schema/OpenAPI, runbook, and manifest evidence.
+- Workload mount, template/clone, purge/break-glass, and real deployment runtime
+  are capability-gated by default and have denied/recovery/fail-closed evidence.
+- Optional positives only block final when selected by the final selector and
+  exact manifest fields match.
+- Deployment-runtime-support is never a required local GA positive gate.
+- Restore_archived/restore_tombstoned drain behavior is fixed and proven.
+- Operator repair has one shared contract/test suite/audit schema and one entry
+  implementation, API or CLI.
+- Capability matrix v1 drives all surfaces.
+- Operation terminalization rules are implemented and tested.
+- Generated report/evidence artifacts are deterministic and digestable.
+- `bash scripts/verify-ga-release.sh` is the only release entrypoint and cannot
+  pass final with open required gaps.
+- No sibling project, business project, manual sign-off, or production
+  deployment state is a GA gate.
 
-Package 5 doc-sync DoD 必须显式清理旧口径。这个 DoD 是最终收口检查，不要求本交接修订现在改动这些文件。
+## Reviewer Checklist
 
-| Doc-sync target | 必须清理的旧口径 | Guard / evidence expectation |
-| --- | --- | --- |
-| `cmd/README.md` | 早期“API 尚未实现 WebDAV、mount、save/restore、template handlers”等实现状态文字必须与当前代码和 default/optional 边界对齐。 | doc guard 证明 command/readme 不再误导 handler 状态；optional 能力仍写 default denied。 |
-| `docs/PRODUCT_REQUIREMENTS.md` | PRD evidence wording 必须与唯一 repo-local gate、manifest selector、default/fixture/deployment profiles 对齐。 | doc guard 拒绝 generated-client/consumer adoption/人工 review 被写成替代 final gate。 |
-| `docs/READINESS_EVIDENCE.md` | `auto_verified`、seed vs final、manifest selector、profile boundary wording 必须拆清；seed/baseline 不能被写成 final GA coverage。 | doc guard 拒绝粗粒度 `auto_verified` 覆盖高风险 claim，要求 evidence profile、selector 和 final blocking 语义一致。 |
-| `docs/GA_RELEASE_GATES.md` / GA release wording | GA release 只能由 `bash scripts/verify-ga-release.sh` + final selector 自动判定；不能出现手工 `-mode final` 或 seed/baseline 代 final。 | contractcheck/doc guard 覆盖唯一入口、selector final candidate、open seed gap hard fail。 |
-| `docs/ARCHITECTURE.md` | Architecture 默认 GA wording 必须把 workload/template/purge 写成 optional-gated default denied/recovery；default positive 只包含本文 Handoff Contract。 | doc guard 拒绝 optional positive 被描述成默认可用。 |
-| `docs/contracts/` | contract 中的 lifecycle、credential issuer、quota、template/purge wording 必须与 storage-state、AFSCP-issued credential relay、machine-readable quota status、optional positive non-default 对齐。 | schema/OpenAPI/contractcheck anchor 到相同 claim IDs。 |
-| `docs/runbooks/` 和 runbooks README | runbook 不得把 operator repair、purge approval 或 residual-risk acceptance 写成人工 GA 审批；临时 SQL 只能是 break-fix，不是 claim evidence。 | doc guard + operator repair evidence 证明 controlled contract 是主路径。 |
-| root or docs README | README 层摘要必须清理 default GA、deployment-runtime-support、optional fixture final-blocking 的旧口径。 | generated coverage report 映射 README wording 到 Handoff Contract categories。 |
+Reviewers should ask:
 
-Claim/evidence mapping 必须在 manifest 或相邻 generated report 中可读，并且只能派生自
-Package 0 的唯一 taxonomy：
-
-| claim_id | Claim | Required evidence shape | Manifest requirement |
-| --- | --- | --- | --- |
-| `CLAIM_PROFILE_BOUNDARY` | evidence profile 与默认/optional/deployment 边界一致 | profile schema + verifier negative cases | 只接受 `default`、`repo-local-fixture-enabled`、`deployment-runtime-support`。 |
-| `CLAIM_ADMIN_BOOTSTRAP_READY` | 默认闭环前置 admin/bootstrap 已就绪 | volume preflight + namespace binding + caller role/policy + path resolver redaction | 每项至少一个 `default_mode=true` evidence；不得暴露 raw path。 |
-| `CLAIM_DEFAULT_USER_LOOP` | 默认 GA trusted caller 闭环可用 | create/get/projection/list + save/history/restore + WebDAV + operation/audit/recovery repo-local evidence | 每个子能力至少一个 `default_mode=true` positive evidence。 |
-| `CLAIM_DEFAULT_DENIAL_SAFE` | 默认负路径 fail-closed | authz/policy/lifecycle/session/fence/path denial tests | 稳定 error/audit；不得创建永久 queued。 |
-| `CLAIM_CAPABILITY_MATRIX_CONSISTENT` | API、worker、readyz、operator、manifest 使用同一 matrix | contract/schema/OpenAPI + readyz/operator consistency tests | capability ID、surface type、required set 和 evidence manifest 不漂移。 |
-| `CLAIM_OPERATION_TERMINALIZATION` | 历史 durable operation 可终态化/intervention | recovery dispatcher/classifier/terminalizer tests | read/status/preflight/redaction 不伪装成 durable operation。 |
-| `CLAIM_DISCOVERY_SURFACES` | caller/orchestrator/operator/readyz discovery surface 分层 | caller status、orchestrator disabled/status、operator global、readyz contract tests | readyz 不替代 caller/orchestrator API contract。 |
-| `CLAIM_WEBDAV_DEFAULT_ACCESS` | 默认 WebDAV access 链路安全可用 | first-create credential + gateway/revoke/ledger e2e | repo-local Postgres ledger evidence；raw secret/path 不回放。 |
-| `CLAIM_SECRET_PATH_REDACTION` | SecretRef/raw path/host path/credential 不泄漏 | RBAC/redaction/path resolver negative tests | 普通 caller、connector、workload 只能见 redacted projection。 |
-| `CLAIM_RETAINED_LIFECYCLE_DEFAULT` | retained repo lifecycle 属于默认 GA storage-state 正向能力 | archive/restore_archived/delete/tombstone/restore_tombstoned repo-local positive tests | 每个 action 至少一个 `default_mode=true` positive evidence；purge 不得归入该 claim。 |
-| `CLAIM_OPTIONAL_DENIED_SAFE` | workload/template/purge 默认关闭时安全 | disabled/denied/recovery negative tests | `negative_or_positive=negative`、`default_mode=true`、不得创建永久 queued。 |
-| `CLAIM_OPTIONAL_FIXTURE_CONFORMANT` | optional positive path 只在显式 fixture conformance 声明时 blocking | repo-local fixture positive tests | manifest 条目必须声明 `evidence_profile=repo-local-fixture-enabled`、`fixture_enabled_mode=true`、`default_mode=false`、`optional_gated=true`、`required=true`；未声明 fixture-conformant 时不得阻断默认 GA。 |
-| `CLAIM_WORKLOAD_FIXTURE_READY` | workload fixture 正向路径完整 | plan fetch、heartbeat、release、revoke、terminal evidence 五个 subclaim | 每个 subclaim 都是 repo-local fixture evidence，缺一不可。 |
-| `CLAIM_OPERATOR_REPAIR_SAFE` | operator repair 有 allowlist、safety predicate、evidence、audit | contract + auth + audit/redaction/idempotency tests | 每个 repair action 有 claim/evidence pair。 |
-| `CLAIM_PURGE_APPROVAL_SAFE` | purge approval 结构化且可验证 | approval fixture + replay/expiry/scope negative tests | default disabled；positive 只可 `fixture_enabled_mode=true`。 |
-| `CLAIM_RESTORE_RECONCILIATION` | restore reconciliation mode 防止危险写入 | mode entry/exit + read-only/write-deny + inconsistency intervention tests | metadata/storage 不一致不得静默 active。 |
-| `CLAIM_RESIDUAL_RISK_CATALOG` | residual-risk acceptance 受预登记 catalog 约束 | catalog fixture + named predicate + record-only default negative tests | 未预登记 `risk_id` 或自动 unblock 必须 fail。 |
-| `CLAIM_TEMPLATE_QUOTA_BOUNDARY` | template/clone 默认 denied，quota status 机器可读 | default denied + same-namespace same-volume fixture + quota schema/OpenAPI tests | optional positive 不得 `default_mode=true`。 |
-| `CLAIM_DEPLOYMENT_RISK_ENVELOPE` | deployment-only 风险有 repo-local检测/模拟/脱敏/升级证据 | model fixture + doc/runbook guard | 不允许要求真实 CSI/POSIX/subPath 部署 gate。 |
-| `CLAIM_WORKFLOW_HARDENING_GUARD` | workflow hardening 只验证 repo-local 可检查事实 | 唯一脚本调用 + 最小权限 + artifact/tag trigger 配置声明 guard | branch protection、真实 artifact、GitHub environment 不能作为本地通过条件。 |
-| `CLAIM_RELEASE_ARTIFACT_IDENTITY` | release artifact identity 可机器追踪 | git revision + manifest digest + selector input digest + schema/migration set + policy/artifact identity digest + workflow entrypoint evidence；generated report digest 作为运行输出记录 | `release_artifact_id` 必须稳定、可复算；不能用手填版本号、generated report 输入循环或真实 artifact 截图替代。 |
-| `CLAIM_ROLLBACK_ROLLFORWARD_POLICY` | rollback/roll-forward policy 被 release selector 绑定 | schema/migration compatibility tests + rollback decision table + forward-fix/runbook guard | 每个 final candidate 必须引用 policy evidence；不允许散落 prose。 |
-| `CLAIM_RELEASE_GATE_TRACEABLE` | 最终验收 bullet 可追溯 | manifest verifier + generated mapping | 每个最终验收 bullet 都引用 `claim_id`、`acceptance_id` 或 `subclaim_id`、evidence `id`。 |
-
-release artifact identity 与 rollback/roll-forward 的最小 claim/subclaim/验收映射：
-
-| Claim | Subclaim / acceptance | Required evidence | Final fail 条件 |
-| --- | --- | --- | --- |
-| `CLAIM_RELEASE_ARTIFACT_IDENTITY` | `SUBCLAIM_ARTIFACT_GIT_REVISION` / `ACCEPT_RELEASE_ARTIFACT_REVISION_PINNED` | clean checkout git revision、dirty state guard、唯一 gate command | revision 缺失、dirty state 未记录、命令不来自唯一 gate。 |
-| `CLAIM_RELEASE_ARTIFACT_IDENTITY` | `SUBCLAIM_ARTIFACT_MANIFEST_DIGEST` / `ACCEPT_RELEASE_MANIFEST_DIGEST_PINNED` | manifest digest、final selector input digest、schema/policy/artifact identity digest；generated report digest 仅作为执行输出记录 | digest 不可复算、selector input 与 manifest 不匹配，或把 generated report digest 放进同一次 selector 输入造成循环。 |
-| `CLAIM_RELEASE_ARTIFACT_IDENTITY` | `SUBCLAIM_ARTIFACT_SCHEMA_MIGRATION_SET` / `ACCEPT_SCHEMA_MIGRATION_SET_PINNED` | schema/OpenAPI/migration file list 与 digest、migration compatibility command | schema/migration 漂移未进入 report。 |
-| `CLAIM_ROLLBACK_ROLLFORWARD_POLICY` | `SUBCLAIM_ROLLBACK_ALLOWED_BOUNDARY` / `ACCEPT_ROLLBACK_POLICY_MACHINE_READABLE` | 哪些 migration/schema change 可 rollback、哪些只能 roll-forward 的机器可读表 | 只有 prose，没有 verifier-checkable policy。 |
-| `CLAIM_ROLLBACK_ROLLFORWARD_POLICY` | `SUBCLAIM_ROLLFORWARD_REPAIR_PATH` / `ACCEPT_ROLLFORWARD_HAS_RUNBOOK_AND_TEST` | forward-fix/runbook ref、compatibility test、operator intervention guard | policy 不能说明失败后如何保持安全阻断或前滚修复。 |
-| `CLAIM_ROLLBACK_ROLLFORWARD_POLICY` | `SUBCLAIM_RELEASE_SELECTOR_BINDS_POLICY` / `ACCEPT_FINAL_SELECTOR_REFERENCES_POLICY` | `rollback_rollforward_policy_ref` 被 final selector 引用并由 verifier 校验 | policy 与 release selector 脱节，或只在段落里提到。 |
-
-### TDD/自动验收
-
-- `go test ./internal/releaseevidence -run 'Test.*Manifest|Test.*Final|Test.*Selector|Test.*Report'`：先让 selector 缺失/多份/digest 不匹配、seed selector 误通过 final、open seed gap、未知 claim/capability、optional positive 未声明却 blocking 等失败。
-- `go test ./internal/contractcheck -run 'Test.*GA|Test.*Workflow|Test.*Artifact|Test.*Permission'`：先覆盖 workflow 唯一入口、最小权限、artifact upload key 和真实 GitHub 状态不得作为本地 pass。
-- `bash scripts/verify-ga-release.sh`：seed/convergence selector 可报告 gap；final selector 下任何 open seed gap、doc-only high-risk、缺 command、缺 artifact identity 或缺 rollback policy 都失败。
-- `go test ./...` 可作为 fast/full smoke 的候选命令，但 final required evidence 必须以 manifest 中列出的 command 为准，不能用“全量测试跑过”泛化替代 claim coverage。
-- manifest schema validation。
-- manifest verifier negative tests：缺少 required capability evidence、doc-only high-risk evidence、命令不存在、evidence type 不合法时失败。
-- `scripts/verify-ga-release.sh` 覆盖 manifest verifier。
-- schema/OpenAPI drift guard。
-- repo-local generated-client fixture 编译。
-- precise race/concurrency gate。
-- Postgres migration/transaction/idempotency/lease/fence/audit outbox integration。
-- product-neutral conformance/smoke 在默认模式覆盖 fake trusted caller -> fake connector credential relay、operation inspection、workload/template/purge stable denied/fail-closed；在 repo-local fixture capability 启用后覆盖 fake orchestrator mount plan consumption、template/clone、purge 正向路径，不引入业务项目名。
-- happy/failure journey index 能映射到 manifest evidence ID，防止大而泛测试。
-
-不算完成的反例：
-
-- final release 需要人手工执行 verifier `-mode final`，或脚本没有读取 repo-local final selector。
-- generated report 只有 Markdown 摘要，没有机器可读 JSON、selector input digest、artifact digest 或 evidence artifact layout。
-- high-risk claim 只有 doc guard 或 runbook prose。
-- release artifact identity、schema/migration set、rollback/roll-forward policy 只散落在段落里，没有 claim/subclaim/acceptance/evidence 映射。
-- gate 对 integration/e2e flake 做无限重试，或把 flaky 结果当作 pass。
-
-### 交付物
-
-- 扩展后的 `docs/release-evidence/ga-manifest.json` 和 schema。
-- evidence manifest verifier。
-- 更新后的 `scripts/verify-ga-release.sh` 子 gate 接入。
-- release gate 文档与 readiness evidence ledger 更新。
-- CI workflow hardening 检查。
-- product-neutral happy/failure journeys 交付物与验收索引。
-- doc-sync guard 与旧口径清理 evidence，覆盖 `cmd/README.md`、PRD evidence wording、
-  `docs/READINESS_EVIDENCE.md` 的 `auto_verified`/seed-vs-final/profile wording、GA release
-  wording、Architecture 默认 GA wording、`docs/contracts/`、`docs/runbooks/` 和 README 摘要。
-
-### 范围防蔓延
-
-- 不做外部 release dashboard。
-- 不依赖兄弟 repo 或外部业务 e2e。
-- 不把 generated-client 扩成多语言兼容矩阵。
-- 不把 branch protection、人工 artifact 检查或 GitHub 环境配置当成本地 gate。
-
-## 开发团队接手顺序
-
-这不是阶段路线图；它只是为了减少返工的工程接手顺序。
-
-0. 先落 evidence manifest schema/verifier seed。
-   这一步先固定 claim/subclaim/profile/risk/evidence 语言，避免后续包各自补证据。
-
-1. 再落 capability matrix 与 operation terminalization contract。
-   这一步决定 admission、worker recovery、readyz、operator 和 evidence 的共同语言。
-
-2. 然后补 access session safety。
-   WebDAV、workload、restore、template、lifecycle 都依赖 session/fence/lease 语义；先把 credential、ledger、lease freshness、SecretRef redaction 收紧。
-
-3. 接着补 operator intervention。
-   当 recovery 无法证明安全时，需要有受控的 inspection 和 repair 写路径，否则 `operator_intervention_required` 只会变成死状态。
-
-4. 再收 irreversible lifecycle safety。
-   purge、backup/restore、template clone、quota、lifecycle wording 都会碰到不可逆或调用方误解风险，必须在 capability 和 session 安全之后收口。
-
-5. 最后做 evidence hardening 与 coverage report。
-   每个开发包完成时都应同步补 evidence 条目；最后一步只做统一 verifier、gate 接入和缺口清零。
-
-不存在 package-level GA。package 0-5 全部完成、全部证据进入唯一 gate，并且 `bash scripts/verify-ga-release.sh` 从干净 checkout 成功退出后，才能进入 GA 判定。
-
-每一步都按同一方式推进：
-
-1. 先改 contract/schema/OpenAPI/test fixture，让当前实现失败。
-2. 再做最小产品中立实现。
-3. 补 stable error、audit、redaction、idempotency、runbook/evidence。
-4. 接入 `scripts/verify-ga-release.sh` 覆盖的 repo-local gate。
-
-## 多轮 review 质量标准
-
-多轮 review 是质量控制，不是 GA gate。review 不能替代自动化 gate，也不能把人工结论写成
-required/final claim 的证据。每轮 review 都必须输出可复跑的 evidence command 和 manifest
-trace；没有 command/trace 的意见只能作为待办，不能关闭 claim。
-
-| Round | 角色与目的 | 必须输出 | 不能做什么 |
-| --- | --- | --- | --- |
-| Round 1 开发自审 | 开发者确认 package DoD、profile 标记、negative case 和 doc guard 没漏。 | 本包涉及的 evidence command、manifest `claim_id/subclaim_id/acceptance_id` trace、已知 seed gap。 | 用“我看过了”关闭 claim。 |
-| Round 2 domain review | domain reviewer 复核产品边界、安全状态机、operator/recovery/lifecycle 决策是否一致。 | 复核过的 anchors、需要新增或修正的 evidence command、manifest trace。 | 扩大默认 GA 范围或引入业务项目 gate。 |
-| Round 3 QA/release review | QA/release reviewer 复核 clean checkout gate、manifest coverage、workflow hardening guard 和 release note/doc-sync 口径。 | `bash scripts/verify-ga-release.sh` 运行证据、coverage/gap report、release note/doc-sync profile trace。 | 用 branch protection、真实 artifact 或 GitHub 环境状态替代 repo-local gate。 |
-| Round 4 fix review | 修复后只复核被改动 claim、风险和证据，确认没有回归 profile 边界。 | 修复关联 command、manifest diff trace、remaining gap list。 | 把未重跑 gate 的修复判定为 GA ready。 |
-
-review 通过只说明“质量复核已完成”。最终 GA 判定仍只看 clean checkout 下唯一脚本退出码，
-以及 manifest verifier 对 required/final claim 的机器判断。
-
-## Deployment readiness envelope
-
-默认 GA 的 deployment readiness 只表达最小可运行配置和 readyz 语义，不把真实业务部署、
-兄弟 repo、人工审批或主观 review 纳入 release gate。
-
-最小可运行配置必须明确：
-
-- service auth 与 trusted caller/operator/admin role 配置存在且可校验；optional orchestrator
-  role/policy readiness 不属于默认 GA deployment readiness，只能在 `repo-local-fixture-enabled`
-  或 `deployment-runtime-support` profile 中验证。
-- PostgreSQL metadata store/migration 可用，或 repo-local integration fixture 可自动启动等价依赖。
-- managed volume policy 和 path resolver root 配置存在，但 raw root path 不暴露给 caller。
-- pinned JVS runner 配置、provenance/smoke evidence 可由 gate 验证。
-- 内置 WebDAV gateway 作为默认 export policy boundary；不是 stock gateway 代替品。
-- audit outbox HTTP JSON GA sink 或 repo-local sink fixture 配置可用，且 redaction guard 生效。
-- optional-gated workload/template/purge 默认关闭；`repo-local-fixture-enabled` mode 必须显式打开并产生单独 evidence。
-  默认 profile 只证明 optional orchestrator capability 的 disabled discovery/deny 安全。
-
-readyz 必须表达：
-
-| readyz dimension | Meaning | Default GA impact |
-| --- | --- | --- |
-| `service_ready` | 默认 GA 必需依赖可接收和安全处理请求 | false 时不能声明默认 GA ready。 |
-| `default_capabilities_ready` | namespace/repo/JVS/WebDAV/lifecycle retained/recovery/audit 等默认能力 ready | 任一 required capability false，service-ready 必须反映。 |
-| `optional_capabilities` | workload/template/purge 等 optional-gated 当前 disabled/denied/fixture-enabled 状态 | disabled 不使 service not ready；fixture-enabled positive path 必须单独显示。 |
-| `recovery_ready` | classifier/terminalizer 可以发现历史 operation 并推进 failed/intervention | 不得因 optional capability disabled 从 recovery discovery 消失。 |
-| `evidence_profile` | 当前进程/测试运行使用 `default`、`repo-local-fixture-enabled` 还是 `deployment-runtime-support` | 用于防止 positive fixture 被误读成默认开启。 |
-
-## 最终验收命令
-
-后续开发完成后，GA 只由干净 checkout 下这一条命令的退出码决定：
-
-```bash
-bash scripts/verify-ga-release.sh
-```
-
-任何人工 review、会议、owner sign-off、branch protection、真实 artifact、兄弟 repo e2e、
-真实部署状态或 release note 文字，都不能替代这条命令。该命令必须自动证明：
-
-- final release 判定由 repo-local release intent/manifest selector 触发；不能靠人工手工选择
-  verifier `-mode final`。final selector 必须拒绝 seed/baseline 误通过和 open seed gap。
-- authoritative selector input 是 `docs/release-evidence/ga-release-selector.json`；
-  `docs/release-evidence/generated/ga-final-selector.json` 只能是 gate 生成的报告/副本。gate
-  必须拒绝 selector 缺失、多份 selector、digest 不匹配和 seed selector 用于 final。
-- optional positive fixture 的 final blocking 范围只来自 selector/manifest 中显式声明的
-  `claimed_optional_capabilities`；默认 GA 只要求 optional disabled/denied/recovery 负路径。
-- capability matrix row 保持“一行一个 surface/decision”；durable/read/teardown/discovery
-  facets 分开进入 contract、test 和 evidence，不扩成通用 feature flag 平台。
-- 默认 GA capability 都有 repo-local evidence，并可追溯到 manifest `claim_id`/evidence `id`。
-- pinned JVS save/history/restore-preview/run/discard 和 WebDAV export/gateway/revoke 被自动证明为默认 GA 能力，不被 optional gate 跳过，并映射到 `CLAIM_DEFAULT_USER_LOOP`。
-- retained repo lifecycle 的 archive、restore_archived、delete/tombstone、restore_tombstoned 有 repo-local positive evidence，并映射到 `CLAIM_RETAINED_LIFECYCLE_DEFAULT`；purge 不包含在 retained lifecycle 默认能力内。
-- namespace-scoped repo projection/list 有分页、过滤和权限边界，不是 global search/aggregation/operator investigation 平台。
-- optional gated capability 关闭时，新 mutation fail-closed，不创建永久 queued operation，并映射到 `CLAIM_OPTIONAL_DENIED_SAFE`。
-- 默认 GA required/final blocking evidence 只要求 optional capability 的 disabled/denied/recovery 安全；optional 正向 fixture evidence 只在 release 明确声明某 optional capability fixture-conformant 时才 blocking。
-- optional 正向 fixture evidence 成为 final 阻塞项必须是 manifest 条目级声明，且同时满足
-  `repo-local-fixture-enabled` profile、`fixture_enabled_mode=true`、`default_mode=false`、
-  `optional_gated=true`、`required=true`；普通 seed gap marker 不等于默认 GA 需求。
-- product-neutral conformance/smoke 在默认模式证明 workload/template/purge stable denied/fail-closed/recovery；启用 repo-local fixture capability 后才证明 mount plan/template/purge 正向路径，其中 template/clone 正向路径只允许 same-namespace same-volume primitive，purge positive evidence 必须来自 manifest 条目显式声明的 `repo-local-fixture-enabled` profile、`fixture_enabled_mode=true`、`default_mode=false`、`optional_gated=true`、`required=true`，且结构化 approval evidence 可验证，并映射到 `CLAIM_OPTIONAL_FIXTURE_CONFORMANT`。
-- idempotent replay 优先于 capability denial。
-- 历史 operation 即使 capability 关闭，也会被 worker recovery 扫描并终态化或进入 `operator_intervention_required`；dispatcher/classifier/terminalizer 不因 `ready/configured=false` 从查询或分类范围消失。
-- WebDAV credential first-create-only、revoke/expiry、gateway policy、redaction、ledger recovery 有真实 Postgres ledger 与 repo-local e2e 证据。
-- workload plan 领取检查 lease freshness，expired/stale 只能 blocking 或 teardown-only。
-- teardown-only plan 只对 orchestrator role 可见，只含 release/revoke/terminal evidence 所需字段，
-  不含 SecretRef、raw path、payload subdir、credential 或可推导 mount material，并产生 audit。
-  default profile 下它只代表历史/stale recovery 的受限 teardown/discovery/repair surface；
-  fixture-enabled profile 才证明正向 orchestrator flow。
-- workload stale binding 不能只靠 P2 单独关闭；必须有 P3 operator inspection/repair evidence
-  证明 stale/intervention queue 可发现、可定位、可按 allowlist 安全处理。
-- operator inspection/repair 覆盖 correlated lookup、intervention queue、held fence/session、stale lease、audit lag、runtime recovery status，并有分页/过滤/脱敏、allowed transition、safety predicate、identity/reason/evidence/before-after/audit，映射到 `CLAIM_OPERATOR_REPAIR_SAFE`。
-- operator repair 通过 API/CLI/tooling 何种形态交付均可，但必须调用同一受控 contract，生成
-  durable repair/intervention record 和 audit；manifest evidence 必须指向同一个 contract
-  test suite；临时 SQL 不能作为主路径或 claim evidence。
-- residual-risk acceptance 不能自动绕过 active/uncertain writer、credential、mount、restore、purge 阻断；repair 后不重发 raw secret、不复活 purged repo、不把 uncertain session 当 terminal。
-- purge approval evidence 结构化、可校验、防重放，包含 issuer/verifier、subject、audience，并与 audit 绑定。
-- backup/restore 后 reconciliation mode 阻止危险新动作，purged repo 不复活，metadata/storage 不一致进入 intervention。
-- `restore_archived` 和 `restore_tombstoned` 作为恢复访问性的 storage-state mutation，默认 GA 下受
-  active/uncertain session/fence blocking；不能证明无 active/uncertain access 时 fail-closed 或进入
-  `operator_intervention_required`，并同步映射 contract/API/worker/recovery/evidence。
-- shared-volume residual risk 覆盖 path traversal、symlink escape、cross-namespace mismatch、raw path/SecretRef redaction、backup restore residual data simulation、POSIX/CSI/subPath drift detection model fixture、dedicated-volume escalation、runbook/escalation、residual-risk acceptance audit，并映射到 `CLAIM_DEPLOYMENT_RISK_ENVELOPE`。
-- template/clone 默认模式只证明 stable denied/fail-closed/recovery；若 fixture-enabled/optional capability 显式启用，正向路径只允许 same-namespace same-volume primitive。
-- quota enforcement status 机器可读。
-- lifecycle vocabulary 保持 storage-state，不漂移成业务 catalog lifecycle。
-- schema/OpenAPI/generated fixture 不漂移，product-neutral happy/failure journey index 能映射到 evidence manifest。
-- doc-sync exit criterion 覆盖 `cmd/README.md`、PRD、`docs/READINESS_EVIDENCE.md`、
-  GA release wording、Architecture、contracts、runbooks/README：清理 workload/template/purge
-  默认正向、caller credential issuer、业务 catalog lifecycle、quota 硬 enforcement、
-  `auto_verified`、seed vs final、manifest selector 和 profile boundary 等 wording 漂移。
-- workflow hardening guard 只验证 repo-local DoD：唯一脚本调用、最小权限、artifact/tag trigger
-  配置声明；branch protection、真实 artifact、GitHub environment 不能作为本地 gate 通过条件。
-- gate runtime/flake policy 被机器执行：expected runtime 分档、有限重试、required/final evidence
-  观测到 `flake_observed` 一律 fail，non-blocking rationale 只允许非 required evidence，
-  外部依赖 repo-local provision、report 稳定排序。
-- generated report 和 evidence artifact layout 固定在 `docs/release-evidence/generated/`，包含
-  JSON/Markdown coverage report、final selector 和每条 evidence 的 command/stdout/stderr/metadata。
-- release artifact identity 可追溯到 git revision、manifest digest、selector input digest、
-  schema/migration set 和 policy/artifact identity digest；generated report digest 作为本次 gate
-  输出记录，并映射到 `CLAIM_RELEASE_ARTIFACT_IDENTITY`。
-- rollback/roll-forward policy 有机器可读 claim/subclaim/acceptance/evidence 映射，并由 final
-  selector 引用；不能只散落在 prose。
-- JVS provenance/smoke、Postgres integration、WebDAV e2e、race/concurrency、doc guard 都由唯一 gate 覆盖；Postgres gate 在本地可自启动临时 Postgres 或使用 repo-local 可复现 fixture，不要求人工 DSN 或预配置外部 DB。
-- generated claim/evidence report 证明每个最终验收 bullet 都可追溯到 manifest `claim_id`、`acceptance_id` 或 `subclaim_id`、evidence `id`，并映射到 `CLAIM_RELEASE_GATE_TRACEABLE`。
-
-以下任一情况存在时，即使代码看起来可用，也不能判定 GA：
-
-- 任一 required/final claim 仍对应 `seed_gap_*_open` 或等价 open gap。
-- final release 只能通过人手工调用 verifier `-mode final` 才能成立，或同一脚本仍接受 seed/baseline selector。
-- 高风险 claim 只有 doc-only evidence，没有非文档自动证据。
-- required evidence 缺少 repo-local `command`，或 command 不被唯一 gate 覆盖。
-- `bash scripts/verify-ga-release.sh` 没有在干净 checkout 运行成功。
-- evidence 依赖人工审批、会议、兄弟 repo、真实部署状态、人工 DSN、branch protection、真实 artifact
-  或 GitHub 环境配置。
-- optional positive evidence 被标成 default GA，或 `deployment-runtime-support` 被放入 required
-  local GA evidence。
-- required final report、artifact identity 或 rollback/roll-forward policy 缺机器可读映射。
-
-只有这条命令从干净 checkout 成功退出，且上述不能判定条件全部不存在，才能认为下一阶段开发交付满足 GA 收敛要求。
+- Which claim from the taxonomy does this PR close?
+- Does evidence strength match the claim wording?
+- Did retained lifecycle coverage include admission, predicate, worker recovery,
+  stable errors, audit, schema/OpenAPI, runbook, and manifest evidence?
+- Did optional positive behavior remain selector-selected and non-default?
+- Did deployment-runtime-support stay out of local positive final gates?
+- Did restore drain behavior follow the fixed decision?
+- Did operator repair use the shared contract/test suite/audit schema?
+- Did the PR update touched docs, contracts, schemas, runbooks, and evidence?
+- Did targeted package tests and the relevant gate subset run?
