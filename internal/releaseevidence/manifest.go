@@ -260,6 +260,7 @@ func validateRequiredEvidenceItems(manifest Manifest) []Finding {
 
 var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "webdav_export_disabled_admission_unit", CapabilityID: "webdav_export", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
+	{ID: "repo_lifecycle_retained_positive_unit", CapabilityID: "repo_lifecycle_retained", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "workload_mount_disabled_admission_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
 	{ID: "workload_mount_plan_store_freshness_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
 	{ID: "workload_mount_runtime_secretref_config_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
@@ -300,7 +301,7 @@ func validateItem(item Item, repoRoot string) []Finding {
 
 func validateCapabilityClassification(item Item) []Finding {
 	switch item.CapabilityID {
-	case "storage", "jvs", "webdav_export":
+	case "storage", "jvs", "webdav_export", "repo_lifecycle_retained":
 		if item.OptionalGated {
 			return []Finding{{ItemID: item.ID, Code: "item.optional_gated_invalid", Message: fmt.Sprintf("%s is default GA required and cannot be optional_gated=true", item.CapabilityID)}}
 		}
@@ -600,13 +601,14 @@ var validEvidenceTypes = map[string]bool{
 }
 
 var validCapabilities = map[string]bool{
-	"":               true,
-	"storage":        true,
-	"jvs":            true,
-	"webdav_export":  true,
-	"workload_mount": true,
-	"repo_template":  true,
-	"repo_purge":     true,
+	"":                        true,
+	"storage":                 true,
+	"jvs":                     true,
+	"webdav_export":           true,
+	"repo_lifecycle_retained": true,
+	"workload_mount":          true,
+	"repo_template":           true,
+	"repo_purge":              true,
 }
 
 var allowedExecutables = map[string]bool{

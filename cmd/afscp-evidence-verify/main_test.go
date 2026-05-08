@@ -76,6 +76,17 @@ func evidenceCLIManifest(command, anchor string) string {
       "default_ga_required":false
     },
     {
+      "id":"repo_lifecycle_retained_positive_unit",
+      "capability_id":"repo_lifecycle_retained",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"workload_mount_plan_store_freshness_unit",
       "capability_id":"workload_mount",
       "evidence_type":"unit",

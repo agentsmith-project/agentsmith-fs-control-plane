@@ -45,6 +45,33 @@
       "default_ga_required": false
     },
     {
+      "id": "repo_lifecycle_retained_positive_unit",
+      "capability_id": "repo_lifecycle_retained",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/repoexec",
+        "./internal/store/postgres",
+        "./internal/api",
+        "-run",
+        "^Test(LifecycleExecutor(ArchivesActiveRepoAndCommitsBoundary|RestoresArchivedRepoAfterDoctor|DeletesActiveAndArchivedReposToTombstone|RestoresTombstonedRepoToPreDeleteStatusAfterDoctor)|RepoLifecycleSuccessCommitSQL(IsAtomicBoundaryWithSessionGuardAndFenceRelease|HasDeleteAndRestoreTombstonedPredicates)|RepoLifecycleHandler(RestoreTombstonedRetentionWindow|CreatesArchiveOperationIntake|CreatesDeleteAndPurgeOperations))$"
+      ],
+      "anchors": [
+        "internal/repoexec/lifecycle_executor_test.go",
+        "internal/repoexec/lifecycle_executor.go",
+        "internal/store/postgres/repo_lifecycle_operations_test.go",
+        "internal/store/postgres/repo_lifecycle_operations.go",
+        "internal/api/repo_lifecycle_handler_test.go",
+        "internal/api/repo_lifecycle_handler.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": true
+    },
+    {
       "id": "workload_mount_plan_store_freshness_unit",
       "capability_id": "workload_mount",
       "evidence_type": "unit",
