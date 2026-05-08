@@ -73,6 +73,12 @@ type JVSRunnerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSR
 type StoragePurgerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error)
 type AuditDelivererFactory func(config.WorkerAuditDeliveryConfig) (auditdelivery.Deliverer, error)
 
+var ErrJVSRuntimeUnavailable = errors.New("jvs runtime unavailable")
+
+func IsJVSRuntimeUnavailable(err error) bool {
+	return errors.Is(err, ErrJVSRuntimeUnavailable)
+}
+
 type StoreHandle struct {
 	Store                WorkerStore
 	OperationStore       OperationRecoveryStore
@@ -287,27 +293,30 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			}
 			jvs, err := jvsFactory(opConfig.RepoCreate)
 			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+				if !IsJVSRuntimeUnavailable(err) {
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
 				}
-				return nil, err
-			}
-			repoExecutor, err := repoexec.NewExecutor(repoexec.Config{
-				Store:        scopedStore,
-				JVSRunner:    jvs,
-				Owner:        opConfig.Owner,
-				Clock:        now,
-				AuditEventID: func() string { return eventID() },
-				VolumeRoots:  opConfig.RepoCreate.VolumeRoots,
-			})
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+			} else {
+				repoExecutor, err := repoexec.NewExecutor(repoexec.Config{
+					Store:        scopedStore,
+					JVSRunner:    jvs,
+					Owner:        opConfig.Owner,
+					Clock:        now,
+					AuditEventID: func() string { return eventID() },
+					VolumeRoots:  opConfig.RepoCreate.VolumeRoots,
+				})
+				if err != nil {
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
 				}
-				return nil, err
+				executors = append(executors, repoExecutor)
+				scopedStore.repoCreateEnabled = true
 			}
-			executors = append(executors, repoExecutor)
-			scopedStore.repoCreateEnabled = true
 		}
 		if opConfig.RepoLifecycle.Enabled {
 			jvsFactory := options.JVSRunnerFactory
@@ -701,12 +710,12 @@ func NewStoragePurgerFromConfig(config.WorkerRepoCreateRecoveryConfig) (repoexec
 func verifyFileSHA256(path, want string) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return errors.New("jvs binary verification failed")
+		return fmt.Errorf("%w: jvs binary verification failed", ErrJVSRuntimeUnavailable)
 	}
 	defer file.Close()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
-		return errors.New("jvs binary verification failed")
+		return fmt.Errorf("%w: jvs binary verification failed", ErrJVSRuntimeUnavailable)
 	}
 	if got := hex.EncodeToString(hash.Sum(nil)); got != want {
 		return errors.New("jvs binary checksum mismatch")

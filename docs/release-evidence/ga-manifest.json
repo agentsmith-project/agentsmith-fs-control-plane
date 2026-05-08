@@ -410,6 +410,45 @@
       }
     },
     {
+      "id": "repo_create_jvs_runtime_unavailable_recovery_unit",
+      "capability_id": "jvs",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/workerapp",
+        "-run",
+        "^Test(RunOnceRepoCreateEnabled.*(Unavailable|Checksum|Constructor).*|NewJVSRunnerFromConfigRedactsBinaryReadErrors)$"
+      ],
+      "anchors": [
+        "internal/workerapp/run_once_test.go",
+        "internal/workerapp/run_once.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": true,
+      "claim_id": "CLAIM_OPERATION_TERMINALIZATION",
+      "subclaim_id": "repo_create_jvs_runtime_unavailable_recovery",
+      "acceptance_id": "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY",
+      "risk_id": "F6",
+      "fixture_id": "",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "negative",
+      "pass_criteria": {
+        "kind": "denial_safety",
+        "assertions": [
+          "default production constructor does not fail when repo_create JVS runtime is unavailable",
+          "RunOnce scans historical repo_create operation and persists operator_intervention_required with OPERATION_RECOVERY_REQUIRED",
+          "failed audit is written and no repo, JVS, or fence side effect executes",
+          "checksum mismatch and generic or nil constructor failures remain fail-fast and do not enter recovery"
+        ]
+      }
+    },
+    {
       "id": "default_ga_capability_classification_unit",
       "capability_id": "",
       "evidence_type": "unit",

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -406,6 +407,187 @@ func TestRunOnceRepoCreateDisabledScansAndPersistsUnsupportedIntervention(t *tes
 	assertWorkerAppUnsupportedAudit(t, store, repoRecord, audit.EventTypeRepoCreate)
 	if store.releasedFenceID != "" {
 		t.Fatalf("released fence = %q, want no executor side effects or fence release", store.releasedFenceID)
+	}
+}
+
+func TestRunOnceRepoCreateEnabledButJVSUnavailableScansAndPersistsUnsupportedIntervention(t *testing.T) {
+	now := workerAppNow()
+	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
+	store := newWorkerAppStore(repoRecord)
+	factoryCalls := 0
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			factoryCalls++
+			return nil, fmt.Errorf("%w: test runtime missing", ErrJVSRuntimeUnavailable)
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_repo" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
+	}
+	if !strings.Contains(err.Error(), "operation recovery incomplete") {
+		t.Fatalf("RunOnce error = %q, want operation recovery incomplete", err)
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("JVS factory calls = %d, want one initialization attempt", factoryCalls)
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || summary.Failed != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want repo_create scanned into unsupported recovery when JVS unavailable", summary)
+	}
+	if got := strings.Join(store.acquireIDs, ","); got != repoRecord.ID {
+		t.Fatalf("acquire IDs = %q, want repo_create leased for intervention", got)
+	}
+	got := store.records[repoRecord.ID]
+	if got.State != operations.OperationStateOperatorInterventionRequired || got.Error == nil || got.Error.Code != "OPERATION_RECOVERY_REQUIRED" {
+		t.Fatalf("repo_create record = %#v, want persisted unsupported intervention", got)
+	}
+	if got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("repo_create lease = %q/%v, want cleared after intervention", got.LeaseOwner, got.LeaseExpiresAt)
+	}
+	if store.genericUpdateCalls != 0 {
+		t.Fatalf("generic update calls = %d, want unsupported intervention committed through audit boundary", store.genericUpdateCalls)
+	}
+	assertWorkerAppUnsupportedAudit(t, store, repoRecord, audit.EventTypeRepoCreate)
+	if store.repo.ID != "" || store.releasedFenceID != "" {
+		t.Fatalf("repo/released fence = %#v/%q, want no repo side effects or fence release", store.repo, store.releasedFenceID)
+	}
+}
+
+func TestRunOnceRepoCreateEnabledProductionJVSUnavailableScansAndPersistsUnsupportedIntervention(t *testing.T) {
+	now := workerAppNow()
+	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
+	store := newWorkerAppStore(repoRecord)
+	missingJVSPath := filepath.Join(t.TempDir(), "missing-jvs")
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoConfigSource(config.MapSource{
+			"AFSCP_JVS_BINARY_PATH": missingJVSPath,
+		}),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_repo" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
+	}
+	if !strings.Contains(err.Error(), "operation recovery incomplete") {
+		t.Fatalf("RunOnce error = %q, want operation recovery incomplete", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || summary.Failed != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want repo_create scanned into unsupported recovery when production JVS is unavailable", summary)
+	}
+	if got := strings.Join(store.acquireIDs, ","); got != repoRecord.ID {
+		t.Fatalf("acquire IDs = %q, want repo_create leased for intervention", got)
+	}
+	got := store.records[repoRecord.ID]
+	if got.State != operations.OperationStateOperatorInterventionRequired || got.Error == nil || got.Error.Code != "OPERATION_RECOVERY_REQUIRED" {
+		t.Fatalf("repo_create record = %#v, want persisted unsupported intervention", got)
+	}
+	if got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("repo_create lease = %q/%v, want cleared after intervention", got.LeaseOwner, got.LeaseExpiresAt)
+	}
+	if store.genericUpdateCalls != 0 {
+		t.Fatalf("generic update calls = %d, want unsupported intervention committed through audit boundary", store.genericUpdateCalls)
+	}
+	assertWorkerAppUnsupportedAudit(t, store, repoRecord, audit.EventTypeRepoCreate)
+	if store.repo.ID != "" || store.operation.Type != operations.OperationRepoCreate || store.releasedFenceID != "" {
+		t.Fatalf("repo/operation/released fence = %#v/%#v/%q, want failed audit only and no repo/JVS/fence side effect", store.repo, store.operation, store.releasedFenceID)
+	}
+}
+
+func TestRunOnceRepoCreateEnabledChecksumMismatchFailsFast(t *testing.T) {
+	now := workerAppNow()
+	path := filepath.Join(t.TempDir(), "jvs")
+	if err := os.WriteFile(path, []byte("not the accepted jvs release binary"), 0o755); err != nil {
+		t.Fatalf("write fake jvs binary: %v", err)
+	}
+	store := newWorkerAppStore(workerAppRepoCreateOperationRecord("op_repo", now))
+	_, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoConfigSource(config.MapSource{
+			"AFSCP_JVS_BINARY_PATH": path,
+		}),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_repo" },
+	})
+	if err == nil {
+		t.Fatal("NewRunOnceRunner succeeded, want JVS checksum mismatch")
+	}
+	if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("NewRunOnceRunner error = %q, want checksum mismatch", err)
+	}
+	if errors.Is(err, ErrJVSRuntimeUnavailable) {
+		t.Fatalf("NewRunOnceRunner error = %v, want checksum mismatch to stay fail-fast and not runtime-unavailable recovery", err)
+	}
+	if store.genericUpdateCalls != 0 || len(store.acquireIDs) != 0 {
+		t.Fatalf("store generic/acquire = %d/%#v, want fail-fast before recovery", store.genericUpdateCalls, store.acquireIDs)
+	}
+}
+
+func TestRunOnceRepoCreateEnabledRepoExecutorConstructorErrorFailsFast(t *testing.T) {
+	now := workerAppNow()
+	tests := []struct {
+		name    string
+		factory JVSRunnerFactory
+		want    string
+	}{
+		{
+			name: "generic factory error",
+			factory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+				return nil, errors.New("generic jvs factory error")
+			},
+			want: "generic jvs factory error",
+		},
+		{
+			name: "nil runner",
+			factory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+				return nil, nil
+			},
+			want: "repo create jvs runner is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newWorkerAppStore(workerAppRepoCreateOperationRecord("op_repo", now))
+			_, err := NewRunOnceRunner(Options{
+				Source: workerAppRepoConfigSource(nil),
+				StoreFactory: func(context.Context, string) (StoreHandle, error) {
+					return StoreHandle{Store: store}, nil
+				},
+				JVSRunnerFactory: tt.factory,
+				Clock:            func() time.Time { return now },
+				AuditEventID:     func() string { return "evt_repo" },
+			})
+			if err == nil {
+				t.Fatal("NewRunOnceRunner succeeded, want fail-fast error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("NewRunOnceRunner error = %q, want %q", err, tt.want)
+			}
+			if store.genericUpdateCalls != 0 || len(store.acquireIDs) != 0 {
+				t.Fatalf("store generic/acquire = %d/%#v, want fail-fast before recovery", store.genericUpdateCalls, store.acquireIDs)
+			}
+		})
 	}
 }
 
@@ -1339,19 +1521,36 @@ func TestRunOnceReturnsCloseError(t *testing.T) {
 }
 
 func TestNewJVSRunnerFromConfigRedactsBinaryReadErrors(t *testing.T) {
-	rawPath := "/tmp/afscp-secret-missing-jvs-binary"
-	_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
-		Enabled:         true,
-		JVSBinaryPath:   rawPath,
-		JVSBinarySHA256: acceptedJVSBinarySHA256,
-		JVSCWD:          "/var/lib/afscp/jvs-cwd",
-		VolumeRoots:     map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
-	})
-	if err == nil {
-		t.Fatal("NewJVSRunnerFromConfig succeeded, want read/checksum error")
+	readFailurePath := filepath.Join(t.TempDir(), "afscp-secret-jvs-dir")
+	if err := os.Mkdir(readFailurePath, 0o755); err != nil {
+		t.Fatalf("mkdir read failure fixture: %v", err)
 	}
-	if strings.Contains(err.Error(), rawPath) || strings.Contains(strings.ToLower(err.Error()), "secret") {
-		t.Fatalf("error leaked raw binary path: %v", err)
+	tests := []struct {
+		name    string
+		rawPath string
+	}{
+		{name: "missing", rawPath: "/tmp/afscp-secret-missing-jvs-binary"},
+		{name: "read failure", rawPath: readFailurePath},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
+				Enabled:         true,
+				JVSBinaryPath:   tt.rawPath,
+				JVSBinarySHA256: acceptedJVSBinarySHA256,
+				JVSCWD:          "/var/lib/afscp/jvs-cwd",
+				VolumeRoots:     map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+			})
+			if err == nil {
+				t.Fatal("NewJVSRunnerFromConfig succeeded, want read/checksum error")
+			}
+			if !errors.Is(err, ErrJVSRuntimeUnavailable) {
+				t.Fatalf("NewJVSRunnerFromConfig error = %v, want ErrJVSRuntimeUnavailable", err)
+			}
+			if strings.Contains(err.Error(), tt.rawPath) || strings.Contains(strings.ToLower(err.Error()), "secret") {
+				t.Fatalf("error leaked raw binary path: %v", err)
+			}
+		})
 	}
 }
 
