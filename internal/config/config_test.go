@@ -31,6 +31,8 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	assertCapability(t, "jvs", cfg.Capabilities.JVS, false, false)
 	assertCapability(t, "webdav", cfg.Capabilities.WebDAV, false, false)
 	assertCapability(t, "mount", cfg.Capabilities.Mount, false, false)
+	assertCapability(t, "repo_template", cfg.Capabilities.RepoTemplate, false, false)
+	assertCapability(t, "repo_purge", cfg.Capabilities.RepoPurge, false, false)
 
 	if cfg.Worker.OperationRecovery.Enabled {
 		t.Fatal("worker operation recovery enabled by default, want disabled")
@@ -105,17 +107,21 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 
 func TestLoadNormalizesFieldsAndCapabilities(t *testing.T) {
 	cfg, err := Load(MapSource{
-		"AFSCP_SERVICE_NAME":    " afscp-api ",
-		"AFSCP_LISTEN_ADDR":     " 127.0.0.1:8090 ",
-		"AFSCP_ENVIRONMENT":     " Prod ",
-		"AFSCP_STORAGE_ENABLED": " true ",
-		"AFSCP_STORAGE_READY":   " 1 ",
-		"AFSCP_JVS_ENABLED":     " TRUE ",
-		"AFSCP_JVS_READY":       " false ",
-		"AFSCP_WEBDAV_ENABLED":  " yes ",
-		"AFSCP_WEBDAV_READY":    " yes ",
-		"AFSCP_MOUNT_READY":     " true ",
-		"AFSCP_MOUNT_ENABLED":   " false ",
+		"AFSCP_SERVICE_NAME":          " afscp-api ",
+		"AFSCP_LISTEN_ADDR":           " 127.0.0.1:8090 ",
+		"AFSCP_ENVIRONMENT":           " Prod ",
+		"AFSCP_STORAGE_ENABLED":       " true ",
+		"AFSCP_STORAGE_READY":         " 1 ",
+		"AFSCP_JVS_ENABLED":           " TRUE ",
+		"AFSCP_JVS_READY":             " false ",
+		"AFSCP_WEBDAV_ENABLED":        " yes ",
+		"AFSCP_WEBDAV_READY":          " yes ",
+		"AFSCP_MOUNT_READY":           " true ",
+		"AFSCP_MOUNT_ENABLED":         " false ",
+		"AFSCP_REPO_TEMPLATE_ENABLED": " true ",
+		"AFSCP_REPO_TEMPLATE_READY":   " true ",
+		"AFSCP_REPO_PURGE_ENABLED":    " true ",
+		"AFSCP_REPO_PURGE_READY":      " false ",
 	})
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
@@ -135,6 +141,8 @@ func TestLoadNormalizesFieldsAndCapabilities(t *testing.T) {
 	assertCapability(t, "jvs", cfg.Capabilities.JVS, true, false)
 	assertCapability(t, "webdav", cfg.Capabilities.WebDAV, true, true)
 	assertCapability(t, "mount", cfg.Capabilities.Mount, false, false)
+	assertCapability(t, "repo_template", cfg.Capabilities.RepoTemplate, true, true)
+	assertCapability(t, "repo_purge", cfg.Capabilities.RepoPurge, true, false)
 }
 
 func TestLoadReadinessProfileAllowsRuntimeAndGA(t *testing.T) {

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,6 +109,201 @@ func TestCreateRepoTemplateReusesIdempotentOperationBeforeMetadataReads(t *testi
 	}
 	if store.lookupCalls != 1 || store.calls != 0 || meta.repoReader.getInNamespaceCalls != 0 || meta.bindingReader.calls != 0 {
 		t.Fatalf("calls lookup/intake/repo/binding = %d/%d/%d/%d, want idempotency first only", store.lookupCalls, store.calls, meta.repoReader.getInNamespaceCalls, meta.bindingReader.calls)
+	}
+}
+
+func TestRepoTemplateIdempotencyLookupOutageAuditsDeniedBeforeMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "create", path: "/internal/v1/repo-templates", body: `{"namespace_id":"ns_123","source_repo_id":"repo_123","target_template_id":"tmpl_base01","clone_history_mode":"main"}`},
+		{name: "clone", path: "/internal/v1/repo-templates/tmpl_base01:clone", body: `{"namespace_id":"ns_123","template_id":"tmpl_base01","target_repo_id":"repo_clone01"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeOperationIntakeStore{lookupErr: errors.New("postgres password=secret failed")}
+			meta := repoTemplateMetaFixture()
+			sink := &fakeAuditSink{}
+			handler := repoTemplateHandlerForTestWithAudit(store, meta, sink)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, repoTemplateRequest(http.MethodPost, tt.path, "ns_123", tt.body))
+
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d body = %s, want 503", rec.Code, rec.Body.String())
+			}
+			env := decodeErrorEnvelope(t, rec.Body.Bytes())
+			if env.Error.Code != CodeStorageUnavailable || !env.Error.Retryable {
+				t.Fatalf("error = %#v, want STORAGE_UNAVAILABLE retryable", env.Error)
+			}
+			if !auditValidationErrorsContain(env.Error.Details["validation_errors"], "idempotency_lookup_unavailable") {
+				t.Fatalf("response validation_errors = %#v, want idempotency_lookup_unavailable", env.Error.Details["validation_errors"])
+			}
+			if store.lookupCalls != 1 || store.calls != 0 || store.jvsMutationCalls != 0 || meta.repoReader.getInNamespaceCalls != 0 || meta.bindingReader.calls != 0 || meta.fenceReader.calls != 0 {
+				t.Fatalf("calls lookup/intake/mutation/repo/binding/fence = %d/%d/%d/%d/%d/%d, want lookup denial before metadata", store.lookupCalls, store.calls, store.jvsMutationCalls, meta.repoReader.getInNamespaceCalls, meta.bindingReader.calls, meta.fenceReader.calls)
+			}
+			if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+				t.Fatalf("audit events = %#v, want denied audit", sink.events)
+			}
+			if sink.events[0].Details["error_code"] != string(CodeStorageUnavailable) {
+				t.Fatalf("audit error_code = %#v, want %s", sink.events[0].Details["error_code"], CodeStorageUnavailable)
+			}
+			if !auditValidationErrorsContain(sink.events[0].Details["validation_errors"], "idempotency_lookup_unavailable") {
+				t.Fatalf("audit validation_errors = %#v, want idempotency_lookup_unavailable", sink.events[0].Details["validation_errors"])
+			}
+			renderedAudit := auditEventString(t, sink.events[0])
+			for _, leaked := range []string{"postgres", "password=secret"} {
+				if strings.Contains(rec.Body.String(), leaked) || strings.Contains(renderedAudit, leaked) {
+					t.Fatalf("lookup outage leaked %q response=%s audit=%s", leaked, rec.Body.String(), renderedAudit)
+				}
+			}
+		})
+	}
+}
+
+func TestRepoTemplateAdmissionDisabledReplaysExistingOperationsBeforeMetadata(t *testing.T) {
+	tests := []struct {
+		name          string
+		path          string
+		body          string
+		canonical     any
+		operationType operations.OperationType
+	}{
+		{
+			name:          "create",
+			path:          "/internal/v1/repo-templates",
+			body:          `{"namespace_id":"ns_123","source_repo_id":"repo_123","target_template_id":"tmpl_base01","clone_history_mode":"main"}`,
+			canonical:     createRepoTemplateCanonicalRequest{NamespaceID: "ns_123", SourceRepoID: "repo_123", TargetTemplateID: "tmpl_base01", CloneHistoryMode: "main"},
+			operationType: operations.OperationTemplateCreate,
+		},
+		{
+			name:          "clone",
+			path:          "/internal/v1/repo-templates/tmpl_base01:clone",
+			body:          `{"namespace_id":"ns_123","template_id":"tmpl_base01","target_repo_id":"repo_clone01"}`,
+			canonical:     cloneRepoTemplateCanonicalRequest{NamespaceID: "ns_123", SourceNamespaceID: "ns_123", TemplateID: "tmpl_base01", TargetRepoID: "repo_clone01"},
+			operationType: operations.OperationTemplateClone,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hash, err := operations.HashRequest(tt.canonical)
+			if err != nil {
+				t.Fatalf("hash canonical: %v", err)
+			}
+			existing := templateOperationRecord("op_existing_template", tt.operationType, hash)
+			store := &fakeOperationIntakeStore{lookupRecord: &existing}
+			meta := repoTemplateMetaFixture()
+			handler := repoTemplateHandlerForTestWithOptions(store, meta, nil, true)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, repoTemplateRequest(http.MethodPost, tt.path, "ns_123", tt.body))
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+			}
+			if store.lookupCalls != 1 || store.calls != 0 || store.jvsMutationCalls != 0 || meta.repoReader.getInNamespaceCalls != 0 || meta.bindingReader.calls != 0 || meta.fenceReader.calls != 0 {
+				t.Fatalf("calls lookup/intake/mutation/repo/binding/fence = %d/%d/%d/%d/%d/%d, want replay only", store.lookupCalls, store.calls, store.jvsMutationCalls, meta.repoReader.getInNamespaceCalls, meta.bindingReader.calls, meta.fenceReader.calls)
+			}
+		})
+	}
+}
+
+func TestRepoTemplateAdmissionDisabledRejectsNewOperationsBeforeMetadataAndAudits(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "create", path: "/internal/v1/repo-templates", body: `{"namespace_id":"ns_123","source_repo_id":"repo_123","target_template_id":"tmpl_base01","clone_history_mode":"main"}`},
+		{name: "clone", path: "/internal/v1/repo-templates/tmpl_base01:clone", body: `{"namespace_id":"ns_123","template_id":"tmpl_base01","target_repo_id":"repo_clone01"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeOperationIntakeStore{}
+			meta := repoTemplateMetaFixture()
+			sink := &fakeAuditSink{}
+			handler := repoTemplateHandlerForTestWithOptions(store, meta, sink, true)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, repoTemplateRequest(http.MethodPost, tt.path, "ns_123", tt.body))
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+			}
+			env := decodeErrorEnvelope(t, rec.Body.Bytes())
+			if env.Error.Code != CodeCapabilityDenied {
+				t.Fatalf("error code = %s, want %s", env.Error.Code, CodeCapabilityDenied)
+			}
+			if store.lookupCalls != 1 || store.calls != 0 || store.jvsMutationCalls != 0 || meta.repoReader.getInNamespaceCalls != 0 || meta.bindingReader.calls != 0 || meta.fenceReader.calls != 0 {
+				t.Fatalf("calls lookup/intake/mutation/repo/binding/fence = %d/%d/%d/%d/%d/%d, want lookup then deny only", store.lookupCalls, store.calls, store.jvsMutationCalls, meta.repoReader.getInNamespaceCalls, meta.bindingReader.calls, meta.fenceReader.calls)
+			}
+			if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+				t.Fatalf("audit events = %#v, want one denied audit", sink.events)
+			}
+			assertRepoTemplateAdmissionDisabledAudit(t, sink.events[0], "repo_template_admission_disabled")
+		})
+	}
+}
+
+func TestRepoTemplateAdmissionDisabledReturnsIdempotencyConflictBeforeCapabilityDenied(t *testing.T) {
+	existing := templateOperationRecord("op_existing_template", operations.OperationTemplateCreate, operations.RequestHash("sha256:different"))
+	store := &fakeOperationIntakeStore{lookupRecord: &existing}
+	meta := repoTemplateMetaFixture()
+	sink := &fakeAuditSink{}
+	handler := repoTemplateHandlerForTestWithOptions(store, meta, sink, true)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoTemplateRequest(http.MethodPost, "/internal/v1/repo-templates", "ns_123", `{"namespace_id":"ns_123","source_repo_id":"repo_123","target_template_id":"tmpl_base01","clone_history_mode":"main"}`))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeIdempotencyConflict {
+		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeIdempotencyConflict)
+	}
+	if store.calls != 0 || meta.repoReader.getInNamespaceCalls != 0 {
+		t.Fatalf("intake/repo calls = %d/%d, want conflict before metadata", store.calls, meta.repoReader.getInNamespaceCalls)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("audit events = %#v, want no capability denied audit on idempotency conflict", sink.events)
+	}
+}
+
+func TestRepoTemplateAdmissionDisabledWithoutLookupStoreFailsClosedBeforeMetadata(t *testing.T) {
+	store := &fakeTemplateIntakeStoreWithoutLookup{}
+	meta := repoTemplateMetaFixture()
+	sink := &fakeAuditSink{}
+	handler := RepoTemplateHandler(RepoTemplateHandlerConfig{
+		RepoReader:        meta.repoReader,
+		NamespaceReader:   &fakeNamespaceReader{namespace: meta.namespace},
+		BindingReader:     meta.bindingReader,
+		FenceReader:       meta.fenceReader,
+		MutationGate:      &fakeOperationIntakeStore{},
+		IntakeStore:       store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    namespaceBindingAllowedPolicy(auth.RoleTemplateAdmin),
+		AdmissionDisabled: true,
+		AuditSink:         sink,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoTemplateRequest(http.MethodPost, "/internal/v1/repo-templates", "ns_123", `{"namespace_id":"ns_123","source_repo_id":"repo_123","target_template_id":"tmpl_base01","clone_history_mode":"main"}`))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeCapabilityDenied)
+	}
+	if store.calls != 0 || meta.repoReader.getInNamespaceCalls != 0 || meta.bindingReader.calls != 0 || meta.fenceReader.calls != 0 {
+		t.Fatalf("calls intake/repo/binding/fence = %d/%d/%d/%d, want fail-closed before metadata", store.calls, meta.repoReader.getInNamespaceCalls, meta.bindingReader.calls, meta.fenceReader.calls)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("audit events = %#v, want denied audit", sink.events)
 	}
 }
 
@@ -291,6 +488,10 @@ func repoTemplateHandlerForTest(store *fakeOperationIntakeStore, meta repoTempla
 }
 
 func repoTemplateHandlerForTestWithAudit(store *fakeOperationIntakeStore, meta repoTemplateMeta, sink *fakeAuditSink) http.Handler {
+	return repoTemplateHandlerForTestWithOptions(store, meta, sink, false)
+}
+
+func repoTemplateHandlerForTestWithOptions(store *fakeOperationIntakeStore, meta repoTemplateMeta, sink *fakeAuditSink, admissionDisabled bool) http.Handler {
 	if meta.bindingReader == nil {
 		meta.bindingReader = &fakeNamespaceVolumeBindingReader{binding: meta.binding}
 	}
@@ -310,6 +511,7 @@ func repoTemplateHandlerForTestWithAudit(store *fakeOperationIntakeStore, meta r
 		AllowedCallers:    namespaceBindingAllowedPolicy(auth.RoleTemplateAdmin),
 		OperationID:       func() string { return "op_template" },
 		Now:               fixedNamespaceNow,
+		AdmissionDisabled: admissionDisabled,
 		AuditSink:         auditSink,
 	})
 }
@@ -341,11 +543,43 @@ func templateOperationRecord(operationID string, typ operations.OperationType, h
 	return operations.OperationRecord{ID: operationID, Type: typ, State: operations.OperationStateQueued, Phase: phase, IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_123", typ, "idem_template").String(), IdempotencyKey: "idem_template", RequestHash: hash, CorrelationID: "corr_template", CallerService: "product-caller", AuthorizedActor: operations.Actor{Type: "user", ID: "user_123"}, Resource: resource, NamespaceID: "ns_123", RepoID: repoID, TemplateID: "tmpl_base01", ExternalResourceIDs: map[string]string{}, InputSummary: map[string]any{}, CreatedAt: now}
 }
 
+type fakeTemplateIntakeStoreWithoutLookup struct {
+	calls int
+}
+
+func (store *fakeTemplateIntakeStoreWithoutLookup) CreateOrReuseTemplateCreateOperation(_ context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	store.calls++
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	return operations.IdempotencyResolution{Operation: record.Sanitized()}, nil
+}
+
+func (store *fakeTemplateIntakeStoreWithoutLookup) CreateOrReuseTemplateCloneOperation(_ context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	store.calls++
+	record, err := operations.NewQueuedOperationRecord(spec)
+	if err != nil {
+		return operations.IdempotencyResolution{}, err
+	}
+	return operations.IdempotencyResolution{Operation: record.Sanitized()}, nil
+}
+
 func assertRepoTemplateResponseDoesNotLeak(t *testing.T, body string) {
 	t.Helper()
 	for _, forbidden := range []string{"password=secret", "raw secret reason", "/srv", "control_root", "payload_root", "raw_path", "token=", "bearer "} {
 		if strings.Contains(strings.ToLower(body), forbidden) {
 			t.Fatalf("repo template response leaked %q: %s", forbidden, body)
 		}
+	}
+}
+
+func assertRepoTemplateAdmissionDisabledAudit(t *testing.T, event audit.Event, wantValidation string) {
+	t.Helper()
+	if event.Type != audit.EventTypeCapabilityDenied {
+		t.Fatalf("audit event Type = %q, want %q", event.Type, audit.EventTypeCapabilityDenied)
+	}
+	if !auditValidationErrorsContain(event.Details["validation_errors"], wantValidation) {
+		t.Fatalf("audit validation_errors = %#v, want %s; details=%#v", event.Details["validation_errors"], wantValidation, event.Details)
 	}
 }

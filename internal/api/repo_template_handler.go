@@ -35,6 +35,7 @@ type RepoTemplateHandlerConfig struct {
 	AllowedCallers    AllowedCallerPolicy
 	OperationID       OperationIDGenerator
 	Now               func() time.Time
+	AdmissionDisabled bool
 	AuditSink         audit.Sink
 }
 
@@ -82,18 +83,19 @@ func RepoTemplateHandler(config RepoTemplateHandlerConfig) http.Handler {
 		}
 	}
 	leaf := repoTemplateLeafHandler{
-		createRoute:     createRoute,
-		cloneRoute:      cloneRoute,
-		repoReader:      config.RepoReader,
-		namespaceReader: config.NamespaceReader,
-		bindingReader:   config.BindingReader,
-		fenceReader:     config.FenceReader,
-		mutationGate:    mutationGate,
-		intakeStore:     config.IntakeStore,
-		lookupStore:     lookupStore,
-		operationID:     config.OperationID,
-		now:             config.Now,
-		sink:            config.AuditSink,
+		createRoute:       createRoute,
+		cloneRoute:        cloneRoute,
+		repoReader:        config.RepoReader,
+		namespaceReader:   config.NamespaceReader,
+		bindingReader:     config.BindingReader,
+		fenceReader:       config.FenceReader,
+		mutationGate:      mutationGate,
+		intakeStore:       config.IntakeStore,
+		lookupStore:       lookupStore,
+		operationID:       config.OperationID,
+		now:               config.Now,
+		admissionDisabled: config.AdmissionDisabled,
+		sink:              config.AuditSink,
 	}
 	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, repoTemplateRouteResolver{createRoute: createRoute, cloneRoute: cloneRoute}, config.AllowedCallers, config.AuditSink)
 }
@@ -119,18 +121,19 @@ func (resolver repoTemplateRouteResolver) ResolveRouteClass(r *http.Request) (Ro
 }
 
 type repoTemplateLeafHandler struct {
-	createRoute     RouteMetadata
-	cloneRoute      RouteMetadata
-	repoReader      RepoReader
-	namespaceReader NamespaceReader
-	bindingReader   NamespaceVolumeBindingReader
-	fenceReader     RepoFenceReader
-	mutationGate    RepoJVSMutationGateReader
-	intakeStore     TemplateOperationIntakeStore
-	lookupStore     OperationIdempotencyLookupStore
-	operationID     OperationIDGenerator
-	now             func() time.Time
-	sink            audit.Sink
+	createRoute       RouteMetadata
+	cloneRoute        RouteMetadata
+	repoReader        RepoReader
+	namespaceReader   NamespaceReader
+	bindingReader     NamespaceVolumeBindingReader
+	fenceReader       RepoFenceReader
+	mutationGate      RepoJVSMutationGateReader
+	intakeStore       TemplateOperationIntakeStore
+	lookupStore       OperationIdempotencyLookupStore
+	operationID       OperationIDGenerator
+	now               func() time.Time
+	admissionDisabled bool
+	sink              audit.Sink
 }
 
 func (handler repoTemplateLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -167,10 +170,6 @@ func (handler repoTemplateLeafHandler) routeForRequest(r *http.Request) (RouteMe
 }
 
 func (handler repoTemplateLeafHandler) serveCreate(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext) {
-	if handler.missingDeps() {
-		writeRepoTemplateError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
-		return
-	}
 	body, err := decodeCreateRepoTemplateRequest(r)
 	if err != nil {
 		writeValidationErrorWithAudit(w, r, route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid repo template create request", []string{"invalid_request_body"}, handler.sink)
@@ -198,7 +197,23 @@ func (handler repoTemplateLeafHandler) serveCreate(w http.ResponseWriter, r *htt
 		return
 	}
 	canonical := createRepoTemplateCanonicalRequest{NamespaceID: body.NamespaceID, SourceRepoID: body.SourceRepoID, TargetTemplateID: body.TargetTemplateID, CloneHistoryMode: body.CloneHistoryMode}
-	if handler.writeExistingIdempotentOperation(w, r, requestContext, body.NamespaceID, operations.OperationTemplateCreate, canonical) {
+	if handler.lookupStore == nil {
+		if handler.admissionDisabled {
+			writeRepoTemplateAdmissionDisabled(w, r, route, requestContext, handler.sink)
+			return
+		}
+		writeRepoTemplateError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+		return
+	}
+	if handler.writeExistingIdempotentOperation(w, r, route, requestContext, body.NamespaceID, operations.OperationTemplateCreate, canonical) {
+		return
+	}
+	if handler.admissionDisabled {
+		writeRepoTemplateAdmissionDisabled(w, r, route, requestContext, handler.sink)
+		return
+	}
+	if handler.missingMutationDeps() {
+		writeRepoTemplateError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return
 	}
 	repo, namespace, binding, held, ok := handler.loadOrdinaryRepoMetadata(w, r, body.NamespaceID, body.SourceRepoID)
@@ -234,10 +249,6 @@ func (handler repoTemplateLeafHandler) serveCreate(w http.ResponseWriter, r *htt
 }
 
 func (handler repoTemplateLeafHandler) serveClone(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext) {
-	if handler.missingDeps() {
-		writeRepoTemplateError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
-		return
-	}
 	params, ok := RoutePathParams(route.Path, r.URL.Path)
 	if !ok {
 		writeRepoTemplateError(w, r, http.StatusNotFound, CodePathDenied, "route is not available", false)
@@ -278,7 +289,23 @@ func (handler repoTemplateLeafHandler) serveClone(w http.ResponseWriter, r *http
 		return
 	}
 	canonical := cloneRepoTemplateCanonicalRequest{NamespaceID: body.NamespaceID, SourceNamespaceID: body.SourceNamespaceID, TemplateID: templateID, TargetRepoID: body.TargetRepoID}
-	if handler.writeExistingIdempotentOperation(w, r, requestContext, body.NamespaceID, operations.OperationTemplateClone, canonical) {
+	if handler.lookupStore == nil {
+		if handler.admissionDisabled {
+			writeRepoTemplateAdmissionDisabled(w, r, route, requestContext, handler.sink)
+			return
+		}
+		writeRepoTemplateError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+		return
+	}
+	if handler.writeExistingIdempotentOperation(w, r, route, requestContext, body.NamespaceID, operations.OperationTemplateClone, canonical) {
+		return
+	}
+	if handler.admissionDisabled {
+		writeRepoTemplateAdmissionDisabled(w, r, route, requestContext, handler.sink)
+		return
+	}
+	if handler.missingMutationDeps() {
+		writeRepoTemplateError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return
 	}
 	template, namespace, binding, ok := handler.loadTemplateMetadata(w, r, body.NamespaceID, templateID)
@@ -309,11 +336,11 @@ func (handler repoTemplateLeafHandler) serveClone(w http.ResponseWriter, r *http
 	_ = writeJSON(w, http.StatusAccepted, envelope)
 }
 
-func (handler repoTemplateLeafHandler) missingDeps() bool {
-	return handler.intakeStore == nil || handler.lookupStore == nil || handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.fenceReader == nil || handler.mutationGate == nil
+func (handler repoTemplateLeafHandler) missingMutationDeps() bool {
+	return handler.intakeStore == nil || handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.fenceReader == nil || handler.mutationGate == nil
 }
 
-func (handler repoTemplateLeafHandler) writeExistingIdempotentOperation(w http.ResponseWriter, r *http.Request, requestContext auth.RequestContext, namespaceID string, operationType operations.OperationType, canonical any) bool {
+func (handler repoTemplateLeafHandler) writeExistingIdempotentOperation(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, namespaceID string, operationType operations.OperationType, canonical any) bool {
 	requestHash, err := operations.HashRequest(canonical)
 	if err != nil {
 		writeRepoTemplateError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
@@ -325,7 +352,7 @@ func (handler repoTemplateLeafHandler) writeExistingIdempotentOperation(w http.R
 		if errors.Is(err, sql.ErrNoRows) {
 			return false
 		}
-		writeRepoTemplateError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeStorageUnavailable, http.StatusServiceUnavailable, true, "durable metadata store is unavailable", []string{"idempotency_lookup_unavailable"}, handler.sink)
 		return true
 	}
 	if record.RequestHash != requestHash {
@@ -503,6 +530,33 @@ func decodeCloneRepoTemplateRequest(r *http.Request) (cloneRepoTemplateRequestDT
 func templatePolicyEnabled(binding resources.NamespaceVolumeBinding) bool {
 	enabled, _ := binding.TemplatePolicy["namespace_templates_enabled"].(bool)
 	return enabled
+}
+
+func writeRepoTemplateAdmissionDisabled(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, sink audit.Sink) {
+	message := "repo template admission is disabled"
+	validationErrors := []string{"repo_template_admission_disabled"}
+	var operationID *string
+	if route.OperationID != "" {
+		operationID = &route.OperationID
+	}
+	envelope := NewErrorEnvelope(
+		CodeCapabilityDenied,
+		message,
+		false,
+		CorrelationIDFromRequest(r),
+		operationID,
+		map[string]any{"validation_errors": validationErrors},
+	)
+	_ = WriteErrorEnvelope(w, http.StatusForbidden, envelope)
+	emitDeniedAuditEvent(r.Context(), sink, r, deniedAuditEvent{
+		Type:             audit.EventTypeCapabilityDenied,
+		Route:            route,
+		Status:           http.StatusForbidden,
+		Code:             CodeCapabilityDenied,
+		Reason:           message,
+		ValidationErrors: validationErrors,
+		RequestContext:   requestContext,
+	})
 }
 
 func writeRepoTemplateError(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, message string, retryable bool) {

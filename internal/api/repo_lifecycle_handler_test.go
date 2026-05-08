@@ -215,6 +215,118 @@ func TestRepoLifecycleHandlerIdempotencyConflictBeforeMetadata(t *testing.T) {
 	}
 }
 
+func TestRepoLifecyclePurgeAdmissionDisabledRejectsNewBeforeMetadataAndAudits(t *testing.T) {
+	store := &fakeOperationIntakeStore{}
+	meta := repoLifecycleMetaFixture(resources.RepoStatusTombstoned)
+	sink := &fakeAuditSink{}
+	handler := repoLifecycleHandlerForTestWithOptions(store, meta, namespaceBindingAllowedPolicy(auth.RoleRepoLifecycleAdmin), nil, sink, true)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoLifecycleRequest("/internal/v1/repos/repo_123:purge", "ns_123", `{"reason":"raw reason secret","product_confirmation_ref":"confirm-secret"}`))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeCapabilityDenied)
+	}
+	if store.lookupCalls != 1 || store.calls != 0 || meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceRead.calls != 0 || meta.bindingReader.calls != 0 || meta.fenceReader.calls != 0 {
+		t.Fatalf("calls lookup/intake/repo/ns/binding/fence = %d/%d/%d/%d/%d/%d, want lookup then deny only", store.lookupCalls, store.calls, meta.repoReader.getInNamespaceCalls, meta.namespaceRead.calls, meta.bindingReader.calls, meta.fenceReader.calls)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("audit events = %#v, want one denied audit", sink.events)
+	}
+	assertRepoPurgeAdmissionDisabledAudit(t, sink.events[0])
+	if strings.Contains(rec.Body.String(), "secret") || strings.Contains(rec.Body.String(), "confirm-secret") {
+		t.Fatalf("response leaked purge input: %s", rec.Body.String())
+	}
+}
+
+func TestRepoLifecyclePurgeAdmissionDisabledReturnsConflictBeforeCapabilityDenied(t *testing.T) {
+	store := &fakeOperationIntakeStore{lookupRecord: existingLifecycleOperationRecord("op_existing_lifecycle", operations.OperationRepoPurge, operations.RequestHash("sha256:different"))}
+	meta := repoLifecycleMetaFixture(resources.RepoStatusTombstoned)
+	sink := &fakeAuditSink{}
+	handler := repoLifecycleHandlerForTestWithOptions(store, meta, namespaceBindingAllowedPolicy(auth.RoleRepoLifecycleAdmin), nil, sink, true)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoLifecycleRequest("/internal/v1/repos/repo_123:purge", "ns_123", `{"reason":"raw reason secret","product_confirmation_ref":"confirm-secret"}`))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeIdempotencyConflict {
+		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeIdempotencyConflict)
+	}
+	if store.calls != 0 || meta.repoReader.getInNamespaceCalls != 0 {
+		t.Fatalf("intake/repo calls = %d/%d, want conflict before metadata", store.calls, meta.repoReader.getInNamespaceCalls)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("audit events = %#v, want no capability denied audit on idempotency conflict", sink.events)
+	}
+}
+
+func TestRepoLifecyclePurgeAdmissionDisabledWithoutLookupStoreFailsClosedBeforeMetadata(t *testing.T) {
+	store := &fakeNoLookupOperationIntakeStore{}
+	meta := repoLifecycleMetaFixture(resources.RepoStatusTombstoned)
+	sink := &fakeAuditSink{}
+	handler := repoLifecycleHandlerForTestWithOptions(store, meta, namespaceBindingAllowedPolicy(auth.RoleRepoLifecycleAdmin), nil, sink, true)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoLifecycleRequest("/internal/v1/repos/repo_123:purge", "ns_123", `{"reason":"raw reason secret","product_confirmation_ref":"confirm-secret"}`))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeCapabilityDenied)
+	}
+	if store.calls != 0 || meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceRead.calls != 0 || meta.bindingReader.calls != 0 || meta.fenceReader.calls != 0 {
+		t.Fatalf("calls intake/repo/ns/binding/fence = %d/%d/%d/%d/%d, want fail-closed before metadata", store.calls, meta.repoReader.getInNamespaceCalls, meta.namespaceRead.calls, meta.bindingReader.calls, meta.fenceReader.calls)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("audit events = %#v, want denied audit", sink.events)
+	}
+}
+
+func TestRepoLifecyclePurgeAdmissionDisabledDoesNotGateOtherLifecycleMutations(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		status resources.RepoStatus
+		body   string
+	}{
+		{name: "archive", path: "/internal/v1/repos/repo_123:archive", status: resources.RepoStatusActive, body: `{}`},
+		{name: "delete", path: "/internal/v1/repos/repo_123:delete", status: resources.RepoStatusActive, body: `{}`},
+		{name: "restore archived", path: "/internal/v1/repos/repo_123:restore-archived", status: resources.RepoStatusArchived, body: `{}`},
+		{name: "restore tombstoned", path: "/internal/v1/repos/repo_123:restore-tombstoned", status: resources.RepoStatusTombstoned, body: `{}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeOperationIntakeStore{}
+			meta := repoLifecycleMetaFixture(tt.status)
+			if tt.status == resources.RepoStatusTombstoned {
+				retention := fixedNamespaceNow().Add(time.Hour)
+				meta.repo.Lifecycle.RetentionExpiresAt = &retention
+				meta.repoReader.repos = []resources.Repo{meta.repo}
+			}
+			handler := repoLifecycleHandlerForTestWithOptions(store, meta, namespaceBindingAllowedPolicy(auth.RoleRepoLifecycleAdmin), nil, nil, true)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, repoLifecycleRequest(tt.path, "ns_123", tt.body))
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+			}
+			if store.calls != 1 {
+				t.Fatalf("intake calls = %d, want other lifecycle operation to enter handler", store.calls)
+			}
+		})
+	}
+}
+
 func TestRepoLifecycleHandlerCanonicalRequestIncludesPathRepoID(t *testing.T) {
 	body := lifecycleRequestDTO{}
 	repoHash, err := operations.HashRequest(repoLifecycleCanonicalRequest{RepoID: "repo_123", Body: body})
@@ -703,22 +815,27 @@ func repoLifecycleHandlerForTestWithPolicy(store OperationIntakeStore, meta repo
 }
 
 func repoLifecycleHandlerForTestWithPolicies(store OperationIntakeStore, meta repoLifecycleMeta, policy AllowedCallerPolicy, breakGlass AllowedCallerPolicy, sink *fakeAuditSink) http.Handler {
+	return repoLifecycleHandlerForTestWithOptions(store, meta, policy, breakGlass, sink, false)
+}
+
+func repoLifecycleHandlerForTestWithOptions(store OperationIntakeStore, meta repoLifecycleMeta, policy AllowedCallerPolicy, breakGlass AllowedCallerPolicy, sink *fakeAuditSink, purgeAdmissionDisabled bool) http.Handler {
 	var auditSink audit.Sink
 	if sink != nil {
 		auditSink = sink
 	}
 	return RepoLifecycleHandler(RepoLifecycleHandlerConfig{
-		RepoReader:        meta.repoReader,
-		NamespaceReader:   meta.namespaceRead,
-		BindingReader:     meta.bindingReader,
-		FenceReader:       meta.fenceReader,
-		IntakeStore:       store,
-		PrincipalResolver: namespaceBindingPrincipalResolver(),
-		AllowedCallers:    policy,
-		BreakGlassCallers: breakGlass,
-		OperationID:       func() string { return "op_lifecycle" },
-		Now:               fixedNamespaceNow,
-		AuditSink:         auditSink,
+		RepoReader:             meta.repoReader,
+		NamespaceReader:        meta.namespaceRead,
+		BindingReader:          meta.bindingReader,
+		FenceReader:            meta.fenceReader,
+		IntakeStore:            store,
+		PrincipalResolver:      namespaceBindingPrincipalResolver(),
+		AllowedCallers:         policy,
+		BreakGlassCallers:      breakGlass,
+		OperationID:            func() string { return "op_lifecycle" },
+		Now:                    fixedNamespaceNow,
+		PurgeAdmissionDisabled: purgeAdmissionDisabled,
+		AuditSink:              auditSink,
 	})
 }
 
@@ -822,5 +939,18 @@ func existingLifecycleOperationRecord(operationID string, operationType operatio
 		RepoID:           "repo_123",
 		InputSummary:     map[string]any{},
 		CreatedAt:        now,
+	}
+}
+
+func assertRepoPurgeAdmissionDisabledAudit(t *testing.T, event audit.Event) {
+	t.Helper()
+	if event.Type != audit.EventTypeCapabilityDenied {
+		t.Fatalf("audit event Type = %q, want %q", event.Type, audit.EventTypeCapabilityDenied)
+	}
+	if got := event.Details["route_operation_id"]; got != "purgeRepo" {
+		t.Fatalf("audit route_operation_id = %#v, want purgeRepo; details=%#v", got, event.Details)
+	}
+	if !auditValidationErrorsContain(event.Details["validation_errors"], "repo_purge_admission_disabled") {
+		t.Fatalf("audit validation_errors = %#v, want repo_purge_admission_disabled; details=%#v", event.Details["validation_errors"], event.Details)
 	}
 }

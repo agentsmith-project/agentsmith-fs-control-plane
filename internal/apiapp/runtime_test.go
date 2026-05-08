@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -708,18 +709,154 @@ func TestInternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated(t *
 				}
 			}
 
-			mount := body.Capabilities[api.CapabilityWorkloadMount]
-			if runtimeReadinessBoolField(t, mount, "required_for_service_ready") {
-				t.Fatalf("workload mount required_for_service_ready = true, want false")
+			for capability, wantReason := range map[string]string{
+				api.CapabilityWorkloadMount: tt.wantReason,
+				api.CapabilityRepoTemplate:  "repo_template_not_configured",
+				api.CapabilityRepoPurge:     "repo_purge_not_configured",
+			} {
+				gate := body.Capabilities[capability]
+				if runtimeReadinessBoolField(t, gate, "required_for_service_ready") {
+					t.Fatalf("%s required_for_service_ready = true, want false", capability)
+				}
+				if runtimeReadinessBoolField(t, gate, "required_for_default_ga") {
+					t.Fatalf("%s required_for_default_ga = true, want false", capability)
+				}
+				if !runtimeReadinessBoolField(t, gate, "optional_gated") {
+					t.Fatalf("%s optional_gated = false, want true", capability)
+				}
+				if got, _ := gate["reason"].(string); got != wantReason {
+					t.Fatalf("%s reason = %q, want %q", capability, got, wantReason)
+				}
 			}
-			if runtimeReadinessBoolField(t, mount, "required_for_default_ga") {
-				t.Fatalf("workload mount required_for_default_ga = true, want false")
+		})
+	}
+}
+
+func TestInternalRuntimeReadinessRuntimeProfileRequiresOptedInRepoOptionalCapabilities(t *testing.T) {
+	tests := []struct {
+		name       string
+		overrides  config.MapSource
+		capability string
+		wantReason string
+	}{
+		{
+			name: "repo template unready",
+			overrides: config.MapSource{
+				"AFSCP_REPO_TEMPLATE_ENABLED": "true",
+				"AFSCP_REPO_TEMPLATE_READY":   "false",
+			},
+			capability: api.CapabilityRepoTemplate,
+			wantReason: "repo_template_not_ready",
+		},
+		{
+			name: "repo purge unready",
+			overrides: config.MapSource{
+				"AFSCP_REPO_PURGE_ENABLED": "true",
+				"AFSCP_REPO_PURGE_READY":   "false",
+			},
+			capability: api.CapabilityRepoPurge,
+			wantReason: "repo_purge_not_ready",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := newTestRuntimeWithSourceOverrides(t, tt.overrides, func(context.Context) error { return nil })
+			defer closeRuntime(t, runtime)
+
+			rec := httptest.NewRecorder()
+			runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 			}
-			if !runtimeReadinessBoolField(t, mount, "optional_gated") {
-				t.Fatalf("workload mount optional_gated = false, want true")
+
+			var body api.ReadinessResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
 			}
-			if got, _ := mount["reason"].(string); got != tt.wantReason {
-				t.Fatalf("workload mount reason = %q, want %q", got, tt.wantReason)
+			if body.Ready {
+				t.Fatalf("readiness = ready, want not ready when %s is explicitly enabled but unready", tt.capability)
+			}
+			gate := body.Capabilities[tt.capability]
+			if !gate.RequiredForServiceReady || gate.OptionalGated {
+				t.Fatalf("%s gate = %#v, want runtime opt-in required", tt.capability, gate)
+			}
+			if !gate.Enabled || gate.Ready || !gate.Gated || gate.Reason != tt.wantReason {
+				t.Fatalf("%s gate = %#v, want enabled unready gated reason %q", tt.capability, gate, tt.wantReason)
+			}
+		})
+	}
+}
+
+func TestInternalRuntimeWiresRepoTemplateAndPurgeCapabilitiesToAdmission(t *testing.T) {
+	source := readyTestRuntimeSource()
+	source["AFSCP_REPO_TEMPLATE_ENABLED"] = "false"
+	source["AFSCP_REPO_TEMPLATE_READY"] = "false"
+	source["AFSCP_REPO_PURGE_ENABLED"] = "false"
+	source["AFSCP_REPO_PURGE_READY"] = "false"
+
+	binding := testBinding()
+	binding.AllowedCallers = []resources.AllowedCaller{{
+		CallerService: "svc_api",
+		Roles: []resources.CallerRole{
+			resources.CallerRoleTemplateAdmin,
+			resources.CallerRoleRepoLifecycleAdmin,
+		},
+	}}
+	store := &fakeRuntimeStore{binding: binding}
+	runtime, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {
+			if dsn != "postgres://api:secret@db/afscp" {
+				t.Fatalf("dsn = %q", dsn)
+			}
+			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+		},
+		OperationID: func() string { return "op_test" },
+		Clock:       func() time.Time { return time.Unix(100, 0).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer closeRuntime(t, runtime)
+
+	tests := []struct {
+		name        string
+		request     *http.Request
+		wantMessage string
+	}{
+		{
+			name:        "repo template create",
+			request:     internalPOST("/internal/v1/repo-templates", "svc_api", "token-api", `{"namespace_id":"ns_alpha","source_repo_id":"repo_alpha","target_template_id":"tmpl_alpha","clone_history_mode":"main"}`),
+			wantMessage: "repo template admission is disabled",
+		},
+		{
+			name:        "repo purge",
+			request:     internalPOST("/internal/v1/repos/repo_alpha:purge", "svc_api", "token-api", `{"reason":"remove requested","product_confirmation_ref":"confirm-alpha"}`),
+			wantMessage: "repo purge admission is disabled",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			beforeRepoReads := store.repoInNamespaceCalls
+			beforeGenericIntake := store.operationCreateCalls
+			beforeTemplateIntake := store.templateCreateCalls + store.templateCloneCalls
+			rec := httptest.NewRecorder()
+
+			runtime.Handler.ServeHTTP(rec, tt.request)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
+			}
+			env := decodeRuntimeErrorEnvelope(t, rec.Body.Bytes())
+			if env.Error.Code != api.CodeCapabilityDenied {
+				t.Fatalf("error code = %s, want %s; body=%s", env.Error.Code, api.CodeCapabilityDenied, rec.Body.String())
+			}
+			if env.Error.Message != tt.wantMessage {
+				t.Fatalf("error message = %q, want %q; body=%s", env.Error.Message, tt.wantMessage, rec.Body.String())
+			}
+			if store.repoInNamespaceCalls != beforeRepoReads || store.operationCreateCalls != beforeGenericIntake || store.templateCreateCalls+store.templateCloneCalls != beforeTemplateIntake {
+				t.Fatalf("metadata/intake calls changed repo=%d->%d generic=%d->%d template=%d->%d", beforeRepoReads, store.repoInNamespaceCalls, beforeGenericIntake, store.operationCreateCalls, beforeTemplateIntake, store.templateCreateCalls+store.templateCloneCalls)
 			}
 		})
 	}
@@ -1087,6 +1224,13 @@ func internalGET(path, callerService, token string) *http.Request {
 	return internalRequest(http.MethodGet, path, callerService, token)
 }
 
+func internalPOST(path, callerService, token string, body string) *http.Request {
+	req := internalRequest(http.MethodPost, path, callerService, token)
+	req.Body = io.NopCloser(strings.NewReader(body))
+	req.ContentLength = int64(len(body))
+	return req
+}
+
 func internalRequest(method, path, callerService, token string) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set(auth.HeaderAuthorization, "Bearer "+token)
@@ -1097,6 +1241,15 @@ func internalRequest(method, path, callerService, token string) *http.Request {
 	req.Header.Set(auth.HeaderActorType, "service")
 	req.Header.Set(auth.HeaderActorID, callerService)
 	return req
+}
+
+func decodeRuntimeErrorEnvelope(t *testing.T, body []byte) api.ErrorEnvelope {
+	t.Helper()
+	var env api.ErrorEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("error envelope did not decode: %v: %s", err, string(body))
+	}
+	return env
 }
 
 func testBinding() resources.NamespaceVolumeBinding {
@@ -1138,13 +1291,17 @@ func runtimeVolumeHealthHasFinding(response api.VolumeHealthResponse, code strin
 }
 
 type fakeRuntimeStore struct {
-	binding           resources.NamespaceVolumeBinding
-	namespace         resources.Namespace
-	repo              resources.Repo
-	volume            resources.Volume
-	exportCreate      exportaccess.CreateRequest
-	exportCreateCalls int
-	closed            bool
+	binding              resources.NamespaceVolumeBinding
+	namespace            resources.Namespace
+	repo                 resources.Repo
+	volume               resources.Volume
+	exportCreate         exportaccess.CreateRequest
+	exportCreateCalls    int
+	repoInNamespaceCalls int
+	operationCreateCalls int
+	templateCreateCalls  int
+	templateCloneCalls   int
+	closed               bool
 }
 
 func (store *fakeRuntimeStore) Close() error {
@@ -1174,6 +1331,7 @@ func (store *fakeRuntimeStore) GetRepo(_ context.Context, repoID string) (resour
 }
 
 func (store *fakeRuntimeStore) GetRepoInNamespace(_ context.Context, namespaceID, repoID string) (resources.Repo, error) {
+	store.repoInNamespaceCalls++
 	if store.repo.NamespaceID == namespaceID && store.repo.ID == repoID {
 		return store.repo, nil
 	}
@@ -1232,7 +1390,8 @@ func (*fakeRuntimeStore) GetOperationByIdempotencyScope(context.Context, operati
 	return operations.OperationRecord{}, sql.ErrNoRows
 }
 
-func (*fakeRuntimeStore) CreateOrReuseOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+func (store *fakeRuntimeStore) CreateOrReuseOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	store.operationCreateCalls++
 	return operations.IdempotencyResolution{}, errors.New("not implemented")
 }
 
@@ -1240,11 +1399,13 @@ func (*fakeRuntimeStore) CreateOrReuseRepoCreateOperation(context.Context, opera
 	return operations.IdempotencyResolution{}, errors.New("not implemented")
 }
 
-func (*fakeRuntimeStore) CreateOrReuseTemplateCreateOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+func (store *fakeRuntimeStore) CreateOrReuseTemplateCreateOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	store.templateCreateCalls++
 	return operations.IdempotencyResolution{}, errors.New("not implemented")
 }
 
-func (*fakeRuntimeStore) CreateOrReuseTemplateCloneOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+func (store *fakeRuntimeStore) CreateOrReuseTemplateCloneOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	store.templateCloneCalls++
 	return operations.IdempotencyResolution{}, errors.New("not implemented")
 }
 

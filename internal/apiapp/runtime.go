@@ -193,6 +193,8 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		ReadinessProvider:              internalReadinessProvider(cfg, handle.Ping),
 		WebDAVExportAdmissionDisabled:  !cfg.Capabilities.WebDAV.Available(),
 		WorkloadMountAdmissionDisabled: !cfg.Capabilities.Mount.Available(),
+		RepoTemplateAdmissionDisabled:  !cfg.Capabilities.RepoTemplate.Available(),
+		RepoPurgeAdmissionDisabled:     !cfg.Capabilities.RepoPurge.Available(),
 	})
 
 	return &Runtime{Handler: handler, close: handle.Close}, nil
@@ -431,6 +433,8 @@ func internalCapabilityMatrix(cfg config.Config) capability.Matrix {
 		Gated:   !cfg.Capabilities.Mount.Available(),
 		Reason:  mountReadinessReason(cfg.Capabilities.Mount),
 	}
+	templateStatus := capabilityStatus(cfg.Capabilities.RepoTemplate, "repo_template_not_configured", "repo_template_not_ready")
+	purgeStatus := capabilityStatus(cfg.Capabilities.RepoPurge, "repo_purge_not_configured", "repo_purge_not_ready")
 
 	return capability.NewMatrix(
 		capability.Entry{
@@ -452,6 +456,16 @@ func internalCapabilityMatrix(cfg config.Config) capability.Matrix {
 			ID:          capability.WorkloadMount,
 			Status:      mountStatus,
 			Requirement: internalCapabilityRequirement(cfg, capability.WorkloadMount, mountStatus),
+		},
+		capability.Entry{
+			ID:          capability.RepoTemplate,
+			Status:      templateStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.RepoTemplate, templateStatus),
+		},
+		capability.Entry{
+			ID:          capability.RepoPurge,
+			Status:      purgeStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.RepoPurge, purgeStatus),
 		},
 	)
 }
@@ -479,6 +493,8 @@ func internalRequiredReadinessCapabilities(cfg config.Config) []string {
 		capability.JVS,
 		capability.WebDAVExport,
 		capability.WorkloadMount,
+		capability.RepoTemplate,
+		capability.RepoPurge,
 	}
 	required := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -502,7 +518,7 @@ func internalCapabilityRequirement(cfg config.Config, id capability.ID, status c
 	requiredForServiceReady := internalRequiredForServiceReady(cfg, id)
 	return capability.Requirement{
 		RequiredForServiceReady: requiredForServiceReady,
-		RequiredForDefaultGA:    internalRequiredForDefaultGA(id),
+		RequiredForDefaultGA:    capability.RequiredForDefaultGA(id),
 		OptionalGated:           !requiredForServiceReady && status.Gated,
 	}
 }
@@ -526,15 +542,10 @@ func internalRequiredForServiceReady(cfg config.Config, id capability.ID) bool {
 		return cfg.Capabilities.WebDAV.Enabled
 	case capability.WorkloadMount:
 		return cfg.Capabilities.Mount.Enabled
-	default:
-		return false
-	}
-}
-
-func internalRequiredForDefaultGA(id capability.ID) bool {
-	switch id {
-	case capability.Storage, capability.JVS, capability.WebDAVExport:
-		return true
+	case capability.RepoTemplate:
+		return cfg.Capabilities.RepoTemplate.Enabled
+	case capability.RepoPurge:
+		return cfg.Capabilities.RepoPurge.Enabled
 	default:
 		return false
 	}

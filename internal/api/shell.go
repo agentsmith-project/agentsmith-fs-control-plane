@@ -63,6 +63,8 @@ type InternalAPIShellConfig struct {
 	ReadinessProvider              func(context.Context) ReadinessResponse
 	WebDAVExportAdmissionDisabled  bool
 	WorkloadMountAdmissionDisabled bool
+	RepoTemplateAdmissionDisabled  bool
+	RepoPurgeAdmissionDisabled     bool
 }
 
 func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
@@ -144,10 +146,11 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
 			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
 		},
-		BreakGlassCallers: deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
-		OperationID:       config.GenerateOperationID,
-		Now:               config.Now,
-		AuditSink:         config.AuditSink,
+		BreakGlassCallers:      deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+		OperationID:            config.GenerateOperationID,
+		Now:                    config.Now,
+		PurgeAdmissionDisabled: config.RepoPurgeAdmissionDisabled,
+		AuditSink:              config.AuditSink,
 	})
 	archiveRepoHandler := requestLogHandler(repoLifecycleHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}:archive", "archiveRepo")
 	restoreArchivedRepoHandler := requestLogHandler(repoLifecycleHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}:restore-archived", "restoreArchivedRepo")
@@ -345,9 +348,10 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
 			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
 		},
-		OperationID: config.GenerateOperationID,
-		Now:         config.Now,
-		AuditSink:   config.AuditSink,
+		OperationID:       config.GenerateOperationID,
+		Now:               config.Now,
+		AdmissionDisabled: config.RepoTemplateAdmissionDisabled,
+		AuditSink:         config.AuditSink,
 	})
 	createRepoTemplateHandler := requestLogHandler(repoTemplateHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repo-templates", "createRepoTemplate")
 	cloneRepoTemplateHandler := requestLogHandler(repoTemplateHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repo-templates/{templateId}:clone", "cloneRepoTemplate")
@@ -555,6 +559,8 @@ func capabilityDeniedHandlerWithMessage(message string) http.Handler {
 					CapabilityJVS,
 					CapabilityWebDAVExport,
 					CapabilityWorkloadMount,
+					CapabilityRepoTemplate,
+					CapabilityRepoPurge,
 				},
 			},
 		)
@@ -610,6 +616,8 @@ func fallbackHandler(logger *slog.Logger, sink audit.Sink, capabilityDenied http
 						CapabilityJVS,
 						CapabilityWebDAVExport,
 						CapabilityWorkloadMount,
+						CapabilityRepoTemplate,
+						CapabilityRepoPurge,
 					},
 				},
 			)

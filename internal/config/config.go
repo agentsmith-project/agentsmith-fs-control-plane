@@ -77,10 +77,12 @@ type Config struct {
 }
 
 type Capabilities struct {
-	Storage Capability
-	JVS     Capability
-	WebDAV  Capability
-	Mount   Capability
+	Storage      Capability
+	JVS          Capability
+	WebDAV       Capability
+	Mount        Capability
+	RepoTemplate Capability
+	RepoPurge    Capability
 }
 
 type Capability struct {
@@ -229,6 +231,12 @@ func Load(source Source) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Capabilities.Mount, err = loadCapability(source, "AFSCP_MOUNT"); err != nil {
+		return Config{}, err
+	}
+	if cfg.Capabilities.RepoTemplate, err = loadCapability(source, "AFSCP_REPO_TEMPLATE"); err != nil {
+		return Config{}, err
+	}
+	if cfg.Capabilities.RepoPurge, err = loadCapability(source, "AFSCP_REPO_PURGE"); err != nil {
 		return Config{}, err
 	}
 	if cfg.Worker, err = loadWorkerConfig(source, cfg.Worker); err != nil {

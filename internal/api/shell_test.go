@@ -76,8 +76,10 @@ func TestNeutralShellDeniesKnownInternalRoutesWithoutReadingRequestBody(t *testi
 			if !ok {
 				t.Fatalf("missing disabled_capabilities detail: %#v", envelope.Error.Details)
 			}
-			if len(disabled) != 4 {
-				t.Fatalf("expected 4 disabled capabilities, got %#v", disabled)
+			for _, capability := range []string{CapabilityStorage, CapabilityJVS, CapabilityWebDAVExport, CapabilityWorkloadMount, CapabilityRepoTemplate, CapabilityRepoPurge} {
+				if !auditValidationErrorsContain(disabled, capability) {
+					t.Fatalf("disabled_capabilities = %#v, missing %s", disabled, capability)
+				}
 			}
 		})
 	}

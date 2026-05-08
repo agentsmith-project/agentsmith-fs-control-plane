@@ -14,6 +14,8 @@ const (
 	CapabilityJVS           = string(capability.JVS)
 	CapabilityWebDAVExport  = string(capability.WebDAVExport)
 	CapabilityWorkloadMount = string(capability.WorkloadMount)
+	CapabilityRepoTemplate  = string(capability.RepoTemplate)
+	CapabilityRepoPurge     = string(capability.RepoPurge)
 )
 
 var requiredReadinessCapabilities = []string{
@@ -66,6 +68,8 @@ func NeutralReadiness() ReadinessResponse {
 			CapabilityJVS:           disabled,
 			CapabilityWebDAVExport:  disabled,
 			CapabilityWorkloadMount: disabled,
+			CapabilityRepoTemplate:  disabled,
+			CapabilityRepoPurge:     disabled,
 		},
 	}
 }

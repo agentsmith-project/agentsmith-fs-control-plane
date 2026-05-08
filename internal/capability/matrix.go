@@ -1,5 +1,7 @@
 package capability
 
+import "github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+
 type ID string
 
 const (
@@ -7,7 +9,31 @@ const (
 	JVS           ID = "jvs"
 	WebDAVExport  ID = "webdav_export"
 	WorkloadMount ID = "workload_mount"
+	RepoTemplate  ID = "repo_template"
+	RepoPurge     ID = "repo_purge"
 )
+
+var admissionCapabilitiesByOperationType = map[operations.OperationType]ID{
+	operations.OperationExportCreate:       WebDAVExport,
+	operations.OperationMountBindingCreate: WorkloadMount,
+	operations.OperationTemplateCreate:     RepoTemplate,
+	operations.OperationTemplateClone:      RepoTemplate,
+	operations.OperationRepoPurge:          RepoPurge,
+}
+
+func AdmissionCapabilityForOperationType(operationType operations.OperationType) (ID, bool) {
+	id, ok := admissionCapabilitiesByOperationType[operationType]
+	return id, ok
+}
+
+func RequiredForDefaultGA(id ID) bool {
+	switch id {
+	case Storage, JVS, WebDAVExport:
+		return true
+	default:
+		return false
+	}
+}
 
 type Status struct {
 	Enabled bool

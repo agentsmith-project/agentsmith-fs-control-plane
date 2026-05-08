@@ -30,18 +30,19 @@ type RepoFenceReader interface {
 }
 
 type RepoLifecycleHandlerConfig struct {
-	RepoReader        RepoReader
-	NamespaceReader   NamespaceReader
-	BindingReader     NamespaceVolumeBindingReader
-	FenceReader       RepoFenceReader
-	IntakeStore       OperationIntakeStore
-	IntakeLookupStore OperationIdempotencyLookupStore
-	PrincipalResolver PrincipalResolver
-	AllowedCallers    AllowedCallerPolicy
-	BreakGlassCallers AllowedCallerPolicy
-	OperationID       OperationIDGenerator
-	Now               func() time.Time
-	AuditSink         audit.Sink
+	RepoReader             RepoReader
+	NamespaceReader        NamespaceReader
+	BindingReader          NamespaceVolumeBindingReader
+	FenceReader            RepoFenceReader
+	IntakeStore            OperationIntakeStore
+	IntakeLookupStore      OperationIdempotencyLookupStore
+	PrincipalResolver      PrincipalResolver
+	AllowedCallers         AllowedCallerPolicy
+	BreakGlassCallers      AllowedCallerPolicy
+	OperationID            OperationIDGenerator
+	Now                    func() time.Time
+	PurgeAdmissionDisabled bool
+	AuditSink              audit.Sink
 }
 
 type lifecycleRequestDTO struct {
@@ -69,18 +70,19 @@ func RepoLifecycleHandler(config RepoLifecycleHandlerConfig) http.Handler {
 		}
 	}
 	leaf := repoLifecycleLeafHandler{
-		routes:          routes,
-		repoReader:      config.RepoReader,
-		namespaceReader: config.NamespaceReader,
-		bindingReader:   config.BindingReader,
-		fenceReader:     config.FenceReader,
-		intakeStore:     config.IntakeStore,
-		lookupStore:     lookupStore,
-		operationID:     config.OperationID,
-		now:             config.Now,
-		sink:            config.AuditSink,
-		allowedCallers:  config.AllowedCallers,
-		breakGlass:      config.BreakGlassCallers,
+		routes:                 routes,
+		repoReader:             config.RepoReader,
+		namespaceReader:        config.NamespaceReader,
+		bindingReader:          config.BindingReader,
+		fenceReader:            config.FenceReader,
+		intakeStore:            config.IntakeStore,
+		lookupStore:            lookupStore,
+		operationID:            config.OperationID,
+		now:                    config.Now,
+		purgeAdmissionDisabled: config.PurgeAdmissionDisabled,
+		sink:                   config.AuditSink,
+		allowedCallers:         config.AllowedCallers,
+		breakGlass:             config.BreakGlassCallers,
 	}
 	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, repoLifecycleRouteResolver{routes: routes}, config.AllowedCallers, config.AuditSink)
 }
@@ -114,18 +116,19 @@ func (resolver repoLifecycleRouteResolver) ResolveRouteClass(r *http.Request) (R
 }
 
 type repoLifecycleLeafHandler struct {
-	routes          []RouteMetadata
-	repoReader      RepoReader
-	namespaceReader NamespaceReader
-	bindingReader   NamespaceVolumeBindingReader
-	fenceReader     RepoFenceReader
-	intakeStore     OperationIntakeStore
-	lookupStore     OperationIdempotencyLookupStore
-	operationID     OperationIDGenerator
-	now             func() time.Time
-	sink            audit.Sink
-	allowedCallers  AllowedCallerPolicy
-	breakGlass      AllowedCallerPolicy
+	routes                 []RouteMetadata
+	repoReader             RepoReader
+	namespaceReader        NamespaceReader
+	bindingReader          NamespaceVolumeBindingReader
+	fenceReader            RepoFenceReader
+	intakeStore            OperationIntakeStore
+	lookupStore            OperationIdempotencyLookupStore
+	operationID            OperationIDGenerator
+	now                    func() time.Time
+	purgeAdmissionDisabled bool
+	sink                   audit.Sink
+	allowedCallers         AllowedCallerPolicy
+	breakGlass             AllowedCallerPolicy
 }
 
 func (handler repoLifecycleLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -153,18 +156,30 @@ func (handler repoLifecycleLeafHandler) ServeHTTP(w http.ResponseWriter, r *http
 		writeRepoLifecycleValidationError(w, r, route, requestContext, CodeInvalidID, "invalid namespace id", []string{"invalid_namespace_id"}, handler.sink)
 		return
 	}
-	if handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.fenceReader == nil || handler.intakeStore == nil || handler.lookupStore == nil {
-		writeRepoLifecycleError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
-		return
-	}
 	body, canonicalBody, baseSummary, err := handler.decodeRequest(route.OperationID, r)
 	if err != nil {
 		writeRepoLifecycleValidationError(w, r, route, requestContext, err.Code, err.Message, []string{err.Label}, handler.sink)
 		return
 	}
 	canonical := repoLifecycleCanonicalRequest{RepoID: repoID, Body: canonicalBody}
+	if handler.lookupStore == nil {
+		if route.OperationID == "purgeRepo" && handler.purgeAdmissionDisabled {
+			writeRepoPurgeAdmissionDisabled(w, r, route, requestContext, handler.sink)
+			return
+		}
+		writeRepoLifecycleError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+		return
+	}
 	if reused, handled := handler.writeExistingIdempotentOperation(w, r, route, requestContext, namespaceID, canonical); handled {
 		_ = reused
+		return
+	}
+	if route.OperationID == "purgeRepo" && handler.purgeAdmissionDisabled {
+		writeRepoPurgeAdmissionDisabled(w, r, route, requestContext, handler.sink)
+		return
+	}
+	if handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.fenceReader == nil || handler.intakeStore == nil {
+		writeRepoLifecycleError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return
 	}
 	repo, namespace, binding, heldFences, ok := handler.loadMetadata(w, r, route, requestContext, namespaceID, repoID)
@@ -610,6 +625,33 @@ func purgeRefFingerprint(kind, ref string) string {
 
 func writeRepoLifecycleValidationError(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, code ErrorCode, message string, labels []string, sink audit.Sink) {
 	writeValidationErrorWithAudit(w, r, route, requestContext, code, http.StatusBadRequest, message, labels, sink)
+}
+
+func writeRepoPurgeAdmissionDisabled(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, sink audit.Sink) {
+	message := "repo purge admission is disabled"
+	validationErrors := []string{"repo_purge_admission_disabled"}
+	var operationID *string
+	if route.OperationID != "" {
+		operationID = &route.OperationID
+	}
+	envelope := NewErrorEnvelope(
+		CodeCapabilityDenied,
+		message,
+		false,
+		CorrelationIDFromRequest(r),
+		operationID,
+		map[string]any{"validation_errors": validationErrors},
+	)
+	_ = WriteErrorEnvelope(w, http.StatusForbidden, envelope)
+	emitDeniedAuditEvent(r.Context(), sink, r, deniedAuditEvent{
+		Type:             audit.EventTypeCapabilityDenied,
+		Route:            route,
+		Status:           http.StatusForbidden,
+		Code:             CodeCapabilityDenied,
+		Reason:           message,
+		ValidationErrors: validationErrors,
+		RequestContext:   requestContext,
+	})
 }
 
 func writeRepoLifecycleError(w http.ResponseWriter, r *http.Request, status int, code ErrorCode, message string, retryable bool) {
