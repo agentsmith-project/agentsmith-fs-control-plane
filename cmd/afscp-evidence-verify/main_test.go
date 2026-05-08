@@ -288,6 +288,28 @@ func evidenceCLIManifest(command, anchor string) string {
       "default_ga_required":true
     },
     {
+      "id":"webdav_default_access_unit",
+      "capability_id":"webdav_export",
+      "evidence_type":"integration",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
+      "id":"default_user_loop_webdav_access_unit",
+      "capability_id":"webdav_export",
+      "evidence_type":"integration",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -436,7 +458,6 @@ var package0CLISeedGapMetadata = []struct {
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_profile_boundary_open", "CLAIM_PROFILE_BOUNDARY", "F1"},
 	{"seed_gap_discovery_surfaces_open", "CLAIM_DISCOVERY_SURFACES", "F7"},
-	{"seed_gap_webdav_default_access_open", "CLAIM_WEBDAV_DEFAULT_ACCESS", "F8"},
 	{"seed_gap_secret_path_redaction_open", "CLAIM_SECRET_PATH_REDACTION", "F10"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
@@ -469,6 +490,8 @@ var package0CLIMetadata = []struct {
 	{"repo_purge_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_worker_recovery", "P0_OPTIONAL_DENIED_PURGE_RECOVERY", "F13", "negative", "fast", "package", "false", "denial_safety", "repo purge recovery terminalizes unsupported work"},
 	{"default_user_loop_repo_projection_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_repo_projection", "P1B_DEFAULT_USER_LOOP_REPO_PROJECTION", "F2", "positive", "fast", "package", "true", "positive_path", "repo create get list projection and repo-create worker positive path pass without closing the full default user loop"},
 	{"default_user_loop_jvs_save_restore_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_jvs_save_restore", "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE", "F2", "positive", "fast", "package", "true", "positive_path", "JVS save history restore-preview restore-run and discard paths pass without closing the full default user loop"},
+	{"webdav_default_access_unit", "CLAIM_WEBDAV_DEFAULT_ACCESS", "webdav_default_access", "P0_WEBDAV_DEFAULT_ACCESS", "F8", "positive", "fast", "package", "true", "positive_path", "webdav default access passes in default mode"},
+	{"default_user_loop_webdav_access_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_webdav_access", "P1D_DEFAULT_USER_LOOP_WEBDAV_ACCESS", "F2", "positive", "fast", "package", "true", "positive_path", "WebDAV access contributes only partial default user loop evidence"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "negative", "fast", "package", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "both", "fast", "package", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "both", "fast", "package", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},

@@ -1089,6 +1089,139 @@ func TestCurrentRepoManifestContainsP1cJVSSaveRestoreEvidence(t *testing.T) {
 	}
 }
 
+func TestCurrentRepoManifestContainsP1dWebDAVDefaultAccessEvidence(t *testing.T) {
+	assertCurrentRepoManifestContainsP1dWebDAVEvidence(t, p1dWebDAVEvidenceWant{
+		id:           "webdav_default_access_unit",
+		claimID:      "CLAIM_WEBDAV_DEFAULT_ACCESS",
+		subclaimID:   "webdav_default_access",
+		acceptanceID: "P0_WEBDAV_DEFAULT_ACCESS",
+		riskID:       "F8",
+	})
+}
+
+func TestCurrentRepoManifestContainsP1dDefaultUserLoopWebDAVPartialEvidence(t *testing.T) {
+	assertCurrentRepoManifestContainsP1dWebDAVEvidence(t, p1dWebDAVEvidenceWant{
+		id:           "default_user_loop_webdav_access_unit",
+		claimID:      "CLAIM_DEFAULT_USER_LOOP",
+		subclaimID:   "default_user_loop_webdav_access",
+		acceptanceID: "P1D_DEFAULT_USER_LOOP_WEBDAV_ACCESS",
+		riskID:       "F2",
+	})
+}
+
+type p1dWebDAVEvidenceWant struct {
+	id           string
+	claimID      string
+	subclaimID   string
+	acceptanceID string
+	riskID       string
+}
+
+func assertCurrentRepoManifestContainsP1dWebDAVEvidence(t *testing.T, want p1dWebDAVEvidenceWant) {
+	t.Helper()
+
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	item, ok := manifestItemByID(manifest, want.id)
+	if !ok {
+		t.Fatalf("manifest missing %s", want.id)
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != want.claimID ||
+		item.SubclaimID != want.subclaimID ||
+		item.AcceptanceID != want.acceptanceID ||
+		item.RiskID != want.riskID ||
+		item.CapabilityID != "webdav_export" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.NegativeOrPositive != "positive" ||
+		item.EvidenceType != "integration" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		!item.DefaultGARequired ||
+		item.PassCriteria.Kind != "positive_path" {
+		t.Fatalf("%s shape = %+v, want default required P1d WebDAV positive evidence", item.ID, item)
+	}
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/api", "./internal/exportaccess", "./internal/exportgateway", "./internal/exportreconcile", "./internal/store/postgres"}) {
+		t.Fatalf("%s command packages = %#v, want api, exportaccess, exportgateway, exportreconcile, and postgres store", item.ID, packages)
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range p1dWebDAVRequiredTestNames() {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func p1dWebDAVRequiredTestNames() []string {
+	return []string{
+		"TestCreateExportReturnsOneTimePasswordAndPersistsOnlyVerifier",
+		"TestCreateExportIdempotentReplayReturnsRedactedSessionWithoutPassword",
+		"TestCreateExportDefaultsTTLAndClampsDefaultToPolicyMax",
+		"TestGetExportReturnsRedactedSessionOnly",
+		"TestGetExportRejectsNamespaceMismatch",
+		"TestRevokeExportIsIdempotentAndLeavesSessionRevoking",
+		"TestRevokeExportRemainsAvailableForRevokingSessionAfterNamespaceDisable",
+		"TestPasswordVerifierAcceptsOnlyOriginalSecret",
+		"TestResolveTTLSecondsAppliesDefaultMinAndPolicyMax",
+		"TestSessionValidationKeepsCredentialFieldsOutOfAPIModel",
+		"TestReadOnlyMethodPolicy",
+		"TestReadWritePutGetAndCopyMoveDestinationPolicy",
+		"TestSuccessfulGETRecordsRuntimeLedger",
+		"TestSuccessfulGETUsesSingleDurableRuntimeRequestID",
+		"TestReadWritePUTUsesDurableWriteRuntimeRequest",
+		"TestReadWritePUTRecordsActiveWriteRuntimeLedger",
+		"TestInactiveAndExpiredSessionsDenyClosed",
+		"TestInactiveExpiredAndRevokingSessionsEmitRedactedAuditWithoutRuntimeObservation",
+		"TestBasicAuthFailureDoesNotLeakCredentialOrPaths",
+		"TestGatewayStoreFailClosedDeniesDisabledNamespaceCredential",
+		"TestDeniedRequestsEmitAuditWithoutRuntimeObservation",
+		"TestDeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial",
+		"TestBeginRuntimeRequestAdmissionDeniedFailsClosedBeforeBackend",
+		"TestRunOnceReconcilesZeroCountRevokingAndExpiredSessions",
+		"TestRunOnceRecoversStaleRuntimeRequestsBeforeTerminalList",
+		"TestRunOnceTreatsNoRowsAsRaceLost",
+		"TestCreateOrReuseExportSQLCommitsSessionOperationAndAuditInOneBoundary",
+		"TestCreateOrReuseExportSQLPredicatesMatchOperationAndSessionArgs",
+		"TestCreateOrReuseExportSQLOnlyCreatesSessionAndAuditForNewOperation",
+		"TestCreateOrReuseExportClassifiesReplayAndRejectsHashConflict",
+		"TestCreateOrReuseExportFallsBackToCommittedReplayWhenInsertRaceReturnsNoRows",
+		"TestGetExportSessionSelectsOnlyRedactedColumns",
+		"TestRevokeExportSQLUsesRevokingDrainStateNotTerminalRevoked",
+		"TestRevokeExportClassifiesReplayConflictAndReturnsRevokingSession",
+		"TestGatewayCredentialReadsVerifierAndPayloadSubdirWithoutRawRoot",
+		"TestGatewayCredentialSQLFailsClosedOnInactiveNamespaceBindingOrSession",
+		"TestBeginExportRuntimeRequestReplayDoesNotIncrementAndConflictsFailClosed",
+		"TestBeginExportRuntimeRequestUsesLedgerAndPositiveAdmissionAtomically",
+		"TestHeartbeatAndEndExportRuntimeRequestUseSameLedgerRequestID",
+		"TestEndExportRuntimeRequestReplayDoesNotMutateSession",
+		"TestRecoverStaleExportRuntimeRequestsClosesOpenLedgerAndAdjustsCounts",
+		"TestReconcileExportSessionTerminalSQLCommitsOperationSessionAndAudit",
+		"TestListExportSessionsForTerminalReconcileFindsZeroCountRevokingAndExpiredWithoutHeartbeat",
+		"TestReconcileExportSessionTerminalRejectsActiveCountsBeforeSQL",
+		"TestReconcileExportSessionTerminalReturnsOperationAuditBoundary",
+	}
+}
+
 func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1b(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
@@ -1104,7 +1237,6 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1b(t *test
 	for _, gapID := range []string{
 		"seed_gap_default_user_loop_open",
 		"seed_gap_discovery_surfaces_open",
-		"seed_gap_webdav_default_access_open",
 		"seed_gap_secret_path_redaction_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
@@ -1137,7 +1269,6 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1c(t *test
 
 	for _, gapID := range []string{
 		"seed_gap_default_user_loop_open",
-		"seed_gap_webdav_default_access_open",
 		"seed_gap_restore_reconciliation_open",
 		"seed_gap_secret_path_redaction_open",
 		"seed_gap_discovery_surfaces_open",
@@ -1154,6 +1285,57 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1c(t *test
 		if item.ID == "default_user_loop_positive_unit" ||
 			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
 			t.Fatalf("P1c JVS save/restore is partial and must not close full default user loop: %+v", item)
+		}
+	}
+}
+
+func TestCurrentRepoManifestKeepsDefaultUserLoopSeedGapOpenForPartialP1d(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	item, ok := manifestItemByID(manifest, "seed_gap_default_user_loop_open")
+	if !ok {
+		t.Fatal("manifest must keep seed_gap_default_user_loop_open for partial P1d")
+	}
+	if item.EvidenceStatus != "placeholder" || item.PassCriteria.Kind != "seed_gap" || !containsString(item.PassCriteria.Assertions, "open") {
+		t.Fatalf("%s = %+v, want open placeholder seed gap", item.ID, item)
+	}
+	if _, ok := manifestItemByID(manifest, "seed_gap_webdav_default_access_open"); ok {
+		t.Fatal("P1d must close seed_gap_webdav_default_access_open with exact WebDAV replacement evidence")
+	}
+	for _, item := range manifest.Items {
+		if item.ID == "default_user_loop_positive_unit" ||
+			(item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed")) {
+			t.Fatalf("P1d WebDAV access is partial and must not close full default user loop: %+v", item)
+		}
+	}
+}
+
+func TestCurrentRepoManifestDoesNotCloseDefaultUserLoopBeforeAggregation(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+	if _, ok := manifestItemByID(manifest, "default_user_loop_positive_unit"); ok {
+		t.Fatal("manifest must not add default_user_loop_positive_unit before aggregation")
+	}
+	for _, item := range manifest.Items {
+		if item.AcceptanceID == "P0_DEFAULT_USER_LOOP_POSITIVE" && (item.EvidenceStatus == "implemented" || item.EvidenceStatus == "closed") {
+			t.Fatalf("manifest must not close full default user loop before aggregation: %+v", item)
 		}
 	}
 }
@@ -1215,6 +1397,11 @@ func goTestPackageForTestName(testName string) string {
 	if strings.HasPrefix(testName, "TestInternalRuntime") {
 		return "./internal/apiapp"
 	}
+	if strings.HasPrefix(testName, "TestRunOnceReconciles") ||
+		strings.HasPrefix(testName, "TestRunOnceRecovers") ||
+		strings.HasPrefix(testName, "TestRunOnceTreats") {
+		return "./internal/exportreconcile"
+	}
 	if strings.HasPrefix(testName, "TestRunOnce") {
 		return "./internal/workerapp"
 	}
@@ -1232,12 +1419,38 @@ func goTestPackageForTestName(testName string) string {
 	}
 	if strings.HasPrefix(testName, "TestCreateGetAndListRepos") ||
 		strings.HasPrefix(testName, "TestCreateOrReuseRepoCreateOperation") ||
+		strings.HasPrefix(testName, "TestCreateOrReuseExport") ||
 		strings.HasPrefix(testName, "TestCommitRepoCreate") ||
 		strings.HasPrefix(testName, "TestAcquireSavePointCreateOperationLease") ||
 		strings.HasPrefix(testName, "TestCommitSavePointCreate") ||
 		strings.HasPrefix(testName, "TestCreateOrReuseRestore") ||
-		strings.HasPrefix(testName, "TestCommitRestore") {
+		strings.HasPrefix(testName, "TestCommitRestore") ||
+		strings.HasPrefix(testName, "TestGetExportSession") ||
+		strings.HasPrefix(testName, "TestRevokeExportSQL") ||
+		strings.HasPrefix(testName, "TestRevokeExportClassifies") ||
+		strings.HasPrefix(testName, "TestGatewayCredential") ||
+		strings.HasPrefix(testName, "TestBeginExportRuntime") ||
+		strings.HasPrefix(testName, "TestHeartbeatAndEndExportRuntime") ||
+		strings.HasPrefix(testName, "TestEndExportRuntime") ||
+		strings.HasPrefix(testName, "TestRecoverStaleExportRuntimeRequests") ||
+		strings.HasPrefix(testName, "TestReconcileExportSession") ||
+		strings.HasPrefix(testName, "TestListExportSessionsForTerminalReconcile") {
 		return "./internal/store/postgres"
+	}
+	if strings.HasPrefix(testName, "TestPasswordVerifier") ||
+		strings.HasPrefix(testName, "TestResolveTTL") ||
+		strings.HasPrefix(testName, "TestSessionValidation") {
+		return "./internal/exportaccess"
+	}
+	if strings.HasPrefix(testName, "TestReadOnly") ||
+		strings.HasPrefix(testName, "TestReadWrite") ||
+		strings.HasPrefix(testName, "TestSuccessfulGET") ||
+		strings.HasPrefix(testName, "TestInactive") ||
+		strings.HasPrefix(testName, "TestBasicAuth") ||
+		strings.HasPrefix(testName, "TestGatewayStore") ||
+		strings.HasPrefix(testName, "TestDenied") ||
+		strings.HasPrefix(testName, "TestBeginRuntimeRequest") {
+		return "./internal/exportgateway"
 	}
 	if strings.HasPrefix(testName, "TestCurrentRepoReadiness") {
 		return "./internal/contractcheck"
@@ -1491,6 +1704,28 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":true
     },
     {
+      "id":"webdav_default_access_unit",
+      "capability_id":"webdav_export",
+      "evidence_type":"integration",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
+      "id":"default_user_loop_webdav_access_unit",
+      "capability_id":"webdav_export",
+      "evidence_type":"integration",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -1639,7 +1874,6 @@ var package0SeedGapFixtureMetadata = []struct {
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_profile_boundary_open", "CLAIM_PROFILE_BOUNDARY", "F1"},
 	{"seed_gap_discovery_surfaces_open", "CLAIM_DISCOVERY_SURFACES", "F7"},
-	{"seed_gap_webdav_default_access_open", "CLAIM_WEBDAV_DEFAULT_ACCESS", "F8"},
 	{"seed_gap_secret_path_redaction_open", "CLAIM_SECRET_PATH_REDACTION", "F10"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
@@ -1676,6 +1910,8 @@ var package0FixtureMetadata = []struct {
 	{"repo_purge_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_worker_recovery", "P0_OPTIONAL_DENIED_PURGE_RECOVERY", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "disabled repo purge recovery terminalizes unsupported historical operations"},
 	{"default_user_loop_repo_projection_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_repo_projection", "P1B_DEFAULT_USER_LOOP_REPO_PROJECTION", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "repo create get list projection and repo-create worker positive path pass without closing the full default user loop"},
 	{"default_user_loop_jvs_save_restore_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_jvs_save_restore", "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "JVS save history restore-preview restore-run and discard paths pass without closing the full default user loop"},
+	{"webdav_default_access_unit", "CLAIM_WEBDAV_DEFAULT_ACCESS", "webdav_default_access", "P0_WEBDAV_DEFAULT_ACCESS", "F8", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "webdav default access passes in default mode"},
+	{"default_user_loop_webdav_access_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_webdav_access", "P1D_DEFAULT_USER_LOOP_WEBDAV_ACCESS", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "WebDAV access contributes only partial default user loop evidence"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},

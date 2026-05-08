@@ -103,6 +103,41 @@ func TestInactiveAndExpiredSessionsDenyClosed(t *testing.T) {
 	}
 }
 
+func TestInactiveExpiredAndRevokingSessionsEmitRedactedAuditWithoutRuntimeObservation(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  sessionstate.ExportStatus
+		expires time.Time
+	}{
+		{name: "revoking", status: sessionstate.ExportStatusRevoking},
+		{name: "expired status", status: sessionstate.ExportStatusExpired},
+		{name: "past expiry", status: sessionstate.ExportStatusActive, expires: fixedGatewayNow().Add(-time.Second)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, tt.status)
+			if !tt.expires.IsZero() {
+				env.store.credential.Session.ExpiresAt = tt.expires
+			}
+			env.writePayload(t, "hello.txt", "hello")
+
+			rec := env.request(http.MethodGet, "/e/"+testExportID+"/hello.txt", nil, "")
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403, body %q", rec.Code, rec.Body.String())
+			}
+			requireNoRuntimeObservation(t, env)
+			event := requireAuditEvent(t, env, 0, audit.EventTypeAuthzDenied, http.StatusForbidden, "authz_denied")
+			rendered := renderAuditEvent(t, event)
+			for _, forbidden := range []string{testPassword, env.volumeRoot, env.payloadRoot, ".jvs"} {
+				if strings.Contains(rendered, forbidden) {
+					t.Fatalf("audit event leaked %q in %s", forbidden, rendered)
+				}
+			}
+		})
+	}
+}
+
 func TestGatewayStoreFailClosedDeniesDisabledNamespaceCredential(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
 	env.store.getErr = errors.New("credential rejected by namespace or binding predicate")
