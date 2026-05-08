@@ -98,7 +98,13 @@ type APIConfig struct {
 	DeploymentGlobalAllowedCallers    string
 	DeploymentNamespaceAllowedCallers string
 	VolumeRoots                       map[string]string
+	WorkloadMountRuntimeSecretRefs    map[string]SecretRef
 	SavePointHistory                  WorkerRepoCreateRecoveryConfig
+}
+
+type SecretRef struct {
+	Namespace string
+	Name      string
 }
 
 type ExportGatewayConfig struct {
@@ -183,8 +189,9 @@ func Load(source Source) (Config, error) {
 		Environment:      defaultEnvironment,
 		ReadinessProfile: defaultReadinessProfile,
 		API: APIConfig{
-			Mode:        "neutral",
-			VolumeRoots: map[string]string{},
+			Mode:                           "neutral",
+			VolumeRoots:                    map[string]string{},
+			WorkloadMountRuntimeSecretRefs: map[string]SecretRef{},
 		},
 		ExportGateway: ExportGatewayConfig{
 			Prefix:      "/e/",
@@ -494,6 +501,7 @@ func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
 	cfg.DeploymentNamespaceAllowedCallers = valueOrDefault(source, "AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS", "")
 	if cfg.Mode != "internal" {
 		cfg.VolumeRoots = map[string]string{}
+		cfg.WorkloadMountRuntimeSecretRefs = map[string]SecretRef{}
 	} else {
 		rootsRaw := valueOrDefault(source, "AFSCP_API_VOLUME_ROOTS", "")
 		rootsKey := "AFSCP_API_VOLUME_ROOTS"
@@ -509,6 +517,16 @@ func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
 				return APIConfig{}, err
 			}
 			cfg.VolumeRoots = roots
+		}
+		secretRefsRaw := valueOrDefault(source, "AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS", "")
+		if secretRefsRaw == "" {
+			cfg.WorkloadMountRuntimeSecretRefs = map[string]SecretRef{}
+		} else {
+			refs, err := parseWorkloadMountRuntimeSecretRefs(secretRefsRaw)
+			if err != nil {
+				return APIConfig{}, err
+			}
+			cfg.WorkloadMountRuntimeSecretRefs = refs
 		}
 	}
 	savePointHistory, err := loadJVSConfigWhenCapabilityAvailable(source, "AFSCP_API_SAVE_POINT_HISTORY")
@@ -666,6 +684,70 @@ func validGatewayPrefix(prefix string) bool {
 
 func ParseExportGatewayVolumeRoots(raw string) (map[string]string, error) {
 	return parseVolumeRoots(raw, "AFSCP_EXPORT_GATEWAY_VOLUME_ROOTS")
+}
+
+func parseWorkloadMountRuntimeSecretRefs(raw string) (map[string]SecretRef, error) {
+	const key = "AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS"
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]SecretRef{}, nil
+	}
+	refs := map[string]SecretRef{}
+	for _, part := range strings.Split(raw, ",") {
+		pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(pair) != 2 || strings.TrimSpace(pair[0]) == "" || strings.TrimSpace(pair[1]) == "" {
+			return nil, fmt.Errorf("%s must be vol_id=namespace/name pairs", key)
+		}
+		volumeID := strings.TrimSpace(pair[0])
+		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
+			return nil, fmt.Errorf("%s must contain valid volume ids and secret refs", key)
+		}
+		refParts := strings.Split(strings.TrimSpace(pair[1]), "/")
+		if len(refParts) != 2 {
+			return nil, fmt.Errorf("%s must contain valid volume ids and secret refs", key)
+		}
+		ref := SecretRef{Namespace: strings.TrimSpace(refParts[0]), Name: strings.TrimSpace(refParts[1])}
+		if !validRuntimeSecretRefDNSLabel(ref.Namespace, 63) || !validRuntimeSecretRefDNSSubdomain(ref.Name, 253) {
+			return nil, fmt.Errorf("%s must contain valid volume ids and secret refs", key)
+		}
+		if _, exists := refs[volumeID]; exists {
+			return nil, fmt.Errorf("%s must contain unique volume ids", key)
+		}
+		refs[volumeID] = ref
+	}
+	if len(refs) == 0 {
+		return nil, fmt.Errorf("%s is required when configured", key)
+	}
+	return refs, nil
+}
+
+func validRuntimeSecretRefDNSSubdomain(value string, maxLen int) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > maxLen {
+		return false
+	}
+	for _, part := range strings.Split(value, ".") {
+		if !validRuntimeSecretRefDNSLabel(part, 63) {
+			return false
+		}
+	}
+	return true
+}
+
+func validRuntimeSecretRefDNSLabel(value string, maxLen int) bool {
+	if value == "" || len(value) > maxLen {
+		return false
+	}
+	for idx, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-' && idx > 0 && idx < len(value)-1:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func loadWorkerAuditDeliveryConfig(source Source, defaults WorkerAuditDeliveryConfig) (WorkerAuditDeliveryConfig, error) {

@@ -104,9 +104,27 @@ func (store *Store) GetOrchestratorMountPlan(ctx context.Context, namespaceID, m
 		return workloadmount.Plan{}, err
 	}
 	plan.ReadOnly = readOnly
-	plan.SecretRef = workloadmount.SecretRef{Namespace: "afscp-runtime", Name: "afscp-volume-" + strings.TrimPrefix(plan.VolumeID, "vol_")}
+	secretRef, err := store.workloadMountRuntimeSecretRef(plan.VolumeID)
+	if err != nil {
+		return workloadmount.Plan{}, err
+	}
+	plan.SecretRef = secretRef
 	plan.SecurityPolicy = workloadmount.SecurityPolicy{RunAsNonRoot: true, AllowPrivileged: allowPrivileged, JVSControlOutsidePayload: true}
 	return plan, nil
+}
+
+func (store *Store) workloadMountRuntimeSecretRef(volumeID string) (workloadmount.SecretRef, error) {
+	if err := validateWorkloadMountRuntimeSecretRefs(store.workloadMountRuntimeSecretRefs); err != nil {
+		return workloadmount.SecretRef{}, err
+	}
+	ref, ok := store.workloadMountRuntimeSecretRefs[volumeID]
+	if !ok {
+		return workloadmount.SecretRef{}, fmt.Errorf("workload mount runtime secret ref is not configured for volume")
+	}
+	if err := workloadmount.ValidateSecretRef(ref); err != nil {
+		return workloadmount.SecretRef{}, fmt.Errorf("workload mount runtime secret ref is invalid")
+	}
+	return ref, nil
 }
 
 func (store *Store) CommitWorkloadMountBindingCreateWithLease(ctx context.Context, binding workloadmount.Binding, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
@@ -315,7 +333,7 @@ func workloadMountStaleNonTerminalSelectSQL() string {
 
 func workloadMountPlanSelectSQL() string {
 	return "WITH candidate_binding AS (" +
-		"SELECT mount_binding_id, namespace_id, repo_id, volume_id, mount_path, read_only, status FROM workload_mount_bindings " +
+		"SELECT mount_binding_id, namespace_id, repo_id, volume_id, mount_path, read_only, status, lease_expires_at FROM workload_mount_bindings " +
 		"WHERE namespace_id = $1 AND mount_binding_id = $2 AND status IN ('issued','pending','active','releasing')" +
 		"), active_namespace AS (" +
 		"SELECT ns.namespace_id FROM namespaces ns, candidate_binding b WHERE ns.namespace_id = b.namespace_id " +
@@ -346,7 +364,7 @@ func workloadMountPlanSelectSQL() string {
 		"), issuance_track AS (" +
 		"SELECT b.mount_binding_id, b.volume_id, r.repo_id, r.payload_volume_subdir, b.mount_path, b.read_only, COALESCE((nvb.mount_policy->>'allow_privileged_workload')::boolean, false) AS allow_privileged_workload " +
 		"FROM candidate_binding b, active_repo r, active_binding nvb " +
-		"WHERE b.status IN ('issued','pending','active') AND EXISTS (SELECT 1 FROM active_namespace) AND EXISTS (SELECT 1 FROM active_volume) AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)" +
+		"WHERE b.status IN ('issued','pending','active') AND b.lease_expires_at > now() AND EXISTS (SELECT 1 FROM active_namespace) AND EXISTS (SELECT 1 FROM active_volume) AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)" +
 		"), teardown_track AS (" +
 		"SELECT b.mount_binding_id, b.volume_id, r.repo_id, r.payload_volume_subdir, b.mount_path, b.read_only, false AS allow_privileged_workload " +
 		"FROM candidate_binding b, repo_identity r " +

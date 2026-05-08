@@ -186,6 +186,7 @@ func TestLoadAPIInternalRuntimeConfig(t *testing.T) {
 		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS":    "svc_ops:operator:operation_inspector|operator_admin",
 		"AFSCP_API_DEPLOYMENT_NAMESPACE_ALLOWED_CALLERS": "svc_api:product:namespace_admin",
 		"AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL":        " https://files.example.com/public ",
+		"AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS":           " vol_payload01=runtime-secret-namespace/runtime-secret-volume ",
 	})
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
@@ -208,6 +209,9 @@ func TestLoadAPIInternalRuntimeConfig(t *testing.T) {
 	}
 	if cfg.API.WebDAVExportPublicBaseURL != "https://files.example.com/public" {
 		t.Fatalf("api webdav export public base url = %q", cfg.API.WebDAVExportPublicBaseURL)
+	}
+	if got := cfg.API.WorkloadMountRuntimeSecretRefs["vol_payload01"]; got.Namespace != "runtime-secret-namespace" || got.Name != "runtime-secret-volume" {
+		t.Fatalf("workload mount secret ref = %#v", got)
 	}
 }
 
@@ -411,6 +415,57 @@ func TestLoadAPIVolumeRootsRejectsBadRootsWithoutLeakingValues(t *testing.T) {
 			for _, leaked := range []string{"secret-relative-root", "/srv/afscp/secret-root", "/srv/afscp/secret-root/child"} {
 				if strings.Contains(err.Error(), leaked) {
 					t.Fatalf("error leaked raw root %q: %v", leaked, err)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadAPIWorkloadMountRuntimeSecretRefs(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_API_MODE":                       "internal",
+		"AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS": "vol_payload01=runtime-secret-namespace/runtime-secret-volume,vol_other=runtime-secret-namespace/runtime-secret-other",
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got := cfg.API.WorkloadMountRuntimeSecretRefs["vol_payload01"]; got.Namespace != "runtime-secret-namespace" || got.Name != "runtime-secret-volume" {
+		t.Fatalf("vol_payload01 secret ref = %#v", got)
+	}
+	if got := cfg.API.WorkloadMountRuntimeSecretRefs["vol_other"]; got.Namespace != "runtime-secret-namespace" || got.Name != "runtime-secret-other" {
+		t.Fatalf("vol_other secret ref = %#v", got)
+	}
+}
+
+func TestLoadAPIWorkloadMountRuntimeSecretRefsRejectsInvalidConfigWithoutLeakingValues(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "missing separator", raw: "vol_payload01"},
+		{name: "bad volume id", raw: "payload01=secret-ns/secret-name"},
+		{name: "missing namespace", raw: "vol_payload01=/secret-name"},
+		{name: "missing name", raw: "vol_payload01=secret-ns/"},
+		{name: "extra slash", raw: "vol_payload01=secret-ns/secret-name/extra"},
+		{name: "uppercase secret", raw: "vol_payload01=Secret-Ns/secret-name"},
+		{name: "duplicate volume", raw: "vol_payload01=secret-ns/secret-name,vol_payload01=secret-ns/secret-other"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(MapSource{
+				"AFSCP_API_MODE":                       "internal",
+				"AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS": tt.raw,
+			})
+			if err == nil {
+				t.Fatal("Load succeeded, want workload mount secret ref config error")
+			}
+			if !strings.Contains(err.Error(), "AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS") {
+				t.Fatalf("error = %q, want secret ref config key", err)
+			}
+			for _, leaked := range []string{"Secret-Ns", "secret-name/extra", "secret-other"} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Fatalf("error leaked raw secret ref component %q: %v", leaked, err)
 				}
 			}
 		})

@@ -22,8 +22,10 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store/postgres"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 
 	_ "github.com/lib/pq"
 	"golang.org/x/sys/unix"
@@ -121,10 +123,19 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 	if err != nil {
 		return nil, err
 	}
+	workloadMountRuntimeSecretRefs, err := workloadMountRuntimeSecretRefsFromConfig(cfg.API.WorkloadMountRuntimeSecretRefs)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Capabilities.Mount.Available() && len(workloadMountRuntimeSecretRefs) == 0 {
+		return nil, errors.New("AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS is required when workload mount capability is available")
+	}
 
 	storeFactory := options.StoreFactory
 	if storeFactory == nil {
-		storeFactory = OpenPostgresStore
+		storeFactory = func(ctx context.Context, dsn string) (StoreHandle, error) {
+			return OpenPostgresStore(ctx, dsn, postgres.WithWorkloadMountRuntimeSecretRefs(workloadMountRuntimeSecretRefs))
+		}
 	}
 	openCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -270,7 +281,7 @@ func (runtime *Runtime) Close() error {
 	return runtime.close()
 }
 
-func OpenPostgresStore(ctx context.Context, dsn string) (StoreHandle, error) {
+func OpenPostgresStore(ctx context.Context, dsn string, opts ...postgres.Option) (StoreHandle, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return StoreHandle{}, err
@@ -279,8 +290,26 @@ func OpenPostgresStore(ctx context.Context, dsn string) (StoreHandle, error) {
 		closeErr := db.Close()
 		return StoreHandle{}, errors.Join(err, closeErr)
 	}
-	st := postgres.New(db)
+	st := postgres.New(db, opts...)
 	return StoreHandle{Store: st, Close: db.Close, Ping: db.PingContext}, nil
+}
+
+func workloadMountRuntimeSecretRefsFromConfig(refs map[string]config.SecretRef) (map[string]workloadmount.SecretRef, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]workloadmount.SecretRef, len(refs))
+	for volumeID, ref := range refs {
+		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
+			return nil, errors.New("AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS must contain valid volume ids")
+		}
+		secretRef := workloadmount.SecretRef{Namespace: ref.Namespace, Name: ref.Name}
+		if err := workloadmount.ValidateSecretRef(secretRef); err != nil {
+			return nil, errors.New("AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS must contain valid secret refs")
+		}
+		out[volumeID] = secretRef
+	}
+	return out, nil
 }
 
 type auditOutboxSink struct {

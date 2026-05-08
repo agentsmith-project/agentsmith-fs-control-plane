@@ -45,6 +45,74 @@
       "default_ga_required": false
     },
     {
+      "id": "workload_mount_plan_store_freshness_unit",
+      "capability_id": "workload_mount",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/store/postgres",
+        "-run",
+        "^TestWorkloadMountPlan(SQLHasDurableAdmissionGates|TeardownTrackDoesNotDependOnIssuanceGates|TrackSemanticsContract|StoreContractBehaviorMatrix)$"
+      ],
+      "anchors": [
+        "internal/store/postgres/workload_mount_bindings_test.go",
+        "internal/store/postgres/workload_mount_bindings.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": true,
+      "default_ga_required": false
+    },
+    {
+      "id": "workload_mount_runtime_secretref_config_unit",
+      "capability_id": "workload_mount",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/config",
+        "./internal/apiapp",
+        "./internal/store/postgres",
+        "-run",
+        "^Test(LoadAPIWorkloadMountRuntimeSecretRefs(RejectsInvalidConfigWithoutLeakingValues)?|InternalRuntimeRejectsMissingWorkloadMountRuntimeSecretRefsWhenMountAvailable|InternalRuntimeRejectsInvalidWorkloadMountRuntimeSecretRefsBeforeOpeningStore|InternalRuntimeAllowsMissingWorkloadMountRuntimeSecretRefsWhenMountUnavailable|WorkloadMountPlanFailsClosedOnInvalidRuntimeSecretMapping)$"
+      ],
+      "anchors": [
+        "internal/config/config_test.go",
+        "internal/config/config.go",
+        "internal/apiapp/runtime_test.go",
+        "internal/apiapp/runtime.go",
+        "internal/store/postgres/store.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": true,
+      "default_ga_required": false
+    },
+    {
+      "id": "workload_mount_secretref_redaction_unit",
+      "capability_id": "workload_mount",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/api",
+        "-run",
+        "^Test(WorkloadMountGetAndPlanRedactionBoundary|WorkloadMountPlanAuditUsesMinimalDetails|RuntimeOrchestratorMountPlanBoundary)$"
+      ],
+      "anchors": [
+        "internal/api/workload_mount_handler_test.go",
+        "internal/api/caller_runtime_boundary_e2e_test.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": true,
+      "default_ga_required": false
+    },
+    {
       "id": "repo_template_disabled_admission_unit",
       "capability_id": "repo_template",
       "evidence_type": "unit",

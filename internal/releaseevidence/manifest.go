@@ -261,6 +261,9 @@ func validateRequiredEvidenceItems(manifest Manifest) []Finding {
 var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "webdav_export_disabled_admission_unit", CapabilityID: "webdav_export", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "workload_mount_disabled_admission_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "workload_mount_plan_store_freshness_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "workload_mount_runtime_secretref_config_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
+	{ID: "workload_mount_secretref_redaction_unit", CapabilityID: "workload_mount", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
 	{ID: "repo_template_disabled_admission_unit", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
 	{ID: "repo_purge_disabled_admission_unit", CapabilityID: "repo_purge", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},
 	{ID: "repo_template_create_disabled_worker_recovery_unit", CapabilityID: "repo_template", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: true, DefaultGARequired: false},

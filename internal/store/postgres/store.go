@@ -3,7 +3,11 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
 type rowScanner interface {
@@ -24,8 +28,9 @@ type executor interface {
 }
 
 type Store struct {
-	exec  executor
-	clock func() time.Time
+	exec                           executor
+	clock                          func() time.Time
+	workloadMountRuntimeSecretRefs map[string]workloadmount.SecretRef
 }
 
 type Option func(*Store)
@@ -65,9 +70,38 @@ func WithClock(clock func() time.Time) Option {
 	}
 }
 
+func WithWorkloadMountRuntimeSecretRefs(refs map[string]workloadmount.SecretRef) Option {
+	return func(store *Store) {
+		store.workloadMountRuntimeSecretRefs = cloneWorkloadMountRuntimeSecretRefs(refs)
+	}
+}
+
 func (store *Store) now() time.Time {
 	if store.clock == nil {
 		return time.Now().UTC()
 	}
 	return store.clock().UTC()
+}
+
+func cloneWorkloadMountRuntimeSecretRefs(refs map[string]workloadmount.SecretRef) map[string]workloadmount.SecretRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	cloned := make(map[string]workloadmount.SecretRef, len(refs))
+	for volumeID, ref := range refs {
+		cloned[volumeID] = ref
+	}
+	return cloned
+}
+
+func validateWorkloadMountRuntimeSecretRefs(refs map[string]workloadmount.SecretRef) error {
+	for volumeID, ref := range refs {
+		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
+			return fmt.Errorf("workload mount runtime secret refs must contain valid volume ids")
+		}
+		if err := workloadmount.ValidateSecretRef(ref); err != nil {
+			return fmt.Errorf("workload mount runtime secret refs must contain valid secret refs")
+		}
+	}
+	return nil
 }

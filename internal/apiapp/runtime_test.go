@@ -114,6 +114,62 @@ func TestInternalRuntimeRejectsMissingWebDAVPublicBaseURLWhenWebDAVAvailable(t *
 	}
 }
 
+func TestInternalRuntimeRejectsMissingWorkloadMountRuntimeSecretRefsWhenMountAvailable(t *testing.T) {
+	source := readyTestRuntimeSource()
+	delete(source, "AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS")
+	_, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			t.Fatal("StoreFactory must not be called before workload mount secret ref config is validated")
+			return StoreHandle{}, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("NewRuntime succeeded, want workload mount secret ref config error")
+	}
+	if !strings.Contains(err.Error(), "AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS") {
+		t.Fatalf("error = %q, want workload mount secret ref config key", err)
+	}
+}
+
+func TestInternalRuntimeRejectsInvalidWorkloadMountRuntimeSecretRefsBeforeOpeningStore(t *testing.T) {
+	source := readyTestRuntimeSource()
+	source["AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS"] = "vol_main=Secret-Ns/runtime-secret-volume"
+	_, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			t.Fatal("StoreFactory must not be called before workload mount secret ref config is validated")
+			return StoreHandle{}, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("NewRuntime succeeded, want workload mount secret ref config error")
+	}
+	if !strings.Contains(err.Error(), "AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS") {
+		t.Fatalf("error = %q, want workload mount secret ref config key", err)
+	}
+	if strings.Contains(err.Error(), "Secret-Ns") {
+		t.Fatalf("error leaked raw secret ref: %v", err)
+	}
+}
+
+func TestInternalRuntimeAllowsMissingWorkloadMountRuntimeSecretRefsWhenMountUnavailable(t *testing.T) {
+	source := readyTestRuntimeSource()
+	source["AFSCP_MOUNT_READY"] = "false"
+	delete(source, "AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS")
+	store := &fakeRuntimeStore{binding: testBinding()}
+	runtime, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error with workload mount unavailable: %v", err)
+	}
+	defer closeRuntime(t, runtime)
+}
+
 func TestNewRuntimeFromConfigSavePointHistoryVerifiesJVSBinaryAgainstAcceptedPin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jvs")
 	content := []byte("not the accepted jvs release binary")
@@ -1183,6 +1239,7 @@ func baseTestRuntimeSource() config.MapSource {
 		"AFSCP_WEBDAV_READY":                             "true",
 		"AFSCP_MOUNT_ENABLED":                            "true",
 		"AFSCP_MOUNT_READY":                              "true",
+		"AFSCP_API_WORKLOAD_MOUNT_SECRET_REFS":           "vol_main=runtime-secret-namespace/runtime-secret-volume",
 	}
 }
 

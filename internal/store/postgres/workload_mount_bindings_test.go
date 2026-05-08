@@ -26,21 +26,23 @@ func TestWorkloadMountPlanStoreContractBehaviorMatrix(t *testing.T) {
 	tests := []struct {
 		name         string
 		row          fakeRow
+		secretRefs   map[string]workloadmount.SecretRef
 		wantPlan     workloadmount.Plan
 		wantErr      error
 		sqlContracts map[string][]string
 		sqlForbidden map[string][]string
 	}{
 		{
-			name: "active issued binding returns plan and derives runtime secret",
-			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", true, true)},
+			name:       "active issued binding returns plan with configured runtime secret",
+			row:        fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", true, true)},
+			secretRefs: workloadMountPlanSecretRefsForTest(),
 			wantPlan: workloadmount.Plan{
 				MountBindingID:      "wmb_123",
 				VolumeID:            "vol_payload01",
 				PayloadVolumeSubdir: workloadMountPlanPayloadSubdirForTest,
 				MountPath:           "/mnt/repo",
 				ReadOnly:            true,
-				SecretRef:           workloadmount.SecretRef{Namespace: "afscp-runtime", Name: "afscp-volume-payload01"},
+				SecretRef:           workloadMountPlanSecretRefForTest(),
 				SecurityPolicy:      workloadmount.SecurityPolicy{RunAsNonRoot: true, AllowPrivileged: true, JVSControlOutsidePayload: true},
 			},
 			sqlContracts: map[string][]string{
@@ -64,15 +66,16 @@ func TestWorkloadMountPlanStoreContractBehaviorMatrix(t *testing.T) {
 			},
 		},
 		{
-			name: "disabled namespace with releasing binding returns unprivileged teardown plan",
-			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", false, false)},
+			name:       "disabled namespace with releasing binding returns unprivileged teardown plan",
+			row:        fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", false, false)},
+			secretRefs: workloadMountPlanSecretRefsForTest(),
 			wantPlan: workloadmount.Plan{
 				MountBindingID:      "wmb_123",
 				VolumeID:            "vol_payload01",
 				PayloadVolumeSubdir: workloadMountPlanPayloadSubdirForTest,
 				MountPath:           "/mnt/repo",
 				ReadOnly:            false,
-				SecretRef:           workloadmount.SecretRef{Namespace: "afscp-runtime", Name: "afscp-volume-payload01"},
+				SecretRef:           workloadMountPlanSecretRefForTest(),
 				SecurityPolicy:      workloadmount.SecurityPolicy{RunAsNonRoot: true, AllowPrivileged: false, JVSControlOutsidePayload: true},
 			},
 			sqlContracts: map[string][]string{
@@ -94,15 +97,16 @@ func TestWorkloadMountPlanStoreContractBehaviorMatrix(t *testing.T) {
 			},
 		},
 		{
-			name: "held lifecycle fence with releasing binding returns unprivileged teardown plan",
-			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", false, false)},
+			name:       "held lifecycle fence with releasing binding returns unprivileged teardown plan",
+			row:        fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", false, false)},
+			secretRefs: workloadMountPlanSecretRefsForTest(),
 			wantPlan: workloadmount.Plan{
 				MountBindingID:      "wmb_123",
 				VolumeID:            "vol_payload01",
 				PayloadVolumeSubdir: workloadMountPlanPayloadSubdirForTest,
 				MountPath:           "/mnt/repo",
 				ReadOnly:            false,
-				SecretRef:           workloadmount.SecretRef{Namespace: "afscp-runtime", Name: "afscp-volume-payload01"},
+				SecretRef:           workloadMountPlanSecretRefForTest(),
 				SecurityPolicy:      workloadmount.SecurityPolicy{RunAsNonRoot: true, AllowPrivileged: false, JVSControlOutsidePayload: true},
 			},
 			sqlContracts: map[string][]string{
@@ -157,7 +161,7 @@ func TestWorkloadMountPlanStoreContractBehaviorMatrix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			exec := &fakeExecutor{row: tt.row}
-			store := &Store{exec: exec}
+			store := &Store{exec: exec, workloadMountRuntimeSecretRefs: tt.secretRefs}
 
 			got, err := store.GetOrchestratorMountPlan(context.Background(), "ns_123", "wmb_123")
 			if tt.wantErr != nil {
@@ -231,12 +235,16 @@ func TestWorkloadMountPlanFailsClosedOnScannedIdentityMismatch(t *testing.T) {
 			name: "bad mount path",
 			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "relative/path", true, false)},
 		},
+		{
+			name: "missing runtime secret mapping",
+			row:  fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_unmapped", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", true, false)},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			exec := &fakeExecutor{row: tt.row}
-			store := &Store{exec: exec}
+			store := &Store{exec: exec, workloadMountRuntimeSecretRefs: workloadMountPlanSecretRefsForTest()}
 
 			got, err := store.GetOrchestratorMountPlan(context.Background(), "ns_123", "wmb_123")
 			if err == nil {
@@ -247,6 +255,37 @@ func TestWorkloadMountPlanFailsClosedOnScannedIdentityMismatch(t *testing.T) {
 			}
 			if exec.queryRowCalls != 1 || len(exec.args) != 2 || exec.args[0] != "ns_123" || exec.args[1] != "wmb_123" {
 				t.Fatalf("query calls/args = %d/%#v, want scoped plan query", exec.queryRowCalls, exec.args)
+			}
+		})
+	}
+}
+
+func TestWorkloadMountPlanFailsClosedOnInvalidRuntimeSecretMapping(t *testing.T) {
+	tests := []struct {
+		name       string
+		secretRefs map[string]workloadmount.SecretRef
+	}{
+		{
+			name:       "bad volume id in mapping",
+			secretRefs: map[string]workloadmount.SecretRef{"payload01": workloadMountPlanSecretRefForTest()},
+		},
+		{
+			name:       "bad secret ref in mapping",
+			secretRefs: map[string]workloadmount.SecretRef{"vol_payload01": {Namespace: "Runtime-Secret-Namespace", Name: "runtime-secret-volume"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{row: fakeRow{values: workloadMountPlanRowForTest("wmb_123", "vol_payload01", "repo_123", workloadMountPlanPayloadSubdirForTest, "/mnt/repo", true, false)}}
+			store := &Store{exec: exec, workloadMountRuntimeSecretRefs: tt.secretRefs}
+
+			got, err := store.GetOrchestratorMountPlan(context.Background(), "ns_123", "wmb_123")
+			if err == nil {
+				t.Fatalf("GetOrchestratorMountPlan err = nil, want fail-closed error with plan %#v", got)
+			}
+			if !reflect.DeepEqual(got, workloadmount.Plan{}) {
+				t.Fatalf("plan = %#v, want zero plan on fail-closed error", got)
 			}
 		})
 	}
@@ -403,6 +442,7 @@ func TestWorkloadMountPlanSQLHasDurableAdmissionGates(t *testing.T) {
 		"allow_privileged_workload",
 		"FROM candidate_binding b, active_repo r, active_binding nvb",
 		"b.status IN ('issued','pending','active')",
+		"b.lease_expires_at > now()",
 		"EXISTS (SELECT 1 FROM active_namespace)",
 		"EXISTS (SELECT 1 FROM active_volume)",
 		"NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)",
@@ -437,6 +477,7 @@ func TestWorkloadMountPlanTeardownTrackDoesNotDependOnIssuanceGates(t *testing.T
 		"workload_mount_requires_jvs_external_control_root",
 		"lifecycle_status",
 		"capabilities",
+		"lease_expires_at > now()",
 	} {
 		if strings.Contains(teardown, forbidden) {
 			t.Fatalf("teardown track must not depend on %q: %s", forbidden, teardown)
@@ -491,12 +532,13 @@ func TestWorkloadMountPlanTrackSemanticsContract(t *testing.T) {
 			track: issuance,
 			want: []string{
 				"b.status IN ('issued','pending','active')",
+				"b.lease_expires_at > now()",
 				"NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)",
 			},
-			contract: "active and pending issuance must stop when a lifecycle fence is held",
+			contract: "active and pending issuance must stop when lease is stale or a lifecycle fence is held",
 		},
 		{
-			name:  "releasing binding behind lifecycle fence still receives teardown plan",
+			name:  "releasing binding behind lifecycle fence or stale lease still receives teardown plan",
 			track: teardown,
 			want: []string{
 				"b.status = 'releasing'",
@@ -504,8 +546,9 @@ func TestWorkloadMountPlanTrackSemanticsContract(t *testing.T) {
 			},
 			forbidden: []string{
 				"held_lifecycle_fence",
+				"lease_expires_at > now()",
 			},
-			contract: "teardown plans bypass the issuance lifecycle fence and force unprivileged workload policy",
+			contract: "teardown plans bypass issuance freshness and lifecycle fence gates and force unprivileged workload policy",
 		},
 		{
 			name:  "releasing binding in disabled namespace still receives teardown plan",
@@ -757,6 +800,14 @@ func TestWorkloadMountStatusCommitRejectsReasonOverMaxLengthBeforeSQL(t *testing
 
 func workloadMountPlanRowForTest(mountBindingID, volumeID, repoID, payloadVolumeSubdir, mountPath string, readOnly, allowPrivileged bool) []any {
 	return []any{mountBindingID, volumeID, repoID, payloadVolumeSubdir, mountPath, readOnly, allowPrivileged}
+}
+
+func workloadMountPlanSecretRefForTest() workloadmount.SecretRef {
+	return workloadmount.SecretRef{Namespace: "runtime-secret-namespace", Name: "runtime-secret-volume"}
+}
+
+func workloadMountPlanSecretRefsForTest() map[string]workloadmount.SecretRef {
+	return map[string]workloadmount.SecretRef{"vol_payload01": workloadMountPlanSecretRefForTest()}
 }
 
 func workloadMountPlanSQLFragmentsForTest(t *testing.T) map[string]string {

@@ -129,6 +129,42 @@ func ValidateMountPath(path string) error {
 	return nil
 }
 
+func ValidateSecretRef(ref SecretRef) error {
+	if !validSecretRefDNSLabel(ref.Namespace, 63) || !validSecretRefDNSSubdomain(ref.Name, 253) {
+		return fmt.Errorf("workload mount secret_ref must contain a valid namespace and name")
+	}
+	return nil
+}
+
+func validSecretRefDNSSubdomain(value string, maxLen int) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > maxLen {
+		return false
+	}
+	for _, part := range strings.Split(value, ".") {
+		if !validSecretRefDNSLabel(part, 63) {
+			return false
+		}
+	}
+	return true
+}
+
+func validSecretRefDNSLabel(value string, maxLen int) bool {
+	if value == "" || len(value) > maxLen {
+		return false
+	}
+	for idx, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-' && idx > 0 && idx < len(value)-1:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func ValidStatus(status sessionstate.MountStatus) bool {
 	switch status {
 	case sessionstate.MountStatusIssued,

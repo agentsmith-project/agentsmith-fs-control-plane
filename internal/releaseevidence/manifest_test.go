@@ -480,6 +480,39 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":false
     },
     {
+      "id":"workload_mount_plan_store_freshness_unit",
+      "capability_id":"workload_mount",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
+      "id":"workload_mount_runtime_secretref_config_unit",
+      "capability_id":"workload_mount",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
+      "id":"workload_mount_secretref_redaction_unit",
+      "capability_id":"workload_mount",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":true,
+      "default_ga_required":false
+    },
+    {
       "id":"repo_template_disabled_admission_unit",
       "capability_id":"repo_template",
       "evidence_type":"unit",
