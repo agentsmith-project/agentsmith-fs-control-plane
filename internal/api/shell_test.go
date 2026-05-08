@@ -76,12 +76,43 @@ func TestNeutralShellDeniesKnownInternalRoutesWithoutReadingRequestBody(t *testi
 			if !ok {
 				t.Fatalf("missing disabled_capabilities detail: %#v", envelope.Error.Details)
 			}
-			for _, capability := range []string{CapabilityStorage, CapabilityJVS, CapabilityWebDAVExport, CapabilityWorkloadMount, CapabilityRepoTemplate, CapabilityRepoPurge} {
+			for _, capability := range []string{CapabilityStorage, CapabilityJVS, CapabilityWebDAVExport, CapabilityWorkloadMountBinding, CapabilityWorkloadMountDiscovery, CapabilityWorkloadTeardownPlan, CapabilityRepoTemplate, CapabilityRepoPurge} {
 				if !auditValidationErrorsContain(disabled, capability) {
 					t.Fatalf("disabled_capabilities = %#v, missing %s", disabled, capability)
 				}
 			}
+			if auditValidationErrorsContain(disabled, CapabilityWorkloadMount) {
+				t.Fatalf("disabled_capabilities = %#v, must not include legacy coarse workload capability %s", disabled, CapabilityWorkloadMount)
+			}
 		})
+	}
+}
+
+func TestNeutralShellFallbackReportsSplitWorkloadCapabilities(t *testing.T) {
+	handler := NewNeutralShell()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", strings.NewReader(`{"mount_path":"/mnt/repo"}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusForbidden, rec.Code, rec.Body.String())
+	}
+	var envelope ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("error envelope did not decode: %v", err)
+	}
+	disabled, ok := envelope.Error.Details["disabled_capabilities"].([]any)
+	if !ok {
+		t.Fatalf("missing disabled_capabilities detail: %#v", envelope.Error.Details)
+	}
+	for _, capability := range []string{CapabilityWorkloadMountBinding, CapabilityWorkloadMountDiscovery, CapabilityWorkloadTeardownPlan} {
+		if !auditValidationErrorsContain(disabled, capability) {
+			t.Fatalf("disabled_capabilities = %#v, missing %s", disabled, capability)
+		}
+	}
+	if auditValidationErrorsContain(disabled, CapabilityWorkloadMount) {
+		t.Fatalf("disabled_capabilities = %#v, must not include legacy coarse workload capability %s", disabled, CapabilityWorkloadMount)
 	}
 }
 

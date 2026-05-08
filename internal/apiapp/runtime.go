@@ -482,9 +482,19 @@ func internalCapabilityMatrix(cfg config.Config) capability.Matrix {
 			Requirement: internalCapabilityRequirement(cfg, capability.WebDAVExport, webDAVStatus),
 		},
 		capability.Entry{
-			ID:          capability.WorkloadMount,
+			ID:          capability.WorkloadMountBinding,
 			Status:      mountStatus,
-			Requirement: internalCapabilityRequirement(cfg, capability.WorkloadMount, mountStatus),
+			Requirement: internalCapabilityRequirement(cfg, capability.WorkloadMountBinding, mountStatus),
+		},
+		capability.Entry{
+			ID:          capability.WorkloadMountDiscovery,
+			Status:      mountStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.WorkloadMountDiscovery, mountStatus),
+		},
+		capability.Entry{
+			ID:          capability.WorkloadTeardownPlan,
+			Status:      mountStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.WorkloadTeardownPlan, mountStatus),
 		},
 		capability.Entry{
 			ID:          capability.RepoTemplate,
@@ -514,24 +524,6 @@ func internalReadinessProvider(cfg config.Config, ping func(context.Context) err
 		}
 		return readiness
 	}
-}
-
-func internalRequiredReadinessCapabilities(cfg config.Config) []string {
-	ids := []capability.ID{
-		capability.Storage,
-		capability.JVS,
-		capability.WebDAVExport,
-		capability.WorkloadMount,
-		capability.RepoTemplate,
-		capability.RepoPurge,
-	}
-	required := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if internalRequiredForServiceReady(cfg, id) {
-			required = append(required, string(id))
-		}
-	}
-	return required
 }
 
 func storageReadinessOverride(readiness api.ReadinessResponse, reason string) api.CapabilityGate {
@@ -569,7 +561,7 @@ func internalRequiredForServiceReady(cfg config.Config, id capability.ID) bool {
 		return cfg.Capabilities.JVS.Enabled
 	case capability.WebDAVExport:
 		return cfg.Capabilities.WebDAV.Enabled
-	case capability.WorkloadMount:
+	case capability.WorkloadMountBinding, capability.WorkloadMountDiscovery, capability.WorkloadTeardownPlan:
 		return cfg.Capabilities.Mount.Enabled
 	case capability.RepoTemplate:
 		return cfg.Capabilities.RepoTemplate.Enabled

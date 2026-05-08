@@ -261,6 +261,17 @@ func evidenceCLIManifest(command, anchor string) string {
       "default_ga_required":false
     },
     {
+      "id":"capability_matrix_v1_contract_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
       "id":"release_script_evidence_manifest_guard",
       "capability_id":"",
       "evidence_type":"contract",
@@ -365,6 +376,7 @@ var package0CLIMetadata = []struct {
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "negative", "fast", "package", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"default_ga_capability_classification_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "default_ga_capability_classification", "P0_CAPABILITY_MATRIX_DEFAULT_CLASSIFICATION", "F4", "both", "fast", "package", "false", "coverage_guard", "capability matrix classifies default and optional capabilities consistently"},
 	{"capability_admission_operation_coverage_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "capability_admission_operation_coverage", "P0_CAPABILITY_MATRIX_OPERATION_COVERAGE", "F4", "both", "fast", "package", "false", "coverage_guard", "capability admission operation coverage stays consistent"},
+	{"capability_matrix_v1_contract_unit", "CLAIM_CAPABILITY_MATRIX_CONSISTENT", "capability_matrix_v1_contract", "P1_CAPABILITY_MATRIX_V1_CONTRACT", "F4", "both", "fast", "package", "false", "coverage_guard", "capability matrix v1 contract covers readyz workload split vocabulary"},
 	{"release_script_evidence_manifest_guard", "CLAIM_RELEASE_GATE_TRACEABLE", "release_gate_invokes_manifest_verifier", "P0_RELEASE_GATE_TRACEABLE_MANIFEST_VERIFIER", "F18", "both", "fast", "workflow-guard", "false", "coverage_guard", "release gate invokes the manifest verifier"},
 }
 

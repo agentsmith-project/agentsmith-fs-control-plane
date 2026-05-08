@@ -10,19 +10,21 @@ import (
 )
 
 const (
-	CapabilityStorage       = string(capability.Storage)
-	CapabilityJVS           = string(capability.JVS)
-	CapabilityWebDAVExport  = string(capability.WebDAVExport)
-	CapabilityWorkloadMount = string(capability.WorkloadMount)
-	CapabilityRepoTemplate  = string(capability.RepoTemplate)
-	CapabilityRepoPurge     = string(capability.RepoPurge)
+	CapabilityStorage                = string(capability.Storage)
+	CapabilityJVS                    = string(capability.JVS)
+	CapabilityWebDAVExport           = string(capability.WebDAVExport)
+	CapabilityWorkloadMount          = string(capability.WorkloadMount)
+	CapabilityWorkloadMountBinding   = string(capability.WorkloadMountBinding)
+	CapabilityWorkloadMountDiscovery = string(capability.WorkloadMountDiscovery)
+	CapabilityWorkloadTeardownPlan   = string(capability.WorkloadTeardownPlan)
+	CapabilityRepoTemplate           = string(capability.RepoTemplate)
+	CapabilityRepoPurge              = string(capability.RepoPurge)
 )
 
 var requiredReadinessCapabilities = []string{
 	CapabilityStorage,
 	CapabilityJVS,
 	CapabilityWebDAVExport,
-	CapabilityWorkloadMount,
 }
 
 type HealthResponse struct {
@@ -64,12 +66,14 @@ func NeutralReadiness() ReadinessResponse {
 		Status: "not_ready",
 		Ready:  false,
 		Capabilities: map[string]CapabilityGate{
-			CapabilityStorage:       disabled,
-			CapabilityJVS:           disabled,
-			CapabilityWebDAVExport:  disabled,
-			CapabilityWorkloadMount: disabled,
-			CapabilityRepoTemplate:  disabled,
-			CapabilityRepoPurge:     disabled,
+			CapabilityStorage:                disabled,
+			CapabilityJVS:                    disabled,
+			CapabilityWebDAVExport:           disabled,
+			CapabilityWorkloadMountBinding:   disabled,
+			CapabilityWorkloadMountDiscovery: disabled,
+			CapabilityWorkloadTeardownPlan:   disabled,
+			CapabilityRepoTemplate:           disabled,
+			CapabilityRepoPurge:              disabled,
 		},
 	}
 }

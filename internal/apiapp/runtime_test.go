@@ -506,9 +506,14 @@ func TestInternalRuntimeReadinessIsNotNeutralAndDoesNotAdvertiseUnimplementedHan
 	if !webdav.Enabled || !webdav.Ready || webdav.Gated || webdav.Reason != "" {
 		t.Fatalf("webdav gate = %#v, want enabled and ready", webdav)
 	}
-	mount := body.Capabilities[api.CapabilityWorkloadMount]
-	if !mount.Enabled || !mount.Ready || mount.Gated || mount.Reason != "" {
-		t.Fatalf("mount gate = %#v, want enabled and ready", mount)
+	if _, ok := body.Capabilities[api.CapabilityWorkloadMount]; ok {
+		t.Fatalf("readiness advertised legacy coarse workload capability %q", api.CapabilityWorkloadMount)
+	}
+	for _, capability := range []string{api.CapabilityWorkloadMountBinding, api.CapabilityWorkloadMountDiscovery, api.CapabilityWorkloadTeardownPlan} {
+		gate := body.Capabilities[capability]
+		if !gate.Enabled || !gate.Ready || gate.Gated || gate.Reason != "" {
+			t.Fatalf("%s gate = %#v, want enabled and ready", capability, gate)
+		}
 	}
 }
 
@@ -752,6 +757,9 @@ func TestInternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated(t *
 			if !body.Ready {
 				t.Fatalf("readiness = not ready, want ready when only workload mount is gated")
 			}
+			if _, ok := body.Capabilities[api.CapabilityWorkloadMount]; ok {
+				t.Fatalf("readiness advertised legacy coarse workload capability %q", api.CapabilityWorkloadMount)
+			}
 			for _, capability := range []string{api.CapabilityStorage, api.CapabilityJVS, api.CapabilityWebDAVExport} {
 				gate := body.Capabilities[capability]
 				if !runtimeReadinessBoolField(t, gate, "required_for_service_ready") {
@@ -766,9 +774,11 @@ func TestInternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated(t *
 			}
 
 			for capability, wantReason := range map[string]string{
-				api.CapabilityWorkloadMount: tt.wantReason,
-				api.CapabilityRepoTemplate:  "repo_template_not_configured",
-				api.CapabilityRepoPurge:     "repo_purge_not_configured",
+				api.CapabilityWorkloadMountBinding:   tt.wantReason,
+				api.CapabilityWorkloadMountDiscovery: tt.wantReason,
+				api.CapabilityWorkloadTeardownPlan:   tt.wantReason,
+				api.CapabilityRepoTemplate:           "repo_template_not_configured",
+				api.CapabilityRepoPurge:              "repo_purge_not_configured",
 			} {
 				gate := body.Capabilities[capability]
 				if runtimeReadinessBoolField(t, gate, "required_for_service_ready") {
@@ -785,6 +795,43 @@ func TestInternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated(t *
 				}
 			}
 		})
+	}
+}
+
+func TestInternalRuntimeReadinessRuntimeProfileRequiresOptedInWorkloadMountFacets(t *testing.T) {
+	runtime := newTestRuntimeWithSourceOverrides(t, config.MapSource{
+		"AFSCP_MOUNT_ENABLED": "true",
+		"AFSCP_MOUNT_READY":   "false",
+	}, func(context.Context) error { return nil })
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	if body.Ready {
+		t.Fatalf("readiness = ready, want not ready when workload mount is explicitly enabled but unready")
+	}
+	if _, ok := body.Capabilities[api.CapabilityWorkloadMount]; ok {
+		t.Fatalf("readiness advertised legacy coarse workload capability %q", api.CapabilityWorkloadMount)
+	}
+	for _, capability := range []string{api.CapabilityWorkloadMountBinding, api.CapabilityWorkloadMountDiscovery, api.CapabilityWorkloadTeardownPlan} {
+		gate, ok := body.Capabilities[capability]
+		if !ok {
+			t.Fatalf("missing split workload capability %q", capability)
+		}
+		if !gate.RequiredForServiceReady || gate.OptionalGated {
+			t.Fatalf("%s gate = %#v, want runtime opt-in required", capability, gate)
+		}
+		if !gate.Enabled || gate.Ready || !gate.Gated || gate.Reason != "mount_not_ready" {
+			t.Fatalf("%s gate = %#v, want enabled unready gated reason mount_not_ready", capability, gate)
+		}
 	}
 }
 

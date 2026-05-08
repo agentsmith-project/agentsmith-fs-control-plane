@@ -564,12 +564,20 @@
         "test",
         "-count=1",
         "./internal/capability",
+        "./internal/api",
+        "./internal/apiapp",
         "-run",
-        "^Test(CapabilityMatrixV1(RowsMatchHandoffVocabulary|ExcludesLegacyCoarseCapabilities|SplitsJVSAndWebDAVProjectionFacets|SplitsWorkloadBindingDiscoveryAndTeardownPlanFacets|WebDAVExportAdmissionIncludesCreateAndRevoke|TeardownOnlyPlanDoesNotBypassNewMutationDenial)|AdmissionCapabilityForOperationTypeCoversEveryMatrixAdmissionOperation)$"
+        "^Test(CapabilityMatrixV1(RowsMatchHandoffVocabulary|ExcludesLegacyCoarseCapabilities|SplitsJVSAndWebDAVProjectionFacets|SplitsWorkloadBindingDiscoveryAndTeardownPlanFacets|WebDAVExportAdmissionIncludesCreateAndRevoke|TeardownOnlyPlanDoesNotBypassNewMutationDenial)|AdmissionCapabilityForOperationTypeCoversEveryMatrixAdmissionOperation|NeutralReadinessHandlerReportsNotReadyAndDisabledGates|ReadinessFromCapabilityMatrixSerializesWorkloadMountSplitCapabilities|NeutralShellFallbackReportsSplitWorkloadCapabilities|InternalRuntimeReadinessIsNotNeutralAndDoesNotAdvertiseUnimplementedHandlersReady|InternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated|InternalRuntimeReadinessRuntimeProfileRequiresOptedInWorkloadMountFacets)$"
       ],
       "anchors": [
         "internal/capability/matrix.go",
-        "internal/capability/matrix_test.go"
+        "internal/capability/matrix_test.go",
+        "internal/api/health.go",
+        "internal/api/health_test.go",
+        "internal/api/shell.go",
+        "internal/api/shell_test.go",
+        "internal/apiapp/runtime.go",
+        "internal/apiapp/runtime_test.go"
       ],
       "doc_only_allowed": false,
       "optional_gated": false,
@@ -589,6 +597,7 @@
           "capability matrix v1 contract covers the handoff row vocabulary and excludes legacy coarse rows",
           "JVS and WebDAV durable admissions are split from read projection facets, with WebDAV export covering create and revoke",
           "workload binding, discovery, and teardown plan facets stay separate, and teardown-only plan has no admission operation bypass",
+          "readyz and shell readiness serialize workload binding, discovery, and teardown plan split capabilities explicitly",
           "every matrix admission operation reverse maps to the same capability row"
         ]
       },

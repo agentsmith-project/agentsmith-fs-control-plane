@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 )
 
 func TestHealthHandlerReturnsOK(t *testing.T) {
@@ -54,7 +56,9 @@ func TestNeutralReadinessHandlerReportsNotReadyAndDisabledGates(t *testing.T) {
 		CapabilityStorage,
 		CapabilityJVS,
 		CapabilityWebDAVExport,
-		CapabilityWorkloadMount,
+		CapabilityWorkloadMountBinding,
+		CapabilityWorkloadMountDiscovery,
+		CapabilityWorkloadTeardownPlan,
 	} {
 		state, ok := body.Capabilities[capability]
 		if !ok {
@@ -69,6 +73,9 @@ func TestNeutralReadinessHandlerReportsNotReadyAndDisabledGates(t *testing.T) {
 		if !state.Gated {
 			t.Fatalf("capability %q must be explicitly gated", capability)
 		}
+	}
+	if _, ok := body.Capabilities[CapabilityWorkloadMount]; ok {
+		t.Fatalf("neutral readiness advertised legacy coarse workload capability %q", CapabilityWorkloadMount)
 	}
 }
 
@@ -184,7 +191,7 @@ func TestReadinessHandlerUsesInjectedRequiredCapabilities(t *testing.T) {
 			CapabilityStorage:      {Enabled: true, Ready: true, Gated: false},
 			CapabilityJVS:          {Enabled: true, Ready: true, Gated: false},
 			CapabilityWebDAVExport: {Enabled: true, Ready: false, Gated: true, Reason: "handler_not_implemented"},
-			CapabilityWorkloadMount: {
+			CapabilityWorkloadMountBinding: {
 				Enabled: true,
 				Ready:   false,
 				Gated:   true,
@@ -222,7 +229,7 @@ func TestReadinessHandlerSerializesSeparateRequirementSemantics(t *testing.T) {
 			CapabilityStorage:      {Enabled: true, Ready: true},
 			CapabilityJVS:          {Enabled: true, Ready: true},
 			CapabilityWebDAVExport: {Enabled: true, Ready: false, Gated: true, Reason: "webdav_not_ready"},
-			CapabilityWorkloadMount: {
+			CapabilityWorkloadMountBinding: {
 				Enabled: false,
 				Ready:   false,
 				Gated:   true,
@@ -255,8 +262,76 @@ func TestReadinessHandlerSerializesSeparateRequirementSemantics(t *testing.T) {
 	if got := readinessBoolField(t, body.Capabilities[CapabilityWebDAVExport], "optional_gated"); !got {
 		t.Fatalf("webdav optional_gated = false, want true for non-service-required gated capability")
 	}
-	if got := readinessBoolField(t, body.Capabilities[CapabilityWorkloadMount], "required_for_default_ga"); got {
-		t.Fatalf("workload mount required_for_default_ga = true, want false by default")
+	if got := readinessBoolField(t, body.Capabilities[CapabilityWorkloadMountBinding], "required_for_default_ga"); got {
+		t.Fatalf("workload mount binding required_for_default_ga = true, want false by default")
+	}
+}
+
+func TestReadinessFromCapabilityMatrixSerializesWorkloadMountSplitCapabilities(t *testing.T) {
+	readiness := ReadinessFromCapabilityMatrix(capability.NewMatrix(
+		capability.Entry{
+			ID:     capability.Storage,
+			Status: capability.Status{Enabled: true, Ready: true},
+			Requirement: capability.Requirement{
+				RequiredForServiceReady: true,
+				RequiredForDefaultGA:    true,
+			},
+		},
+		capability.Entry{
+			ID:     capability.WorkloadMountBinding,
+			Status: capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "mount_not_configured"},
+			Requirement: capability.Requirement{
+				OptionalGated: true,
+			},
+		},
+		capability.Entry{
+			ID:     capability.WorkloadMountDiscovery,
+			Status: capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "mount_not_configured"},
+			Requirement: capability.Requirement{
+				OptionalGated: true,
+			},
+		},
+		capability.Entry{
+			ID:     capability.WorkloadTeardownPlan,
+			Status: capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "mount_not_configured"},
+			Requirement: capability.Requirement{
+				OptionalGated: true,
+			},
+		},
+	))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	ReadinessHandler(readiness).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var body ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness response did not decode: %v", err)
+	}
+	if !body.Ready {
+		t.Fatalf("readiness must be ready when only optional workload facets are gated")
+	}
+	if _, ok := body.Capabilities[CapabilityWorkloadMount]; ok {
+		t.Fatalf("readiness advertised legacy coarse workload capability %q", CapabilityWorkloadMount)
+	}
+	for _, capability := range []string{CapabilityWorkloadMountBinding, CapabilityWorkloadMountDiscovery, CapabilityWorkloadTeardownPlan} {
+		gate, ok := body.Capabilities[capability]
+		if !ok {
+			t.Fatalf("missing split workload capability %q", capability)
+		}
+		if gate.RequiredForServiceReady {
+			t.Fatalf("%s required_for_service_ready = true, want false", capability)
+		}
+		if !gate.OptionalGated {
+			t.Fatalf("%s optional_gated = false, want true", capability)
+		}
+		if gate.Enabled || gate.Ready || !gate.Gated || gate.Reason != "mount_not_configured" {
+			t.Fatalf("%s gate = %#v, want disabled optional mount gate", capability, gate)
+		}
 	}
 }
 
@@ -276,9 +351,11 @@ func readinessBoolField(t *testing.T, fields map[string]any, name string) bool {
 func readyCapabilities() map[string]CapabilityGate {
 	ready := CapabilityGate{Enabled: true, Ready: true, Gated: false}
 	return map[string]CapabilityGate{
-		CapabilityStorage:       ready,
-		CapabilityJVS:           ready,
-		CapabilityWebDAVExport:  ready,
-		CapabilityWorkloadMount: ready,
+		CapabilityStorage:                ready,
+		CapabilityJVS:                    ready,
+		CapabilityWebDAVExport:           ready,
+		CapabilityWorkloadMountBinding:   ready,
+		CapabilityWorkloadMountDiscovery: ready,
+		CapabilityWorkloadTeardownPlan:   ready,
 	}
 }
