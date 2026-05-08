@@ -362,7 +362,21 @@ func validateCommand(item Item, repoRoot string) []Finding {
 			return []Finding{{ItemID: item.ID, Code: "item.command_approval_gate", Message: "commands must not depend on approval gates"}}
 		}
 	}
+	if finding, ok := validateRetainedLifecycleEvidenceScope(item); ok {
+		return []Finding{finding}
+	}
 	return validateCommandTarget(item, repoRoot)
+}
+
+func validateRetainedLifecycleEvidenceScope(item Item) (Finding, bool) {
+	if item.ID != "repo_lifecycle_retained_positive_unit" {
+		return Finding{}, false
+	}
+	command := strings.ToLower(strings.Join(item.Command, " "))
+	if strings.Contains(command, "purge") || strings.Contains(command, "repo_purge") {
+		return Finding{ItemID: item.ID, Code: "item.command_retained_lifecycle_scope_invalid", Message: "retained lifecycle positive evidence command must not include purge or repo_purge selectors"}, true
+	}
+	return Finding{}, false
 }
 
 func validateCommandTarget(item Item, repoRoot string) []Finding {

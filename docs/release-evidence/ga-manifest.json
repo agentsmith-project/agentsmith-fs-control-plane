@@ -57,7 +57,7 @@
         "./internal/store/postgres",
         "./internal/api",
         "-run",
-        "^Test(LifecycleExecutor(ArchivesActiveRepoAndCommitsBoundary|RestoresArchivedRepoAfterDoctor|DeletesActiveAndArchivedReposToTombstone|RestoresTombstonedRepoToPreDeleteStatusAfterDoctor)|RepoLifecycleSuccessCommitSQL(IsAtomicBoundaryWithSessionGuardAndFenceRelease|HasDeleteAndRestoreTombstonedPredicates)|RepoLifecycleHandler(RestoreTombstonedRetentionWindow|CreatesArchiveOperationIntake|CreatesDeleteAndPurgeOperations))$"
+        "^Test(LifecycleExecutor(ArchivesActiveRepoAndCommitsBoundary|RestoresArchivedRepoAfterDoctor|DeletesActiveAndArchivedReposToTombstone|RestoresTombstonedRepoToPreDeleteStatusAfterDoctor)|RepoLifecycleSuccessCommitSQL(IsAtomicBoundaryWithSessionGuardAndFenceRelease|HasDeleteAndRestoreTombstonedPredicates)|RepoLifecycleHandler(RestoreTombstonedRetentionWindow|CreatesArchiveOperationIntake|CreatesRetainedLifecycleOperationIntake))$"
       ],
       "anchors": [
         "internal/repoexec/lifecycle_executor_test.go",

@@ -55,6 +55,64 @@ func TestRepoLifecycleHandlerCreatesArchiveOperationIntake(t *testing.T) {
 	}
 }
 
+func TestRepoLifecycleHandlerCreatesRetainedLifecycleOperationIntake(t *testing.T) {
+	tests := []struct {
+		name               string
+		path               string
+		status             resources.RepoStatus
+		body               string
+		wantType           operations.OperationType
+		wantReasonPresent  bool
+		wantPolicySnapshot bool
+	}{
+		{name: "archive", path: "/internal/v1/repos/repo_123:archive", status: resources.RepoStatusActive, body: `{"reason":"archive reason"}`, wantType: operations.OperationRepoArchive, wantReasonPresent: true},
+		{name: "restore archived", path: "/internal/v1/repos/repo_123:restore-archived", status: resources.RepoStatusArchived, body: `{}`, wantType: operations.OperationRepoRestoreArchived},
+		{name: "delete", path: "/internal/v1/repos/repo_123:delete", status: resources.RepoStatusActive, body: `{}`, wantType: operations.OperationRepoDelete, wantPolicySnapshot: true},
+		{name: "restore tombstoned", path: "/internal/v1/repos/repo_123:restore-tombstoned", status: resources.RepoStatusTombstoned, body: `{}`, wantType: operations.OperationRepoRestoreTombstoned},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeOperationIntakeStore{}
+			meta := repoLifecycleMetaFixture(tt.status)
+			if tt.status == resources.RepoStatusTombstoned {
+				retention := fixedNamespaceNow().Add(time.Hour)
+				meta.repo.Lifecycle.RetentionExpiresAt = &retention
+				meta.repoReader.repos = []resources.Repo{meta.repo}
+			}
+			handler := repoLifecycleHandlerForTest(store, meta)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, repoLifecycleRequest(tt.path, "ns_123", tt.body))
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+			}
+			if store.calls != 1 {
+				t.Fatalf("intake calls = %d, want 1", store.calls)
+			}
+			spec := store.spec
+			if spec.Scope.OperationType != tt.wantType || spec.Phase != operations.OperationPhaseRepoLifecycleValidate {
+				t.Fatalf("spec type/phase = %s/%s, want %s/%s", spec.Scope.OperationType, spec.Phase, tt.wantType, operations.OperationPhaseRepoLifecycleValidate)
+			}
+			if spec.NamespaceID != "ns_123" || spec.RepoID != "repo_123" || spec.Resource.Type != "repo" || spec.Resource.ID != "repo_123" {
+				t.Fatalf("spec ns/repo/resource = %q/%q/%#v", spec.NamespaceID, spec.RepoID, spec.Resource)
+			}
+			if spec.InputSummary["reason_present"] != tt.wantReasonPresent {
+				t.Fatalf("reason_present = %#v, want %v in %#v", spec.InputSummary["reason_present"], tt.wantReasonPresent, spec.InputSummary)
+			}
+			snapshot, hasSnapshot := spec.InputSummary["lifecycle_policy_snapshot"].(map[string]any)
+			if hasSnapshot != tt.wantPolicySnapshot {
+				t.Fatalf("lifecycle policy snapshot present = %v, want %v in %#v", hasSnapshot, tt.wantPolicySnapshot, spec.InputSummary)
+			}
+			if tt.wantPolicySnapshot {
+				if snapshot["tombstone_retention_seconds"] != float64(604800) || snapshot["retention_met"] != false || snapshot["retention_override_requested"] != false {
+					t.Fatalf("lifecycle policy snapshot = %#v, want retained delete policy window", snapshot)
+				}
+			}
+		})
+	}
+}
+
 func renderLifecycleArgs(t *testing.T, value any) string {
 	t.Helper()
 	encoded, err := json.Marshal(value)

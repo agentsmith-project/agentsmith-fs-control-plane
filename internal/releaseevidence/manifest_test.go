@@ -255,6 +255,28 @@ func TestValidateManifestRejectsGoTestRunSelectorThatOnlyMatchesBenchmark(t *tes
 	assertReleaseEvidenceFindingContains(t, findings, "go test -run")
 }
 
+func TestValidateManifestRejectsRetainedLifecyclePositivePurgeSelectors(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	body := strings.Replace(validReleaseEvidenceManifest(), `"id":"repo_lifecycle_retained_positive_unit",
+      "capability_id":"repo_lifecycle_retained",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["bash","scripts/pass.sh"]`, `"id":"repo_lifecycle_retained_positive_unit",
+      "capability_id":"repo_lifecycle_retained",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","./internal/evidencetest","-run","^TestRepoLifecycleHandlerCreatesDeleteAndPurgeOperations$"]`, 1)
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
+
+	findings, err := VerifyFile(path, Options{RepoRoot: root, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
+	}
+	assertReleaseEvidenceFindingContains(t, findings, "retained lifecycle")
+	assertReleaseEvidenceFindingContains(t, findings, "purge")
+}
+
 func TestValidateManifestRejectsDocOnlyEvidenceForNonDocItems(t *testing.T) {
 	tests := []struct {
 		name string
