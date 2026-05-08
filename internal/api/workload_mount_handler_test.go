@@ -121,6 +121,232 @@ func TestCreateWorkloadMountBindingAdmissionDisabledRejectsNewBeforeMetadataAndA
 	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
 }
 
+func TestCreateWorkloadMountBindingAdmissionDisabledHashConflictBeforeCapabilityDenied(t *testing.T) {
+	hash, err := operations.HashRequest(createWorkloadMountRequest{MountPath: "/mnt/other", ReadOnly: true, LeaseSeconds: 120})
+	if err != nil {
+		t.Fatalf("hash workload mount request: %v", err)
+	}
+	store := &fakeOperationIntakeStore{lookupRecord: existingWorkloadMountOperationRecord("op_existing_mount", hash)}
+	sink := &fakeAuditSink{}
+	handler := WorkloadMountHandler(workloadMountHandlerConfig(store, namespaceBindingAllowedPolicy(auth.RoleMountAdmin), func(config *WorkloadMountHandlerConfig) {
+		config.AdmissionDisabled = true
+		config.AuditSink = sink
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, workloadMountRequest(http.MethodPost, "/internal/v1/repos/repo_123/workload-mount-bindings", `{"mount_path":"/mnt/repo","read_only":true,"lease_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409 idempotency conflict", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeIdempotencyConflict {
+		t.Fatalf("error = %#v, want idempotency conflict", env.Error)
+	}
+	if store.calls != 0 || store.lookupCalls != 1 {
+		t.Fatalf("intake/lookup calls = %d/%d, want lookup conflict without intake", store.calls, store.lookupCalls)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("audit events = %#v, want no capability denied audit on idempotency conflict", sink.events)
+	}
+}
+
+func TestWorkloadMountAdmissionDisabledMutations(t *testing.T) {
+	for _, operationID := range []string{"updateWorkloadMountBindingStatus", "heartbeatWorkloadMountBinding"} {
+		route, ok := RouteMetadataByOperationID(operationID)
+		if !ok {
+			t.Fatalf("missing route metadata for %s", operationID)
+		}
+		if !workloadMountAdmissionGatedMutation(route) {
+			t.Fatalf("%s should be gated when workload mount admission is disabled", operationID)
+		}
+	}
+	for _, operationID := range []string{"releaseWorkloadMountBinding", "revokeWorkloadMountBinding"} {
+		route, ok := RouteMetadataByOperationID(operationID)
+		if !ok {
+			t.Fatalf("missing route metadata for %s", operationID)
+		}
+		operationType, ok := operations.OperationTypeForRouteOperationID(operationID)
+		if !ok {
+			t.Fatalf("missing operation type for %s", operationID)
+		}
+		if !workloadMountTeardownExceptionOperation(operationType) {
+			t.Fatalf("%s should be an explicit workload mount teardown exception", operationID)
+		}
+		if workloadMountAdmissionGatedMutation(route) {
+			t.Fatalf("%s should not be gated when workload mount admission is disabled", operationID)
+		}
+	}
+
+	statusCanonical := struct {
+		MountBindingID string `json:"mount_binding_id"`
+		Status         string `json:"status"`
+		ObservedAt     string `json:"observed_at"`
+		LeaseExpiresAt string `json:"lease_expires_at,omitempty"`
+		Reason         string `json:"reason,omitempty"`
+	}{"wmb_123", "active", "2026-05-05T12:34:56Z", "", "mounted"}
+	statusHash, err := operations.HashRequest(statusCanonical)
+	if err != nil {
+		t.Fatalf("hash status request: %v", err)
+	}
+	heartbeatHash, err := operations.HashRequest(map[string]string{"mount_binding_id": "wmb_123"})
+	if err != nil {
+		t.Fatalf("hash heartbeat request: %v", err)
+	}
+
+	tests := []struct {
+		name             string
+		method           string
+		path             string
+		body             string
+		callerService    string
+		callerKind       auth.CallerKind
+		role             auth.Role
+		lookupRecord     *operations.OperationRecord
+		wantStatus       int
+		wantErrorCode    ErrorCode
+		wantOperationID  string
+		wantIntakeCalls  int
+		wantLookupCalls  int
+		wantBindingCalls int
+		wantAuditDenied  bool
+		wantAuditRouteID string
+		wantPhase        string
+	}{
+		{
+			name:             "status denied before binding",
+			method:           http.MethodPatch,
+			path:             "/internal/v1/workload-mount-bindings/wmb_123/status",
+			body:             `{"status":"active","observed_at":"2026-05-05T12:34:56Z","reason":"mounted"}`,
+			callerService:    "runtime-orchestrator",
+			callerKind:       auth.CallerKindOrchestrator,
+			role:             auth.RoleOrchestratorMount,
+			wantStatus:       http.StatusForbidden,
+			wantErrorCode:    CodeCapabilityDenied,
+			wantLookupCalls:  1,
+			wantAuditDenied:  true,
+			wantAuditRouteID: "updateWorkloadMountBindingStatus",
+			wantBindingCalls: 0,
+		},
+		{
+			name:             "status replay before denial",
+			method:           http.MethodPatch,
+			path:             "/internal/v1/workload-mount-bindings/wmb_123/status",
+			body:             `{"status":"active","observed_at":"2026-05-05T12:34:56Z","reason":"mounted"}`,
+			callerService:    "runtime-orchestrator",
+			callerKind:       auth.CallerKindOrchestrator,
+			role:             auth.RoleOrchestratorMount,
+			lookupRecord:     existingWorkloadMountMutationOperationRecord("op_existing_status", operations.OperationMountBindingStatusUpdate, operations.OperationPhaseMountBindingStatusValidate, statusHash),
+			wantStatus:       http.StatusAccepted,
+			wantOperationID:  "op_existing_status",
+			wantLookupCalls:  1,
+			wantBindingCalls: 0,
+		},
+		{
+			name:             "heartbeat denied before binding",
+			method:           http.MethodPost,
+			path:             "/internal/v1/workload-mount-bindings/wmb_123:heartbeat",
+			callerService:    "runtime-orchestrator",
+			callerKind:       auth.CallerKindOrchestrator,
+			role:             auth.RoleOrchestratorMount,
+			wantStatus:       http.StatusForbidden,
+			wantErrorCode:    CodeCapabilityDenied,
+			wantLookupCalls:  1,
+			wantAuditDenied:  true,
+			wantAuditRouteID: "heartbeatWorkloadMountBinding",
+			wantBindingCalls: 0,
+		},
+		{
+			name:             "heartbeat replay before denial",
+			method:           http.MethodPost,
+			path:             "/internal/v1/workload-mount-bindings/wmb_123:heartbeat",
+			callerService:    "runtime-orchestrator",
+			callerKind:       auth.CallerKindOrchestrator,
+			role:             auth.RoleOrchestratorMount,
+			lookupRecord:     existingWorkloadMountMutationOperationRecord("op_existing_heartbeat", operations.OperationMountBindingHeartbeat, operations.OperationPhaseMountBindingHeartbeatValidate, heartbeatHash),
+			wantStatus:       http.StatusAccepted,
+			wantOperationID:  "op_existing_heartbeat",
+			wantLookupCalls:  1,
+			wantBindingCalls: 0,
+		},
+		{
+			name:             "release teardown exception",
+			method:           http.MethodPost,
+			path:             "/internal/v1/workload-mount-bindings/wmb_123:release",
+			callerService:    "runtime-orchestrator",
+			callerKind:       auth.CallerKindOrchestrator,
+			role:             auth.RoleOrchestratorMount,
+			wantStatus:       http.StatusAccepted,
+			wantIntakeCalls:  1,
+			wantLookupCalls:  1,
+			wantBindingCalls: 1,
+			wantPhase:        operations.OperationPhaseMountBindingReleaseValidate,
+		},
+		{
+			name:             "revoke teardown exception",
+			method:           http.MethodPost,
+			path:             "/internal/v1/workload-mount-bindings/wmb_123:revoke",
+			callerService:    "product-caller",
+			callerKind:       auth.CallerKindProduct,
+			role:             auth.RoleMountAdmin,
+			wantStatus:       http.StatusAccepted,
+			wantIntakeCalls:  1,
+			wantLookupCalls:  1,
+			wantBindingCalls: 1,
+			wantPhase:        operations.OperationPhaseMountBindingRevokeValidate,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeOperationIntakeStore{lookupRecord: tt.lookupRecord}
+			sink := &fakeAuditSink{}
+			mountCalls := 0
+			config := workloadMountHandlerConfig(store, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: tt.callerService, Kind: tt.callerKind, Roles: []auth.Role{tt.role}}}}, func(config *WorkloadMountHandlerConfig) {
+				config.AdmissionDisabled = true
+				config.AuditSink = sink
+				config.MountReader = fakeWorkloadMountReader{binding: workloadMountMetaFixture().mount, calls: &mountCalls}
+			})
+			config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:" + tt.callerService, CanonicalCallerService: tt.callerService}}
+			rec := httptest.NewRecorder()
+
+			WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(tt.method, tt.path, tt.body, "ns_123", tt.callerService))
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d body = %s, want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			if tt.wantErrorCode != "" {
+				if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != tt.wantErrorCode {
+					t.Fatalf("error = %#v, want %s", env.Error, tt.wantErrorCode)
+				}
+			}
+			if tt.wantOperationID != "" {
+				envelope := decodeOperationEnvelope(t, rec.Body.Bytes())
+				if envelope.OperationID != tt.wantOperationID {
+					t.Fatalf("operation id = %q, want %q", envelope.OperationID, tt.wantOperationID)
+				}
+			}
+			if store.calls != tt.wantIntakeCalls || store.lookupCalls != tt.wantLookupCalls {
+				t.Fatalf("intake/lookup calls = %d/%d, want %d/%d", store.calls, store.lookupCalls, tt.wantIntakeCalls, tt.wantLookupCalls)
+			}
+			if mountCalls != tt.wantBindingCalls {
+				t.Fatalf("binding calls = %d, want %d", mountCalls, tt.wantBindingCalls)
+			}
+			if tt.wantPhase != "" && store.spec.Phase != tt.wantPhase {
+				t.Fatalf("phase = %q, want %q", store.spec.Phase, tt.wantPhase)
+			}
+			if tt.wantAuditDenied {
+				if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied || sink.events[0].Type != audit.EventTypeCapabilityDenied {
+					t.Fatalf("audit events = %#v, want one capability denied audit", sink.events)
+				}
+				assertWorkloadMountAdmissionDisabledAudit(t, sink.events[0], tt.wantAuditRouteID)
+			} else if len(sink.events) != 0 {
+				t.Fatalf("audit events = %#v, want none", sink.events)
+			}
+			assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+		})
+	}
+}
+
 func TestCreateWorkloadMountBindingRejectsFilteredMountWithoutExternalControlRoot(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -418,6 +644,56 @@ func TestWorkloadMountGetAndPlanDenyNamespaceMismatchWithoutPlanLeak(t *testing.
 	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
 }
 
+func TestWorkloadMountAdmissionDisabledPlan(t *testing.T) {
+	tests := []struct {
+		name          string
+		status        sessionstate.MountStatus
+		wantStatus    int
+		wantPlanCalls int
+	}{
+		{name: "ordinary plan denied", status: sessionstate.MountStatusActive, wantStatus: http.StatusForbidden},
+		{name: "teardown plan exception", status: sessionstate.MountStatusReleasing, wantStatus: http.StatusOK, wantPlanCalls: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := workloadMountMetaFixture()
+			meta.mount.Status = tt.status
+			planCalls := &fakeWorkloadMountPlanReaderCalls{}
+			sink := &fakeAuditSink{}
+			config := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
+				config.AdmissionDisabled = true
+				config.AuditSink = sink
+				config.MountReader = fakeWorkloadMountReader{binding: meta.mount}
+				config.PlanReader = fakeWorkloadMountPlanReader{plan: meta.plan, calls: planCalls}
+			})
+			config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
+			rec := httptest.NewRecorder()
+
+			WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "runtime-orchestrator"))
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d body = %s, want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			if planCalls.calls != tt.wantPlanCalls {
+				t.Fatalf("plan calls = %d, want %d", planCalls.calls, tt.wantPlanCalls)
+			}
+			if tt.wantStatus == http.StatusForbidden {
+				if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+					t.Fatalf("error = %#v, want capability denied", env.Error)
+				}
+				if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+					t.Fatalf("audit events = %#v, want one denied audit", sink.events)
+				}
+				assertWorkloadMountAdmissionDisabledAudit(t, sink.events[0], "getOrchestratorMountPlan")
+				assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+			} else if len(sink.events) != 1 || sink.events[0].Type != audit.EventTypeMountPlanIssued {
+				t.Fatalf("audit events = %#v, want mount plan issued audit", sink.events)
+			}
+		})
+	}
+}
+
 func TestWorkloadMountPlanAuditUsesMinimalDetails(t *testing.T) {
 	sink := &fakeAuditSink{}
 	config := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
@@ -707,9 +983,15 @@ func (reader fakeWorkloadMountVolumeReader) GetVolume(context.Context, string) (
 	return reader.volume, nil
 }
 
-type fakeWorkloadMountReader struct{ binding workloadmount.Binding }
+type fakeWorkloadMountReader struct {
+	binding workloadmount.Binding
+	calls   *int
+}
 
 func (reader fakeWorkloadMountReader) GetWorkloadMountBinding(context.Context, string) (workloadmount.Binding, error) {
+	if reader.calls != nil {
+		(*reader.calls)++
+	}
 	return reader.binding, nil
 }
 
@@ -797,13 +1079,40 @@ func (store *fakeNoLookupOperationIntakeStore) CreateOrReuseOperation(_ context.
 	return operations.IdempotencyResolution{Operation: record.Sanitized()}, nil
 }
 
-func assertWorkloadMountAdmissionDisabledAudit(t *testing.T, event audit.Event) {
+func existingWorkloadMountMutationOperationRecord(operationID string, operationType operations.OperationType, phase string, hash operations.RequestHash) *operations.OperationRecord {
+	now := fixedNamespaceNow()
+	return &operations.OperationRecord{
+		ID:                  operationID,
+		Type:                operationType,
+		State:               operations.OperationStateQueued,
+		Phase:               phase,
+		IdempotencyScope:    operations.NewIdempotencyScope("runtime-orchestrator", "ns_123", operationType, "idem_mount").String(),
+		IdempotencyKey:      "idem_mount",
+		RequestHash:         hash,
+		CorrelationID:       "corr_mount",
+		CallerService:       "runtime-orchestrator",
+		AuthorizedActor:     operations.Actor{Type: "user", ID: "user_123"},
+		Resource:            operations.ResourceRef{Type: "workload_mount_binding", ID: "wmb_123"},
+		NamespaceID:         "ns_123",
+		RepoID:              "repo_123",
+		MountBindingID:      "wmb_123",
+		ExternalResourceIDs: map[string]string{},
+		InputSummary:        map[string]any{"mount_binding_id": "wmb_123"},
+		CreatedAt:           now,
+	}
+}
+
+func assertWorkloadMountAdmissionDisabledAudit(t *testing.T, event audit.Event, routeOperationIDs ...string) {
 	t.Helper()
 	if event.Type != audit.EventTypeCapabilityDenied {
 		t.Fatalf("audit event Type = %q, want %q", event.Type, audit.EventTypeCapabilityDenied)
 	}
-	if got := event.Details["route_operation_id"]; got != "createWorkloadMountBinding" {
-		t.Fatalf("audit route_operation_id = %#v, want createWorkloadMountBinding; details=%#v", got, event.Details)
+	wantRouteOperationID := "createWorkloadMountBinding"
+	if len(routeOperationIDs) > 0 {
+		wantRouteOperationID = routeOperationIDs[0]
+	}
+	if got := event.Details["route_operation_id"]; got != wantRouteOperationID {
+		t.Fatalf("audit route_operation_id = %#v, want %s; details=%#v", got, wantRouteOperationID, event.Details)
 	}
 	if !auditValidationErrorsContain(event.Details["validation_errors"], "workload_mount_admission_disabled") {
 		t.Fatalf("audit validation_errors = %#v, want workload_mount_admission_disabled; details=%#v", event.Details["validation_errors"], event.Details)

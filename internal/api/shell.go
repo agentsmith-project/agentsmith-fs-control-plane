@@ -485,7 +485,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	if !config.WorkloadMountAdmissionDisabled || operationLookupStore != nil {
 		implemented["createWorkloadMountBinding"] = createWorkloadMountHandler
 	}
-	if !config.WorkloadMountAdmissionDisabled {
+	if !config.WorkloadMountAdmissionDisabled || (mountReader != nil && mountPlanReader != nil) {
 		implemented["getOrchestratorMountPlan"] = getOrchestratorMountPlanHandler
 	}
 	if config.VolumeReader != nil {

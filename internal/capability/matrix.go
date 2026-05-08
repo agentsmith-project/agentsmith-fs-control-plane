@@ -14,11 +14,20 @@ const (
 )
 
 var admissionCapabilitiesByOperationType = map[operations.OperationType]ID{
-	operations.OperationExportCreate:       WebDAVExport,
-	operations.OperationMountBindingCreate: WorkloadMount,
-	operations.OperationTemplateCreate:     RepoTemplate,
-	operations.OperationTemplateClone:      RepoTemplate,
-	operations.OperationRepoPurge:          RepoPurge,
+	operations.OperationExportCreate:             WebDAVExport,
+	operations.OperationMountBindingCreate:       WorkloadMount,
+	operations.OperationMountBindingStatusUpdate: WorkloadMount,
+	operations.OperationMountBindingHeartbeat:    WorkloadMount,
+	operations.OperationTemplateCreate:           RepoTemplate,
+	operations.OperationTemplateClone:            RepoTemplate,
+	operations.OperationRepoPurge:                RepoPurge,
+}
+
+var teardownOperationsByCapability = map[ID][]operations.OperationType{
+	WorkloadMount: {
+		operations.OperationMountBindingRelease,
+		operations.OperationMountBindingRevoke,
+	},
 }
 
 func AdmissionCapabilityForOperationType(operationType operations.OperationType) (ID, bool) {
@@ -34,6 +43,10 @@ func AdmissionOperationTypesForCapability(id ID) []operations.OperationType {
 		}
 	}
 	return operationTypes
+}
+
+func TeardownOperationTypesForCapability(id ID) []operations.OperationType {
+	return append([]operations.OperationType(nil), teardownOperationsByCapability[id]...)
 }
 
 func RequiredForDefaultGA(id ID) bool {

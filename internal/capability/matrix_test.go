@@ -13,6 +13,8 @@ func TestAdmissionCapabilityForOperationTypeIsStable(t *testing.T) {
 	}{
 		{operationType: operations.OperationExportCreate, want: WebDAVExport},
 		{operationType: operations.OperationMountBindingCreate, want: WorkloadMount},
+		{operationType: operations.OperationMountBindingStatusUpdate, want: WorkloadMount},
+		{operationType: operations.OperationMountBindingHeartbeat, want: WorkloadMount},
 		{operationType: operations.OperationTemplateCreate, want: RepoTemplate},
 		{operationType: operations.OperationTemplateClone, want: RepoTemplate},
 		{operationType: operations.OperationRepoPurge, want: RepoPurge},
@@ -49,6 +51,7 @@ func TestCapabilityAdmissionOperationCoverageContract(t *testing.T) {
 		capabilityID      ID
 		wantDefaultGA     bool
 		wantAdmissionOps  []operations.OperationType
+		wantTeardownOps   []operations.OperationType
 		wantOptionalGated bool
 	}{
 		{
@@ -58,7 +61,8 @@ func TestCapabilityAdmissionOperationCoverageContract(t *testing.T) {
 		},
 		{
 			capabilityID:      WorkloadMount,
-			wantAdmissionOps:  []operations.OperationType{operations.OperationMountBindingCreate},
+			wantAdmissionOps:  []operations.OperationType{operations.OperationMountBindingCreate, operations.OperationMountBindingStatusUpdate, operations.OperationMountBindingHeartbeat},
+			wantTeardownOps:   []operations.OperationType{operations.OperationMountBindingRelease, operations.OperationMountBindingRevoke},
 			wantOptionalGated: true,
 		},
 		{
@@ -78,6 +82,10 @@ func TestCapabilityAdmissionOperationCoverageContract(t *testing.T) {
 			got := AdmissionOperationTypesForCapability(tt.capabilityID)
 			if !operationTypeSlicesEqual(got, tt.wantAdmissionOps) {
 				t.Fatalf("AdmissionOperationTypesForCapability(%s) = %#v, want %#v", tt.capabilityID, got, tt.wantAdmissionOps)
+			}
+			gotTeardown := TeardownOperationTypesForCapability(tt.capabilityID)
+			if !operationTypeSlicesEqual(gotTeardown, tt.wantTeardownOps) {
+				t.Fatalf("TeardownOperationTypesForCapability(%s) = %#v, want %#v", tt.capabilityID, gotTeardown, tt.wantTeardownOps)
 			}
 			if gotDefaultGA := RequiredForDefaultGA(tt.capabilityID); gotDefaultGA != tt.wantDefaultGA {
 				t.Fatalf("RequiredForDefaultGA(%s) = %v, want %v", tt.capabilityID, gotDefaultGA, tt.wantDefaultGA)

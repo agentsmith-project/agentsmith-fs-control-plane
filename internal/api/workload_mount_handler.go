@@ -14,6 +14,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
@@ -281,7 +282,12 @@ func (handler workloadMountLeafHandler) plan(w http.ResponseWriter, r *http.Requ
 	if !handler.bindingInRequestNamespace(w, r, route, requestContext, binding, namespaceID) {
 		return
 	}
-	if workloadmount.BindingPlanFreshnessDecision(binding, handler.currentTime()) == workloadmount.PlanFreshnessStaleIssuance {
+	freshness := workloadmount.BindingPlanFreshnessDecision(binding, handler.currentTime())
+	if handler.admissionDisabled && freshness != workloadmount.PlanFreshnessAllowTeardown {
+		writeWorkloadMountAdmissionDisabled(w, r, route, requestContext, handler.sink)
+		return
+	}
+	if freshness == workloadmount.PlanFreshnessStaleIssuance {
 		writeWorkloadMountStaleLeaseRecoveryRequired(w, r, route, requestContext, handler.sink)
 		return
 	}
@@ -295,26 +301,41 @@ func (handler workloadMountLeafHandler) plan(w http.ResponseWriter, r *http.Requ
 }
 
 func (handler workloadMountLeafHandler) mutateExisting(w http.ResponseWriter, r *http.Request, route RouteMetadata, params map[string]string, requestContext auth.RequestContext) {
-	if handler.mountReader == nil || handler.intakeStore == nil {
-		writeWorkloadMountError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
-		return
-	}
 	namespaceID, ok := requestNamespace(w, r, route, requestContext, handler.sink)
 	if !ok {
 		return
 	}
 	mountBindingID := strings.TrimSpace(params["mountBindingId"])
+	if err := pathresolver.ValidateID(pathresolver.WorkloadMountBindingID, mountBindingID); err != nil {
+		writeValidationError(w, r, route, CodeInvalidID, http.StatusBadRequest, "invalid mount binding id", []string{"invalid_mount_binding_id"})
+		return
+	}
+	canonical, summary, phase, err := handler.mutationCanonical(route.OperationID, mountBindingID, r)
+	if err != nil {
+		writeValidationErrorWithAudit(w, r, route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid workload mount request", []string{"invalid_request_body"}, handler.sink)
+		return
+	}
+	if handler.lookupStore == nil {
+		writeWorkloadMountError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+		return
+	}
+	if handler.writeExistingIdempotentOperation(w, r, route, requestContext, namespaceID, canonical) {
+		return
+	}
+	if handler.admissionDisabled && workloadMountAdmissionGatedMutation(route) {
+		writeWorkloadMountAdmissionDisabled(w, r, route, requestContext, handler.sink)
+		return
+	}
+	if handler.mountReader == nil || handler.intakeStore == nil {
+		writeWorkloadMountError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
+		return
+	}
 	binding, ok := handler.readBinding(w, r, route, mountBindingID)
 	if !ok {
 		return
 	}
 	if binding.NamespaceID != namespaceID {
 		handler.bindingInRequestNamespace(w, r, route, requestContext, binding, namespaceID)
-		return
-	}
-	canonical, summary, phase, err := handler.mutationCanonical(route.OperationID, mountBindingID, r)
-	if err != nil {
-		writeValidationErrorWithAudit(w, r, route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid workload mount request", []string{"invalid_request_body"}, handler.sink)
 		return
 	}
 	now := handler.currentTime()
@@ -336,6 +357,27 @@ func (handler workloadMountLeafHandler) mutateExisting(w http.ResponseWriter, r 
 		return
 	}
 	_ = writeJSON(w, http.StatusAccepted, envelope)
+}
+
+func workloadMountAdmissionGatedMutation(route RouteMetadata) bool {
+	operationType, ok := operations.OperationTypeForRouteOperationID(route.OperationID)
+	if !ok {
+		return false
+	}
+	if workloadMountTeardownExceptionOperation(operationType) {
+		return false
+	}
+	capabilityID, ok := capability.AdmissionCapabilityForOperationType(operationType)
+	return ok && capabilityID == capability.WorkloadMount
+}
+
+func workloadMountTeardownExceptionOperation(operationType operations.OperationType) bool {
+	for _, teardownOperationType := range capability.TeardownOperationTypesForCapability(capability.WorkloadMount) {
+		if operationType == teardownOperationType {
+			return true
+		}
+	}
+	return false
 }
 
 func (handler workloadMountLeafHandler) mutationCanonical(operationID, mountBindingID string, r *http.Request) (any, map[string]any, string, error) {
@@ -654,7 +696,10 @@ func writeWorkloadMountReadError(w http.ResponseWriter, r *http.Request, err err
 }
 
 func writeWorkloadMountAdmissionDisabled(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, sink audit.Sink) {
-	message := "workload mount create admission is disabled"
+	message := "workload mount admission is disabled"
+	if route.OperationID == "createWorkloadMountBinding" {
+		message = "workload mount create admission is disabled"
+	}
 	validationErrors := []string{"workload_mount_admission_disabled"}
 	var operationID *string
 	if route.OperationID != "" {

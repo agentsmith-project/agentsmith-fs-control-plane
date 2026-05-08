@@ -47,11 +47,16 @@
         "go",
         "test",
         "-count=1",
+        "./internal/capability",
         "./internal/api",
         "-run",
-        "^TestCreateWorkloadMountBindingAdmissionDisabledRejectsNewBeforeMetadataAndAudits$"
+        "^Test(CapabilityAdmissionOperationCoverageContract|InternalAPIShell.*WorkloadMount.*AdmissionDisabled|CreateWorkloadMountBindingAdmissionDisabled(ReplaysExistingBeforeMetadata|RejectsNewBeforeMetadataAndAudits|HashConflictBeforeCapabilityDenied)|WorkloadMountAdmissionDisabled(Mutations|Plan))$"
       ],
       "anchors": [
+        "internal/capability/matrix_test.go",
+        "internal/capability/matrix.go",
+        "internal/api/assembler_test.go",
+        "internal/api/shell.go",
         "internal/api/workload_mount_handler_test.go",
         "internal/api/workload_mount_handler.go"
       ],
@@ -70,7 +75,8 @@
       "pass_criteria": {
         "kind": "denial_safety",
         "assertions": [
-          "optional disabled admission rejects before metadata and audits without queuing"
+          "optional disabled workload mount admission rejects create, status update, heartbeat, and ordinary orchestrator plan before metadata/runtime continuation while preserving idempotency replay/conflict precedence",
+          "release and revoke remain explicit teardown exceptions under disabled workload mount admission"
         ]
       }
     },

@@ -474,6 +474,60 @@ func TestInternalAPIShellCreateWorkloadMountAdmissionDisabledWithoutLookupStoreF
 	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
 }
 
+func TestInternalAPIShellWorkloadMountPlanAdmissionDisabled(t *testing.T) {
+	tests := []struct {
+		name          string
+		status        sessionstate.MountStatus
+		wantStatus    int
+		wantPlanCalls int
+	}{
+		{name: "ordinary plan denied", status: sessionstate.MountStatusActive, wantStatus: http.StatusForbidden},
+		{name: "releasing teardown plan allowed", status: sessionstate.MountStatusReleasing, wantStatus: http.StatusOK, wantPlanCalls: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := workloadMountMetaFixture()
+			meta.mount.Status = tt.status
+			planCalls := &fakeWorkloadMountPlanReaderCalls{}
+			sink := &fakeAuditSink{}
+			handler := NewInternalAPIShell(InternalAPIShellConfig{
+				AuditSink:                      sink,
+				PrincipalResolver:              fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}},
+				NamespaceBindingReader:         &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "runtime-orchestrator", Roles: []resources.CallerRole{resources.CallerRoleOrchestratorMount}})},
+				WorkloadMountBindingReader:     fakeWorkloadMountReader{binding: meta.mount},
+				WorkloadMountPlanReader:        fakeWorkloadMountPlanReader{plan: meta.plan, calls: planCalls},
+				Now:                            fixedNamespaceNow,
+				WorkloadMountAdmissionDisabled: true,
+			})
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "runtime-orchestrator"))
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("plan status = %d body = %s, want %d", rec.Code, rec.Body.String(), tt.wantStatus)
+			}
+			if planCalls.calls != tt.wantPlanCalls {
+				t.Fatalf("plan calls = %d, want %d", planCalls.calls, tt.wantPlanCalls)
+			}
+			if tt.wantStatus == http.StatusForbidden {
+				if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeCapabilityDenied {
+					t.Fatalf("error = %#v, want capability denied", env.Error)
+				}
+				assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+			}
+			for _, event := range sink.events {
+				if _, ok := event.Details["secret_ref"]; ok {
+					t.Fatalf("audit event leaked secret ref: %#v", event.Details)
+				}
+				if _, ok := event.Details["payload_volume_subdir"]; ok {
+					t.Fatalf("audit event leaked plan material: %#v", event.Details)
+				}
+			}
+		})
+	}
+}
+
 func TestInternalAPIShellGetAndRevokeExportRemainAvailableWhenWebDAVAdmissionDisabled(t *testing.T) {
 	meta := exportMetaFixture()
 	store := &fakeExportStore{}

@@ -2,6 +2,7 @@ package releaseevidence
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -463,6 +464,89 @@ func TestCurrentRepoManifestRepoCreateJVSEvidenceRunSelectorCoversRecoveryTests(
 	}
 }
 
+func TestCurrentRepoManifestWorkloadMountDisabledAdmissionSelectorCoversCoreTests(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	var item Item
+	found := false
+	for _, candidate := range manifest.Items {
+		if candidate.ID == "workload_mount_disabled_admission_unit" {
+			item = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("manifest missing workload_mount_disabled_admission_unit")
+	}
+
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/capability", "./internal/api"}) {
+		t.Fatalf("%s command packages = %#v, want capability and api packages", item.ID, packages)
+	}
+
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range []string{
+		"TestCapabilityAdmissionOperationCoverageContract",
+		"TestInternalAPIShellWorkloadMountPlanAdmissionDisabled",
+		"TestCreateWorkloadMountBindingAdmissionDisabledReplaysExistingBeforeMetadata",
+		"TestCreateWorkloadMountBindingAdmissionDisabledRejectsNewBeforeMetadataAndAudits",
+		"TestCreateWorkloadMountBindingAdmissionDisabledHashConflictBeforeCapabilityDenied",
+		"TestWorkloadMountAdmissionDisabledMutations",
+		"TestWorkloadMountAdmissionDisabledPlan",
+	} {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+	passCriteria := strings.Join(item.PassCriteria.Assertions, "\n")
+	for _, required := range []string{"status update", "heartbeat", "ordinary orchestrator plan", "release and revoke", "teardown exceptions"} {
+		if !strings.Contains(passCriteria, required) {
+			t.Fatalf("%s pass criteria %q does not mention %q", item.ID, passCriteria, required)
+		}
+	}
+}
+
+func goTestPackageForTestName(testName string) string {
+	if strings.HasPrefix(testName, "TestCapability") {
+		return "./internal/capability"
+	}
+	return "./internal/api"
+}
+
+func assertGoTestListIncludesTest(t *testing.T, repoRoot, itemID, selector, pkg, testName string) {
+	t.Helper()
+
+	command := exec.Command("go", "test", "-list", selector, pkg)
+	command.Dir = repoRoot
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s go test -list %q %s failed: %v: %s", itemID, selector, pkg, err, compactCommandOutput(output))
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.TrimSpace(line) == testName {
+			return
+		}
+	}
+	t.Fatalf("%s go test -list %q %s output missing %s: %s", itemID, selector, pkg, testName, compactCommandOutput(output))
+}
+
 func TestValidateManifestRequiresExactReleaseEvidenceItems(t *testing.T) {
 	tests := []struct {
 		name string
@@ -775,7 +859,7 @@ var package0FixtureMetadata = []struct {
 	passCriteriaAssertion string
 }{
 	{"webdav_export_disabled_admission_unit", "CLAIM_DEFAULT_DENIAL_SAFE", "webdav_export_disabled_admission", "P0_DEFAULT_DENIAL_WEBDAV_DISABLED_ADMISSION", "F5", "", "default", "true", "false", "negative", "true", "denial_safety", "disabled admission rejects before metadata and audits without queuing"},
-	{"workload_mount_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_disabled_admission", "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", "F5", "", "default", "true", "false", "negative", "false", "denial_safety", "optional disabled admission rejects before metadata and audits without queuing"},
+	{"workload_mount_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_disabled_admission", "P0_OPTIONAL_DENIED_WORKLOAD_ADMISSION", "F5", "", "default", "true", "false", "negative", "false", "denial_safety", "optional disabled workload mount admission rejects create, status update, heartbeat, and ordinary orchestrator plan before metadata/runtime continuation while preserving idempotency replay/conflict precedence"},
 	{"repo_lifecycle_retained_positive_unit", "CLAIM_RETAINED_LIFECYCLE_DEFAULT", "retained_lifecycle_positive", "P0_RETAINED_LIFECYCLE_DEFAULT_POSITIVE", "F15", "", "default", "true", "false", "positive", "true", "positive_path", "retained lifecycle archive restore delete and tombstone flows pass without purge selectors"},
 	{"workload_mount_plan_store_freshness_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_plan_store_freshness", "P0_OPTIONAL_DENIED_WORKLOAD_PLAN_STORE", "F9", "", "default", "true", "false", "negative", "false", "denial_safety", "workload mount plan store fails closed on stale or unsupported default state"},
 	{"workload_mount_runtime_secretref_config_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "workload_mount_runtime_secretref_config", "P0_OPTIONAL_DENIED_WORKLOAD_RUNTIME_SECRETREF", "F10", "", "default", "true", "false", "negative", "false", "denial_safety", "runtime secretref configuration fails closed without leaking values"},
@@ -804,6 +888,18 @@ func writeReleaseEvidenceFile(t *testing.T, path, body string) {
 
 func appendReleaseEvidenceItem(body, item string) string {
 	return strings.Replace(body, "\n  ]\n}", ",\n    {"+item+"}\n  ]\n}", 1)
+}
+
+func stringSlicesEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func assertReleaseEvidenceFindingContains(t *testing.T, findings []Finding, needle string) {
