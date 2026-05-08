@@ -380,6 +380,49 @@ func TestPackage0RequiresSeedGapMarkers(t *testing.T) {
 	}
 }
 
+func TestPackage0SeedModeAllowsClosedSeedGapReplacement(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	body := withoutPackage0SeedGapMarker(validReleaseEvidenceManifest(), "seed_gap_admin_bootstrap_ready_open")
+	body = appendReleaseEvidenceItem(body, seedGapReplacementItem(seedGapSpecByID(t, "seed_gap_admin_bootstrap_ready_open"), `"bash","scripts/pass.sh"`, "scripts/pass.sh", "implemented"))
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
+
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
+	}
+	assertNoReleaseEvidenceFindingContains(t, findings, "seed_gap_admin_bootstrap_ready_open")
+	assertNoReleaseEvidenceFindingContains(t, findings, "CLAIM_ADMIN_BOOTSTRAP_READY")
+}
+
+func TestPackage0SeedModeRejectsMissingSeedGapWithoutReplacement(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	body := withoutPackage0SeedGapMarker(validReleaseEvidenceManifest(), "seed_gap_admin_bootstrap_ready_open")
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
+
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
+	}
+	assertReleaseEvidenceFindingContains(t, findings, "manifest.seed_gap_state_missing")
+	assertReleaseEvidenceFindingContains(t, findings, "CLAIM_ADMIN_BOOTSTRAP_READY")
+}
+
+func TestPackage0SeedModeRejectsOpenAndClosedSeedGapConflict(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	body := appendReleaseEvidenceItem(validReleaseEvidenceManifest(), seedGapReplacementItem(seedGapSpecByID(t, "seed_gap_admin_bootstrap_ready_open"), `"bash","scripts/pass.sh"`, "scripts/pass.sh", "implemented"))
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
+
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
+	}
+	assertReleaseEvidenceFindingContains(t, findings, "manifest.seed_gap_state_conflict")
+	assertReleaseEvidenceFindingContains(t, findings, "seed_gap_admin_bootstrap_ready_open")
+}
+
 func TestPackage0SeedModeAllowsTargetCapabilityVocabulary(t *testing.T) {
 	root := releaseEvidenceFixtureRoot(t)
 	body := validReleaseEvidenceManifest()

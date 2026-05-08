@@ -452,8 +452,19 @@ func validateSeedGapMarkers(itemsByID map[string]Item) []Finding {
 	var findings []Finding
 	for _, spec := range seedGapSpecs {
 		item, ok := itemsByID[spec.ID]
+		hasClosedReplacement := false
+		if replacement, replacementOK := itemsByID[finalReplacementIDForSeedGap(spec)]; replacementOK {
+			hasClosedReplacement = finalClaimReplacementEvidenceMatchesSeedGap(replacement, spec)
+		}
+		switch {
+		case ok && hasClosedReplacement:
+			findings = append(findings, Finding{ItemID: spec.ID, Code: "manifest.seed_gap_state_conflict", Message: fmt.Sprintf("seed gap %s for claim %s cannot be both open marker and closed replacement", spec.ID, spec.ClaimID)})
+		case !ok && !hasClosedReplacement:
+			findings = append(findings, Finding{Code: "manifest.seed_gap_state_missing", Message: fmt.Sprintf("seed gap %s for claim %s must have an open marker or exact implemented/closed replacement evidence", spec.ID, spec.ClaimID)})
+		case !ok && hasClosedReplacement:
+			continue
+		}
 		if !ok {
-			findings = append(findings, Finding{Code: "manifest.seed_gap_marker_missing", Message: fmt.Sprintf("missing open seed gap marker for %s", spec.ClaimID)})
 			continue
 		}
 		if item.ClaimID != spec.ClaimID ||
