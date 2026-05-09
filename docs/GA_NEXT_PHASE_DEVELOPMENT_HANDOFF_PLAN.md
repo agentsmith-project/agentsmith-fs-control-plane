@@ -128,6 +128,25 @@ add partial default-loop evidence, but it must not close
 P2b runtime parity contract it relies on is satisfied. Retained lifecycle,
 operator repair, and release hardening close their own claims.
 
+## Product Architecture Review Follow-up Plan
+
+Research findings are triaged into this handoff by GA acceptance semantics, not
+by finding count. A finding becomes a default blocker only when it protects the
+product-neutral shared file-system control plane promised above. Optional
+positive and deployment/runtime findings stay out of default GA final unless the
+selector explicitly claims them or the finding is release/profile/doc-sync
+safety.
+
+| Finding class | Handoff treatment | Closure rule |
+| --- | --- | --- |
+| Default blocker | Default caller loop, capability/admission/worker/recovery parity, operator inspection/repair, restore reconciliation, discovery/readyz layering, secret/path redaction, release/profile/workflow hardening. | Requires exact claim/subclaim/acceptance evidence, non-placeholder replacement, focused command, and `bash scripts/verify-ga-release.sh` where release evidence changes. |
+| Selected optional | Workload positive, template positive, purge positive, and other fixture-enabled positives. | Blocks final only when selected by `claimed_optional_capabilities`; default profile still requires denied/fail-closed evidence. |
+| Runtime-support/doc-sync | Deployment envelope, runtime prerequisites, residual-risk shape, release wording, generated reports, and runbook/doc alignment. | Repo-local schema/contract/doc/evidence guard only; never a production deployment, manual, or external project gate. |
+
+Do not promote `auto_verified`, research recommendations, broad smoke wording, or
+reviewer approval into final GA evidence. Research findings must land as the
+smallest exact claim slice with manifest guards and negative shape tests.
+
 ## Gate Mode Contract
 
 The only release entrypoint is:
@@ -341,6 +360,39 @@ P0 -> P2a capability + terminalization contract
 This is not a rollout phase. It only says positive default-loop work must not
 close without the capability/admission/recovery/terminalization runtime parity
 it depends on.
+
+## Current Next-Stage Queue
+
+Use the current manifest as the source of truth. If a listed seed gap has
+already been replaced by exact evidence, verify the replacement shape and skip
+to the next open default blocker.
+
+1. Default user loop aggregation: if `seed_gap_default_user_loop_open` remains
+   open, close it only with `default_user_loop_positive_unit` proving exact
+   P2b/P1b/P1c/P1d evidence plus caller-scoped operation/audit/recovery trace.
+2. P3 operator repair: if `seed_gap_operator_repair_safe_open` remains open,
+   add the allowlisted repair contract, one API or CLI entry, shared audit
+   shape, and denial/intervention tests. If already closed, validate the
+   evidence and skip.
+3. P4b restore reconciliation: close `seed_gap_restore_reconciliation_open`
+   with reconciliation, no credential reissue, no purged resurrection, and
+   mismatch-to-intervention evidence.
+4. Discovery surfaces: close remaining `CLAIM_DISCOVERY_SURFACES` gaps with
+   caller/orchestrator/operator/readyz output evidence, not matrix rows alone.
+5. Secret/path redaction: close remaining redaction gaps across caller,
+   operator, runtime, audit, and evidence surfaces touched by the current
+   slice.
+6. Profile, workflow, release hardening: close profile boundary, workflow guard,
+   selector/digest/artifact identity, generated report, and doc-sync gaps
+   through repo-local evidence.
+7. Residual/deployment envelope: finish runtime support and residual-risk
+   schema/audit/runbook evidence without making deployment state a local final
+   gate.
+
+Optional fixture positives for workload, template, and purge remain outside the
+default queue. They become final-blocking only when the final selector claims
+the capability; hard quota enforcement and deployment-specific positives remain
+runtime-support or selected-optional work, not default GA positive scope.
 
 ## Capability Matrix V1 Contract
 
@@ -772,6 +824,25 @@ go test -count=1 ./internal/releaseevidence ./cmd/afscp-evidence-verify
 bash scripts/verify-ga-release.sh
 ```
 
+## Per-Slice Handoff Template
+
+Every slice that closes or advances a finding must state the following before
+implementation and keep the manifest/release guard aligned:
+
+| Required field | Slice answer must include |
+| --- | --- |
+| Seed gap | `seed_gap_id`, whether it stays open or is removed, and the exact replacement rule. |
+| Evidence identity | Replacement evidence ID plus `claim_id`, `subclaim_id`, `acceptance_id`, risk, capability, profile, polarity, required/default/optional semantics, and evidence type. |
+| Command | Exact focused `go test`/contract/release command from the evidence item, plus the full release gate command when release evidence or final-candidate behavior changes. |
+| Real behavior | Runtime tests for the touched surface: API admission before queue, worker RunOnce/recovery, store atomicity, discovery/inspection output, redaction, or gateway/session behavior as applicable. |
+| Non-scope | What the slice explicitly does not close, especially default-loop aggregation, optional positives, deployment runtime, retained lifecycle, restore reconciliation, or operator repair. |
+| Negative guards | Missing item, placeholder, wrong claim/subclaim/acceptance, wrong profile/polarity, broad selector, helper-only selector, doc-only overclaim, partial-only closure, and selected-optional mismatch. |
+
+Selectors must be precise enough that reviewers can see which production path is
+covered. Helper/matrix tests may support a slice, but cannot be the only proof
+for API admission, worker recovery, terminalization, discovery, default-loop,
+WebDAV/JVS, operator repair, restore reconciliation, or release gate behavior.
+
 ## Package Evidence Index
 
 This index tells PR authors what seed gap they are replacing and how seed/final
@@ -836,26 +907,30 @@ do not infer release status from this highlight list alone.
 
 ## Next Slice Guidance
 
-Recommended next slice depends on the current branch:
+Recommended next slice depends on the current manifest state:
 
 | Branch state | Recommended next slice | Why |
 | --- | --- | --- |
+| P2b/P1b/P1c/P1d evidence are exact but `seed_gap_default_user_loop_open` remains open | Default user loop aggregation guard. | Close the caller loop only through `default_user_loop_positive_unit`, with exact P2b/P1b/P1c/P1d evidence and caller-scoped operation/audit/recovery trace. |
+| Default user loop aggregation is closed and `seed_gap_operator_repair_safe_open` remains open | P3 Operator repair. | Operator repair is the next default safety blocker; it must be allowlisted repair with shared audit/test contract, not a generic operations platform. |
+| Operator repair is closed and `seed_gap_restore_reconciliation_open` remains open | P4b Restore reconciliation. | Restore reconciliation is separate from P1c restore-run and must prove no credential reissue, no purged resurrection, and mismatch-to-intervention behavior. |
+| P3/P4b blockers are closed but discovery/redaction/profile/release gaps remain | Discovery surfaces, secret/path redaction, profile/workflow/release hardening. | These are default safety/release claims and should close with exact repo-local evidence before selected optional positives. |
+| Default safety/release blockers are closed but runtime envelope gaps remain | Residual/deployment envelope. | Runtime-support/doc-sync only: use repo-local schema/doc/audit/runbook guards; do not require production deployment state and do not treat it as a default blocker or local positive final proof. |
+| Default blockers are closed and optional capabilities are selected by the final selector | Selected optional fixture positives. | Workload/template/purge positives block only under selector-selected `repo-local-fixture-enabled` semantics. |
 | P2a is not closed | Finish P2a Capability + Terminalization Contract Seed. | Later durable positives need the matrix/state-machine contract seed. |
 | P2a is closed | P2b Runtime Parity. | Contract seed is not enough; API admission, worker registration/recovery, unsupported terminalization, discovery, and evidence must align at runtime. |
 | P2b is closed but P1b or P1c is missing | Fill the missing P1 partial evidence first. | The default loop aggregation depends on exact repo and JVS partial evidence before WebDAV can complete the caller-loop set. |
 | P2b, P1b, and P1c evidence are present but P1d is missing | P1d WebDAV default access. | Runtime parity plus repo/JVS partial evidence are present. WebDAV is the next caller-loop positive; it may close only `CLAIM_WEBDAV_DEFAULT_ACCESS` and add partial default-loop evidence. |
-| P1d WebDAV exact evidence is present | Default user loop aggregation guard. | Use this row when the manifest confirms P2b/P1b/P1c/P1d evidence. Only the aggregation guard may close `seed_gap_default_user_loop_open`, and only if P1b/P1c/P1d plus P2b are exact, non-placeholder, selector-precise, and include caller-scoped operation/audit/recovery trace evidence. |
-| Default-loop aggregation is closed | Remaining default safety work: operator repair, restore reconciliation, release hardening, and runtime envelope docs/evidence. | These are default GA claims but not the P1 caller-loop slice. Keep each claim/subclaim exact. |
 
 Fallback: if the current branch does not contain `admin_bootstrap_ready_unit`
 replacing `seed_gap_admin_bootstrap_ready_open`, then P1a Admin Bootstrap +
 Redacted Readiness is the prerequisite micro-slice. P1a may land before full
 P2a only if it does not create durable repo/JVS/WebDAV mutation admission.
 
-For older branches, use the table above to close missing prerequisites. If the
-current branch already has P2b, P1b, P1c, and P1d evidence present, the
-immediate closure target is the default user loop aggregation guard; do not
-repeat P1d. If P1d is still missing, close WebDAV default access first:
+For older branches, use the table above to close missing prerequisites before
+the current queue. If the branch already has P2b, P1b, P1c, and P1d evidence
+present, do not repeat P1d; close the default user loop aggregation if its seed
+gap remains open. If P1d is still missing, close WebDAV default access first:
 
 - Add exact `CLAIM_WEBDAV_DEFAULT_ACCESS` replacement for
   `seed_gap_webdav_default_access_open`.
@@ -870,8 +945,8 @@ Keep open after P1d:
 
 - `seed_gap_default_user_loop_open` until the separate aggregation guard closes
   it.
-- Operator repair, restore reconciliation, release hardening, optional
-  positives, and deployment runtime envelope gaps.
+- Operator repair, restore reconciliation, discovery/redaction, release
+  hardening, optional positives, and deployment runtime envelope gaps.
 - Workload mount positive, template positive, purge positive, hard quota
   enforcement, and shared-volume deployment/runtime specifics unless a later
   selector explicitly claims them.
