@@ -11,7 +11,7 @@ AFSCP should manage volumes, namespaces, repos, repo lifecycle, repo templates, 
 
 ## Source Of Truth
 
-Current active source of truth is the root-level documentation in this repository, especially `docs/DEVELOPER_HANDOFF.md`, `docs/PRE_DEV_COMPLETION.md`, `docs/GA_PRE_DEV_READINESS.md`, `docs/DEVELOPMENT_GOVERNANCE.md`, `docs/RISK_REGISTER.md`, `docs/READINESS_EVIDENCE.md`, `docs/HANDOFF.md`, `docs/PRODUCT_REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/STORAGE_LAYOUT.md`, `docs/API_CONTRACT_DRAFT.md`, `api/openapi/internal-v1.openapi.yaml`, `api/schemas/afscp-internal-v1.schema.json`, and `docs/contracts/`.
+Current active source of truth is the root-level documentation in this repository, especially `docs/DEVELOPER_HANDOFF.md`, `docs/USER_GUIDE.md`, `docs/DEVELOPER_GUIDE.md`, `docs/PRE_DEV_COMPLETION.md`, `docs/GA_PRE_DEV_READINESS.md`, `docs/DEVELOPMENT_GOVERNANCE.md`, `docs/RISK_REGISTER.md`, `docs/READINESS_EVIDENCE.md`, `docs/HANDOFF.md`, `docs/PRODUCT_REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, `docs/STORAGE_LAYOUT.md`, `docs/API_CONTRACT_DRAFT.md`, `api/openapi/internal-v1.openapi.yaml`, `api/schemas/afscp-internal-v1.schema.json`, and `docs/contracts/`.
 
 Historical review and research documents may still use P0, P1, or MVP
 language. For active planning, read those terms through the GA implementation
@@ -139,7 +139,9 @@ Client/desktop connector owns:
 ## First Engineering Checkpoints
 
 1. Use the existing Go service skeleton and `docs/DEVELOPER_HANDOFF.md` as the
-   implementation baseline.
+   implementation baseline. `docs/USER_GUIDE.md` is the current entrypoint for
+   users, integrators, and operators; `docs/DEVELOPER_GUIDE.md` is the current
+   entrypoint for coding, testing, contract, and gate work.
 2. Continue or modify storage mutation handlers only through versioned contracts,
    gate evidence, and focused tests; baseline
    implementation does not by itself close the relevant gate in

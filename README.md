@@ -69,6 +69,8 @@ unresolved required/default gaps and selected optional positive gaps.
 - [docs/READINESS_EVIDENCE.md](docs/READINESS_EVIDENCE.md): GA gate evidence ledger.
 - [docs/PRE_DEV_COMPLETION.md](docs/PRE_DEV_COMPLETION.md): pre-dev artifact completion package and current gate status.
 - [docs/DEVELOPER_HANDOFF.md](docs/DEVELOPER_HANDOFF.md): coding team entrypoint.
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md): guide for users, integrators, and operators.
+- [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md): guide for coding, testing, contracts, and gates.
 - [docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md](docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md): accepted JVS v0.4.8 smoke evidence for G-005.
 - [docs/JVS_SMOKE_EVIDENCE_2026-05-05.md](docs/JVS_SMOKE_EVIDENCE_2026-05-05.md): historical JVS v0.4.7 blocker evidence.
 - [docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md](docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md): historical feasibility review with 2026-05-04 JVS external-control resolution update.

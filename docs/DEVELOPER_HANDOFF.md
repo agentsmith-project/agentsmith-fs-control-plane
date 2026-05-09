@@ -45,16 +45,18 @@ gates.
 
 Read in this order:
 
-1. `docs/PRE_DEV_COMPLETION.md`
-2. `docs/GA_PRE_DEV_READINESS.md`
-3. `docs/PRODUCT_REQUIREMENTS.md`
-4. `docs/ARCHITECTURE.md`
-5. `docs/API_CONTRACT_DRAFT.md`
-6. `docs/contracts/`
-7. `api/openapi/internal-v1.openapi.yaml`
-8. `api/schemas/afscp-internal-v1.schema.json`
-9. `docs/RISK_REGISTER.md`
-10. `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`
+1. `docs/DEVELOPER_GUIDE.md`
+2. `docs/USER_GUIDE.md`
+3. `docs/PRE_DEV_COMPLETION.md`
+4. `docs/GA_PRE_DEV_READINESS.md`
+5. `docs/PRODUCT_REQUIREMENTS.md`
+6. `docs/ARCHITECTURE.md`
+7. `docs/API_CONTRACT_DRAFT.md`
+8. `docs/contracts/`
+9. `api/openapi/internal-v1.openapi.yaml`
+10. `api/schemas/afscp-internal-v1.schema.json`
+11. `docs/RISK_REGISTER.md`
+12. `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`
 
 ## Runtime And Build
 
@@ -301,7 +303,9 @@ Continue in dependency order:
    operation records covered by tests.
 3. Add recovery loop behavior only after the remaining durable primitives have
    tests.
-4. Implement volume and namespace binding APIs.
+4. Keep the implemented volume and namespace binding APIs under contract,
+   operation lease, audit, and focused regression evidence coverage as they
+   evolve.
 5. Continue from the implemented repo create, repo lifecycle, export/WebDAV,
    workload mount, save/restore, and template paths by closing remaining
    evidence through contracts, fences, session drain, operation leases, audit

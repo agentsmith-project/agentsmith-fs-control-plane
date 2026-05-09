@@ -36,8 +36,8 @@ needed before real handlers and storage mutation work:
 - `contractcheck`: contract verifier for OpenAPI/schema/docs/Go DTO guardrails.
 - `fences`: pure repo fence model, held-state semantics, and acquisition checks.
 - `repoaccess`: pure repo access admission model used by repo lifecycle
-  intake/admission handlers and intended for later save/restore, export, mount,
-  and template handlers. It validates stored repo/binding/fence invariants and
+  intake/admission and save/restore, export, workload mount, and template
+  control-plane admission/gating. It validates stored repo/binding/fence invariants and
   returns stable error-family decisions.
 - `sessionstate`: pure export and workload-mount session substrate for
   restore-run writer gating and repo lifecycle drain gating. Export session
@@ -79,10 +79,9 @@ needed before real handlers and storage mutation work:
   uses a separate explicit worker gate, dedicated store boundary, and storage
   purger for destructive AFSCP-managed retained storage removal.
 - `workerapp`: production `afscp-worker --run-once` bootstrap for explicitly
-  gated export session terminal reconcile, the opt-in metadata operation
-  recovery runner, and the independent audit outbox stale-recovery plus HTTP
-  JSON delivery runner. Export session reconcile runs before operation recovery
-  when both are enabled.
+  gated export session terminal reconcile, workload mount stale lease scan,
+  restore reconciliation, operation recovery, audit stale recovery, and HTTP
+  JSON audit delivery in the same order as the command entrypoint.
 - `pathresolver`: path safety helpers, denial tests, shared resolver corpus, and
   canonical internal repo root resolution from trusted volume roots plus repo
   IDs.
@@ -98,13 +97,13 @@ per-request WebDAV operation records outside the dedicated runtime ledger, and
 fence enforcement beyond the minimal repo fence adapter slice.
 The worker app currently wires export session terminal reconcile when
 `AFSCP_EXPORT_SESSION_RECONCILE_ENABLED=true`, workload mount stale lease scans
-when `AFSCP_WORKER_WORKLOAD_MOUNT_STALE_ENABLED=true`, then
-`volume_ensure`, `namespace_upsert`, `namespace_disable`,
-`namespace_volume_binding_put`, workload mount binding recovery, and opt-in
-`repo_create`, repo lifecycle, `repo_purge`, save point, restore
-preview/discard/run, and template create/clone operation recovery when the
-corresponding worker gates are explicitly enabled. It also wires audit outbox
-stale recovery and HTTP JSON delivery when
+when `AFSCP_WORKLOAD_MOUNT_STALE_LEASE_RECONCILE_ENABLED=true`, restore
+reconciliation when `AFSCP_RESTORE_RECONCILIATION_ENABLED=true`, then operation
+recovery when `AFSCP_WORKER_OPERATION_RECOVERY_ENABLED=true`. Operation recovery
+includes the metadata executors, workload mount binding recovery, and opt-in
+JVS/storage-backed repo lifecycle, save point, restore, and template recovery
+executors behind their corresponding gates. It also wires audit outbox stale
+recovery and HTTP JSON delivery when
 `AFSCP_WORKER_AUDIT_DELIVERY_ENABLED=true`; delivery is at-least-once and the
 external sink must dedupe by `audit_event_id`.
 
