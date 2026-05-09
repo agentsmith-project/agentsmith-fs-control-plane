@@ -409,6 +409,9 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 		if spec.ID == "restore_reconciliation_safe_unit" && !restoreReconciliationSafeCommandIsPrecise(item.Command) {
 			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.restore_reconciliation_safe_command_invalid", Message: "restore reconciliation evidence command must use the exact restore reconciliation selector, not P1c-only, broad, or helper-only coverage"})
 		}
+		if spec.ID == "discovery_surfaces_layered_unit" && !discoverySurfacesCommandIsPrecise(item.Command) {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.discovery_surfaces_command_invalid", Message: "discovery surfaces evidence command must use the exact layered discovery selector, not matrix-only, readyz-only, runtime-only, broad, or helper-only coverage"})
+		}
 	}
 	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest, requireDefaultLoopAggregation)...)
 	if requireDefaultLoopAggregation {
@@ -437,6 +440,9 @@ func requiredEvidenceSpecCanBeSeedOpen(id string, itemsByID map[string]Item) boo
 	case "restore_reconciliation_safe_unit":
 		gapID = "seed_gap_restore_reconciliation_open"
 		claimID = "CLAIM_RESTORE_RECONCILIATION"
+	case "discovery_surfaces_layered_unit":
+		gapID = "seed_gap_discovery_surfaces_open"
+		claimID = "CLAIM_DISCOVERY_SURFACES"
 	default:
 		return false
 	}
@@ -620,6 +626,9 @@ func validateRequiredClaimSubclaimCoverage(manifest Manifest, requireDefaultLoop
 			continue
 		}
 		if spec.ClaimID == "CLAIM_RESTORE_RECONCILIATION" && spec.SubclaimID == "restore_reconciliation_safe" && requiredEvidenceSpecCanBeSeedOpen("restore_reconciliation_safe_unit", itemsByIDFromManifest(manifest)) {
+			continue
+		}
+		if spec.ClaimID == "CLAIM_DISCOVERY_SURFACES" && spec.SubclaimID == "discovery_surfaces_layered" && requiredEvidenceSpecCanBeSeedOpen("discovery_surfaces_layered_unit", itemsByIDFromManifest(manifest)) {
 			continue
 		}
 		if !requiredCoverage[spec] {
@@ -957,6 +966,49 @@ func restoreReconciliationSafeCommand() []string {
 	}
 }
 
+func discoverySurfacesCommand() []string {
+	return []string{
+		"go",
+		"test",
+		"-count=1",
+		"./internal/api",
+		"./internal/apiapp",
+		"./internal/contractcheck",
+		"./internal/releaseevidence",
+		"./cmd/afscp-evidence-verify",
+		"-run",
+		"^Test(" + strings.Join(discoverySurfacesSelectorNames(), "|") + ")$",
+	}
+}
+
+func discoverySurfacesSelectorNames() []string {
+	names := make([]string, 0, len(discoverySurfacesRequiredTestNames))
+	for _, name := range discoverySurfacesRequiredTestNames {
+		names = append(names, strings.TrimPrefix(name, "Test"))
+	}
+	return names
+}
+
+func discoverySurfacesCommandIsPrecise(command []string) bool {
+	if !sameStringSlice(command, discoverySurfacesCommand()) {
+		return false
+	}
+	selector, ok := goTestRunSelector(command)
+	if !ok || broadGoTestSelector(selector) {
+		return false
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		return false
+	}
+	for _, testName := range discoverySurfacesRequiredTestNames {
+		if !compiled.MatchString(testName) {
+			return false
+		}
+	}
+	return true
+}
+
 func restoreReconciliationSafeSelectorNames() []string {
 	names := make([]string, 0, len(restoreReconciliationSafeRequiredTestNames))
 	for _, name := range restoreReconciliationSafeRequiredTestNames {
@@ -1072,6 +1124,18 @@ var restoreReconciliationSafeRequiredTestNames = []string{
 	"TestRunCheckOnlyAcceptsRestoreReconciliationManifest",
 }
 
+var discoverySurfacesRequiredTestNames = []string{
+	"TestDiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields",
+	"TestDiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields",
+	"TestDiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady",
+	"TestDiscoverySurfacesOrchestratorDefaultDeniedDoesNotLeakPlanOrSecrets",
+	"TestDiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDistinctFromRepair",
+	"TestDiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries",
+	"TestCurrentRepoManifestContainsDiscoverySurfacesEvidence",
+	"TestDiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly",
+	"TestRunCheckOnlyAcceptsDiscoverySurfacesManifest",
+}
+
 var defaultUserLoopAggregationPrereqIDs = []string{
 	"default_user_loop_repo_projection_unit",
 	"default_user_loop_jvs_save_restore_unit",
@@ -1102,6 +1166,7 @@ var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "default_user_loop_positive_unit", ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_positive", AcceptanceID: "P0_DEFAULT_USER_LOOP_POSITIVE", RiskID: "F2", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "caller_policy_readiness", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operator_repair_safe_unit", ClaimID: "CLAIM_OPERATOR_REPAIR_SAFE", SubclaimID: "operator_repair_safe", AcceptanceID: "P0_OPERATOR_REPAIR_SAFE", RiskID: "F11", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "restore_reconciliation_safe_unit", ClaimID: "CLAIM_RESTORE_RECONCILIATION", SubclaimID: "restore_reconciliation_safe", AcceptanceID: "P0_RESTORE_RECONCILIATION_SAFE", RiskID: "F14", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "jvs_save_restore", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
+	{ID: "discovery_surfaces_layered_unit", ClaimID: "CLAIM_DISCOVERY_SURFACES", SubclaimID: "discovery_surfaces_layered", AcceptanceID: "P0_DISCOVERY_SURFACES_LAYERED", RiskID: "F7", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "repo_projection", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "repo_create_jvs_runtime_unavailable_recovery_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery", AcceptanceID: "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_create", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_terminalization_contract_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract", AcceptanceID: "P2A_OPERATION_TERMINALIZATION_CONTRACT", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_runtime_terminalization_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization", AcceptanceID: "P2B_OPERATION_RUNTIME_TERMINALIZATION", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
@@ -1131,6 +1196,7 @@ var requiredClaimSubclaimSpecs = []requiredClaimSubclaimSpec{
 	{ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_positive"},
 	{ClaimID: "CLAIM_OPERATOR_REPAIR_SAFE", SubclaimID: "operator_repair_safe"},
 	{ClaimID: "CLAIM_RESTORE_RECONCILIATION", SubclaimID: "restore_reconciliation_safe"},
+	{ClaimID: "CLAIM_DISCOVERY_SURFACES", SubclaimID: "discovery_surfaces_layered"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization"},

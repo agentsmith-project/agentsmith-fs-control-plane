@@ -38,6 +38,40 @@ func TestGetRepoHandlerReturnsNamespaceBoundProjection(t *testing.T) {
 	assertRepoReadResponseDoesNotLeak(t, body)
 }
 
+func TestDiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields(t *testing.T) {
+	reader := &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}}
+	handler := repoReadHandlerForTest(reader, namespaceBindingAllowedPolicy(auth.RoleRepoAdmin), nil)
+
+	for _, req := range []*http.Request{
+		repoReadRequest(http.MethodGet, "/internal/v1/repos/repo_123", "ns_123"),
+		repoReadRequest(http.MethodGet, "/internal/v1/repos?namespace_id=ns_123", "ns_123"),
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s status = %d body = %s, want 200", req.Method, req.URL.Path, rec.Code, rec.Body.String())
+		}
+		body := rec.Body.String()
+		for _, forbidden := range []string{
+			"operator_intervention_required",
+			"secret_ref",
+			"payload_volume_subdir",
+			"mount_binding_id",
+			"lease_owner",
+			"fence",
+			"audit",
+			"/srv/",
+			".jvs",
+			"credential",
+		} {
+			if strings.Contains(body, forbidden) {
+				t.Fatalf("caller repo projection leaked %q: %s", forbidden, body)
+			}
+		}
+		assertRepoReadResponseDoesNotLeak(t, body)
+	}
+}
+
 func TestGetRepoHandlerUsesNamespaceScopedReadBoundary(t *testing.T) {
 	reader := &fakeRepoReader{
 		repos:             []resources.Repo{repoResourceFixture("ns_other", "repo_123", resources.RepoStatusActive)},

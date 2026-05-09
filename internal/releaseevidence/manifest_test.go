@@ -1732,6 +1732,114 @@ func TestRestoreReconciliationReplacementRejectsWrongShapeBroadSelectorOrP1cOnly
 	}
 }
 
+func TestCurrentRepoManifestContainsDiscoverySurfacesEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+	item, ok := manifestItemByID(manifest, "discovery_surfaces_layered_unit")
+	if !ok {
+		t.Fatal("manifest missing discovery_surfaces_layered_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_DISCOVERY_SURFACES" ||
+		item.SubclaimID != "discovery_surfaces_layered" ||
+		item.AcceptanceID != "P0_DISCOVERY_SURFACES_LAYERED" ||
+		item.RiskID != "F7" ||
+		item.CapabilityID != "repo_projection" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.ExpectedRuntime != "fast" ||
+		item.Scope != "package" ||
+		item.NegativeOrPositive != "positive" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		!item.DefaultGARequired ||
+		item.PassCriteria.Kind != "positive_path" ||
+		!containsString(item.PassCriteria.Assertions, "discovery surfaces pass layered default checks") {
+		t.Fatalf("%s shape = %+v, want default required layered discovery evidence", item.ID, item)
+	}
+	if _, ok := manifestItemByID(manifest, "seed_gap_discovery_surfaces_open"); ok {
+		t.Fatal("discovery surfaces evidence must close seed_gap_discovery_surfaces_open")
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range discoverySurfacesRequiredTestNamesForTest {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestDiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		body func() string
+		want string
+	}{
+		{name: "placeholder", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "discovery_surfaces_layered_unit", `"evidence_status":"implemented"`, `"evidence_status":"placeholder"`)
+		}, want: "discovery_surfaces_layered_unit"},
+		{name: "doc only", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "discovery_surfaces_layered_unit", `"doc_only_allowed":false`, `"doc_only_allowed":true`)
+		}, want: "discovery_surfaces_layered_unit"},
+		{name: "broad selector", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "discovery_surfaces_layered_unit", `"command":["go","test","-count=1","./internal/api","-run","Test.*Discovery"]`)
+		}, want: "selector"},
+		{name: "matrix only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "discovery_surfaces_layered_unit", `"command":["go","test","-count=1","./internal/capability","-run","^Test(CapabilityMatrixV1DecisionRowsCoverRequiredSurfacesByOperationClass|CapabilityMatrixV1DecisionRowsEvidenceRefsMapRuntimeSurfaces)$"]`)
+		}, want: "discovery"},
+		{name: "runtime only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "discovery_surfaces_layered_unit", `"command":["go","test","-count=1","./internal/apiapp","-run","^Test(DiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady)$"]`)
+		}, want: "discovery"},
+		{name: "helper only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "discovery_surfaces_layered_unit", `"command":["go","test","-count=1","./internal/releaseevidence","-run","^Test(CurrentRepoManifestContainsDiscoverySurfacesEvidence|DiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly)$"]`)
+		}, want: "discovery"},
+		{name: "contract only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "discovery_surfaces_layered_unit", `"command":["go","test","-count=1","./internal/contractcheck","-run","^Test(DiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries)$"]`)
+		}, want: "discovery"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.body())
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.want)
+		})
+	}
+}
+
+var discoverySurfacesRequiredTestNamesForTest = []string{
+	"TestDiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields",
+	"TestDiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields",
+	"TestDiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady",
+	"TestDiscoverySurfacesOrchestratorDefaultDeniedDoesNotLeakPlanOrSecrets",
+	"TestDiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDistinctFromRepair",
+	"TestDiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries",
+	"TestCurrentRepoManifestContainsDiscoverySurfacesEvidence",
+	"TestDiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly",
+	"TestRunCheckOnlyAcceptsDiscoverySurfacesManifest",
+}
+
 func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1b(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
@@ -1745,7 +1853,6 @@ func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1b(t *testing.T) 
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_discovery_surfaces_open",
 		"seed_gap_secret_path_redaction_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
@@ -1777,7 +1884,6 @@ func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1c(t *testing.T) 
 
 	for _, gapID := range []string{
 		"seed_gap_secret_path_redaction_open",
-		"seed_gap_discovery_surfaces_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
 		if !ok {
@@ -1839,7 +1945,7 @@ func TestCurrentRepoManifestClosesDefaultUserLoopOnlyWithAggregation(t *testing.
 	}
 }
 
-func TestCurrentRepoManifestKeepsDefaultUserLoopAndDiscoverySeedGapsOpenForP2b(t *testing.T) {
+func TestCurrentRepoManifestClosesDefaultUserLoopAndDiscoveryAfterExactEvidence(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
 
@@ -1850,14 +1956,11 @@ func TestCurrentRepoManifestKeepsDefaultUserLoopAndDiscoverySeedGapsOpenForP2b(t
 	if len(findings) != 0 {
 		t.Fatalf("current manifest findings: %+v", findings)
 	}
-	for _, gapID := range []string{"seed_gap_discovery_surfaces_open"} {
-		item, ok := manifestItemByID(manifest, gapID)
-		if !ok {
-			t.Fatalf("manifest must keep %s open for P2b", gapID)
-		}
-		if item.EvidenceStatus != "placeholder" || item.PassCriteria.Kind != "seed_gap" || !containsString(item.PassCriteria.Assertions, "open") {
-			t.Fatalf("%s = %+v, want open placeholder seed gap", gapID, item)
-		}
+	if _, ok := manifestItemByID(manifest, "seed_gap_discovery_surfaces_open"); ok {
+		t.Fatal("manifest must close seed_gap_discovery_surfaces_open with exact layered discovery evidence")
+	}
+	if _, ok := manifestItemByID(manifest, "discovery_surfaces_layered_unit"); !ok {
+		t.Fatal("manifest must include discovery_surfaces_layered_unit after closing discovery seed gap")
 	}
 	if _, ok := manifestItemByID(manifest, "default_user_loop_positive_unit"); !ok {
 		t.Fatal("manifest should close default user loop through aggregation after P2b and P1 partial evidence")
@@ -1945,6 +2048,25 @@ func goTestPackageForTestName(testName string) string {
 		return "./internal/releaseevidence"
 	}
 	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsRestoreReconciliation") {
+		return "./cmd/afscp-evidence-verify"
+	}
+	if strings.HasPrefix(testName, "TestDiscoverySurfacesCallerProjection") ||
+		strings.HasPrefix(testName, "TestDiscoverySurfacesCallerOperationInspection") ||
+		strings.HasPrefix(testName, "TestDiscoverySurfacesOrchestrator") ||
+		strings.HasPrefix(testName, "TestDiscoverySurfacesOperatorInspection") {
+		return "./internal/api"
+	}
+	if strings.HasPrefix(testName, "TestDiscoverySurfacesReadyz") {
+		return "./internal/apiapp"
+	}
+	if strings.HasPrefix(testName, "TestDiscoverySurfacesContract") {
+		return "./internal/contractcheck"
+	}
+	if strings.HasPrefix(testName, "TestCurrentRepoManifestContainsDiscoverySurfaces") ||
+		strings.HasPrefix(testName, "TestDiscoverySurfacesReplacement") {
+		return "./internal/releaseevidence"
+	}
+	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsDiscoverySurfaces") {
 		return "./cmd/afscp-evidence-verify"
 	}
 	if strings.HasPrefix(testName, "TestCapabilityMatrixAdmissionDisabled") {
@@ -2161,6 +2283,8 @@ func TestCurrentRepoManifestContainsP3OperatorRepairSafeEvidence(t *testing.T) {
 func TestOperatorRepairSafeReplacementRejectsWrongShapeOrBroadSelector(t *testing.T) {}
 func TestCurrentRepoManifestContainsP4bRestoreReconciliationEvidence(t *testing.T) {}
 func TestRestoreReconciliationReplacementRejectsWrongShapeBroadSelectorOrP1cOnly(t *testing.T) {}
+func TestCurrentRepoManifestContainsDiscoverySurfacesEvidence(t *testing.T) {}
+func TestDiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "operatorrepair", "repair_test.go"), `package operatorrepair
 
@@ -2199,6 +2323,7 @@ import "testing"
 func TestOperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL(t *testing.T) {}
 func TestOperatorRepairContractIsLinkedFromContractsReadme(t *testing.T) {}
 func TestRestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch(t *testing.T) {}
+func TestDiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
@@ -2207,6 +2332,7 @@ import "testing"
 func TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsOperatorRepairSafeManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsRestoreReconciliationManifest(t *testing.T) {}
+func TestRunCheckOnlyAcceptsDiscoverySurfacesManifest(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "restorereconcile", "restore_reconciliation_test.go"), `package restorereconcile
 
@@ -2254,6 +2380,16 @@ func TestRestoreReconciliationModeExportReplayDoesNotReturnAccess(t *testing.T) 
 func TestRestoreReconciliationModeDeniesWorkloadMountMutationsAndPlanBeforeIntake(t *testing.T) {}
 func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {}
 func TestProductCallerOperationResponsesDoNotLeakStorageInternals(t *testing.T) {}
+func TestDiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields(t *testing.T) {}
+func TestDiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields(t *testing.T) {}
+func TestDiscoverySurfacesOrchestratorDefaultDeniedDoesNotLeakPlanOrSecrets(t *testing.T) {}
+func TestDiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDistinctFromRepair(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "apiapp", "discovery_surfaces_test.go"), `package apiapp
+
+import "testing"
+
+func TestDiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady(t *testing.T) {}
 `)
 	return root
 }
@@ -2473,6 +2609,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":true
     },
     {
+      "id":"discovery_surfaces_layered_unit",
+      "capability_id":"repo_projection",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/api","./internal/apiapp","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(DiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields|DiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields|DiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady|DiscoverySurfacesOrchestratorDefaultDeniedDoesNotLeakPlanOrSecrets|DiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDistinctFromRepair|DiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries|CurrentRepoManifestContainsDiscoverySurfacesEvidence|DiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly|RunCheckOnlyAcceptsDiscoverySurfacesManifest)$"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -2617,7 +2764,6 @@ var package0SeedGapFixtureMetadata = []struct {
 	{"seed_gap_residual_risk_catalog_open", "CLAIM_RESIDUAL_RISK_CATALOG", "F12"},
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_profile_boundary_open", "CLAIM_PROFILE_BOUNDARY", "F1"},
-	{"seed_gap_discovery_surfaces_open", "CLAIM_DISCOVERY_SURFACES", "F7"},
 	{"seed_gap_secret_path_redaction_open", "CLAIM_SECRET_PATH_REDACTION", "F10"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
@@ -2660,6 +2806,7 @@ var package0FixtureMetadata = []struct {
 	{"default_user_loop_positive_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_positive", "P0_DEFAULT_USER_LOOP_POSITIVE", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "default user loop passes in default mode"},
 	{"operator_repair_safe_unit", "CLAIM_OPERATOR_REPAIR_SAFE", "operator_repair_safe", "P0_OPERATOR_REPAIR_SAFE", "F11", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operator repair safety passes in default mode"},
 	{"restore_reconciliation_safe_unit", "CLAIM_RESTORE_RECONCILIATION", "restore_reconciliation_safe", "P0_RESTORE_RECONCILIATION_SAFE", "F14", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "restore reconciliation safety passes in default mode"},
+	{"discovery_surfaces_layered_unit", "CLAIM_DISCOVERY_SURFACES", "discovery_surfaces_layered", "P0_DISCOVERY_SURFACES_LAYERED", "F7", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "discovery surfaces pass layered default checks"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},

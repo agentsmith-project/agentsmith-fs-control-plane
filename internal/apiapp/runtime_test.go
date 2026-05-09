@@ -983,6 +983,44 @@ func TestInternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated(t *
 	}
 }
 
+func TestDiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady(t *testing.T) {
+	runtime := newTestRuntimeWithSourceOverrides(t, config.MapSource{
+		"AFSCP_READINESS_PROFILE": "ga",
+		"AFSCP_MOUNT_ENABLED":     "false",
+		"AFSCP_MOUNT_READY":       "false",
+	}, func(context.Context) error { return nil })
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body struct {
+		Ready        bool                      `json:"ready"`
+		Capabilities map[string]map[string]any `json:"capabilities"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	if !body.Ready {
+		t.Fatalf("readiness = not ready, want ready when only optional workload runtime is disabled")
+	}
+	for _, capability := range []string{api.CapabilityWorkloadMountBinding, api.CapabilityWorkloadMountDiscovery, api.CapabilityWorkloadTeardownPlan} {
+		gate := body.Capabilities[capability]
+		if runtimeReadinessBoolField(t, gate, "required_for_default_ga") || runtimeReadinessBoolField(t, gate, "required_for_service_ready") {
+			t.Fatalf("%s gate = %#v, want optional discovery/runtime surface outside default/service readiness", capability, gate)
+		}
+		if !runtimeReadinessBoolField(t, gate, "optional_gated") {
+			t.Fatalf("%s optional_gated = false, want true", capability)
+		}
+	}
+	if strings.Contains(rec.Body.String(), "orchestrator_mount") || strings.Contains(rec.Body.String(), "operator_admin") {
+		t.Fatalf("readyz leaked authorization roles instead of readiness state: %s", rec.Body.String())
+	}
+}
+
 func TestInternalRuntimeReadinessRuntimeProfileRequiresOptedInWorkloadMountFacets(t *testing.T) {
 	runtime := newTestRuntimeWithSourceOverrides(t, config.MapSource{
 		"AFSCP_MOUNT_ENABLED": "true",

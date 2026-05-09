@@ -130,6 +130,25 @@ func TestRestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch(t
 	)
 }
 
+func TestDiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/afscp-internal-api-v1.md")
+	requireContractPhrases(t, body,
+		"Discovery Surface Boundary",
+		"readyz is service readiness",
+		"not caller authorization",
+		"caller discovery",
+		"repo projection",
+		"operation inspection",
+		"orchestrator discovery",
+		"orchestrator plan",
+		"default-denied",
+		"operator inspection",
+		"read-only",
+		"evidence classification",
+		"must not replace runtime admission",
+	)
+}
+
 func TestVerifyFilesIgnoresParameterRefsOutsideParametersBlock(t *testing.T) {
 	paths := writeContractFixture(t, contractFixture{
 		openapi: `

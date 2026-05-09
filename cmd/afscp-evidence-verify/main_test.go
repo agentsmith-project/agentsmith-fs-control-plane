@@ -64,6 +64,19 @@ func TestRunCheckOnlyAcceptsRestoreReconciliationManifest(t *testing.T) {
 	}
 }
 
+func TestRunCheckOnlyAcceptsDiscoverySurfacesManifest(t *testing.T) {
+	root := t.TempDir()
+	writeEvidenceCLIScripts(t, root)
+	manifestPath := filepath.Join(root, "manifest.json")
+	writeEvidenceCLIFile(t, manifestPath, evidenceCLIManifest(`["bash","scripts/pass.sh"]`, "scripts/pass.sh"))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-mode", "seed", "-manifest", manifestPath, "-repo-root", root, "-check-only"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestRunExecutesRequiredCommandsByDefault(t *testing.T) {
 	root := t.TempDir()
 	writeEvidenceCLIScripts(t, root)
@@ -393,6 +406,17 @@ func evidenceCLIManifest(command, anchor string) string {
       "default_ga_required":true
     },
     {
+      "id":"discovery_surfaces_layered_unit",
+      "capability_id":"repo_projection",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/api","./internal/apiapp","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(DiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields|DiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields|DiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady|DiscoverySurfacesOrchestratorDefaultDeniedDoesNotLeakPlanOrSecrets|DiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDistinctFromRepair|DiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries|CurrentRepoManifestContainsDiscoverySurfacesEvidence|DiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly|RunCheckOnlyAcceptsDiscoverySurfacesManifest)$"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -537,7 +561,6 @@ var package0CLISeedGapMetadata = []struct {
 	{"seed_gap_residual_risk_catalog_open", "CLAIM_RESIDUAL_RISK_CATALOG", "F12"},
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_profile_boundary_open", "CLAIM_PROFILE_BOUNDARY", "F1"},
-	{"seed_gap_discovery_surfaces_open", "CLAIM_DISCOVERY_SURFACES", "F7"},
 	{"seed_gap_secret_path_redaction_open", "CLAIM_SECRET_PATH_REDACTION", "F10"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
@@ -576,6 +599,7 @@ var package0CLIMetadata = []struct {
 	{"default_user_loop_positive_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_positive", "P0_DEFAULT_USER_LOOP_POSITIVE", "F2", "positive", "fast", "package", "true", "positive_path", "default user loop passes in default mode"},
 	{"operator_repair_safe_unit", "CLAIM_OPERATOR_REPAIR_SAFE", "operator_repair_safe", "P0_OPERATOR_REPAIR_SAFE", "F11", "both", "fast", "package", "true", "coverage_guard", "operator repair safety passes in default mode"},
 	{"restore_reconciliation_safe_unit", "CLAIM_RESTORE_RECONCILIATION", "restore_reconciliation_safe", "P0_RESTORE_RECONCILIATION_SAFE", "F14", "positive", "fast", "package", "true", "positive_path", "restore reconciliation safety passes in default mode"},
+	{"discovery_surfaces_layered_unit", "CLAIM_DISCOVERY_SURFACES", "discovery_surfaces_layered", "P0_DISCOVERY_SURFACES_LAYERED", "F7", "positive", "fast", "package", "true", "positive_path", "discovery surfaces pass layered default checks"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "negative", "fast", "package", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "both", "fast", "package", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "both", "fast", "package", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},
@@ -726,6 +750,8 @@ func TestCurrentRepoManifestContainsP3OperatorRepairSafeEvidence(t *testing.T) {
 func TestOperatorRepairSafeReplacementRejectsWrongShapeOrBroadSelector(t *testing.T) {}
 func TestCurrentRepoManifestContainsP4bRestoreReconciliationEvidence(t *testing.T) {}
 func TestRestoreReconciliationReplacementRejectsWrongShapeBroadSelectorOrP1cOnly(t *testing.T) {}
+func TestCurrentRepoManifestContainsDiscoverySurfacesEvidence(t *testing.T) {}
+func TestDiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "restorereconcile", "reconcile_test.go"), `package restorereconcile
 
@@ -765,6 +791,16 @@ func TestRestoreReconciliationModeExportReplayDoesNotReturnAccess(t *testing.T) 
 func TestRestoreReconciliationModeDeniesWorkloadMountMutationsAndPlanBeforeIntake(t *testing.T) {}
 func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {}
 func TestProductCallerOperationResponsesDoNotLeakStorageInternals(t *testing.T) {}
+func TestDiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields(t *testing.T) {}
+func TestDiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields(t *testing.T) {}
+func TestDiscoverySurfacesOrchestratorDefaultDeniedDoesNotLeakPlanOrSecrets(t *testing.T) {}
+func TestDiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDistinctFromRepair(t *testing.T) {}
+`)
+	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "apiapp", "discovery_surfaces_test.go"), `package apiapp
+
+import "testing"
+
+func TestDiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "workerapp", "restore_reconciliation_test.go"), `package workerapp
 
@@ -811,6 +847,7 @@ import "testing"
 func TestOperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL(t *testing.T) {}
 func TestOperatorRepairContractIsLinkedFromContractsReadme(t *testing.T) {}
 func TestRestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch(t *testing.T) {}
+func TestDiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
@@ -819,6 +856,7 @@ import "testing"
 func TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsOperatorRepairSafeManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsRestoreReconciliationManifest(t *testing.T) {}
+func TestRunCheckOnlyAcceptsDiscoverySurfacesManifest(t *testing.T) {}
 `)
 }
 

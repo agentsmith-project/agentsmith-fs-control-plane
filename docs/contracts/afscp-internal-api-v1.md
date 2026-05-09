@@ -116,6 +116,30 @@ operator/global policy when the stored namespace is null. Handlers must not
 return an `OperationRecord` where an `OperationEnvelope` is specified, and
 operation inspection must not wrap the record in an `OperationEnvelope`.
 
+## Discovery Surface Boundary
+
+readyz is service readiness, not caller authorization. It reports capability
+readiness and default/optional gating state, but it must not grant access,
+advertise caller roles, or make optional runtime capabilities default ready.
+
+caller discovery is limited to caller-scoped repo projection and namespace-
+scoped operation inspection. Repo projection and operation inspection must not
+expose operator-only state, runtime mount material, Secret refs, raw paths,
+credentials, or globally scoped audit/intervention/fence/session state.
+
+orchestrator discovery is limited to the dedicated workload mount
+`orchestrator_mount` surface and orchestrator plan contract. In default-denied
+or not-enabled mode, orchestrator discovery must fail closed without returning
+an orchestrator plan, SecretRef, payload subdir, raw path, or mount material.
+
+operator inspection is a read-only redacted operation inspection boundary unless
+the caller invokes the separate allowlisted repair route. Operator inspection
+must stay distinct from repair side effects.
+
+evidence classification reads the release evidence manifest and capability
+matrix, but must not replace runtime admission, caller authorization, readiness,
+or actor-specific discovery output tests.
+
 ## GA Role Matrix
 
 | Role | Endpoint Groups |

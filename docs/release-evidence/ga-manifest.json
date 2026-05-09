@@ -1231,6 +1231,53 @@
       "scope": "package"
     },
     {
+      "id": "discovery_surfaces_layered_unit",
+      "evidence_status": "implemented",
+      "claim_id": "CLAIM_DISCOVERY_SURFACES",
+      "subclaim_id": "discovery_surfaces_layered",
+      "acceptance_id": "P0_DISCOVERY_SURFACES_LAYERED",
+      "risk_id": "F7",
+      "fixture_id": "",
+      "capability_id": "repo_projection",
+      "evidence_profile": "default",
+      "default_mode": true,
+      "fixture_enabled_mode": false,
+      "negative_or_positive": "positive",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/api",
+        "./internal/apiapp",
+        "./internal/contractcheck",
+        "./internal/releaseevidence",
+        "./cmd/afscp-evidence-verify",
+        "-run",
+        "^Test(DiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields|DiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields|DiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady|DiscoverySurfacesOrchestratorDefaultDeniedDoesNotLeakPlanOrSecrets|DiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDistinctFromRepair|DiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries|CurrentRepoManifestContainsDiscoverySurfacesEvidence|DiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly|RunCheckOnlyAcceptsDiscoverySurfacesManifest)$"
+      ],
+      "anchors": [
+        "docs/contracts/afscp-internal-api-v1.md",
+        "internal/api/repo_handler.go",
+        "internal/api/workload_mount_handler.go",
+        "internal/api/operation_handler.go",
+        "internal/apiapp/runtime.go",
+        "internal/releaseevidence/manifest.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": false,
+      "default_ga_required": true,
+      "pass_criteria": {
+        "kind": "positive_path",
+        "assertions": [
+          "discovery surfaces pass layered default checks"
+        ]
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
+    },
+    {
       "id": "seed_gap_residual_risk_catalog_open",
       "evidence_status": "placeholder",
       "claim_id": "CLAIM_RESIDUAL_RISK_CATALOG",
@@ -1299,37 +1346,6 @@
       "subclaim_id": "seed_gap_open",
       "acceptance_id": "P0_SEED_GAP_OPEN",
       "risk_id": "F1",
-      "fixture_id": "",
-      "capability_id": "",
-      "evidence_profile": "default",
-      "default_mode": true,
-      "fixture_enabled_mode": false,
-      "expected_runtime": "fast",
-      "scope": "doc-guard",
-      "negative_or_positive": "both",
-      "evidence_type": "doc-guard",
-      "required": false,
-      "command": [],
-      "anchors": [
-        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
-      ],
-      "doc_only_allowed": true,
-      "optional_gated": false,
-      "default_ga_required": false,
-      "pass_criteria": {
-        "kind": "seed_gap",
-        "assertions": [
-          "open"
-        ]
-      }
-    },
-    {
-      "id": "seed_gap_discovery_surfaces_open",
-      "evidence_status": "placeholder",
-      "claim_id": "CLAIM_DISCOVERY_SURFACES",
-      "subclaim_id": "seed_gap_open",
-      "acceptance_id": "P0_SEED_GAP_OPEN",
-      "risk_id": "F7",
       "fixture_id": "",
       "capability_id": "",
       "evidence_profile": "default",

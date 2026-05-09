@@ -762,6 +762,34 @@ func TestWorkloadMountAdmissionDisabledPlan(t *testing.T) {
 	}
 }
 
+func TestDiscoverySurfacesOrchestratorDefaultDeniedDoesNotLeakPlanOrSecrets(t *testing.T) {
+	meta := workloadMountMetaFixture()
+	meta.mount.Status = sessionstate.MountStatusActive
+	planCalls := &fakeWorkloadMountPlanReaderCalls{}
+	sink := &fakeAuditSink{}
+	config := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
+		config.AdmissionDisabled = true
+		config.AuditSink = sink
+		config.MountReader = fakeWorkloadMountReader{binding: meta.mount}
+		config.PlanReader = fakeWorkloadMountPlanReader{plan: meta.plan, calls: planCalls}
+	})
+	config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
+	rec := httptest.NewRecorder()
+
+	WorkloadMountHandler(config).ServeHTTP(rec, workloadMountRequestForCaller(http.MethodGet, "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", "", "ns_123", "runtime-orchestrator"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403 default-denied orchestrator discovery", rec.Code, rec.Body.String())
+	}
+	if planCalls.calls != 0 {
+		t.Fatalf("plan calls = %d, want denied before plan materialization", planCalls.calls)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("audit events = %#v, want one denied audit", sink.events)
+	}
+	assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+}
+
 func TestWorkloadMountPlanAuditUsesMinimalDetails(t *testing.T) {
 	sink := &fakeAuditSink{}
 	config := workloadMountHandlerConfig(&fakeOperationIntakeStore{}, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {

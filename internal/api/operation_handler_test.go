@@ -131,6 +131,72 @@ func TestOperationInspectionHandlerRequiresStoredBindingForProductCaller(t *test
 	assertOperationInspectionResponseDoesNotLeak(t, rec.Body.String())
 }
 
+func TestDiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields(t *testing.T) {
+	reader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
+		"op_secret": operationInspectionRecord("op_secret", "ns_123"),
+	}}
+	authorizer := &fakeStoredInspectionAuthorizer{allowed: map[string]bool{"ns_123": true}}
+	handler := operationInspectionHandlerForTest(reader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "product-caller"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "repair_outcome") || strings.Contains(body, "operator_repair") {
+		t.Fatalf("read-only operation inspection leaked repair/write surface fields: %s", body)
+	}
+	assertOperationInspectionResponseDoesNotLeak(t, body)
+}
+
+func TestDiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDistinctFromRepair(t *testing.T) {
+	reader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
+		"op_global": operationInspectionRecord("op_global", ""),
+	}}
+	authorizer := &fakeStoredInspectionAuthorizer{allowed: map[string]bool{"ns_123": true}}
+	handler := OperationInspectionHandler(OperationInspectionHandlerConfig{
+		Reader:                    reader,
+		StoredNamespaceAuthorizer: authorizer,
+		AllowedCallers:            operationInspectionPolicy(auth.AllowedCaller{CallerService: "ops-service", Kind: auth.CallerKindOperator, Roles: []auth.Role{auth.RoleOperatorAdmin}}),
+		PrincipalResolver:         fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:ops-service", CanonicalCallerService: "ops-service"}},
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, operationInspectionRequest("op_global", "ns_ignored", "ops-service"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if reader.calls != 1 || reader.operationID != "op_global" {
+		t.Fatalf("reader calls/op = %d/%q, want op_global", reader.calls, reader.operationID)
+	}
+	if authorizer.calls != 0 {
+		t.Fatalf("authorizer calls = %d, want operator inspection independent of namespace binding auth", authorizer.calls)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"operation_id":"op_global"`, `"namespace_id":null`, `"lease_owner":null`, `"external_resource_ids":{`, `"input_summary":{`, `"jvs_json_output":`, `"verification_result":`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("operator inspection response missing %s: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		"operator_repair",
+		"repair_outcome",
+		"terminalize_unsupported_intervention_as_failed",
+		"affected_ids",
+		"evidence_ref",
+		`"before":`,
+		`"after":`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("operator inspection response leaked repair/write surface field %q: %s", forbidden, body)
+		}
+	}
+	assertOperationInspectionResponseDoesNotLeak(t, body)
+}
+
 func TestOperationInspectionHandlerMapsStoredBindingAuthorizationErrors(t *testing.T) {
 	tests := []struct {
 		name     string
