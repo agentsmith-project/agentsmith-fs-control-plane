@@ -445,6 +445,187 @@ func TestResidualRiskAcceptanceAuditIsOperatorScopedAndRedacted(t *testing.T) {
 	)
 }
 
+func TestDeploymentRiskEnvelopeCurrentRepoDefinesRuntimeSupportRows(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/deployment-risk-envelope-v1.md")
+	requireContractPhrases(t, body,
+		"Deployment Risk Envelope v1",
+		"GA implementation-baseline contract",
+		"docs/READINESS_EVIDENCE.md",
+		"scripts/verify-ga-release.sh",
+		"envelope_id",
+		"runtime_prerequisite",
+		"detection_signal",
+		"failure_mode",
+		"safe_default",
+		"redaction_rule",
+		"rollback_rollforward",
+		"runbook_ref",
+		"operator_handoff",
+		"residual_risk_link",
+		"non_proof",
+	)
+
+	rows := deploymentRiskEnvelopeRows(t)
+	if len(rows) < 7 {
+		t.Fatalf("expected at least 7 deployment risk envelope rows, got %d", len(rows))
+	}
+	wantIDs := map[string]bool{
+		"dre-postgres":               false,
+		"dre-managed-volume-root":    false,
+		"dre-jvs-binary-version":     false,
+		"dre-webdav-gateway":         false,
+		"dre-audit-sink":             false,
+		"dre-ci-runtime-assumptions": false,
+		"dre-optional-orchestrator":  false,
+	}
+	for _, row := range rows {
+		id := row["envelope_id"]
+		if _, ok := wantIDs[id]; ok {
+			wantIDs[id] = true
+		}
+		for _, field := range []string{"envelope_id", "claim", "profile", "surface", "runtime_prerequisite", "detection_signal", "failure_mode", "safe_default", "redaction_rule", "rollback_rollforward", "runbook_ref", "operator_handoff", "residual_risk_link", "non_proof"} {
+			if strings.TrimSpace(row[field]) == "" {
+				t.Fatalf("deployment risk envelope row missing %s: %+v", field, row)
+			}
+		}
+		if !strings.Contains(strings.ToLower(row["operator_handoff"]), "operator") {
+			t.Fatalf("%s operator_handoff must describe operator handoff: %+v", id, row)
+		}
+		if len(deploymentRiskRunbookRefs(t, row["runbook_ref"])) == 0 {
+			t.Fatalf("%s runbook_ref must include at least one repo-local docs/runbook reference: %+v", id, row)
+		}
+		if row["claim"] != "CLAIM_DEPLOYMENT_RISK_ENVELOPE" {
+			t.Fatalf("%s claim = %q, want CLAIM_DEPLOYMENT_RISK_ENVELOPE", id, row["claim"])
+		}
+		if row["profile"] != "default" {
+			t.Fatalf("%s profile = %q, want default", id, row["profile"])
+		}
+	}
+	for id, seen := range wantIDs {
+		if !seen {
+			t.Fatalf("deployment risk envelope rows missing %s", id)
+		}
+	}
+}
+
+func TestDeploymentRiskEnvelopeRejectsProductionOrManualGateProof(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/deployment-risk-envelope-v1.md")
+	lower := strings.ToLower(body)
+	for _, forbidden := range []string{
+		"manual approval",
+		"security approval",
+		"owner approval",
+		"runbook meeting",
+		"human sign-off",
+		"human gate",
+		"production deployment passed",
+		"real deployment passed",
+		"deployment-runtime-support closes",
+	} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("deployment risk envelope must not contain human/deployment proof phrase %q", forbidden)
+		}
+	}
+	requireContractPhrases(t, body,
+		"not production deployment proof",
+		"not sibling acceptance",
+		"not optional fixture conformance",
+		"not real CSI/POSIX/subPath/orchestrator proof",
+	)
+}
+
+func TestDeploymentRiskEnvelopeRequiresDetectionRedactionRollbackAndResidualLinks(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/deployment-risk-envelope-v1.md")
+	requireContractPhrases(t, body,
+		"readiness finding",
+		"operator inspection",
+		"audit/outbox lag",
+		"restore reconciliation finding",
+		"redacted runtime config finding",
+		"deployment/runtime config",
+		"logs",
+		"audit",
+		"evidence/report",
+		"raw root",
+		"SecretRef",
+		"metadata URL",
+		"token/password/credential",
+		"host path/control root",
+		"decision shape",
+		"denied/fail-closed/default-safe state",
+		"partial runtime enablement",
+		"runbook_ref",
+		"operator_handoff",
+		"docs/runbooks/README.md",
+	)
+
+	catalogRows := residualRiskCatalogRows(t)
+	knownRiskIDs := make(map[string]bool, len(catalogRows))
+	for _, row := range catalogRows {
+		knownRiskIDs[row["risk_id"]] = true
+	}
+	for _, row := range deploymentRiskEnvelopeRows(t) {
+		for _, riskID := range splitDeploymentRiskLinks(row["residual_risk_link"]) {
+			if !knownRiskIDs[riskID] {
+				t.Fatalf("%s links unknown residual risk row %q", row["envelope_id"], riskID)
+			}
+		}
+	}
+}
+
+func TestDeploymentRiskEnvelopeRunbookRefsAreRepoLocalOperatorHandoff(t *testing.T) {
+	for _, row := range deploymentRiskEnvelopeRows(t) {
+		refs := deploymentRiskRunbookRefs(t, row["runbook_ref"])
+		if len(refs) == 0 {
+			t.Fatalf("%s runbook_ref missing repo-local doc ref: %+v", row["envelope_id"], row)
+		}
+		for _, ref := range refs {
+			if _, err := os.Stat(filepath.Join(repoRootForContractTest(t), filepath.FromSlash(ref))); err != nil {
+				t.Fatalf("%s runbook_ref %q must exist: %v", row["envelope_id"], ref, err)
+			}
+		}
+		handoff := strings.ToLower(row["operator_handoff"])
+		for _, want := range []string{"operator", "runtime_prerequisite", "detection_signal", "safe_default", "rollback_rollforward", "residual_risk_link"} {
+			if !strings.Contains(handoff, want) {
+				t.Fatalf("%s operator_handoff missing %q: %+v", row["envelope_id"], want, row)
+			}
+		}
+	}
+}
+
+func TestDeploymentRiskEnvelopeRuntimePrereqsDoNotCloseOptionalFixturePurgeTemplateOrWorkload(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/deployment-risk-envelope-v1.md")
+	requireContractPhrases(t, body,
+		"does not close workload fixture",
+		"does not close purge approval",
+		"does not close optional fixture",
+		"does not close template quota",
+	)
+	for _, row := range deploymentRiskEnvelopeRows(t) {
+		for _, forbidden := range []string{
+			"CLAIM_WORKLOAD_FIXTURE_READY",
+			"CLAIM_PURGE_APPROVAL_SAFE",
+			"CLAIM_OPTIONAL_FIXTURE_CONFORMANT",
+			"CLAIM_TEMPLATE_QUOTA_BOUNDARY",
+		} {
+			if row["claim"] == forbidden || strings.Contains(row["surface"], forbidden) || strings.Contains(row["non_proof"], forbidden) {
+				t.Fatalf("%s must not close unrelated claim %s: %+v", row["envelope_id"], forbidden, row)
+			}
+		}
+	}
+}
+
+func TestDeploymentRiskEnvelopeContractSeparatesRuntimeSupportFromDefaultPositiveProof(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/deployment-risk-envelope-v1.md")
+	requireContractPhrases(t, body,
+		"runtime-support envelope guard",
+		"evidence_profile=default",
+		"deployment-runtime-support profile is not required local closure",
+		"default positive runtime deployment proof",
+		"repo-local runtime-support envelope guard",
+	)
+}
+
 func TestVerifyFilesIgnoresParameterRefsOutsideParametersBlock(t *testing.T) {
 	paths := writeContractFixture(t, contractFixture{
 		openapi: `
@@ -2466,6 +2647,78 @@ func residualRiskCatalogRows(t *testing.T) []map[string]string {
 		t.Fatal("residual risk catalog table header not found")
 	}
 	return rows
+}
+
+func deploymentRiskEnvelopeRows(t *testing.T) []map[string]string {
+	t.Helper()
+	body := readRepoFileForContractTest(t, "docs/contracts/deployment-risk-envelope-v1.md")
+	lines := strings.Split(body, "\n")
+	var rows []map[string]string
+	var header []string
+	inRows := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## Envelope Rows") {
+			inRows = true
+			continue
+		}
+		if inRows && strings.HasPrefix(trimmed, "## ") {
+			break
+		}
+		if !inRows || !strings.HasPrefix(trimmed, "|") {
+			continue
+		}
+		cells := markdownTableCells(trimmed)
+		if len(cells) == 0 {
+			continue
+		}
+		if len(header) == 0 {
+			header = cells
+			continue
+		}
+		if markdownSeparatorCells(cells) {
+			continue
+		}
+		if len(cells) != len(header) {
+			t.Fatalf("deployment risk envelope row has %d cells, want %d: %q", len(cells), len(header), line)
+		}
+		row := map[string]string{}
+		for i, key := range header {
+			row[key] = cells[i]
+		}
+		rows = append(rows, row)
+	}
+	if len(header) == 0 {
+		t.Fatal("deployment risk envelope table header not found")
+	}
+	return rows
+}
+
+func splitDeploymentRiskLinks(value string) []string {
+	var out []string
+	for _, part := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' '
+	}) {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "RR-SV-") {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func deploymentRiskRunbookRefs(t *testing.T, value string) []string {
+	t.Helper()
+	var out []string
+	for _, part := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' '
+	}) {
+		part = strings.Trim(part, "`[]()")
+		if strings.HasPrefix(part, "docs/") && strings.HasSuffix(part, ".md") {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func markdownTableCells(line string) []string {

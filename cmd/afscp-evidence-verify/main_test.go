@@ -129,6 +129,19 @@ func TestRunCheckOnlyAcceptsResidualRiskCatalogManifest(t *testing.T) {
 	}
 }
 
+func TestRunCheckOnlyAcceptsDeploymentRiskEnvelopeManifest(t *testing.T) {
+	root := t.TempDir()
+	writeEvidenceCLIScripts(t, root)
+	manifestPath := filepath.Join(root, "manifest.json")
+	writeEvidenceCLIFile(t, manifestPath, evidenceCLIManifest(`["bash","scripts/pass.sh"]`, "scripts/pass.sh"))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-mode", "seed", "-manifest", manifestPath, "-repo-root", root, "-check-only"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestRunExecutesRequiredCommandsByDefault(t *testing.T) {
 	root := t.TempDir()
 	writeEvidenceCLIScripts(t, root)
@@ -513,6 +526,17 @@ func evidenceCLIManifest(command, anchor string) string {
       "default_ga_required":false
     },
     {
+      "id":"deployment_risk_envelope_guard_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^(TestDeploymentRiskEnvelopeCurrentRepoDefinesRuntimeSupportRows|TestDeploymentRiskEnvelopeRejectsProductionOrManualGateProof|TestDeploymentRiskEnvelopeRequiresDetectionRedactionRollbackAndResidualLinks|TestDeploymentRiskEnvelopeRunbookRefsAreRepoLocalOperatorHandoff|TestDeploymentRiskEnvelopeRuntimePrereqsDoNotCloseOptionalFixturePurgeTemplateOrWorkload|TestDeploymentRiskEnvelopeContractSeparatesRuntimeSupportFromDefaultPositiveProof|TestCurrentRepoManifestContainsDeploymentRiskEnvelopeEvidence|TestDeploymentRiskEnvelopeReplacementRejectsWrongShapeBroadSelectorRuntimeOptionalResidualWorkflowProfileOrHelperOnly|TestRunCheckOnlyAcceptsDeploymentRiskEnvelopeManifest)$"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -654,7 +678,6 @@ var package0CLISeedGapMetadata = []struct {
 	{"seed_gap_admin_bootstrap_ready_open", "CLAIM_ADMIN_BOOTSTRAP_READY", "F3"},
 	{"seed_gap_workload_fixture_ready_open", "CLAIM_WORKLOAD_FIXTURE_READY", "F9"},
 	{"seed_gap_purge_approval_safe_open", "CLAIM_PURGE_APPROVAL_SAFE", "F13"},
-	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
 }
@@ -696,6 +719,7 @@ var package0CLIMetadata = []struct {
 	{"profile_boundary_consistent_unit", "CLAIM_PROFILE_BOUNDARY", "profile_boundary_consistent", "P0_PROFILE_BOUNDARY_CONSISTENT", "F1", "both", "fast", "package", "false", "coverage_guard", "profile boundary consistency covers final release evidence"},
 	{"workflow_hardening_guard_unit", "CLAIM_WORKFLOW_HARDENING_GUARD", "workflow_hardening_guard", "P0_WORKFLOW_HARDENING_GUARD", "F18", "both", "fast", "workflow-guard", "false", "coverage_guard", "workflow hardening guard covers final release evidence"},
 	{"residual_risk_catalog_guard_unit", "CLAIM_RESIDUAL_RISK_CATALOG", "residual_risk_catalog_guard", "P0_RESIDUAL_RISK_CATALOG_GUARD", "F12", "both", "fast", "package", "false", "coverage_guard", "residual risk catalog guard covers final release evidence"},
+	{"deployment_risk_envelope_guard_unit", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "deployment_risk_envelope_guard", "P0_DEPLOYMENT_RISK_ENVELOPE_GUARD", "F17", "both", "fast", "workflow-guard", "false", "coverage_guard", "deployment risk envelope guard covers final release evidence"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "negative", "fast", "package", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "both", "fast", "package", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "both", "fast", "package", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},
@@ -860,6 +884,8 @@ func TestWorkflowHardeningReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntim
 func TestSelectorRejectsUnsafePathAndGeneratedReportDigest(t *testing.T) {}
 func TestCurrentRepoManifestContainsResidualRiskCatalogEvidence(t *testing.T) {}
 func TestResidualRiskCatalogReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly(t *testing.T) {}
+func TestCurrentRepoManifestContainsDeploymentRiskEnvelopeEvidence(t *testing.T) {}
+func TestDeploymentRiskEnvelopeReplacementRejectsWrongShapeBroadSelectorRuntimeOptionalResidualWorkflowProfileOrHelperOnly(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "observability", "secret_path_redaction_test.go"), `package observability
 
@@ -1000,6 +1026,12 @@ func TestResidualRiskCatalogRequiresEvidenceRefsOwnerStatusDecisionAndMitigation
 func TestResidualRiskCatalogSharedVolumeThreatModelHasScopeExpiryReviewAndEscalation(t *testing.T) {}
 func TestResidualRiskAcceptanceRequiresPredefinedRiskScopeReasonEvidenceAndReviewPoint(t *testing.T) {}
 func TestResidualRiskAcceptanceAuditIsOperatorScopedAndRedacted(t *testing.T) {}
+func TestDeploymentRiskEnvelopeCurrentRepoDefinesRuntimeSupportRows(t *testing.T) {}
+func TestDeploymentRiskEnvelopeRejectsProductionOrManualGateProof(t *testing.T) {}
+func TestDeploymentRiskEnvelopeRequiresDetectionRedactionRollbackAndResidualLinks(t *testing.T) {}
+func TestDeploymentRiskEnvelopeRunbookRefsAreRepoLocalOperatorHandoff(t *testing.T) {}
+func TestDeploymentRiskEnvelopeRuntimePrereqsDoNotCloseOptionalFixturePurgeTemplateOrWorkload(t *testing.T) {}
+func TestDeploymentRiskEnvelopeContractSeparatesRuntimeSupportFromDefaultPositiveProof(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
@@ -1014,6 +1046,7 @@ func TestRunCheckOnlyAcceptsProfileBoundaryManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsWorkflowHardeningManifest(t *testing.T) {}
 func TestFinalCheckOnlyCannotDeclareFinalAcceptance(t *testing.T) {}
 func TestRunCheckOnlyAcceptsResidualRiskCatalogManifest(t *testing.T) {}
+func TestRunCheckOnlyAcceptsDeploymentRiskEnvelopeManifest(t *testing.T) {}
 `)
 }
 

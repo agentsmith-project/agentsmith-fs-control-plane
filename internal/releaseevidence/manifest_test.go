@@ -2338,6 +2338,173 @@ func TestResidualRiskCatalogReplacementRejectsWrongShapeBroadSelectorDocOnlyRunt
 	}
 }
 
+func TestCurrentRepoManifestContainsDeploymentRiskEnvelopeEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+	item, ok := manifestItemByID(manifest, "deployment_risk_envelope_guard_unit")
+	if !ok {
+		t.Fatal("manifest missing deployment_risk_envelope_guard_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_DEPLOYMENT_RISK_ENVELOPE" ||
+		item.SubclaimID != "deployment_risk_envelope_guard" ||
+		item.AcceptanceID != "P0_DEPLOYMENT_RISK_ENVELOPE_GUARD" ||
+		item.RiskID != "F17" ||
+		item.CapabilityID != "" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.ExpectedRuntime != "fast" ||
+		item.Scope != "workflow-guard" ||
+		item.NegativeOrPositive != "both" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		item.DefaultGARequired ||
+		item.PassCriteria.Kind != "coverage_guard" ||
+		!containsString(item.PassCriteria.Assertions, "deployment risk envelope guard covers final release evidence") {
+		t.Fatalf("%s shape = %+v, want default required deployment risk envelope evidence", item.ID, item)
+	}
+	if _, ok := manifestItemByID(manifest, "seed_gap_deployment_risk_envelope_open"); ok {
+		t.Fatal("deployment risk envelope evidence must close seed_gap_deployment_risk_envelope_open")
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range deploymentRiskEnvelopeRequiredTestNamesForTest {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestDeploymentRiskEnvelopeReplacementRejectsWrongShapeBroadSelectorRuntimeOptionalResidualWorkflowProfileOrHelperOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		body func() string
+		want string
+	}{
+		{name: "placeholder", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"evidence_status":"implemented"`, `"evidence_status":"placeholder"`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "doc only", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"doc_only_allowed":false`, `"doc_only_allowed":true`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "required false", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"required":true`, `"required":false`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "wrong claim", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"claim_id":"CLAIM_DEPLOYMENT_RISK_ENVELOPE"`, `"claim_id":"CLAIM_PROFILE_BOUNDARY"`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "wrong subclaim", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"subclaim_id":"deployment_risk_envelope_guard"`, `"subclaim_id":"profile_boundary_consistent"`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "wrong acceptance", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"acceptance_id":"P0_DEPLOYMENT_RISK_ENVELOPE_GUARD"`, `"acceptance_id":"P0_PROFILE_BOUNDARY_CONSISTENT"`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "wrong risk", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"risk_id":"F17"`, `"risk_id":"F18"`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "runtime support profile", body: func() string {
+			body := replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"evidence_profile":"default"`, `"evidence_profile":"deployment-runtime-support"`)
+			return replaceItemCommand(t, body, "deployment_risk_envelope_guard_unit", `"command":["bash","scripts/pass.sh"]`)
+		}, want: "deployment-runtime-support"},
+		{name: "fixture profile", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"evidence_profile":"default"`, `"evidence_profile":"repo-local-fixture-enabled"`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "fixture enabled", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"fixture_enabled_mode":false`, `"fixture_enabled_mode":true`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "optional gated", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"optional_gated":false`, `"optional_gated":true`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "default mode false", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"default_mode":true`, `"default_mode":false`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "broad deployment selector", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"command":["go","test","-count=1","./internal/contractcheck","-run","Test.*Deployment"]`)
+		}, want: "deployment"},
+		{name: "broad runtime selector", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"command":["go","test","-count=1","./internal/contractcheck","-run","Test.*Runtime"]`)
+		}, want: "runtime"},
+		{name: "manifest only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"command":["go","test","-count=1","./internal/releaseevidence","-run","^TestCurrentRepoManifestContainsDeploymentRiskEnvelopeEvidence$"]`)
+		}, want: "deployment"},
+		{name: "contract only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"command":["go","test","-count=1","./internal/contractcheck","-run","^TestDeploymentRiskEnvelopeCurrentRepoDefinesRuntimeSupportRows$"]`)
+		}, want: "deployment"},
+		{name: "cli only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"command":["go","test","-count=1","./cmd/afscp-evidence-verify","-run","^TestRunCheckOnlyAcceptsDeploymentRiskEnvelopeManifest$"]`)
+		}, want: "deployment"},
+		{name: "helper only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"command":["go","test","-count=1","./internal/evidencetest","-run","^TestExistingEvidenceSelector$"]`)
+		}, want: "deployment"},
+		{name: "workflow proxy", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"command":["go","test","-count=1","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(WorkflowHardeningCurrentRepoWorkflowUsesSingleAuthoritativeGate|RunCheckOnlyAcceptsWorkflowHardeningManifest)$"]`)
+		}, want: "deployment"},
+		{name: "profile proxy", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"command":["go","test","-count=1","./internal/releaseevidence","./internal/contractcheck","./cmd/afscp-evidence-verify","-run","^Test(ProfileBoundaryDefaultFinalRejectsOptionalFixtureAndRuntimeSupportSubstitutes|RunCheckOnlyAcceptsProfileBoundaryManifest)$"]`)
+		}, want: "deployment"},
+		{name: "residual proxy", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"command":["go","test","-count=1","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^(TestResidualRiskCatalogCurrentRepoDefinesMachineCheckableRiskRows|TestRunCheckOnlyAcceptsResidualRiskCatalogManifest)$"]`)
+		}, want: "deployment"},
+		{name: "optional fixture proxy", body: func() string {
+			body := replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"subclaim_id":"deployment_risk_envelope_guard"`, `"subclaim_id":"optional_fixture_conformant"`)
+			return replaceItemField(t, body, "deployment_risk_envelope_guard_unit", `"acceptance_id":"P0_DEPLOYMENT_RISK_ENVELOPE_GUARD"`, `"acceptance_id":"P0_OPTIONAL_FIXTURE_CONFORMANT"`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "purge proxy", body: func() string {
+			body := replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"claim_id":"CLAIM_DEPLOYMENT_RISK_ENVELOPE"`, `"claim_id":"CLAIM_PURGE_APPROVAL_SAFE"`)
+			return replaceItemField(t, body, "deployment_risk_envelope_guard_unit", `"acceptance_id":"P0_DEPLOYMENT_RISK_ENVELOPE_GUARD"`, `"acceptance_id":"P0_PURGE_APPROVAL_SAFE"`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "template proxy", body: func() string {
+			body := replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"claim_id":"CLAIM_DEPLOYMENT_RISK_ENVELOPE"`, `"claim_id":"CLAIM_TEMPLATE_QUOTA_BOUNDARY"`)
+			return replaceItemField(t, body, "deployment_risk_envelope_guard_unit", `"subclaim_id":"deployment_risk_envelope_guard"`, `"subclaim_id":"template_quota_boundary"`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+		{name: "workload proxy", body: func() string {
+			body := replaceItemField(t, validReleaseEvidenceManifest(), "deployment_risk_envelope_guard_unit", `"claim_id":"CLAIM_DEPLOYMENT_RISK_ENVELOPE"`, `"claim_id":"CLAIM_WORKLOAD_FIXTURE_READY"`)
+			return replaceItemField(t, body, "deployment_risk_envelope_guard_unit", `"subclaim_id":"deployment_risk_envelope_guard"`, `"subclaim_id":"workload_fixture_ready"`)
+		}, want: "deployment_risk_envelope_guard_unit"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.body())
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.want)
+		})
+	}
+}
+
+var deploymentRiskEnvelopeRequiredTestNamesForTest = []string{
+	"TestDeploymentRiskEnvelopeCurrentRepoDefinesRuntimeSupportRows",
+	"TestDeploymentRiskEnvelopeRejectsProductionOrManualGateProof",
+	"TestDeploymentRiskEnvelopeRequiresDetectionRedactionRollbackAndResidualLinks",
+	"TestDeploymentRiskEnvelopeRunbookRefsAreRepoLocalOperatorHandoff",
+	"TestDeploymentRiskEnvelopeRuntimePrereqsDoNotCloseOptionalFixturePurgeTemplateOrWorkload",
+	"TestDeploymentRiskEnvelopeContractSeparatesRuntimeSupportFromDefaultPositiveProof",
+	"TestCurrentRepoManifestContainsDeploymentRiskEnvelopeEvidence",
+	"TestDeploymentRiskEnvelopeReplacementRejectsWrongShapeBroadSelectorRuntimeOptionalResidualWorkflowProfileOrHelperOnly",
+	"TestRunCheckOnlyAcceptsDeploymentRiskEnvelopeManifest",
+}
+
 var residualRiskCatalogRequiredTestNamesForTest = []string{
 	"TestResidualRiskCatalogCurrentRepoDefinesMachineCheckableRiskRows",
 	"TestResidualRiskCatalogRejectsHumanApprovalWaiverOrSubjectiveException",
@@ -2408,7 +2575,7 @@ func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1b(t *testing.T) 
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_deployment_risk_envelope_open",
+		"seed_gap_workload_fixture_ready_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
 		if !ok {
@@ -2438,7 +2605,7 @@ func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1c(t *testing.T) 
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_deployment_risk_envelope_open",
+		"seed_gap_workload_fixture_ready_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
 		if !ok {
@@ -2705,6 +2872,21 @@ func goTestPackageForTestName(testName string) string {
 		strings.HasPrefix(testName, "TestResidualRiskCatalogReplacement") {
 		return "./internal/releaseevidence"
 	}
+	if strings.HasPrefix(testName, "TestDeploymentRiskEnvelopeCurrentRepo") ||
+		strings.HasPrefix(testName, "TestDeploymentRiskEnvelopeRejects") ||
+		strings.HasPrefix(testName, "TestDeploymentRiskEnvelopeRequires") ||
+		strings.HasPrefix(testName, "TestDeploymentRiskEnvelopeRunbookRefs") ||
+		strings.HasPrefix(testName, "TestDeploymentRiskEnvelopeRuntimePrereqs") ||
+		strings.HasPrefix(testName, "TestDeploymentRiskEnvelopeContract") {
+		return "./internal/contractcheck"
+	}
+	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsDeploymentRiskEnvelope") {
+		return "./cmd/afscp-evidence-verify"
+	}
+	if strings.HasPrefix(testName, "TestCurrentRepoManifestContainsDeploymentRiskEnvelope") ||
+		strings.HasPrefix(testName, "TestDeploymentRiskEnvelopeReplacement") {
+		return "./internal/releaseevidence"
+	}
 	if strings.HasPrefix(testName, "TestCapabilityMatrixAdmissionDisabled") {
 		return "./internal/api"
 	}
@@ -2951,6 +3133,8 @@ func TestWorkflowHardeningReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntim
 func TestSelectorRejectsUnsafePathAndGeneratedReportDigest(t *testing.T) {}
 func TestCurrentRepoManifestContainsResidualRiskCatalogEvidence(t *testing.T) {}
 func TestResidualRiskCatalogReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly(t *testing.T) {}
+func TestCurrentRepoManifestContainsDeploymentRiskEnvelopeEvidence(t *testing.T) {}
+func TestDeploymentRiskEnvelopeReplacementRejectsWrongShapeBroadSelectorRuntimeOptionalResidualWorkflowProfileOrHelperOnly(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "operatorrepair", "repair_test.go"), `package operatorrepair
 
@@ -3002,6 +3186,12 @@ func TestResidualRiskCatalogRequiresEvidenceRefsOwnerStatusDecisionAndMitigation
 func TestResidualRiskCatalogSharedVolumeThreatModelHasScopeExpiryReviewAndEscalation(t *testing.T) {}
 func TestResidualRiskAcceptanceRequiresPredefinedRiskScopeReasonEvidenceAndReviewPoint(t *testing.T) {}
 func TestResidualRiskAcceptanceAuditIsOperatorScopedAndRedacted(t *testing.T) {}
+func TestDeploymentRiskEnvelopeCurrentRepoDefinesRuntimeSupportRows(t *testing.T) {}
+func TestDeploymentRiskEnvelopeRejectsProductionOrManualGateProof(t *testing.T) {}
+func TestDeploymentRiskEnvelopeRequiresDetectionRedactionRollbackAndResidualLinks(t *testing.T) {}
+func TestDeploymentRiskEnvelopeRunbookRefsAreRepoLocalOperatorHandoff(t *testing.T) {}
+func TestDeploymentRiskEnvelopeRuntimePrereqsDoNotCloseOptionalFixturePurgeTemplateOrWorkload(t *testing.T) {}
+func TestDeploymentRiskEnvelopeContractSeparatesRuntimeSupportFromDefaultPositiveProof(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
@@ -3016,6 +3206,7 @@ func TestRunCheckOnlyAcceptsProfileBoundaryManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsWorkflowHardeningManifest(t *testing.T) {}
 func TestFinalCheckOnlyCannotDeclareFinalAcceptance(t *testing.T) {}
 func TestRunCheckOnlyAcceptsResidualRiskCatalogManifest(t *testing.T) {}
+func TestRunCheckOnlyAcceptsDeploymentRiskEnvelopeManifest(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "restorereconcile", "restore_reconciliation_test.go"), `package restorereconcile
 
@@ -3371,6 +3562,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":false
     },
     {
+      "id":"deployment_risk_envelope_guard_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^(TestDeploymentRiskEnvelopeCurrentRepoDefinesRuntimeSupportRows|TestDeploymentRiskEnvelopeRejectsProductionOrManualGateProof|TestDeploymentRiskEnvelopeRequiresDetectionRedactionRollbackAndResidualLinks|TestDeploymentRiskEnvelopeRunbookRefsAreRepoLocalOperatorHandoff|TestDeploymentRiskEnvelopeRuntimePrereqsDoNotCloseOptionalFixturePurgeTemplateOrWorkload|TestDeploymentRiskEnvelopeContractSeparatesRuntimeSupportFromDefaultPositiveProof|TestCurrentRepoManifestContainsDeploymentRiskEnvelopeEvidence|TestDeploymentRiskEnvelopeReplacementRejectsWrongShapeBroadSelectorRuntimeOptionalResidualWorkflowProfileOrHelperOnly|TestRunCheckOnlyAcceptsDeploymentRiskEnvelopeManifest)$"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -3512,7 +3714,6 @@ var package0SeedGapFixtureMetadata = []struct {
 	{"seed_gap_admin_bootstrap_ready_open", "CLAIM_ADMIN_BOOTSTRAP_READY", "F3"},
 	{"seed_gap_workload_fixture_ready_open", "CLAIM_WORKLOAD_FIXTURE_READY", "F9"},
 	{"seed_gap_purge_approval_safe_open", "CLAIM_PURGE_APPROVAL_SAFE", "F13"},
-	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
 }
@@ -3558,6 +3759,7 @@ var package0FixtureMetadata = []struct {
 	{"profile_boundary_consistent_unit", "CLAIM_PROFILE_BOUNDARY", "profile_boundary_consistent", "P0_PROFILE_BOUNDARY_CONSISTENT", "F1", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "profile boundary consistency covers final release evidence"},
 	{"workflow_hardening_guard_unit", "CLAIM_WORKFLOW_HARDENING_GUARD", "workflow_hardening_guard", "P0_WORKFLOW_HARDENING_GUARD", "F18", "", "default", "true", "false", "fast", "workflow-guard", "both", "false", "coverage_guard", "workflow hardening guard covers final release evidence"},
 	{"residual_risk_catalog_guard_unit", "CLAIM_RESIDUAL_RISK_CATALOG", "residual_risk_catalog_guard", "P0_RESIDUAL_RISK_CATALOG_GUARD", "F12", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "residual risk catalog guard covers final release evidence"},
+	{"deployment_risk_envelope_guard_unit", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "deployment_risk_envelope_guard", "P0_DEPLOYMENT_RISK_ENVELOPE_GUARD", "F17", "", "default", "true", "false", "fast", "workflow-guard", "both", "false", "coverage_guard", "deployment risk envelope guard covers final release evidence"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},

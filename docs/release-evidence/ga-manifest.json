@@ -1320,11 +1320,11 @@
       "scope": "package"
     },
     {
-      "id": "seed_gap_deployment_risk_envelope_open",
-      "evidence_status": "placeholder",
+      "id": "deployment_risk_envelope_guard_unit",
+      "evidence_status": "implemented",
       "claim_id": "CLAIM_DEPLOYMENT_RISK_ENVELOPE",
-      "subclaim_id": "seed_gap_open",
-      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "subclaim_id": "deployment_risk_envelope_guard",
+      "acceptance_id": "P0_DEPLOYMENT_RISK_ENVELOPE_GUARD",
       "risk_id": "F17",
       "fixture_id": "",
       "capability_id": "",
@@ -1332,23 +1332,35 @@
       "default_mode": true,
       "fixture_enabled_mode": false,
       "negative_or_positive": "both",
-      "evidence_type": "doc-guard",
-      "required": false,
-      "command": [],
-      "anchors": [
-        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/contractcheck",
+        "./internal/releaseevidence",
+        "./cmd/afscp-evidence-verify",
+        "-run",
+        "^(TestDeploymentRiskEnvelopeCurrentRepoDefinesRuntimeSupportRows|TestDeploymentRiskEnvelopeRejectsProductionOrManualGateProof|TestDeploymentRiskEnvelopeRequiresDetectionRedactionRollbackAndResidualLinks|TestDeploymentRiskEnvelopeRunbookRefsAreRepoLocalOperatorHandoff|TestDeploymentRiskEnvelopeRuntimePrereqsDoNotCloseOptionalFixturePurgeTemplateOrWorkload|TestDeploymentRiskEnvelopeContractSeparatesRuntimeSupportFromDefaultPositiveProof|TestCurrentRepoManifestContainsDeploymentRiskEnvelopeEvidence|TestDeploymentRiskEnvelopeReplacementRejectsWrongShapeBroadSelectorRuntimeOptionalResidualWorkflowProfileOrHelperOnly|TestRunCheckOnlyAcceptsDeploymentRiskEnvelopeManifest)$"
       ],
-      "doc_only_allowed": true,
+      "anchors": [
+        "docs/contracts/deployment-risk-envelope-v1.md",
+        "internal/contractcheck/contractcheck_test.go",
+        "internal/releaseevidence/manifest.go",
+        "cmd/afscp-evidence-verify/main_test.go"
+      ],
+      "doc_only_allowed": false,
       "optional_gated": false,
       "default_ga_required": false,
       "pass_criteria": {
-        "kind": "seed_gap",
+        "kind": "coverage_guard",
         "assertions": [
-          "open"
+          "deployment risk envelope guard covers final release evidence"
         ]
       },
       "expected_runtime": "fast",
-      "scope": "doc-guard"
+      "scope": "workflow-guard"
     },
     {
       "id": "profile_boundary_consistent_unit",

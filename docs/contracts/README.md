@@ -15,6 +15,7 @@ behavior.
 - [operator-repair-v1.md](operator-repair-v1.md)
 - [restore-reconciliation-v1.md](restore-reconciliation-v1.md)
 - [residual-risk-catalog-v1.md](residual-risk-catalog-v1.md)
+- [deployment-risk-envelope-v1.md](deployment-risk-envelope-v1.md)
 
 The implementation baseline, generated JSON schemas, and internal OpenAPI now
 exist. Continue new or changed endpoint handler and storage behavior only when
@@ -35,6 +36,9 @@ Relevant automated evidence includes:
 - writer-session fence and mount binding lifecycle are test guarded
 - revoke-request versus confirmed-unmounted terminal semantics are test guarded
 - operation recovery matrix is test guarded
+- deployment risk envelope runtime-support prerequisites, detection signals,
+  redaction, rollback/roll-forward shape, and residual-risk links are contract
+  and test guarded
 
 ## Contract Governance
 

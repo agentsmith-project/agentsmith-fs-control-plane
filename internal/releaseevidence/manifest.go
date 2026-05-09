@@ -427,6 +427,9 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 		if spec.ID == "residual_risk_catalog_guard_unit" && !residualRiskCatalogCommandIsPrecise(item.Command) {
 			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.residual_risk_catalog_command_invalid", Message: "residual risk catalog evidence command must use the exact residual risk catalog selector, not doc-only, deployment-only, optional-only, manifest-only, contract-only, CLI-only, workflow/profile proxy, broad, or helper-only coverage"})
 		}
+		if spec.ID == "deployment_risk_envelope_guard_unit" && !deploymentRiskEnvelopeCommandIsPrecise(item.Command) {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.deployment_risk_envelope_command_invalid", Message: "deployment risk envelope evidence command must use the exact deployment risk envelope selector, not manifest-only, contract-only, CLI-only, workflow/profile/residual proxy, optional fixture, purge, template, workload, runtime-support, broad, or helper-only coverage"})
+		}
 	}
 	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest, requireDefaultLoopAggregation)...)
 	if requireDefaultLoopAggregation {
@@ -1082,6 +1085,47 @@ func residualRiskCatalogCommand() []string {
 	}
 }
 
+func deploymentRiskEnvelopeCommand() []string {
+	return []string{
+		"go",
+		"test",
+		"-count=1",
+		"./internal/contractcheck",
+		"./internal/releaseevidence",
+		"./cmd/afscp-evidence-verify",
+		"-run",
+		"^(" + strings.Join(deploymentRiskEnvelopeSelectorNames(), "|") + ")$",
+	}
+}
+
+func deploymentRiskEnvelopeSelectorNames() []string {
+	names := make([]string, 0, len(deploymentRiskEnvelopeRequiredTestNames))
+	for _, name := range deploymentRiskEnvelopeRequiredTestNames {
+		names = append(names, name)
+	}
+	return names
+}
+
+func deploymentRiskEnvelopeCommandIsPrecise(command []string) bool {
+	if !sameStringSlice(command, deploymentRiskEnvelopeCommand()) {
+		return false
+	}
+	selector, ok := goTestRunSelector(command)
+	if !ok || broadGoTestSelector(selector) {
+		return false
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		return false
+	}
+	for _, testName := range deploymentRiskEnvelopeRequiredTestNames {
+		if !compiled.MatchString(testName) {
+			return false
+		}
+	}
+	return true
+}
+
 func residualRiskCatalogSelectorNames() []string {
 	names := make([]string, 0, len(residualRiskCatalogRequiredTestNames))
 	for _, name := range residualRiskCatalogRequiredTestNames {
@@ -1467,6 +1511,18 @@ var residualRiskCatalogRequiredTestNames = []string{
 	"TestRunCheckOnlyAcceptsResidualRiskCatalogManifest",
 }
 
+var deploymentRiskEnvelopeRequiredTestNames = []string{
+	"TestDeploymentRiskEnvelopeCurrentRepoDefinesRuntimeSupportRows",
+	"TestDeploymentRiskEnvelopeRejectsProductionOrManualGateProof",
+	"TestDeploymentRiskEnvelopeRequiresDetectionRedactionRollbackAndResidualLinks",
+	"TestDeploymentRiskEnvelopeRunbookRefsAreRepoLocalOperatorHandoff",
+	"TestDeploymentRiskEnvelopeRuntimePrereqsDoNotCloseOptionalFixturePurgeTemplateOrWorkload",
+	"TestDeploymentRiskEnvelopeContractSeparatesRuntimeSupportFromDefaultPositiveProof",
+	"TestCurrentRepoManifestContainsDeploymentRiskEnvelopeEvidence",
+	"TestDeploymentRiskEnvelopeReplacementRejectsWrongShapeBroadSelectorRuntimeOptionalResidualWorkflowProfileOrHelperOnly",
+	"TestRunCheckOnlyAcceptsDeploymentRiskEnvelopeManifest",
+}
+
 var defaultUserLoopAggregationPrereqIDs = []string{
 	"default_user_loop_repo_projection_unit",
 	"default_user_loop_jvs_save_restore_unit",
@@ -1502,6 +1558,7 @@ var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "profile_boundary_consistent_unit", ClaimID: "CLAIM_PROFILE_BOUNDARY", SubclaimID: "profile_boundary_consistent", AcceptanceID: "P0_PROFILE_BOUNDARY_CONSISTENT", RiskID: "F1", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
 	{ID: "workflow_hardening_guard_unit", ClaimID: "CLAIM_WORKFLOW_HARDENING_GUARD", SubclaimID: "workflow_hardening_guard", AcceptanceID: "P0_WORKFLOW_HARDENING_GUARD", RiskID: "F18", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "workflow-guard", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
 	{ID: "residual_risk_catalog_guard_unit", ClaimID: "CLAIM_RESIDUAL_RISK_CATALOG", SubclaimID: "residual_risk_catalog_guard", AcceptanceID: "P0_RESIDUAL_RISK_CATALOG_GUARD", RiskID: "F12", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
+	{ID: "deployment_risk_envelope_guard_unit", ClaimID: "CLAIM_DEPLOYMENT_RISK_ENVELOPE", SubclaimID: "deployment_risk_envelope_guard", AcceptanceID: "P0_DEPLOYMENT_RISK_ENVELOPE_GUARD", RiskID: "F17", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "workflow-guard", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
 	{ID: "repo_create_jvs_runtime_unavailable_recovery_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery", AcceptanceID: "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_create", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_terminalization_contract_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract", AcceptanceID: "P2A_OPERATION_TERMINALIZATION_CONTRACT", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_runtime_terminalization_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization", AcceptanceID: "P2B_OPERATION_RUNTIME_TERMINALIZATION", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
@@ -1536,6 +1593,7 @@ var requiredClaimSubclaimSpecs = []requiredClaimSubclaimSpec{
 	{ClaimID: "CLAIM_PROFILE_BOUNDARY", SubclaimID: "profile_boundary_consistent"},
 	{ClaimID: "CLAIM_WORKFLOW_HARDENING_GUARD", SubclaimID: "workflow_hardening_guard"},
 	{ClaimID: "CLAIM_RESIDUAL_RISK_CATALOG", SubclaimID: "residual_risk_catalog_guard"},
+	{ClaimID: "CLAIM_DEPLOYMENT_RISK_ENVELOPE", SubclaimID: "deployment_risk_envelope_guard"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization"},
@@ -1762,7 +1820,8 @@ func exactRequiredEvidenceCommandItem(itemID string) bool {
 		itemID == "operator_repair_safe_unit" ||
 		itemID == "restore_reconciliation_safe_unit" ||
 		itemID == "discovery_surfaces_layered_unit" ||
-		itemID == "secret_path_redaction_unit"
+		itemID == "secret_path_redaction_unit" ||
+		itemID == "deployment_risk_envelope_guard_unit"
 }
 
 func validateCommandTarget(item Item, repoRoot string) []Finding {
