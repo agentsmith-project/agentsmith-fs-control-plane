@@ -247,6 +247,59 @@ func TestStableEventTypesUseCommonRedactionRules(t *testing.T) {
 	}
 }
 
+func TestSecretPathRedactionAuditOutboxAndStableEventsUseCommonRedactor(t *testing.T) {
+	event := NewEvent(Event{
+		EventID:       "evt_secret_path_redaction",
+		Type:          EventTypeExportCreate,
+		Time:          time.Date(2026, 5, 4, 22, 9, 0, 0, time.UTC),
+		CallerService: "product-caller",
+		CorrelationID: "corr_secret_path_redaction",
+		OperationID:   "op_secret_path_redaction",
+		Resource: Resource{
+			Type:        "repo",
+			ID:          "repo_123",
+			NamespaceID: "ns_123",
+			Path:        `/srv/afscp/namespaces/ns_123/repos/repo_123/payload/.jvs token=path-token`,
+		},
+		Outcome: OutcomeDenied,
+		Reason:  `failed jvs restore --run plan-secret; next jvs --control-root /srv/afscp/namespaces/ns_123/repos/repo_123/control --workspace main recovery status --json SecretRef: runtime/ns postgres://api:metadata-secret@db/afscp credential=runtime-credential`,
+		Details: map[string]any{
+			"control_volume_subdir": "afscp/namespaces/ns_123/repos/repo_123/control",
+			"payload_volume_subdir": "afscp/namespaces/ns_123/repos/repo_123/payload",
+			"raw_path":              "/srv/afscp/namespaces/ns_123/repos/repo_123/control/.jvs",
+			"command":               "jvs doctor /srv/afscp/namespaces/ns_123/repos/repo_123/control",
+		},
+	})
+	record, err := NewOutboxRecord(event, time.Date(2026, 5, 4, 22, 10, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("NewOutboxRecord returned error: %v", err)
+	}
+
+	rendered := strings.ToLower(auditEventTestString(t, event) + " " + string(record.PayloadJSON))
+	for _, forbidden := range []string{
+		"/srv/afscp",
+		".jvs",
+		"afscp/namespaces/ns_123/repos/repo_123/control",
+		"afscp/namespaces/ns_123/repos/repo_123/payload",
+		"jvs restore --run",
+		"recovery status",
+		"jvs doctor",
+		"plan-secret",
+		"runtime/ns",
+		"metadata-secret",
+		"runtime-credential",
+		"path-token",
+		"postgres://",
+	} {
+		if strings.Contains(rendered, strings.ToLower(forbidden)) {
+			t.Fatalf("audit/outbox leaked secret/path material %q in %s", forbidden, rendered)
+		}
+	}
+	if !strings.Contains(rendered, strings.ToLower(observability.Redacted)) {
+		t.Fatalf("redacted marker missing in %s", rendered)
+	}
+}
+
 func TestOperationTypesMapToStableAuditEventTypes(t *testing.T) {
 	eventTypes := EventTypes()
 	knownEventTypes := make(map[EventType]bool, len(eventTypes))

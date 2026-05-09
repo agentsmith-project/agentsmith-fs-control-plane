@@ -412,6 +412,12 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 		if spec.ID == "discovery_surfaces_layered_unit" && !discoverySurfacesCommandIsPrecise(item.Command) {
 			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.discovery_surfaces_command_invalid", Message: "discovery surfaces evidence command must use the exact layered discovery selector, not matrix-only, readyz-only, runtime-only, broad, or helper-only coverage"})
 		}
+		if spec.ID == "secret_path_redaction_unit" {
+			if !secretPathRedactionCommandIsPrecise(item.Command) {
+				findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.secret_path_redaction_command_invalid", Message: "secret path redaction evidence command must use the exact secret/path redaction selector, not optional-only, discovery-only, runtime-support-only, manifest-only, contract-only, broad, or helper-only coverage"})
+			}
+			findings = append(findings, validateSecretPathRedactionEvidenceStrings(item)...)
+		}
 	}
 	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest, requireDefaultLoopAggregation)...)
 	if requireDefaultLoopAggregation {
@@ -443,6 +449,9 @@ func requiredEvidenceSpecCanBeSeedOpen(id string, itemsByID map[string]Item) boo
 	case "discovery_surfaces_layered_unit":
 		gapID = "seed_gap_discovery_surfaces_open"
 		claimID = "CLAIM_DISCOVERY_SURFACES"
+	case "secret_path_redaction_unit":
+		gapID = "seed_gap_secret_path_redaction_open"
+		claimID = "CLAIM_SECRET_PATH_REDACTION"
 	default:
 		return false
 	}
@@ -629,6 +638,9 @@ func validateRequiredClaimSubclaimCoverage(manifest Manifest, requireDefaultLoop
 			continue
 		}
 		if spec.ClaimID == "CLAIM_DISCOVERY_SURFACES" && spec.SubclaimID == "discovery_surfaces_layered" && requiredEvidenceSpecCanBeSeedOpen("discovery_surfaces_layered_unit", itemsByIDFromManifest(manifest)) {
+			continue
+		}
+		if spec.ClaimID == "CLAIM_SECRET_PATH_REDACTION" && spec.SubclaimID == "secret_path_redaction" && requiredEvidenceSpecCanBeSeedOpen("secret_path_redaction_unit", itemsByIDFromManifest(manifest)) {
 			continue
 		}
 		if !requiredCoverage[spec] {
@@ -981,6 +993,118 @@ func discoverySurfacesCommand() []string {
 	}
 }
 
+func secretPathRedactionCommand() []string {
+	return []string{
+		"go",
+		"test",
+		"-count=1",
+		"./internal/observability",
+		"./internal/audit",
+		"./internal/operations",
+		"./internal/api",
+		"./internal/apiapp",
+		"./internal/exportgateway",
+		"./internal/store/postgres",
+		"./internal/workerapp",
+		"./internal/restorereconcile",
+		"./internal/operatorrepair",
+		"./internal/contractcheck",
+		"./internal/releaseevidence",
+		"./cmd/afscp-evidence-verify",
+		"-run",
+		"^Test(" + strings.Join(secretPathRedactionSelectorNames(), "|") + ")$",
+	}
+}
+
+func secretPathRedactionSelectorNames() []string {
+	names := make([]string, 0, len(secretPathRedactionRequiredTestNames))
+	for _, name := range secretPathRedactionRequiredTestNames {
+		names = append(names, strings.TrimPrefix(name, "Test"))
+	}
+	return names
+}
+
+func secretPathRedactionCommandIsPrecise(command []string) bool {
+	if !sameStringSlice(command, secretPathRedactionCommand()) {
+		return false
+	}
+	selector, ok := goTestRunSelector(command)
+	if !ok || broadGoTestSelector(selector) {
+		return false
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		return false
+	}
+	for _, testName := range secretPathRedactionRequiredTestNames {
+		if !compiled.MatchString(testName) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateSecretPathRedactionEvidenceStrings(item Item) []Finding {
+	var findings []Finding
+	for _, value := range item.Command {
+		if secretPathEvidenceStringUnsafe(value) {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.secret_path_redaction_string_invalid", Message: "secret path redaction evidence command must not contain raw secret/path material"})
+			break
+		}
+	}
+	for _, value := range item.Anchors {
+		if secretPathEvidenceStringUnsafe(value) {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.secret_path_redaction_string_invalid", Message: "secret path redaction evidence anchor must not contain raw secret/path material"})
+			break
+		}
+	}
+	for _, value := range item.PassCriteria.Assertions {
+		if secretPathEvidenceStringUnsafe(value) {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.secret_path_redaction_string_invalid", Message: "secret path redaction evidence pass criteria must not contain raw secret/path material"})
+			break
+		}
+	}
+	return findings
+}
+
+func secretPathEvidenceStringUnsafe(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		"/srv/afscp",
+		".jvs",
+		"afscp/namespaces/",
+		"secretref",
+		"metadata_url",
+		"metadata-url",
+		"postgres://",
+		"postgresql://",
+		"redis://",
+		"token=",
+		"password=",
+		"credential=",
+		"jvs --control-root",
+		"jvs save",
+		"jvs history",
+		"jvs restore",
+		"jvs restore --run",
+		"restore --run",
+		"restore discard",
+		"jvs recovery status",
+		"recovery status",
+		"jvs init",
+		"jvs doctor",
+		"juicefs mount",
+		"raw_mount_command",
+		"direct_mount_command",
+		"mount_command",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func discoverySurfacesSelectorNames() []string {
 	names := make([]string, 0, len(discoverySurfacesRequiredTestNames))
 	for _, name := range discoverySurfacesRequiredTestNames {
@@ -1136,6 +1260,29 @@ var discoverySurfacesRequiredTestNames = []string{
 	"TestRunCheckOnlyAcceptsDiscoverySurfacesManifest",
 }
 
+var secretPathRedactionRequiredTestNames = []string{
+	"TestSecretPathRedactionCorpusCoversForbiddenKeysAndRawStringForms",
+	"TestSecretPathRedactionAuditOutboxAndStableEventsUseCommonRedactor",
+	"TestSanitizedForPersistenceRedactsStorageInternalAndCommandFields",
+	"TestOperationInspectionHandlerReturnsRedactedRecordWithoutNamespaceHeader",
+	"TestSecretPathRedactionOperatorInspectionResponseDoesNotLeakStorageMaterial",
+	"TestSecretPathRedactionCallerRepoAndOperationResponsesDoNotLeakStorageMaterial",
+	"TestReadinessHandlerRedactsAdminBootstrapReasons",
+	"TestInternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors",
+	"TestBasicAuthFailureDoesNotLeakCredentialOrPaths",
+	"TestDeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial",
+	"TestGetExportSessionSelectsOnlyRedactedColumns",
+	"TestNewJVSRunnerFromConfigRedactsBinaryReadErrors",
+	"TestRestoreReconciliationEvidenceRedactsSensitiveMaterial",
+	"TestRestoreReconciliationRejectsSecretShapedEvidenceRefsAndMarkers",
+	"TestOperatorRepairRejectsSecretShapedReasonOrEvidenceRef",
+	"TestOperatorRepairBuildsFailedRecordWithRedactedBeforeAfter",
+	"TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary",
+	"TestCurrentRepoManifestContainsSecretPathRedactionEvidence",
+	"TestSecretPathRedactionReplacementRejectsWrongShapeBroadSelectorOptionalDiscoveryRuntimeOrHelperOnly",
+	"TestRunCheckOnlyAcceptsSecretPathRedactionManifest",
+}
+
 var defaultUserLoopAggregationPrereqIDs = []string{
 	"default_user_loop_repo_projection_unit",
 	"default_user_loop_jvs_save_restore_unit",
@@ -1167,6 +1314,7 @@ var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "operator_repair_safe_unit", ClaimID: "CLAIM_OPERATOR_REPAIR_SAFE", SubclaimID: "operator_repair_safe", AcceptanceID: "P0_OPERATOR_REPAIR_SAFE", RiskID: "F11", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "restore_reconciliation_safe_unit", ClaimID: "CLAIM_RESTORE_RECONCILIATION", SubclaimID: "restore_reconciliation_safe", AcceptanceID: "P0_RESTORE_RECONCILIATION_SAFE", RiskID: "F14", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "jvs_save_restore", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "discovery_surfaces_layered_unit", ClaimID: "CLAIM_DISCOVERY_SURFACES", SubclaimID: "discovery_surfaces_layered", AcceptanceID: "P0_DISCOVERY_SURFACES_LAYERED", RiskID: "F7", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "repo_projection", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
+	{ID: "secret_path_redaction_unit", ClaimID: "CLAIM_SECRET_PATH_REDACTION", SubclaimID: "secret_path_redaction", AcceptanceID: "P0_SECRET_PATH_REDACTION", RiskID: "F10", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "path_redaction", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "repo_create_jvs_runtime_unavailable_recovery_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery", AcceptanceID: "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_create", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_terminalization_contract_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract", AcceptanceID: "P2A_OPERATION_TERMINALIZATION_CONTRACT", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_runtime_terminalization_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization", AcceptanceID: "P2B_OPERATION_RUNTIME_TERMINALIZATION", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
@@ -1197,6 +1345,7 @@ var requiredClaimSubclaimSpecs = []requiredClaimSubclaimSpec{
 	{ClaimID: "CLAIM_OPERATOR_REPAIR_SAFE", SubclaimID: "operator_repair_safe"},
 	{ClaimID: "CLAIM_RESTORE_RECONCILIATION", SubclaimID: "restore_reconciliation_safe"},
 	{ClaimID: "CLAIM_DISCOVERY_SURFACES", SubclaimID: "discovery_surfaces_layered"},
+	{ClaimID: "CLAIM_SECRET_PATH_REDACTION", SubclaimID: "secret_path_redaction"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization"},
@@ -1398,6 +1547,9 @@ func validateCommand(item Item, repoRoot string) []Finding {
 	if finding, ok := validateRetainedLifecycleEvidenceScope(item); ok {
 		return []Finding{finding}
 	}
+	if exactRequiredEvidenceCommandItem(item.ID) {
+		return validateGoTestPackageTargetsExist(item, repoRoot)
+	}
 	return validateCommandTarget(item, repoRoot)
 }
 
@@ -1410,6 +1562,14 @@ func validateRetainedLifecycleEvidenceScope(item Item) (Finding, bool) {
 		return Finding{ItemID: item.ID, Code: "item.command_retained_lifecycle_scope_invalid", Message: "retained lifecycle positive evidence command must not include purge or repo_purge selectors"}, true
 	}
 	return Finding{}, false
+}
+
+func exactRequiredEvidenceCommandItem(itemID string) bool {
+	return itemID == "default_user_loop_positive_unit" ||
+		itemID == "operator_repair_safe_unit" ||
+		itemID == "restore_reconciliation_safe_unit" ||
+		itemID == "discovery_surfaces_layered_unit" ||
+		itemID == "secret_path_redaction_unit"
 }
 
 func validateCommandTarget(item Item, repoRoot string) []Finding {
@@ -1432,10 +1592,20 @@ func validateGoTestTargets(item Item, repoRoot string) []Finding {
 	}
 
 	var findings []Finding
+	findings = append(findings, validateGoTestPackageTargetsExist(item, repoRoot)...)
+	if len(findings) == 0 {
+		packages := goTestPackageArgs(item.Command)
+		findings = append(findings, validateGoTestRunSelector(item, repoRoot, packages)...)
+	}
+	return findings
+}
+
+func validateGoTestPackageTargetsExist(item Item, repoRoot string) []Finding {
 	packages := goTestPackageArgs(item.Command)
 	if len(packages) == 0 {
 		return []Finding{{ItemID: item.ID, Code: "item.command_package_missing", Message: "go test evidence must include at least one explicit repo-local package target"}}
 	}
+	var findings []Finding
 	for _, arg := range packages {
 		if arg == "./..." {
 			continue
@@ -1445,9 +1615,6 @@ func validateGoTestTargets(item Item, repoRoot string) []Finding {
 		if _, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(path))); err != nil {
 			findings = append(findings, Finding{ItemID: item.ID, Code: "item.command_package_missing", Message: fmt.Sprintf("go test package target %q is missing: %v", arg, err)})
 		}
-	}
-	if len(findings) == 0 {
-		findings = append(findings, validateGoTestRunSelector(item, repoRoot, packages)...)
 	}
 	return findings
 }

@@ -201,6 +201,73 @@ func TestRedactFieldsScrubsRawSecretStringForms(t *testing.T) {
 	}
 }
 
+func TestSecretPathRedactionCorpusCoversForbiddenKeysAndRawStringForms(t *testing.T) {
+	fields := map[string]any{
+		"message": `probe failed at /srv/afscp/volumes/vol_main/ns/repo/control/.jvs with jvs restore --run plan-secret SecretRef: runtime/ns postgres://api:metadata-secret@db/afscp token=runtime-token password=runtime-password credential=runtime-credential`,
+		"state":   `standalone jvs marker .jvs/state.json should redact without hiding .env`,
+		"nested": map[string]any{
+			"control_volume_subdir": "afscp/namespaces/ns_123/repos/repo_123/control",
+			"payload_volume_subdir": "afscp/namespaces/ns_123/repos/repo_123/payload",
+			"raw_path":              "/srv/afscp/namespaces/ns_123/repos/repo_123/payload/.jvs",
+			"command":               "jvs doctor /srv/afscp/namespaces/ns_123/repos/repo_123/control",
+		},
+		"array": []any{
+			"jvs init /srv/afscp/namespaces/ns_123/repos/repo_123/payload",
+			"jvs save sp_unsafe --json",
+			"jvs history --json",
+			"jvs --control-root /srv/afscp/namespaces/ns_123/repos/repo_123/control --workspace main restore savepoint_unsafe --json",
+			"jvs --control-root /srv/afscp/namespaces/ns_123/repos/repo_123/control --workspace main restore --run plan-run-secret --json",
+			"jvs --control-root /srv/afscp/namespaces/ns_123/repos/repo_123/control --workspace main restore discard plan-discard-secret --json",
+			"jvs --control-root /srv/afscp/namespaces/ns_123/repos/repo_123/control --workspace main recovery status --json",
+			map[string]string{"mount_command": "juicefs mount repo_raw /mnt/raw"},
+		},
+		"safe": "repo_123",
+	}
+
+	redacted := RedactFields(fields)
+	rendered := strings.ToLower(observabilityTestString(redacted))
+
+	for _, forbidden := range []string{
+		"/srv/afscp",
+		".jvs",
+		"state.json",
+		"afscp/namespaces/ns_123/repos/repo_123/control",
+		"afscp/namespaces/ns_123/repos/repo_123/payload",
+		"jvs restore --run",
+		"jvs doctor",
+		"jvs init",
+		"jvs save",
+		"jvs history",
+		"restore savepoint_unsafe",
+		"restore --run",
+		"restore discard",
+		"recovery status",
+		"plan-run-secret",
+		"plan-discard-secret",
+		"juicefs mount",
+		"plan-secret",
+		"metadata-secret",
+		"runtime-token",
+		"runtime-password",
+		"runtime-credential",
+		"runtime/ns",
+		"postgres://",
+	} {
+		if strings.Contains(rendered, strings.ToLower(forbidden)) {
+			t.Fatalf("secret/path material %q leaked in %#v", forbidden, redacted)
+		}
+	}
+	if got, want := redacted["safe"], "repo_123"; got != want {
+		t.Fatalf("safe field = %#v, want %#v", got, want)
+	}
+	if got, want := redacted["state"].(string), "standalone jvs marker [REDACTED] should redact without hiding .env"; got != want {
+		t.Fatalf("state field = %#v, want %#v", got, want)
+	}
+	if !strings.Contains(rendered, strings.ToLower(Redacted)) {
+		t.Fatalf("redacted marker missing from %#v", redacted)
+	}
+}
+
 func observabilityTestString(value any) string {
 	encoded, err := json.Marshal(value)
 	if err == nil {

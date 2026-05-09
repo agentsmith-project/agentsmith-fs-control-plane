@@ -1840,6 +1840,137 @@ var discoverySurfacesRequiredTestNamesForTest = []string{
 	"TestRunCheckOnlyAcceptsDiscoverySurfacesManifest",
 }
 
+func TestCurrentRepoManifestContainsSecretPathRedactionEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+	item, ok := manifestItemByID(manifest, "secret_path_redaction_unit")
+	if !ok {
+		t.Fatal("manifest missing secret_path_redaction_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_SECRET_PATH_REDACTION" ||
+		item.SubclaimID != "secret_path_redaction" ||
+		item.AcceptanceID != "P0_SECRET_PATH_REDACTION" ||
+		item.RiskID != "F10" ||
+		item.CapabilityID != "path_redaction" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.ExpectedRuntime != "fast" ||
+		item.Scope != "package" ||
+		item.NegativeOrPositive != "negative" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		!item.DefaultGARequired ||
+		item.PassCriteria.Kind != "denial_safety" ||
+		!containsString(item.PassCriteria.Assertions, "secret path redaction denies secret path disclosure") {
+		t.Fatalf("%s shape = %+v, want default required secret/path redaction evidence", item.ID, item)
+	}
+	if _, ok := manifestItemByID(manifest, "seed_gap_secret_path_redaction_open"); ok {
+		t.Fatal("secret path redaction evidence must close seed_gap_secret_path_redaction_open")
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range secretPathRedactionRequiredTestNamesForTest {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestSecretPathRedactionReplacementRejectsWrongShapeBroadSelectorOptionalDiscoveryRuntimeOrHelperOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		body func() string
+		want string
+	}{
+		{name: "placeholder", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"evidence_status":"implemented"`, `"evidence_status":"placeholder"`)
+		}, want: "secret_path_redaction_unit"},
+		{name: "doc only", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"doc_only_allowed":false`, `"doc_only_allowed":true`)
+		}, want: "secret_path_redaction_unit"},
+		{name: "broad selector", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"command":["go","test","-count=1","./internal/observability","-run","Test.*Redact.*"]`)
+		}, want: "selector"},
+		{name: "optional only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"command":["go","test","-count=1","./internal/api","-run","^Test(WorkloadMountGetAndPlanRedactionBoundary)$"]`)
+		}, want: "secret"},
+		{name: "discovery only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"command":["go","test","-count=1","./internal/api","-run","^Test(DiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields)$"]`)
+		}, want: "secret"},
+		{name: "runtime support only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"command":["go","test","-count=1","./internal/apiapp","-run","^Test(InternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors)$"]`)
+		}, want: "secret"},
+		{name: "helper only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"command":["go","test","-count=1","./internal/releaseevidence","-run","^Test(CurrentRepoManifestContainsSecretPathRedactionEvidence)$"]`)
+		}, want: "secret"},
+		{name: "contract only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"command":["go","test","-count=1","./internal/contractcheck","-run","^Test(SecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary)$"]`)
+		}, want: "secret"},
+		{name: "secret shaped anchor", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"anchors":["scripts/pass.sh"]`, `"anchors":["docs/SecretRef-runtime.md"]`)
+		}, want: "secret_path_redaction_string_invalid"},
+		{name: "secret shaped pass criteria", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"secret path redaction denies secret path disclosure"`, `"redacts /srv/afscp/raw/.jvs"`)
+		}, want: "secret_path_redaction_string_invalid"},
+		{name: "raw jvs command shaped pass criteria", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "secret_path_redaction_unit", `"secret path redaction denies secret path disclosure"`, `"redacts jvs save and recovery status commands"`)
+		}, want: "secret_path_redaction_string_invalid"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.body())
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.want)
+		})
+	}
+}
+
+var secretPathRedactionRequiredTestNamesForTest = []string{
+	"TestSecretPathRedactionCorpusCoversForbiddenKeysAndRawStringForms",
+	"TestSecretPathRedactionAuditOutboxAndStableEventsUseCommonRedactor",
+	"TestSanitizedForPersistenceRedactsStorageInternalAndCommandFields",
+	"TestOperationInspectionHandlerReturnsRedactedRecordWithoutNamespaceHeader",
+	"TestSecretPathRedactionOperatorInspectionResponseDoesNotLeakStorageMaterial",
+	"TestSecretPathRedactionCallerRepoAndOperationResponsesDoNotLeakStorageMaterial",
+	"TestReadinessHandlerRedactsAdminBootstrapReasons",
+	"TestInternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors",
+	"TestBasicAuthFailureDoesNotLeakCredentialOrPaths",
+	"TestDeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial",
+	"TestGetExportSessionSelectsOnlyRedactedColumns",
+	"TestNewJVSRunnerFromConfigRedactsBinaryReadErrors",
+	"TestRestoreReconciliationEvidenceRedactsSensitiveMaterial",
+	"TestRestoreReconciliationRejectsSecretShapedEvidenceRefsAndMarkers",
+	"TestOperatorRepairRejectsSecretShapedReasonOrEvidenceRef",
+	"TestOperatorRepairBuildsFailedRecordWithRedactedBeforeAfter",
+	"TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary",
+	"TestCurrentRepoManifestContainsSecretPathRedactionEvidence",
+	"TestSecretPathRedactionReplacementRejectsWrongShapeBroadSelectorOptionalDiscoveryRuntimeOrHelperOnly",
+	"TestRunCheckOnlyAcceptsSecretPathRedactionManifest",
+}
+
 func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1b(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
@@ -1853,7 +1984,7 @@ func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1b(t *testing.T) 
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_secret_path_redaction_open",
+		"seed_gap_profile_boundary_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
 		if !ok {
@@ -1883,7 +2014,7 @@ func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1c(t *testing.T) 
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_secret_path_redaction_open",
+		"seed_gap_profile_boundary_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
 		if !ok {
@@ -2067,6 +2198,44 @@ func goTestPackageForTestName(testName string) string {
 		return "./internal/releaseevidence"
 	}
 	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsDiscoverySurfaces") {
+		return "./cmd/afscp-evidence-verify"
+	}
+	if strings.HasPrefix(testName, "TestSecretPathRedactionCorpus") {
+		return "./internal/observability"
+	}
+	if strings.HasPrefix(testName, "TestSecretPathRedactionAudit") {
+		return "./internal/audit"
+	}
+	if strings.HasPrefix(testName, "TestSanitizedForPersistenceRedactsStorageInternal") {
+		return "./internal/operations"
+	}
+	if strings.HasPrefix(testName, "TestReadinessHandlerRedactsAdminBootstrapReasons") ||
+		strings.HasPrefix(testName, "TestOperationInspectionHandlerReturnsRedactedRecordWithoutNamespaceHeader") ||
+		strings.HasPrefix(testName, "TestSecretPathRedactionCallerRepoAndOperationResponses") ||
+		strings.HasPrefix(testName, "TestSecretPathRedactionOperatorInspectionResponse") {
+		return "./internal/api"
+	}
+	if strings.HasPrefix(testName, "TestInternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors") {
+		return "./internal/apiapp"
+	}
+	if strings.HasPrefix(testName, "TestBasicAuthFailureDoesNotLeakCredentialOrPaths") ||
+		strings.HasPrefix(testName, "TestDeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial") {
+		return "./internal/exportgateway"
+	}
+	if strings.HasPrefix(testName, "TestGetExportSessionSelectsOnlyRedactedColumns") {
+		return "./internal/store/postgres"
+	}
+	if strings.HasPrefix(testName, "TestNewJVSRunnerFromConfigRedactsBinaryReadErrors") {
+		return "./internal/workerapp"
+	}
+	if strings.HasPrefix(testName, "TestSecretPathRedactionContract") {
+		return "./internal/contractcheck"
+	}
+	if strings.HasPrefix(testName, "TestCurrentRepoManifestContainsSecretPathRedaction") ||
+		strings.HasPrefix(testName, "TestSecretPathRedactionReplacement") {
+		return "./internal/releaseevidence"
+	}
+	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsSecretPathRedaction") {
 		return "./cmd/afscp-evidence-verify"
 	}
 	if strings.HasPrefix(testName, "TestCapabilityMatrixAdmissionDisabled") {
@@ -2269,6 +2438,24 @@ import "testing"
 
 func BenchmarkEvidenceOnly(b *testing.B) {}
 `)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "observability", "secret_path_redaction_test.go"), `package observability
+
+import "testing"
+
+func TestSecretPathRedactionCorpusCoversForbiddenKeysAndRawStringForms(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "audit", "secret_path_redaction_test.go"), `package audit
+
+import "testing"
+
+func TestSecretPathRedactionAuditOutboxAndStableEventsUseCommonRedactor(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "operations", "secret_path_redaction_test.go"), `package operations
+
+import "testing"
+
+func TestSanitizedForPersistenceRedactsStorageInternalAndCommandFields(t *testing.T) {}
+`)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "releaseevidence", "aggregation_test.go"), `package releaseevidence
 
 import "testing"
@@ -2285,6 +2472,8 @@ func TestCurrentRepoManifestContainsP4bRestoreReconciliationEvidence(t *testing.
 func TestRestoreReconciliationReplacementRejectsWrongShapeBroadSelectorOrP1cOnly(t *testing.T) {}
 func TestCurrentRepoManifestContainsDiscoverySurfacesEvidence(t *testing.T) {}
 func TestDiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly(t *testing.T) {}
+func TestCurrentRepoManifestContainsSecretPathRedactionEvidence(t *testing.T) {}
+func TestSecretPathRedactionReplacementRejectsWrongShapeBroadSelectorOptionalDiscoveryRuntimeOrHelperOnly(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "operatorrepair", "repair_test.go"), `package operatorrepair
 
@@ -2324,6 +2513,7 @@ func TestOperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL
 func TestOperatorRepairContractIsLinkedFromContractsReadme(t *testing.T) {}
 func TestRestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch(t *testing.T) {}
 func TestDiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries(t *testing.T) {}
+func TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
@@ -2333,6 +2523,7 @@ func TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsOperatorRepairSafeManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsRestoreReconciliationManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsDiscoverySurfacesManifest(t *testing.T) {}
+func TestRunCheckOnlyAcceptsSecretPathRedactionManifest(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "restorereconcile", "restore_reconciliation_test.go"), `package restorereconcile
 
@@ -2380,6 +2571,10 @@ func TestRestoreReconciliationModeExportReplayDoesNotReturnAccess(t *testing.T) 
 func TestRestoreReconciliationModeDeniesWorkloadMountMutationsAndPlanBeforeIntake(t *testing.T) {}
 func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {}
 func TestProductCallerOperationResponsesDoNotLeakStorageInternals(t *testing.T) {}
+func TestOperationInspectionHandlerReturnsRedactedRecordWithoutNamespaceHeader(t *testing.T) {}
+func TestSecretPathRedactionCallerRepoAndOperationResponsesDoNotLeakStorageMaterial(t *testing.T) {}
+func TestSecretPathRedactionOperatorInspectionResponseDoesNotLeakStorageMaterial(t *testing.T) {}
+func TestReadinessHandlerRedactsAdminBootstrapReasons(t *testing.T) {}
 func TestDiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields(t *testing.T) {}
 func TestDiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields(t *testing.T) {}
 func TestDiscoverySurfacesOrchestratorDefaultDeniedDoesNotLeakPlanOrSecrets(t *testing.T) {}
@@ -2390,6 +2585,26 @@ func TestDiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDis
 import "testing"
 
 func TestDiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady(t *testing.T) {}
+func TestInternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "exportgateway", "secret_path_redaction_test.go"), `package exportgateway
+
+import "testing"
+
+func TestBasicAuthFailureDoesNotLeakCredentialOrPaths(t *testing.T) {}
+func TestDeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "store", "postgres", "secret_path_redaction_test.go"), `package postgres
+
+import "testing"
+
+func TestGetExportSessionSelectsOnlyRedactedColumns(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "workerapp", "secret_path_redaction_test.go"), `package workerapp
+
+import "testing"
+
+func TestNewJVSRunnerFromConfigRedactsBinaryReadErrors(t *testing.T) {}
 `)
 	return root
 }
@@ -2620,6 +2835,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":true
     },
     {
+      "id":"secret_path_redaction_unit",
+      "capability_id":"path_redaction",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/observability","./internal/audit","./internal/operations","./internal/api","./internal/apiapp","./internal/exportgateway","./internal/store/postgres","./internal/workerapp","./internal/restorereconcile","./internal/operatorrepair","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(SecretPathRedactionCorpusCoversForbiddenKeysAndRawStringForms|SecretPathRedactionAuditOutboxAndStableEventsUseCommonRedactor|SanitizedForPersistenceRedactsStorageInternalAndCommandFields|OperationInspectionHandlerReturnsRedactedRecordWithoutNamespaceHeader|SecretPathRedactionOperatorInspectionResponseDoesNotLeakStorageMaterial|SecretPathRedactionCallerRepoAndOperationResponsesDoNotLeakStorageMaterial|ReadinessHandlerRedactsAdminBootstrapReasons|InternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors|BasicAuthFailureDoesNotLeakCredentialOrPaths|DeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial|GetExportSessionSelectsOnlyRedactedColumns|NewJVSRunnerFromConfigRedactsBinaryReadErrors|RestoreReconciliationEvidenceRedactsSensitiveMaterial|RestoreReconciliationRejectsSecretShapedEvidenceRefsAndMarkers|OperatorRepairRejectsSecretShapedReasonOrEvidenceRef|OperatorRepairBuildsFailedRecordWithRedactedBeforeAfter|SecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary|CurrentRepoManifestContainsSecretPathRedactionEvidence|SecretPathRedactionReplacementRejectsWrongShapeBroadSelectorOptionalDiscoveryRuntimeOrHelperOnly|RunCheckOnlyAcceptsSecretPathRedactionManifest)$"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -2764,7 +2990,6 @@ var package0SeedGapFixtureMetadata = []struct {
 	{"seed_gap_residual_risk_catalog_open", "CLAIM_RESIDUAL_RISK_CATALOG", "F12"},
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_profile_boundary_open", "CLAIM_PROFILE_BOUNDARY", "F1"},
-	{"seed_gap_secret_path_redaction_open", "CLAIM_SECRET_PATH_REDACTION", "F10"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
 	{"seed_gap_workflow_hardening_guard_open", "CLAIM_WORKFLOW_HARDENING_GUARD", "F18"},
@@ -2807,6 +3032,7 @@ var package0FixtureMetadata = []struct {
 	{"operator_repair_safe_unit", "CLAIM_OPERATOR_REPAIR_SAFE", "operator_repair_safe", "P0_OPERATOR_REPAIR_SAFE", "F11", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operator repair safety passes in default mode"},
 	{"restore_reconciliation_safe_unit", "CLAIM_RESTORE_RECONCILIATION", "restore_reconciliation_safe", "P0_RESTORE_RECONCILIATION_SAFE", "F14", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "restore reconciliation safety passes in default mode"},
 	{"discovery_surfaces_layered_unit", "CLAIM_DISCOVERY_SURFACES", "discovery_surfaces_layered", "P0_DISCOVERY_SURFACES_LAYERED", "F7", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "discovery surfaces pass layered default checks"},
+	{"secret_path_redaction_unit", "CLAIM_SECRET_PATH_REDACTION", "secret_path_redaction", "P0_SECRET_PATH_REDACTION", "F10", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "secret path redaction denies secret path disclosure"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},

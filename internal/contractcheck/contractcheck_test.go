@@ -149,6 +149,45 @@ func TestDiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries(t *testing.T
 	)
 }
 
+func TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/afscp-internal-api-v1.md")
+	requireContractPhrases(t, body,
+		"Secret Path Redaction Boundary",
+		"Default control-plane output surfaces",
+		"/srv/afscp",
+		".jvs",
+		"afscp/namespaces/.../control",
+		"afscp/namespaces/.../payload",
+		"control_volume_subdir",
+		"payload_volume_subdir",
+		"AFSCP raw JVS command shapes",
+		"jvs init",
+		"jvs doctor",
+		"jvs save",
+		"jvs history",
+		"jvs restore <save_point>",
+		"jvs restore --run",
+		"jvs restore discard",
+		"jvs recovery status",
+		"jvs --control-root ... --workspace main ... --json",
+		"juicefs mount",
+		"SecretRef",
+		"metadata URLs",
+		"audit/outbox",
+		"readiness errors",
+		"operation persistence",
+		"operation inspection",
+		"WebDAV gateway denies",
+		"release evidence strings",
+		"must not be satisfied by optional fixture",
+		"discovery-only",
+		"helper-only",
+		"contract-only",
+		"manifest-only",
+		"deployment-runtime-support",
+	)
+}
+
 func TestVerifyFilesIgnoresParameterRefsOutsideParametersBlock(t *testing.T) {
 	paths := writeContractFixture(t, contractFixture{
 		openapi: `

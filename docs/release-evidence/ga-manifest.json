@@ -1482,35 +1482,61 @@
       }
     },
     {
-      "id": "seed_gap_secret_path_redaction_open",
-      "evidence_status": "placeholder",
+      "id": "secret_path_redaction_unit",
+      "evidence_status": "implemented",
       "claim_id": "CLAIM_SECRET_PATH_REDACTION",
-      "subclaim_id": "seed_gap_open",
-      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "subclaim_id": "secret_path_redaction",
+      "acceptance_id": "P0_SECRET_PATH_REDACTION",
       "risk_id": "F10",
       "fixture_id": "",
-      "capability_id": "",
+      "capability_id": "path_redaction",
       "evidence_profile": "default",
       "default_mode": true,
       "fixture_enabled_mode": false,
-      "expected_runtime": "fast",
-      "scope": "doc-guard",
-      "negative_or_positive": "both",
-      "evidence_type": "doc-guard",
-      "required": false,
-      "command": [],
-      "anchors": [
-        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      "negative_or_positive": "negative",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/observability",
+        "./internal/audit",
+        "./internal/operations",
+        "./internal/api",
+        "./internal/apiapp",
+        "./internal/exportgateway",
+        "./internal/store/postgres",
+        "./internal/workerapp",
+        "./internal/restorereconcile",
+        "./internal/operatorrepair",
+        "./internal/contractcheck",
+        "./internal/releaseevidence",
+        "./cmd/afscp-evidence-verify",
+        "-run",
+        "^Test(SecretPathRedactionCorpusCoversForbiddenKeysAndRawStringForms|SecretPathRedactionAuditOutboxAndStableEventsUseCommonRedactor|SanitizedForPersistenceRedactsStorageInternalAndCommandFields|OperationInspectionHandlerReturnsRedactedRecordWithoutNamespaceHeader|SecretPathRedactionOperatorInspectionResponseDoesNotLeakStorageMaterial|SecretPathRedactionCallerRepoAndOperationResponsesDoNotLeakStorageMaterial|ReadinessHandlerRedactsAdminBootstrapReasons|InternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors|BasicAuthFailureDoesNotLeakCredentialOrPaths|DeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial|GetExportSessionSelectsOnlyRedactedColumns|NewJVSRunnerFromConfigRedactsBinaryReadErrors|RestoreReconciliationEvidenceRedactsSensitiveMaterial|RestoreReconciliationRejectsSecretShapedEvidenceRefsAndMarkers|OperatorRepairRejectsSecretShapedReasonOrEvidenceRef|OperatorRepairBuildsFailedRecordWithRedactedBeforeAfter|SecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary|CurrentRepoManifestContainsSecretPathRedactionEvidence|SecretPathRedactionReplacementRejectsWrongShapeBroadSelectorOptionalDiscoveryRuntimeOrHelperOnly|RunCheckOnlyAcceptsSecretPathRedactionManifest)$"
       ],
-      "doc_only_allowed": true,
+      "anchors": [
+        "internal/observability/redaction.go",
+        "internal/audit/event.go",
+        "internal/operations/redaction.go",
+        "internal/api/operation_handler.go",
+        "internal/api/repo_handler.go",
+        "internal/exportgateway/gateway.go",
+        "internal/releaseevidence/manifest.go",
+        "docs/contracts/afscp-internal-api-v1.md"
+      ],
+      "doc_only_allowed": false,
       "optional_gated": false,
-      "default_ga_required": false,
+      "default_ga_required": true,
       "pass_criteria": {
-        "kind": "seed_gap",
+        "kind": "denial_safety",
         "assertions": [
-          "open"
+          "secret path redaction denies secret path disclosure"
         ]
-      }
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
     },
     {
       "id": "seed_gap_optional_fixture_conformant_open",

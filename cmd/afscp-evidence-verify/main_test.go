@@ -77,6 +77,19 @@ func TestRunCheckOnlyAcceptsDiscoverySurfacesManifest(t *testing.T) {
 	}
 }
 
+func TestRunCheckOnlyAcceptsSecretPathRedactionManifest(t *testing.T) {
+	root := t.TempDir()
+	writeEvidenceCLIScripts(t, root)
+	manifestPath := filepath.Join(root, "manifest.json")
+	writeEvidenceCLIFile(t, manifestPath, evidenceCLIManifest(`["bash","scripts/pass.sh"]`, "scripts/pass.sh"))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-mode", "seed", "-manifest", manifestPath, "-repo-root", root, "-check-only"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestRunExecutesRequiredCommandsByDefault(t *testing.T) {
 	root := t.TempDir()
 	writeEvidenceCLIScripts(t, root)
@@ -417,6 +430,17 @@ func evidenceCLIManifest(command, anchor string) string {
       "default_ga_required":true
     },
     {
+      "id":"secret_path_redaction_unit",
+      "capability_id":"path_redaction",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/observability","./internal/audit","./internal/operations","./internal/api","./internal/apiapp","./internal/exportgateway","./internal/store/postgres","./internal/workerapp","./internal/restorereconcile","./internal/operatorrepair","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(SecretPathRedactionCorpusCoversForbiddenKeysAndRawStringForms|SecretPathRedactionAuditOutboxAndStableEventsUseCommonRedactor|SanitizedForPersistenceRedactsStorageInternalAndCommandFields|OperationInspectionHandlerReturnsRedactedRecordWithoutNamespaceHeader|SecretPathRedactionOperatorInspectionResponseDoesNotLeakStorageMaterial|SecretPathRedactionCallerRepoAndOperationResponsesDoNotLeakStorageMaterial|ReadinessHandlerRedactsAdminBootstrapReasons|InternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors|BasicAuthFailureDoesNotLeakCredentialOrPaths|DeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial|GetExportSessionSelectsOnlyRedactedColumns|NewJVSRunnerFromConfigRedactsBinaryReadErrors|RestoreReconciliationEvidenceRedactsSensitiveMaterial|RestoreReconciliationRejectsSecretShapedEvidenceRefsAndMarkers|OperatorRepairRejectsSecretShapedReasonOrEvidenceRef|OperatorRepairBuildsFailedRecordWithRedactedBeforeAfter|SecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary|CurrentRepoManifestContainsSecretPathRedactionEvidence|SecretPathRedactionReplacementRejectsWrongShapeBroadSelectorOptionalDiscoveryRuntimeOrHelperOnly|RunCheckOnlyAcceptsSecretPathRedactionManifest)$"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -561,7 +585,6 @@ var package0CLISeedGapMetadata = []struct {
 	{"seed_gap_residual_risk_catalog_open", "CLAIM_RESIDUAL_RISK_CATALOG", "F12"},
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_profile_boundary_open", "CLAIM_PROFILE_BOUNDARY", "F1"},
-	{"seed_gap_secret_path_redaction_open", "CLAIM_SECRET_PATH_REDACTION", "F10"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
 	{"seed_gap_workflow_hardening_guard_open", "CLAIM_WORKFLOW_HARDENING_GUARD", "F18"},
@@ -600,6 +623,7 @@ var package0CLIMetadata = []struct {
 	{"operator_repair_safe_unit", "CLAIM_OPERATOR_REPAIR_SAFE", "operator_repair_safe", "P0_OPERATOR_REPAIR_SAFE", "F11", "both", "fast", "package", "true", "coverage_guard", "operator repair safety passes in default mode"},
 	{"restore_reconciliation_safe_unit", "CLAIM_RESTORE_RECONCILIATION", "restore_reconciliation_safe", "P0_RESTORE_RECONCILIATION_SAFE", "F14", "positive", "fast", "package", "true", "positive_path", "restore reconciliation safety passes in default mode"},
 	{"discovery_surfaces_layered_unit", "CLAIM_DISCOVERY_SURFACES", "discovery_surfaces_layered", "P0_DISCOVERY_SURFACES_LAYERED", "F7", "positive", "fast", "package", "true", "positive_path", "discovery surfaces pass layered default checks"},
+	{"secret_path_redaction_unit", "CLAIM_SECRET_PATH_REDACTION", "secret_path_redaction", "P0_SECRET_PATH_REDACTION", "F10", "negative", "fast", "package", "true", "denial_safety", "secret path redaction denies secret path disclosure"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "negative", "fast", "package", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "both", "fast", "package", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "both", "fast", "package", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},
@@ -752,6 +776,26 @@ func TestCurrentRepoManifestContainsP4bRestoreReconciliationEvidence(t *testing.
 func TestRestoreReconciliationReplacementRejectsWrongShapeBroadSelectorOrP1cOnly(t *testing.T) {}
 func TestCurrentRepoManifestContainsDiscoverySurfacesEvidence(t *testing.T) {}
 func TestDiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly(t *testing.T) {}
+func TestCurrentRepoManifestContainsSecretPathRedactionEvidence(t *testing.T) {}
+func TestSecretPathRedactionReplacementRejectsWrongShapeBroadSelectorOptionalDiscoveryRuntimeOrHelperOnly(t *testing.T) {}
+`)
+	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "observability", "secret_path_redaction_test.go"), `package observability
+
+import "testing"
+
+func TestSecretPathRedactionCorpusCoversForbiddenKeysAndRawStringForms(t *testing.T) {}
+`)
+	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "audit", "secret_path_redaction_test.go"), `package audit
+
+import "testing"
+
+func TestSecretPathRedactionAuditOutboxAndStableEventsUseCommonRedactor(t *testing.T) {}
+`)
+	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "operations", "secret_path_redaction_test.go"), `package operations
+
+import "testing"
+
+func TestSanitizedForPersistenceRedactsStorageInternalAndCommandFields(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "restorereconcile", "reconcile_test.go"), `package restorereconcile
 
@@ -791,6 +835,10 @@ func TestRestoreReconciliationModeExportReplayDoesNotReturnAccess(t *testing.T) 
 func TestRestoreReconciliationModeDeniesWorkloadMountMutationsAndPlanBeforeIntake(t *testing.T) {}
 func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {}
 func TestProductCallerOperationResponsesDoNotLeakStorageInternals(t *testing.T) {}
+func TestOperationInspectionHandlerReturnsRedactedRecordWithoutNamespaceHeader(t *testing.T) {}
+func TestSecretPathRedactionCallerRepoAndOperationResponsesDoNotLeakStorageMaterial(t *testing.T) {}
+func TestSecretPathRedactionOperatorInspectionResponseDoesNotLeakStorageMaterial(t *testing.T) {}
+func TestReadinessHandlerRedactsAdminBootstrapReasons(t *testing.T) {}
 func TestDiscoverySurfacesCallerProjectionExcludesRuntimeAndOperatorFields(t *testing.T) {}
 func TestDiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields(t *testing.T) {}
 func TestDiscoverySurfacesOrchestratorDefaultDeniedDoesNotLeakPlanOrSecrets(t *testing.T) {}
@@ -801,6 +849,14 @@ func TestDiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDis
 import "testing"
 
 func TestDiscoverySurfacesReadyzDoesNotPromoteOptionalRuntimeDefaultReady(t *testing.T) {}
+func TestInternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingErrors(t *testing.T) {}
+`)
+	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "exportgateway", "secret_path_redaction_test.go"), `package exportgateway
+
+import "testing"
+
+func TestBasicAuthFailureDoesNotLeakCredentialOrPaths(t *testing.T) {}
+func TestDeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "workerapp", "restore_reconciliation_test.go"), `package workerapp
 
@@ -809,6 +865,7 @@ import "testing"
 func TestRunOnceRestoreReconciliationOnlyRunsWhenExplicitlyEnabled(t *testing.T) {}
 func TestRunOnceRestoreReconciliationRunsBeforeOperationRecovery(t *testing.T) {}
 func TestRunOnceRestoreReconciliationBlockedSkipsOperationRecovery(t *testing.T) {}
+func TestNewJVSRunnerFromConfigRedactsBinaryReadErrors(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "operatorrepair", "repair_test.go"), `package operatorrepair
 
@@ -829,6 +886,7 @@ func TestCommitOperatorRepairFailedUsesAtomicCASAndAuditOutbox(t *testing.T) {}
 func TestCommitOperatorRepairFailedRequiresSafeInterventionShapeBeforeSQL(t *testing.T) {}
 func TestCommitOperatorRepairFailedCASRejectsConcurrentAmbiguousPhase(t *testing.T) {}
 func TestCommitOperatorRepairFailedNoRowsFailsClosed(t *testing.T) {}
+func TestGetExportSessionSelectsOnlyRedactedColumns(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "api", "operator_repair_handler_test.go"), `package api
 
@@ -848,6 +906,7 @@ func TestOperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL
 func TestOperatorRepairContractIsLinkedFromContractsReadme(t *testing.T) {}
 func TestRestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch(t *testing.T) {}
 func TestDiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries(t *testing.T) {}
+func TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
@@ -857,6 +916,7 @@ func TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsOperatorRepairSafeManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsRestoreReconciliationManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsDiscoverySurfacesManifest(t *testing.T) {}
+func TestRunCheckOnlyAcceptsSecretPathRedactionManifest(t *testing.T) {}
 `)
 }
 

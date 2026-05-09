@@ -151,6 +151,77 @@ func TestDiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields(t *
 	assertOperationInspectionResponseDoesNotLeak(t, body)
 }
 
+func TestSecretPathRedactionCallerRepoAndOperationResponsesDoNotLeakStorageMaterial(t *testing.T) {
+	repoReader := &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}}
+	repoHandler := repoReadHandlerForTest(repoReader, namespaceBindingAllowedPolicy(auth.RoleRepoAdmin), nil)
+
+	for _, req := range []*http.Request{
+		repoReadRequest(http.MethodGet, "/internal/v1/repos/repo_123", "ns_123"),
+		repoReadRequest(http.MethodGet, "/internal/v1/repos?namespace_id=ns_123", "ns_123"),
+	} {
+		rec := httptest.NewRecorder()
+		repoHandler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s status = %d body = %s, want 200", req.Method, req.URL.String(), rec.Code, rec.Body.String())
+		}
+		assertSecretPathRedactionCorpusNotLeaked(t, rec.Body.String())
+	}
+
+	opReader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
+		"op_secret": operationInspectionRecord("op_secret", "ns_123"),
+	}}
+	authorizer := &fakeStoredInspectionAuthorizer{allowed: map[string]bool{"ns_123": true}}
+	opHandler := operationInspectionHandlerForTest(opReader, authorizer, operationInspectionPolicy(auth.AllowedCaller{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleOperationInspector}}), nil)
+	rec := httptest.NewRecorder()
+
+	opHandler.ServeHTTP(rec, operationInspectionRequest("op_secret", "", "product-caller"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("operation inspection status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	assertSecretPathRedactionCorpusNotLeaked(t, rec.Body.String())
+	assertOperationInspectionResponseDoesNotLeak(t, rec.Body.String())
+}
+
+func TestSecretPathRedactionOperatorInspectionResponseDoesNotLeakStorageMaterial(t *testing.T) {
+	reader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
+		"op_global": operationInspectionRecord("op_global", ""),
+	}}
+	authorizer := &fakeStoredInspectionAuthorizer{allowed: map[string]bool{"ns_123": true}}
+	handler := OperationInspectionHandler(OperationInspectionHandlerConfig{
+		Reader:                    reader,
+		StoredNamespaceAuthorizer: authorizer,
+		AllowedCallers:            operationInspectionPolicy(auth.AllowedCaller{CallerService: "ops-service", Kind: auth.CallerKindOperator, Roles: []auth.Role{auth.RoleOperatorAdmin}}),
+		PrincipalResolver:         fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:ops-service", CanonicalCallerService: "ops-service"}},
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, operationInspectionRequest("op_global", "ns_ignored", "ops-service"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if authorizer.calls != 0 {
+		t.Fatalf("authorizer calls = %d, want operator inspection independent of namespace binding auth", authorizer.calls)
+	}
+	body := rec.Body.String()
+	for _, forbidden := range []string{
+		"operator_repair",
+		"repair_outcome",
+		"terminalize_unsupported_intervention_as_failed",
+		"affected_ids",
+		"evidence_ref",
+		`"before":`,
+		`"after":`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("operator inspection response leaked repair/write surface field %q: %s", forbidden, body)
+		}
+	}
+	assertSecretPathRedactionCorpusNotLeaked(t, body)
+	assertOperationInspectionResponseDoesNotLeak(t, body)
+}
+
 func TestDiscoverySurfacesOperatorInspectionGlobalRecordIsReadOnlyRedactedAndDistinctFromRepair(t *testing.T) {
 	reader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
 		"op_global": operationInspectionRecord("op_global", ""),
@@ -552,6 +623,45 @@ func assertOperationInspectionResponseDoesNotLeak(t *testing.T, body string) {
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("operation inspection response leaked %q: %s", forbidden, body)
+		}
+	}
+}
+
+func assertSecretPathRedactionCorpusNotLeaked(t *testing.T, body string) {
+	t.Helper()
+	rendered := strings.ToLower(body)
+	for _, forbidden := range []string{
+		"/srv/afscp",
+		".jvs",
+		"secretref",
+		"secret_ref",
+		"metadata_url",
+		"redis://",
+		"postgres://",
+		"token secret",
+		"secret-token",
+		"password secret",
+		"super-secret-password",
+		"credential",
+		"control_volume_subdir",
+		"payload_volume_subdir",
+		"control_root",
+		"payload_root",
+		"afscp/namespaces/ns_123/repos/repo_123/control",
+		"afscp/namespaces/ns_123/repos/repo_123/payload",
+		"run_command",
+		"recommended_next_command",
+		"restore_command",
+		"mount_command",
+		"raw_mount_command",
+		"direct_mount_command",
+		"jvs restore --run",
+		"jvs init",
+		"jvs doctor",
+		"juicefs mount",
+	} {
+		if strings.Contains(rendered, strings.ToLower(forbidden)) {
+			t.Fatalf("secret/path redaction corpus leaked %q: %s", forbidden, body)
 		}
 	}
 }

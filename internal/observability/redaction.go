@@ -10,12 +10,17 @@ const Redacted = "[REDACTED]"
 const rawSensitiveKeyPattern = `(?:secret[\s_-]?ref|secret|token|password|passwd|api[\s_-]?key|access[\s_-]?key|secret[\s_-]?key|private[\s_-]?key|credential|authorization|metadata[\s_-]?url|webdav[\s_-]?password)`
 
 var (
-	rawMetadataURLPattern = regexp.MustCompile(`(?i)\b(?:redis|mysql|postgres|postgresql|mongodb|etcd|tikv|sqlite|badger)://[^\s,;)"'}]+`)
-	rawBearerPattern      = regexp.MustCompile(`(?i)\b(bearer(?:[\s_-]+token)?(?:\s*[:=])?\s+)([A-Za-z0-9._~+/=-]+)`)
-	rawAssignmentPattern  = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*` + rawSensitiveKeyPattern + `[a-z0-9_.-]*)(\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
-	rawJSONColonPattern   = regexp.MustCompile(`(?i)("[^"]*` + rawSensitiveKeyPattern + `[^"]*"\s*:\s*")([^"]*)(")`)
-	rawPlainColonPattern  = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*` + rawSensitiveKeyPattern + `[a-z0-9_.-]*)(\s*:\s*)(?:"[^"]*"|'[^']*'|[^\n,;}]+)`)
-	rawCLIFlagPattern     = regexp.MustCompile(`(?i)(--[a-z0-9_.-]*` + rawSensitiveKeyPattern + `[a-z0-9_.-]*)(\s+|=)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
+	rawMetadataURLPattern  = regexp.MustCompile(`(?i)\b(?:redis|mysql|postgres|postgresql|mongodb|etcd|tikv|sqlite|badger)://[^\s,;)"'}]+`)
+	rawBearerPattern       = regexp.MustCompile(`(?i)\b(bearer(?:[\s_-]+token)?(?:\s*[:=])?\s+)([A-Za-z0-9._~+/=-]+)`)
+	rawAssignmentPattern   = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*` + rawSensitiveKeyPattern + `[a-z0-9_.-]*)(\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
+	rawJSONColonPattern    = regexp.MustCompile(`(?i)("[^"]*` + rawSensitiveKeyPattern + `[^"]*"\s*:\s*")([^"]*)(")`)
+	rawPlainColonPattern   = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*` + rawSensitiveKeyPattern + `[a-z0-9_.-]*)(\s*:\s*)(?:"[^"]*"|'[^']*'|[^\n,;}]+)`)
+	rawCLIFlagPattern      = regexp.MustCompile(`(?i)(--[a-z0-9_.-]*` + rawSensitiveKeyPattern + `[a-z0-9_.-]*)(\s+|=)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
+	rawAFSCPRootPattern    = regexp.MustCompile(`(?i)/srv/afscp[^\s,;)"'}]*`)
+	rawAFSCPSubdirPattern  = regexp.MustCompile(`(?i)\bafscp/namespaces/[^\s,;)"'}]*/(?:control|payload)\b[^\s,;)"'}]*`)
+	rawJVSPathPattern      = regexp.MustCompile(`(?i)(^|[^\w.-])(\.jvs(?:/[^\s,;)"'}]*)?)`)
+	rawJVSCommandPattern   = regexp.MustCompile(`(?i)\bjvs\b(?:\s+--(?:control-root|workspace)(?:=|\s+)[^\s,;}]+)*\s+(?:init|doctor|save|history|restore(?:\s+(?:--run|discard))?|recovery\s+status)\b[^\n,;}]*`)
+	rawMountCommandPattern = regexp.MustCompile(`(?i)\bjuicefs\s+mount\b[^\n,;}]*`)
 )
 
 type Event struct {
@@ -45,6 +50,13 @@ func RedactFields(fields map[string]any) map[string]any {
 func RedactString(value string) (string, bool) {
 	redacted := value
 	redacted = rawMetadataURLPattern.ReplaceAllString(redacted, Redacted)
+	redacted = rawAFSCPRootPattern.ReplaceAllString(redacted, Redacted)
+	redacted = rawAFSCPSubdirPattern.ReplaceAllString(redacted, Redacted)
+	redacted = replaceRawStringSubmatches(redacted, rawJVSPathPattern, func(parts []string) string {
+		return parts[1] + Redacted
+	})
+	redacted = rawJVSCommandPattern.ReplaceAllString(redacted, Redacted)
+	redacted = rawMountCommandPattern.ReplaceAllString(redacted, Redacted)
 	redacted = replaceRawStringSubmatches(redacted, rawJSONColonPattern, func(parts []string) string {
 		return parts[1] + Redacted + parts[3]
 	})
@@ -93,6 +105,21 @@ func IsSensitiveField(name string) bool {
 		"token",
 		"credential",
 		"bearer",
+		"rawpath",
+		"controlroot",
+		"payloadroot",
+		"controlrootpath",
+		"payloadrootpath",
+		"reporoot",
+		"targetcontrolroot",
+		"controlvolumesubdir",
+		"payloadvolumesubdir",
+		"runcommand",
+		"recommendednextcommand",
+		"restorecommand",
+		"mountcommand",
+		"rawmountcommand",
+		"directmountcommand",
 	} {
 		if strings.Contains(normalized, marker) {
 			return true

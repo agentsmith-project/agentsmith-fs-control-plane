@@ -116,6 +116,22 @@ operator/global policy when the stored namespace is null. Handlers must not
 return an `OperationRecord` where an `OperationEnvelope` is specified, and
 operation inspection must not wrap the record in an `OperationEnvelope`.
 
+## Secret Path Redaction Boundary
+
+Default control-plane output surfaces must redact AFSCP managed raw roots and
+storage material. This includes `/srv/afscp...`, `.jvs`, managed
+`afscp/namespaces/.../control` and `afscp/namespaces/.../payload` subdirs,
+`control_volume_subdir`, `payload_volume_subdir`, AFSCP raw JVS command shapes
+with examples such as `jvs init`, `jvs doctor`, `jvs save`, `jvs history`,
+`jvs restore <save_point>`, `jvs restore --run`, `jvs restore discard`,
+`jvs recovery status`, and canonical `jvs --control-root ... --workspace main ... --json`
+forms, `juicefs mount` commands, SecretRef values, metadata URLs, tokens, passwords,
+credentials, audit/outbox
+payloads, readiness errors, operation persistence, operation inspection,
+WebDAV gateway denies, and release evidence strings. The boundary is product neutral
+and must not be satisfied by optional fixture, discovery-only, helper-only,
+contract-only, manifest-only, or deployment-runtime-support evidence.
+
 ## Discovery Surface Boundary
 
 readyz is service readiness, not caller authorization. It reports capability
