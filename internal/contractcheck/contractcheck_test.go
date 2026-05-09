@@ -101,6 +101,35 @@ func TestOperatorRepairContractIsLinkedFromContractsReadme(t *testing.T) {
 	requireContractPhrases(t, body, "operator-repair-v1.md")
 }
 
+func TestRestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/restore-reconciliation-v1.md")
+	requireContractPhrases(t, body,
+		"after-restore safety mode",
+		"not JVS restore-run",
+		"reconciling",
+		"blocked_operator_intervention",
+		"completed",
+		"dangerous writes",
+		"durable target set",
+		"every target repo",
+		"snapshot",
+		"generation",
+		"tombstone marker",
+		"purge marker",
+		"no WebDAV credential reissue",
+		"purged repo",
+		"must not resurrect",
+		"remain purged",
+		"metadata/storage mismatch",
+		"non-purged metadata/storage mismatch",
+		"operator_intervention_required",
+		"purged metadata/storage mismatch",
+		"without resurrecting or moving the repo out of purged state",
+		"audit",
+		"scripts/verify-ga-release.sh",
+	)
+}
+
 func TestVerifyFilesIgnoresParameterRefsOutsideParametersBlock(t *testing.T) {
 	paths := writeContractFixture(t, contractFixture{
 		openapi: `

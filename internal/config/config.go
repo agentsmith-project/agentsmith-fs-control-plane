@@ -23,6 +23,7 @@ const (
 	defaultOperationRecoveryLeaseDuration = 5 * time.Minute
 	defaultWorkerRunOnceTimeout           = 30 * time.Second
 	defaultExportSessionReconcileLimit    = 10
+	defaultRestoreReconciliationLimit     = 10
 	defaultWorkloadMountStaleLeaseLimit   = 10
 	defaultAuditDeliveryLimit             = 10
 	defaultAuditDeliveryMaxAttempts       = 5
@@ -118,6 +119,7 @@ type WorkerConfig struct {
 	RunOnceTimeout         time.Duration
 	OperationRecovery      WorkerOperationRecoveryConfig
 	ExportSessionReconcile WorkerExportSessionReconcileConfig
+	RestoreReconciliation  WorkerRestoreReconciliationConfig
 	WorkloadMountStale     WorkerWorkloadMountStaleLeaseConfig
 	AuditDelivery          WorkerAuditDeliveryConfig
 }
@@ -148,6 +150,13 @@ type WorkerRepoCreateRecoveryConfig struct {
 }
 
 type WorkerExportSessionReconcileConfig struct {
+	Enabled     bool
+	PostgresDSN string
+	Owner       string
+	Limit       int
+}
+
+type WorkerRestoreReconciliationConfig struct {
 	Enabled     bool
 	PostgresDSN string
 	Owner       string
@@ -205,6 +214,9 @@ func Load(source Source) (Config, error) {
 			},
 			ExportSessionReconcile: WorkerExportSessionReconcileConfig{
 				Limit: defaultExportSessionReconcileLimit,
+			},
+			RestoreReconciliation: WorkerRestoreReconciliationConfig{
+				Limit: defaultRestoreReconciliationLimit,
 			},
 			WorkloadMountStale: WorkerWorkloadMountStaleLeaseConfig{
 				Limit: defaultWorkloadMountStaleLeaseLimit,
@@ -396,6 +408,11 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.ExportSessionReconcile = exportReconcile
+	restoreReconciliation, err := loadWorkerRestoreReconciliationConfig(source, worker.RestoreReconciliation)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.RestoreReconciliation = restoreReconciliation
 	workloadMountStale, err := loadWorkerWorkloadMountStaleLeaseConfig(source, worker.WorkloadMountStale)
 	if err != nil {
 		return WorkerConfig{}, err
@@ -439,6 +456,37 @@ func loadWorkerExportSessionReconcileConfig(source Source, defaults WorkerExport
 	}
 	if cfg.Owner == "" {
 		return WorkerExportSessionReconcileConfig{}, fmt.Errorf("AFSCP_EXPORT_SESSION_RECONCILE_OWNER is required when AFSCP_EXPORT_SESSION_RECONCILE_ENABLED is true")
+	}
+	return cfg, nil
+}
+
+func loadWorkerRestoreReconciliationConfig(source Source, defaults WorkerRestoreReconciliationConfig) (WorkerRestoreReconciliationConfig, error) {
+	cfg := defaults
+	enabled, err := boolValue(source, "AFSCP_RESTORE_RECONCILIATION_ENABLED")
+	if err != nil {
+		return WorkerRestoreReconciliationConfig{}, err
+	}
+	cfg.Enabled = enabled
+	cfg.PostgresDSN = valueOrDefault(source, "AFSCP_POSTGRES_DSN", cfg.PostgresDSN)
+	if cfg.PostgresDSN == "" {
+		cfg.PostgresDSN = valueOrDefault(source, "AFSCP_DATABASE_URL", "")
+	}
+	cfg.Owner = strings.TrimSpace(valueOrDefault(source, "AFSCP_RESTORE_RECONCILIATION_OWNER", cfg.Owner))
+	limit, err := intValue(source, "AFSCP_RESTORE_RECONCILIATION_LIMIT", cfg.Limit)
+	if err != nil {
+		return WorkerRestoreReconciliationConfig{}, err
+	}
+	if limit <= 0 {
+		return WorkerRestoreReconciliationConfig{}, fmt.Errorf("AFSCP_RESTORE_RECONCILIATION_LIMIT must be positive")
+	}
+	cfg.Limit = limit
+	if cfg.Enabled {
+		if cfg.PostgresDSN == "" {
+			return WorkerRestoreReconciliationConfig{}, fmt.Errorf("AFSCP_POSTGRES_DSN is required when AFSCP_RESTORE_RECONCILIATION_ENABLED is true")
+		}
+		if cfg.Owner == "" {
+			return WorkerRestoreReconciliationConfig{}, fmt.Errorf("AFSCP_RESTORE_RECONCILIATION_OWNER is required when AFSCP_RESTORE_RECONCILIATION_ENABLED is true")
+		}
 	}
 	return cfg, nil
 }

@@ -248,6 +248,54 @@ func TestRouteOperationTypesCoverMutatingInternalV1Routes(t *testing.T) {
 	}
 }
 
+func TestRestoreReconciliationModeDeniesRestoreSaveLifecycleBeforeOperationCreate(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	for _, operationID := range []string{
+		"createRepo",
+		"archiveRepo",
+		"createSavePoint",
+		"restorePreview",
+		"restoreRun",
+		"createRepoTemplate",
+	} {
+		t.Run(operationID, func(t *testing.T) {
+			route, ok := RouteMetadataByOperationID(operationID)
+			if !ok {
+				t.Fatalf("missing route %s", operationID)
+			}
+			store := &fakeOperationIntakeStore{restoreReconciliationBlocked: true}
+			_, err := CreateOrReuseOperationIntake(context.Background(), OperationIntakeConfig{Store: store}, OperationIntakeRequest{
+				RequestContext: auth.RequestContext{
+					IdempotencyKey: "idem_123",
+					CorrelationID:  "corr_123",
+					NamespaceID:    "ns_123",
+					Actor:          auth.Actor{Type: "user", ID: "user_123"},
+					CallerService:  "product-caller",
+				},
+				Route:               route,
+				NamespaceID:         "ns_123",
+				RepoID:              "repo_123",
+				Resource:            operations.ResourceRef{Type: "repo", ID: "repo_123"},
+				CanonicalRequest:    map[string]any{"repo_id": "repo_123", "operation_id": operationID},
+				InputSummary:        map[string]any{"repo_id": "repo_123"},
+				Phase:               "validate_restore_reconciliation_guard",
+				GenerateOperationID: func() string { return "op_123" },
+				Now:                 func() time.Time { return now },
+			})
+			if err == nil {
+				t.Fatal("CreateOrReuseOperationIntake succeeded, want restore reconciliation denial")
+			}
+			intakeErr := operationIntakeError(t, err)
+			if intakeErr.Code != CodeRestoreReconciliationActive || intakeErr.Status != http.StatusConflict || !intakeErr.Retryable {
+				t.Fatalf("intake error = %#v, want RESTORE_RECONCILIATION_ACTIVE retryable conflict", intakeErr)
+			}
+			if store.calls != 0 {
+				t.Fatalf("store calls = %d, want denied before queued operation create", store.calls)
+			}
+		})
+	}
+}
+
 func TestCreateOrReuseOperationIntakeMapsErrors(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	route, _ := RouteMetadataByOperationID("createRepo")
@@ -344,19 +392,29 @@ func TestOperationIntakeHelperDoesNotImportResourceMutationDependencies(t *testi
 }
 
 type fakeOperationIntakeStore struct {
-	calls               int
-	lookupCalls         int
-	spec                operations.QueuedOperationSpec
-	err                 error
-	lookupErr           error
-	lookupRecord        *operations.OperationRecord
-	reused              bool
-	existingOperationID string
-	reusedRecord        *operations.OperationRecord
-	repoAlreadyExists   bool
-	jvsMutation         bool
-	jvsMutationErr      error
-	jvsMutationCalls    int
+	calls                        int
+	lookupCalls                  int
+	spec                         operations.QueuedOperationSpec
+	err                          error
+	lookupErr                    error
+	lookupRecord                 *operations.OperationRecord
+	reused                       bool
+	existingOperationID          string
+	reusedRecord                 *operations.OperationRecord
+	repoAlreadyExists            bool
+	jvsMutation                  bool
+	jvsMutationErr               error
+	jvsMutationCalls             int
+	restoreReconciliationBlocked bool
+	restoreReconciliationCalls   int
+}
+
+func (store *fakeOperationIntakeStore) RestoreReconciliationWriteBlocked(_ context.Context, namespaceID, repoID string) (bool, error) {
+	store.restoreReconciliationCalls++
+	if namespaceID != "ns_123" || strings.TrimSpace(repoID) == "" {
+		return false, fmt.Errorf("unexpected reconciliation gate target %s/%s", namespaceID, repoID)
+	}
+	return store.restoreReconciliationBlocked, nil
 }
 
 func (store *fakeOperationIntakeStore) GetOperationByIdempotencyScope(_ context.Context, _ operations.IdempotencyScope) (operations.OperationRecord, error) {

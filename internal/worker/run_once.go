@@ -8,6 +8,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportreconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restorereconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
@@ -23,6 +24,10 @@ type WorkloadMountStaleLeaseRunner interface {
 	RunOnce(context.Context) (workloadmount.StaleLeaseResult, error)
 }
 
+type RestoreReconciliationRunner interface {
+	RunOnce(context.Context) (restorereconcile.Result, error)
+}
+
 type AuditStaleRecoveryRunner interface {
 	RunOnce(context.Context) (auditdelivery.StaleRecoveryResult, error)
 }
@@ -35,6 +40,7 @@ type Config struct {
 	ExportSessionReconcile ExportSessionReconcileRunner
 	OperationRecovery      OperationRecoveryRunner
 	WorkloadMountStale     WorkloadMountStaleLeaseRunner
+	RestoreReconciliation  RestoreReconciliationRunner
 	AuditStaleRecovery     AuditStaleRecoveryRunner
 	AuditDelivery          AuditDeliveryRunner
 }
@@ -47,6 +53,7 @@ type Result struct {
 	ExportSessionReconcile exportreconcile.Result
 	OperationRecovery      recovery.OperationBatchResult
 	WorkloadMountStale     workloadmount.StaleLeaseResult
+	RestoreReconciliation  restorereconcile.Result
 	AuditStaleRecovery     auditdelivery.StaleRecoveryResult
 	AuditDelivery          auditdelivery.BatchResult
 }
@@ -55,6 +62,7 @@ type Summary struct {
 	ExportSessionReconcile ExportSessionReconcileSummary `json:"export_session_reconcile"`
 	Operation              OperationSummary              `json:"operation_recovery"`
 	WorkloadMountStale     WorkloadMountStaleSummary     `json:"workload_mount_stale_lease_scan"`
+	RestoreReconciliation  RestoreReconciliationSummary  `json:"restore_reconciliation"`
 	AuditStale             AuditStaleSummary             `json:"audit_stale_recovery"`
 	AuditDelivery          AuditDeliverySummary          `json:"audit_delivery"`
 }
@@ -88,6 +96,14 @@ type WorkloadMountStaleSummary struct {
 	Failed      int `json:"failed"`
 }
 
+type RestoreReconciliationSummary struct {
+	Scanned   int `json:"scanned"`
+	Completed int `json:"completed"`
+	Blocked   int `json:"blocked"`
+	Skipped   int `json:"skipped"`
+	Failed    int `json:"failed"`
+}
+
 type AuditStaleSummary struct {
 	Recovered      int `json:"recovered"`
 	RetryWait      int `json:"retry_wait"`
@@ -110,7 +126,7 @@ func (runner Runner) RunOnce(ctx context.Context) (Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if runner.config.ExportSessionReconcile == nil && runner.config.OperationRecovery == nil && runner.config.WorkloadMountStale == nil && runner.config.AuditStaleRecovery == nil && runner.config.AuditDelivery == nil {
+	if runner.config.ExportSessionReconcile == nil && runner.config.OperationRecovery == nil && runner.config.WorkloadMountStale == nil && runner.config.RestoreReconciliation == nil && runner.config.AuditStaleRecovery == nil && runner.config.AuditDelivery == nil {
 		return Result{}, errors.New("worker run-once requires at least one runner")
 	}
 
@@ -149,6 +165,27 @@ func (runner Runner) RunOnce(ctx context.Context) (Result, error) {
 		}
 		if ctx.Err() != nil {
 			errs = append(errs, ctx.Err())
+			return result, errors.Join(errs...)
+		}
+	}
+
+	if runner.config.RestoreReconciliation != nil {
+		if err := ctx.Err(); err != nil {
+			return result, errors.Join(append(errs, err)...)
+		}
+		restoreResult, err := runner.config.RestoreReconciliation.RunOnce(ctx)
+		result.RestoreReconciliation = restoreResult
+		if err != nil {
+			errs = append(errs, fmt.Errorf("restore reconciliation: %w", err))
+			if isContextError(err) {
+				return result, errors.Join(errs...)
+			}
+		}
+		if ctx.Err() != nil {
+			errs = append(errs, ctx.Err())
+			return result, errors.Join(errs...)
+		}
+		if restoreResult.Blocked > 0 || restoreResult.Failed > 0 {
 			return result, errors.Join(errs...)
 		}
 	}
@@ -241,6 +278,13 @@ func (result Result) Summary() Summary {
 			Scanned:     result.WorkloadMountStale.Scanned,
 			KeptBlocked: result.WorkloadMountStale.KeptBlocked,
 			Failed:      result.WorkloadMountStale.Failed,
+		},
+		RestoreReconciliation: RestoreReconciliationSummary{
+			Scanned:   result.RestoreReconciliation.Scanned,
+			Completed: result.RestoreReconciliation.Completed,
+			Blocked:   result.RestoreReconciliation.Blocked,
+			Skipped:   result.RestoreReconciliation.Skipped,
+			Failed:    result.RestoreReconciliation.Failed,
 		},
 		AuditStale: AuditStaleSummary{
 			Recovered:      result.AuditStaleRecovery.Recovered,

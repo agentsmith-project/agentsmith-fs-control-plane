@@ -50,6 +50,7 @@ func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {
 		CodePurgeRetentionNotMet,
 		CodePurgeRequiresOperatorApproval,
 		CodeOperationRecoveryRequired,
+		CodeRestoreReconciliationActive,
 	}
 
 	got := ErrorCodes()

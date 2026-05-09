@@ -477,8 +477,10 @@ func exportRuntimeRequestBeginSQL() string {
 		"SELECT runtime_request_id, export_id, write_request, request_state FROM export_runtime_requests WHERE runtime_request_id = $1 FOR UPDATE" +
 		"), compatible_existing_request AS (" +
 		"SELECT export_id FROM existing_request WHERE export_id = $2 AND write_request = $5 AND request_state = 'open'" +
+		"), active_restore_reconciliation AS (" +
+		"SELECT run_id FROM restore_reconciliation_runs WHERE mode IN ('reconciling','blocked_operator_intervention') LIMIT 1" +
 		"), eligible_session AS (" +
-		"SELECT export_id, namespace_id, repo_id FROM export_sessions WHERE export_id = $2 AND status = 'active' AND expires_at > $3 AND NOT EXISTS (SELECT 1 FROM existing_request) FOR UPDATE" +
+		"SELECT export_id, namespace_id, repo_id FROM export_sessions WHERE export_id = $2 AND status = 'active' AND expires_at > $3 AND NOT EXISTS (SELECT 1 FROM existing_request) AND NOT ($5 AND EXISTS (SELECT 1 FROM active_restore_reconciliation)) FOR UPDATE" +
 		"), inserted_request AS (" +
 		"INSERT INTO export_runtime_requests (runtime_request_id, export_id, namespace_id, repo_id, request_state, write_request, started_at, last_heartbeat_at, heartbeat_expires_at, created_at, updated_at) " +
 		"SELECT $1, export_id, namespace_id, repo_id, 'open', $5, $3, $3, $4, $3, $3 FROM eligible_session " +

@@ -28,6 +28,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restorereconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store/postgres"
@@ -68,6 +69,11 @@ type WorkloadMountStaleLeaseStore interface {
 	store.WorkloadMountStaleLeaseReader
 }
 
+type RestoreReconciliationStore interface {
+	restorereconcile.Store
+	RestoreReconciliationWriteBlocked(ctx context.Context, namespaceID, repoID string) (bool, error)
+}
+
 type StoreFactory func(context.Context, string) (StoreHandle, error)
 type JVSRunnerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error)
 type StoragePurgerFactory func(config.WorkerRepoCreateRecoveryConfig) (repoexec.StoragePurger, error)
@@ -85,6 +91,7 @@ type StoreHandle struct {
 	AuditStore           store.AuditOutboxDeliveryStore
 	ExportReconcileStore ExportReconcileStore
 	WorkloadMountStale   WorkloadMountStaleLeaseStore
+	RestoreReconcile     RestoreReconciliationStore
 	Close                func() error
 }
 
@@ -121,9 +128,10 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}
 	opConfig := cfg.Worker.OperationRecovery
 	exportConfig := cfg.Worker.ExportSessionReconcile
+	restoreConfig := cfg.Worker.RestoreReconciliation
 	workloadMountStaleConfig := cfg.Worker.WorkloadMountStale
 	auditConfig := cfg.Worker.AuditDelivery
-	if !exportConfig.Enabled && !opConfig.Enabled && !workloadMountStaleConfig.Enabled && !auditConfig.Enabled {
+	if !exportConfig.Enabled && !opConfig.Enabled && !workloadMountStaleConfig.Enabled && !restoreConfig.Enabled && !auditConfig.Enabled {
 		return nil, errors.New("worker run-once requires export session reconcile, workload mount stale lease scan, operation recovery, or audit delivery to be enabled")
 	}
 
@@ -134,7 +142,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}
 	openCtx, cancel := context.WithTimeout(context.Background(), cfg.Worker.RunOnceTimeout)
 	defer cancel()
-	dsn, err := workerStoreDSN(exportConfig, opConfig, workloadMountStaleConfig, auditConfig)
+	dsn, err := workerStoreDSN(exportConfig, opConfig, workloadMountStaleConfig, auditConfig, restoreConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +154,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	auditStore := handle.AuditStore
 	exportStore := handle.ExportReconcileStore
 	workloadMountStaleStore := handle.WorkloadMountStale
+	restoreReconcileStore := handle.RestoreReconcile
 	if handle.Store != nil {
 		if operationStore == nil {
 			operationStore = handle.Store
@@ -161,6 +170,11 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		if workloadMountStaleStore == nil {
 			if candidate, ok := any(handle.Store).(WorkloadMountStaleLeaseStore); ok {
 				workloadMountStaleStore = candidate
+			}
+		}
+		if restoreReconcileStore == nil {
+			if candidate, ok := any(handle.Store).(RestoreReconciliationStore); ok {
+				restoreReconcileStore = candidate
 			}
 		}
 	}
@@ -187,6 +201,13 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}
 	if workloadMountStaleConfig.Enabled && workloadMountStaleStore == nil {
 		err := errors.New("worker workload mount stale lease store is required")
+		if handle.Close != nil {
+			err = errors.Join(err, handle.Close())
+		}
+		return nil, err
+	}
+	if restoreConfig.Enabled && restoreReconcileStore == nil {
+		err := errors.New("worker restore reconciliation store is required")
 		if handle.Close != nil {
 			err = errors.Join(err, handle.Close())
 		}
@@ -222,6 +243,16 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			return nil, err
 		}
 		workerConfig.WorkloadMountStale = reconciler
+	}
+
+	if restoreConfig.Enabled {
+		workerConfig.RestoreReconciliation = restorereconcile.NewRunner(restorereconcile.Config{
+			Store:             restoreReconcileStore,
+			ExplicitlyEnabled: true,
+			Owner:             restoreConfig.Owner,
+			AuditEventID:      func() string { return eventID() },
+			Clock:             now,
+		})
 	}
 
 	if opConfig.Enabled {
@@ -657,7 +688,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	}, nil
 }
 
-func workerStoreDSN(exportConfig config.WorkerExportSessionReconcileConfig, opConfig config.WorkerOperationRecoveryConfig, workloadMountStaleConfig config.WorkerWorkloadMountStaleLeaseConfig, auditConfig config.WorkerAuditDeliveryConfig) (string, error) {
+func workerStoreDSN(exportConfig config.WorkerExportSessionReconcileConfig, opConfig config.WorkerOperationRecoveryConfig, workloadMountStaleConfig config.WorkerWorkloadMountStaleLeaseConfig, auditConfig config.WorkerAuditDeliveryConfig, restoreConfig ...config.WorkerRestoreReconciliationConfig) (string, error) {
 	if opConfig.Enabled && auditConfig.Enabled && opConfig.PostgresDSN != auditConfig.PostgresDSN {
 		return "", errors.New("worker operation recovery and audit delivery must use the same postgres dsn")
 	}
@@ -676,6 +707,21 @@ func workerStoreDSN(exportConfig config.WorkerExportSessionReconcileConfig, opCo
 	if workloadMountStaleConfig.Enabled && auditConfig.Enabled && workloadMountStaleConfig.PostgresDSN != auditConfig.PostgresDSN {
 		return "", errors.New("worker workload mount stale lease scan and audit delivery must use the same postgres dsn")
 	}
+	if len(restoreConfig) > 0 && restoreConfig[0].Enabled {
+		restore := restoreConfig[0]
+		if opConfig.Enabled && restore.PostgresDSN != opConfig.PostgresDSN {
+			return "", errors.New("worker restore reconciliation and operation recovery must use the same postgres dsn")
+		}
+		if exportConfig.Enabled && restore.PostgresDSN != exportConfig.PostgresDSN {
+			return "", errors.New("worker restore reconciliation and export session reconcile must use the same postgres dsn")
+		}
+		if workloadMountStaleConfig.Enabled && restore.PostgresDSN != workloadMountStaleConfig.PostgresDSN {
+			return "", errors.New("worker restore reconciliation and workload mount stale lease scan must use the same postgres dsn")
+		}
+		if auditConfig.Enabled && restore.PostgresDSN != auditConfig.PostgresDSN {
+			return "", errors.New("worker restore reconciliation and audit delivery must use the same postgres dsn")
+		}
+	}
 	if exportConfig.Enabled {
 		return exportConfig.PostgresDSN, nil
 	}
@@ -684,6 +730,9 @@ func workerStoreDSN(exportConfig config.WorkerExportSessionReconcileConfig, opCo
 	}
 	if workloadMountStaleConfig.Enabled {
 		return workloadMountStaleConfig.PostgresDSN, nil
+	}
+	if len(restoreConfig) > 0 && restoreConfig[0].Enabled {
+		return restoreConfig[0].PostgresDSN, nil
 	}
 	return auditConfig.PostgresDSN, nil
 }
@@ -763,6 +812,7 @@ func OpenPostgresOperationRecoveryStore(ctx context.Context, dsn string) (StoreH
 		AuditStore:           st,
 		ExportReconcileStore: st,
 		WorkloadMountStale:   st,
+		RestoreReconcile:     st,
 		Close:                db.Close,
 	}, nil
 }

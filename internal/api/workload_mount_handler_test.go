@@ -361,6 +361,60 @@ func TestWorkloadMountAdmissionDisabledMutations(t *testing.T) {
 	}
 }
 
+func TestRestoreReconciliationModeDeniesWorkloadMountMutationsAndPlanBeforeIntake(t *testing.T) {
+	tests := []struct {
+		name        string
+		method      string
+		path        string
+		body        string
+		caller      string
+		role        auth.Role
+		wantPlan    bool
+		wantGateway bool
+	}{
+		{name: "create", method: http.MethodPost, path: "/internal/v1/repos/repo_123/workload-mount-bindings", body: `{"mount_path":"/mnt/repo","read_only":false,"lease_seconds":120}`, caller: "product-caller", role: auth.RoleMountAdmin},
+		{name: "status", method: http.MethodPatch, path: "/internal/v1/workload-mount-bindings/wmb_123/status", body: `{"status":"active","observed_at":"2026-05-05T12:34:56Z","reason":"mounted"}`, caller: "runtime-orchestrator", role: auth.RoleOrchestratorMount},
+		{name: "heartbeat", method: http.MethodPost, path: "/internal/v1/workload-mount-bindings/wmb_123:heartbeat", caller: "runtime-orchestrator", role: auth.RoleOrchestratorMount},
+		{name: "release", method: http.MethodPost, path: "/internal/v1/workload-mount-bindings/wmb_123:release", caller: "runtime-orchestrator", role: auth.RoleOrchestratorMount},
+		{name: "revoke", method: http.MethodPost, path: "/internal/v1/workload-mount-bindings/wmb_123:revoke", caller: "product-caller", role: auth.RoleMountAdmin},
+		{name: "orchestrator plan", method: http.MethodGet, path: "/internal/v1/workload-mount-bindings/wmb_123/orchestrator-plan", caller: "runtime-orchestrator", role: auth.RoleOrchestratorMount, wantPlan: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeOperationIntakeStore{restoreReconciliationBlocked: true}
+			planCalls := &fakeWorkloadMountPlanReaderCalls{}
+			config := workloadMountHandlerConfig(store, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: tt.caller, Kind: auth.CallerKindProduct, Roles: []auth.Role{tt.role}}}}, func(config *WorkloadMountHandlerConfig) {
+				if tt.role == auth.RoleOrchestratorMount {
+					config.AllowedCallers = fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: tt.caller, Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{tt.role}}}}
+					config.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:" + tt.caller, CanonicalCallerService: tt.caller}}
+				}
+				config.PlanReader = fakeWorkloadMountPlanReader{plan: workloadMountMetaFixture().plan, calls: planCalls}
+			})
+			handler := WorkloadMountHandler(config)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, workloadMountRequestForCaller(tt.method, tt.path, tt.body, "ns_123", tt.caller))
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+			}
+			if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeRestoreReconciliationActive {
+				t.Fatalf("error = %#v, want restore reconciliation active", env.Error)
+			}
+			if store.calls != 0 {
+				t.Fatalf("intake calls = %d, want dangerous write denied before queue", store.calls)
+			}
+			if tt.wantPlan && planCalls.calls != 0 {
+				t.Fatalf("plan calls = %d, want plan issuance denied before reader", planCalls.calls)
+			}
+			if store.restoreReconciliationCalls == 0 {
+				t.Fatal("restore reconciliation gate was not consulted")
+			}
+			assertWorkloadMountNoPlanLeak(t, rec.Body.String())
+		})
+	}
+}
+
 func TestCreateWorkloadMountBindingRejectsFilteredMountWithoutExternalControlRoot(t *testing.T) {
 	for _, tt := range []struct {
 		name     string

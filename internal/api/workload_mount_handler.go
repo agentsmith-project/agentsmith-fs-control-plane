@@ -215,6 +215,9 @@ func (handler workloadMountLeafHandler) create(w http.ResponseWriter, r *http.Re
 		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeCapabilityDenied, http.StatusForbidden, false, "workload mount is not enabled for this namespace or volume", []string{"workload_mount_not_enabled"}, handler.sink)
 		return
 	}
+	if handler.restoreReconciliationBlocked(w, r, route, requestContext, namespaceID, repoID) {
+		return
+	}
 	now := handler.currentTime()
 	mountID := handler.newMountBindingID()
 	if err := pathresolver.ValidateID(pathresolver.WorkloadMountBindingID, mountID); err != nil {
@@ -291,6 +294,9 @@ func (handler workloadMountLeafHandler) plan(w http.ResponseWriter, r *http.Requ
 		writeWorkloadMountStaleLeaseRecoveryRequired(w, r, route, requestContext, handler.sink)
 		return
 	}
+	if handler.restoreReconciliationBlocked(w, r, route, requestContext, namespaceID, binding.RepoID) {
+		return
+	}
 	plan, err := handler.planReader.GetOrchestratorMountPlan(r.Context(), namespaceID, mountBindingID)
 	if err != nil {
 		handler.writeReadError(w, r, err)
@@ -336,6 +342,9 @@ func (handler workloadMountLeafHandler) mutateExisting(w http.ResponseWriter, r 
 	}
 	if binding.NamespaceID != namespaceID {
 		handler.bindingInRequestNamespace(w, r, route, requestContext, binding, namespaceID)
+		return
+	}
+	if handler.restoreReconciliationBlocked(w, r, route, requestContext, namespaceID, binding.RepoID) {
 		return
 	}
 	now := handler.currentTime()
@@ -435,6 +444,23 @@ func (handler workloadMountLeafHandler) routeForRequest(r *http.Request) (RouteM
 		}
 	}
 	return RouteMetadata{}, nil, false
+}
+
+func (handler workloadMountLeafHandler) restoreReconciliationBlocked(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, namespaceID, repoID string) bool {
+	gate, ok := handler.intakeStore.(RestoreReconciliationWriteGate)
+	if !ok || gate == nil {
+		return false
+	}
+	blocked, err := gate.RestoreReconciliationWriteBlocked(r.Context(), namespaceID, repoID)
+	if err != nil {
+		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeStorageUnavailable, http.StatusServiceUnavailable, true, "durable metadata store is unavailable", []string{"restore_reconciliation_unavailable"}, handler.sink)
+		return true
+	}
+	if !blocked {
+		return false
+	}
+	writeOperationIntakeHTTPError(w, r, restoreReconciliationActiveIntakeError())
+	return true
 }
 
 func (handler workloadMountLeafHandler) writeExistingIdempotentOperation(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, namespaceID string, canonical any) bool {

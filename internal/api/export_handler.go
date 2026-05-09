@@ -192,6 +192,9 @@ func (handler exportLeafHandler) create(w http.ResponseWriter, r *http.Request, 
 	if handler.writeExistingIdempotentExport(w, r, route, requestContext, namespaceID, repoID, body, mode) {
 		return
 	}
+	if handler.restoreReconciliationBlocked(w, r, route, requestContext, namespaceID, repoID) {
+		return
+	}
 	if handler.admissionDisabled {
 		writeWebDAVExportAdmissionDisabled(w, r, route, requestContext, handler.sink)
 		return
@@ -277,6 +280,23 @@ func (handler exportLeafHandler) create(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	_ = writeJSON(w, http.StatusAccepted, envelope)
+}
+
+func (handler exportLeafHandler) restoreReconciliationBlocked(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, namespaceID, repoID string) bool {
+	gate, ok := handler.store.(RestoreReconciliationWriteGate)
+	if !ok || gate == nil {
+		return false
+	}
+	blocked, err := gate.RestoreReconciliationWriteBlocked(r.Context(), namespaceID, repoID)
+	if err != nil {
+		writeExportError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return true
+	}
+	if !blocked {
+		return false
+	}
+	writeRestoreReconciliationActiveDenied(w, r, route, requestContext, handler.sink)
+	return true
 }
 
 func (handler exportLeafHandler) writeExistingIdempotentExport(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, namespaceID, repoID string, body createExportRequest, mode sessionstate.AccessMode) bool {
@@ -721,6 +741,33 @@ func writeWebDAVExportAdmissionDisabled(w http.ResponseWriter, r *http.Request, 
 		Route:            route,
 		Status:           http.StatusForbidden,
 		Code:             CodeCapabilityDenied,
+		Reason:           message,
+		ValidationErrors: validationErrors,
+		RequestContext:   requestContext,
+	})
+}
+
+func writeRestoreReconciliationActiveDenied(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, sink audit.Sink) {
+	message := "restore reconciliation is active"
+	validationErrors := []string{"restore_reconciliation_active"}
+	var operationID *string
+	if route.OperationID != "" {
+		operationID = &route.OperationID
+	}
+	envelope := NewErrorEnvelope(
+		CodeRestoreReconciliationActive,
+		message,
+		true,
+		CorrelationIDFromRequest(r),
+		operationID,
+		map[string]any{"validation_errors": validationErrors},
+	)
+	_ = WriteErrorEnvelope(w, http.StatusConflict, envelope)
+	emitDeniedAuditEvent(r.Context(), sink, r, deniedAuditEvent{
+		Type:             audit.EventTypeCapabilityDenied,
+		Route:            route,
+		Status:           http.StatusConflict,
+		Code:             CodeRestoreReconciliationActive,
 		Reason:           message,
 		ValidationErrors: validationErrors,
 		RequestContext:   requestContext,

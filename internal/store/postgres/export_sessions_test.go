@@ -399,9 +399,11 @@ func TestBeginExportRuntimeRequestUsesLedgerAndPositiveAdmissionAtomically(t *te
 	assertSQLContainsInOrder(t, exec.query,
 		"WITH existing_request AS (",
 		"compatible_existing_request AS (",
+		"active_restore_reconciliation AS (",
 		"eligible_session AS (",
 		"status = 'active'",
 		"expires_at > $3",
+		"NOT ($5 AND EXISTS (SELECT 1 FROM active_restore_reconciliation))",
 		"INSERT INTO export_runtime_requests",
 		"request_state",
 		"'open'",
@@ -414,6 +416,22 @@ func TestBeginExportRuntimeRequestUsesLedgerAndPositiveAdmissionAtomically(t *te
 		if strings.Contains(strings.ToLower(exec.query), forbidden) {
 			t.Fatalf("BeginExportRuntimeRequest SQL leaked %q: %s", forbidden, exec.query)
 		}
+	}
+}
+
+func TestBeginExportRuntimeWriteRequestFailsClosedDuringRestoreReconciliationBeforeLedgerMutation(t *testing.T) {
+	sql := exportRuntimeRequestBeginSQL()
+	assertSQLContainsInOrder(t, sql,
+		"active_restore_reconciliation AS (",
+		"mode IN ('reconciling','blocked_operator_intervention')",
+		"eligible_session AS (",
+		"NOT ($5 AND EXISTS (SELECT 1 FROM active_restore_reconciliation))",
+		"inserted_request AS (",
+		"INSERT INTO export_runtime_requests",
+		"incremented_session AS (",
+	)
+	if strings.Index(sql, "INSERT INTO export_runtime_requests") < strings.Index(sql, "NOT ($5 AND EXISTS (SELECT 1 FROM active_restore_reconciliation))") {
+		t.Fatalf("runtime request insert appears before restore reconciliation write guard:\n%s", sql)
 	}
 }
 

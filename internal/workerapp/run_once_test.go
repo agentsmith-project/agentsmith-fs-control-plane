@@ -3,6 +3,7 @@ package workerapp
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restorereconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
@@ -270,6 +272,72 @@ func TestRunOnceExportSessionReconcileRunsBeforeOperationRecovery(t *testing.T) 
 	}
 	if got := strings.Join(store.workerCallOrder[:2], ","); got != "export_reconcile,operation_recovery" {
 		t.Fatalf("worker call order = %#v, want export reconcile before operation recovery", store.workerCallOrder)
+	}
+}
+
+func TestRunOnceRestoreReconciliationOnlyRunsWhenExplicitlyEnabled(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore()
+	store.restoreReconciliationRun = restorereconcile.Run{ID: "rrun_123", Mode: restorereconcile.ModeReconciling}
+	store.restoreReconciliationTargets, store.restoreReconciliationObservations = workerAppRestoreReconciliationCleanTargetAndObservation()
+	runner, err := NewRunOnceRunner(Options{
+		Source: config.MapSource{
+			"AFSCP_RESTORE_RECONCILIATION_ENABLED": "true",
+			"AFSCP_POSTGRES_DSN":                   "postgres://worker:password@db/afscp",
+			"AFSCP_RESTORE_RECONCILIATION_OWNER":   "restore-worker",
+		},
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{RestoreReconcile: store}, nil
+		},
+		Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.Summary().RestoreReconciliation.Completed != 1 || store.restoreReconciliationActiveRunCalls != 1 {
+		t.Fatalf("summary/calls = %#v/%d, want explicit restore reconciliation run", result.Summary().RestoreReconciliation, store.restoreReconciliationActiveRunCalls)
+	}
+}
+
+func TestRunOnceRestoreReconciliationRunsBeforeOperationRecovery(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore(workerAppOperationRecord(now))
+	store.restoreReconciliationRun = restorereconcile.Run{ID: "rrun_123", Mode: restorereconcile.ModeReconciling}
+	store.restoreReconciliationTargets, store.restoreReconciliationObservations = workerAppRestoreReconciliationCleanTargetAndObservation()
+	runner := newWorkerAppRunner(t, store, workerAppRestoreReconciliationConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.Summary().RestoreReconciliation.Completed != 1 || result.Summary().Operation.Claimed != 1 {
+		t.Fatalf("summary = %#v, want reconciliation and operation recovery", result.Summary())
+	}
+	if got := strings.Join(store.workerCallOrder[:2], ","); got != "restore_reconciliation,operation_recovery" {
+		t.Fatalf("worker call order = %#v, want restore reconciliation before operation recovery", store.workerCallOrder)
+	}
+}
+
+func TestRunOnceRestoreReconciliationBlockedSkipsOperationRecovery(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore(workerAppOperationRecord(now))
+	store.restoreReconciliationRun = restorereconcile.Run{ID: "rrun_123", Mode: restorereconcile.ModeBlockedOperatorIntervention}
+	runner := newWorkerAppRunner(t, store, workerAppRestoreReconciliationConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.Summary().RestoreReconciliation.Blocked != 1 || result.Summary().Operation != (worker.OperationSummary{}) {
+		t.Fatalf("summary = %#v, want blocked restore reconciliation to skip operation recovery", result.Summary())
+	}
+	if got := strings.Join(store.workerCallOrder, ","); got != "restore_reconciliation" {
+		t.Fatalf("worker call order = %#v, want no operation recovery after blocked reconciliation", store.workerCallOrder)
 	}
 }
 
@@ -2026,6 +2094,44 @@ func workerAppExportReconcileConfigSource(overrides config.MapSource) config.Map
 	return source
 }
 
+func workerAppRestoreReconciliationConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppConfigSource(config.MapSource{
+		"AFSCP_RESTORE_RECONCILIATION_ENABLED": "true",
+		"AFSCP_RESTORE_RECONCILIATION_OWNER":   "restore-worker",
+	})
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return source
+}
+
+func workerAppRestoreReconciliationCleanTargetAndObservation() ([]restorereconcile.Target, []restorereconcile.Observation) {
+	target := restorereconcile.Target{
+		RunID:                     "rrun_123",
+		RepoID:                    "repo_123",
+		NamespaceID:               "ns_123",
+		ExpectedRepoStatus:        restorereconcile.RepoStatusActive,
+		ExpectedStorageGeneration: "gen-1",
+		ExpectedSnapshotID:        "snapshot-1",
+		ExpectedTombstoneMarker:   "none",
+		ExpectedPurgeMarker:       "none",
+	}
+	observation := restorereconcile.Observation{
+		RunID:                   target.RunID,
+		RepoID:                  target.RepoID,
+		NamespaceID:             target.NamespaceID,
+		ExpectedRepoStatus:      target.ExpectedRepoStatus,
+		ObservedStoragePresent:  true,
+		ObservedGeneration:      target.ExpectedStorageGeneration,
+		ObservedSnapshotID:      target.ExpectedSnapshotID,
+		ObservedTombstoneMarker: target.ExpectedTombstoneMarker,
+		ObservedPurgeMarker:     target.ExpectedPurgeMarker,
+		Result:                  restorereconcile.ObservationResultClean,
+		EvidenceRef:             "restore-reconciliation://run/rrun_123/repo/repo_123",
+	}
+	return []restorereconcile.Target{target}, []restorereconcile.Observation{observation}
+}
+
 func workerAppRepoConfigSource(overrides config.MapSource) config.MapSource {
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_REPO_CREATE_RECOVERY_ENABLED": "true",
@@ -2539,48 +2645,54 @@ func workerAppNow() time.Time {
 }
 
 type fakeWorkerAppStore struct {
-	records                        map[string]operations.OperationRecord
-	order                          []string
-	volume                         resources.Volume
-	repo                           resources.Repo
-	namespace                      resources.Namespace
-	binding                        resources.NamespaceVolumeBinding
-	exports                        []sessionstate.ExportSession
-	mounts                         []sessionstate.WorkloadMountBinding
-	operation                      operations.OperationRecord
-	previewOperation               operations.OperationRecord
-	restorePlan                    restoreplan.Plan
-	auditEvents                    []audit.Event
-	fences                         []fences.Fence
-	releasedFenceID                string
-	listDeadline                   time.Time
-	closeCalls                     int
-	acquireIDs                     []string
-	acquirePolicies                map[string]operations.LeaseCancelPolicy
-	recoveredAudit                 []audit.OutboxRecord
-	claimedAudit                   []audit.OutboxRecord
-	auditCallOrder                 []string
-	auditRecoverOwner              string
-	auditRecoverLimit              int
-	auditClaimOwner                string
-	auditClaimLimit                int
-	savePointListCalls             int
-	templateCreateListCalls        int
-	templateCloneListCalls         int
-	restorePreviewListCalls        int
-	restorePreviewDiscardListCalls int
-	restoreRunListCalls            int
-	workloadMountBindingListCalls  int
-	auditDelivered                 []string
-	auditFailed                    []workerAppAuditFailedCall
-	auditDeliverErr                error
-	workerCallOrder                []string
-	exportReconcileCandidates      []exportaccess.Session
-	exportReconciles               []exportaccess.ReconcileRequest
-	staleWorkloadMountBindings     []workloadmount.Binding
-	workloadMountStaleNow          time.Time
-	workloadMountStaleLimit        int
-	genericUpdateCalls             int
+	records                              map[string]operations.OperationRecord
+	order                                []string
+	volume                               resources.Volume
+	repo                                 resources.Repo
+	namespace                            resources.Namespace
+	binding                              resources.NamespaceVolumeBinding
+	exports                              []sessionstate.ExportSession
+	mounts                               []sessionstate.WorkloadMountBinding
+	operation                            operations.OperationRecord
+	previewOperation                     operations.OperationRecord
+	restorePlan                          restoreplan.Plan
+	auditEvents                          []audit.Event
+	fences                               []fences.Fence
+	releasedFenceID                      string
+	listDeadline                         time.Time
+	closeCalls                           int
+	acquireIDs                           []string
+	acquirePolicies                      map[string]operations.LeaseCancelPolicy
+	recoveredAudit                       []audit.OutboxRecord
+	claimedAudit                         []audit.OutboxRecord
+	auditCallOrder                       []string
+	auditRecoverOwner                    string
+	auditRecoverLimit                    int
+	auditClaimOwner                      string
+	auditClaimLimit                      int
+	savePointListCalls                   int
+	templateCreateListCalls              int
+	templateCloneListCalls               int
+	restorePreviewListCalls              int
+	restorePreviewDiscardListCalls       int
+	restoreRunListCalls                  int
+	workloadMountBindingListCalls        int
+	auditDelivered                       []string
+	auditFailed                          []workerAppAuditFailedCall
+	auditDeliverErr                      error
+	workerCallOrder                      []string
+	exportReconcileCandidates            []exportaccess.Session
+	exportReconciles                     []exportaccess.ReconcileRequest
+	staleWorkloadMountBindings           []workloadmount.Binding
+	workloadMountStaleNow                time.Time
+	workloadMountStaleLimit              int
+	restoreReconciliationRun             restorereconcile.Run
+	restoreReconciliationTargets         []restorereconcile.Target
+	restoreReconciliationObservations    []restorereconcile.Observation
+	restoreReconciliationActiveRunCalls  int
+	restoreReconciliationCompletedRunID  string
+	restoreReconciliationMismatchCommits []restorereconcile.MismatchCommit
+	genericUpdateCalls                   int
 }
 
 type workerAppAuditFailedCall struct {
@@ -2741,6 +2853,58 @@ func (store *fakeWorkerAppStore) ReconcileExportSessionTerminal(_ context.Contex
 		}
 	}
 	return exportaccess.ReconcileResult{Session: session, Operation: request.Operation}, nil
+}
+
+func (store *fakeWorkerAppStore) RestoreReconciliationWriteBlocked(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (store *fakeWorkerAppStore) ActiveRun(context.Context) (restorereconcile.Run, error) {
+	store.workerCallOrder = append(store.workerCallOrder, "restore_reconciliation")
+	store.restoreReconciliationActiveRunCalls++
+	if store.restoreReconciliationRun.ID == "" {
+		return restorereconcile.Run{}, sql.ErrNoRows
+	}
+	return store.restoreReconciliationRun, nil
+}
+
+func (store *fakeWorkerAppStore) ListObservations(context.Context, string) ([]restorereconcile.Observation, error) {
+	out := make([]restorereconcile.Observation, len(store.restoreReconciliationObservations))
+	copy(out, store.restoreReconciliationObservations)
+	return out, nil
+}
+
+func (store *fakeWorkerAppStore) ListTargets(context.Context, string) ([]restorereconcile.Target, error) {
+	out := make([]restorereconcile.Target, len(store.restoreReconciliationTargets))
+	copy(out, store.restoreReconciliationTargets)
+	return out, nil
+}
+
+func (store *fakeWorkerAppStore) ObserveTarget(_ context.Context, target restorereconcile.Target) (restorereconcile.Observation, error) {
+	for _, observation := range store.restoreReconciliationObservations {
+		if observation.RepoID == target.RepoID {
+			return observation, nil
+		}
+	}
+	return restorereconcile.Observation{}, restorereconcile.ErrObservationMissing
+}
+
+func (store *fakeWorkerAppStore) CompleteRun(_ context.Context, runID string, _ time.Time) error {
+	store.restoreReconciliationCompletedRunID = runID
+	return nil
+}
+
+func (store *fakeWorkerAppStore) CompleteRestoreReconciliationRun(ctx context.Context, runID string, now time.Time) error {
+	return store.CompleteRun(ctx, runID, now)
+}
+
+func (store *fakeWorkerAppStore) CommitMismatch(_ context.Context, request restorereconcile.MismatchCommit) error {
+	store.restoreReconciliationMismatchCommits = append(store.restoreReconciliationMismatchCommits, request)
+	return nil
+}
+
+func (store *fakeWorkerAppStore) CommitRestoreReconciliationMismatch(ctx context.Context, request restorereconcile.MismatchCommit) error {
+	return store.CommitMismatch(ctx, request)
 }
 
 func (store *fakeWorkerAppStore) ListStaleNonTerminalWorkloadMountBindings(_ context.Context, now time.Time, limit int) ([]workloadmount.Binding, error) {

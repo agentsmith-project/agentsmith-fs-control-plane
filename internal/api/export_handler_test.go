@@ -65,7 +65,7 @@ func TestCreateExportIdempotentReplayReturnsRedactedSessionWithoutPassword(t *te
 	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
@@ -174,7 +174,7 @@ func TestCreateExportAdmissionDisabledRejectsNewBeforeMetadataAndAudits(t *testi
 	})
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d body = %s, want 403", rec.Code, rec.Body.String())
@@ -192,6 +192,76 @@ func TestCreateExportAdmissionDisabledRejectsNewBeforeMetadataAndAudits(t *testi
 		t.Fatalf("audit events = %#v, want one denied admission audit", sink.events)
 	}
 	assertWebDAVExportAdmissionDisabledAudit(t, sink.events[0])
+}
+
+func TestRestoreReconciliationModeDeniesExportCreateBeforePassword(t *testing.T) {
+	meta := exportMetaFixture()
+	sink := &fakeAuditSink{}
+	passwordCalls := 0
+	store := &fakeExportStore{restoreReconciliationBlocked: true}
+	fenceReader := &fakeRepoFenceReader{fences: meta.fences}
+	handler := ExportHandler(ExportHandlerConfig{
+		RepoReader:        meta.repoReader,
+		NamespaceReader:   meta.namespaceReader,
+		BindingReader:     meta.bindingReader,
+		VolumeReader:      meta.volumeReader,
+		FenceReader:       fenceReader,
+		Store:             store,
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AllowedCallers:    fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "product-caller", Kind: auth.CallerKindProduct, Roles: []auth.Role{auth.RoleExportAdmin}}}},
+		OperationID:       func() string { return "op_export" },
+		ExportID:          func() string { return "export_new" },
+		Password: func() string {
+			passwordCalls++
+			return "export-password-once"
+		},
+		Now:       fixedNamespaceNow,
+		AuditSink: sink,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	if env := decodeErrorEnvelope(t, rec.Body.Bytes()); env.Error.Code != CodeRestoreReconciliationActive || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want restore reconciliation active retryable", env.Error)
+	}
+	if store.lookupCalls != 1 || store.createCalls != 0 || store.restoreReconciliationCalls != 1 || passwordCalls != 0 {
+		t.Fatalf("lookup/create/gate/password = %d/%d/%d/%d, want 1/0/1/0", store.lookupCalls, store.createCalls, store.restoreReconciliationCalls, passwordCalls)
+	}
+	if meta.repoReader.getInNamespaceCalls != 0 || meta.namespaceReader.calls != 0 || meta.bindingReader.calls != 0 || meta.volumeReader.calls != 0 || fenceReader.calls != 0 {
+		t.Fatalf("metadata calls repo/ns/binding/volume/fence = %d/%d/%d/%d/%d, want none", meta.repoReader.getInNamespaceCalls, meta.namespaceReader.calls, meta.bindingReader.calls, meta.volumeReader.calls, fenceReader.calls)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied || sink.events[0].Reason != "restore reconciliation is active" {
+		t.Fatalf("audit events = %#v, want restore reconciliation denial audit", sink.events)
+	}
+}
+
+func TestRestoreReconciliationModeExportReplayDoesNotReturnAccess(t *testing.T) {
+	hash, err := operations.HashRequest(exportCanonicalRequest{RepoID: "repo_123", Mode: string(sessionstate.AccessModeReadOnly), TTLSeconds: 120})
+	if err != nil {
+		t.Fatalf("hash export request: %v", err)
+	}
+	session := exportSessionFixture(sessionstate.ExportStatusActive)
+	session.Mode = sessionstate.AccessModeReadOnly
+	store := &fakeExportStore{restoreReconciliationBlocked: true, lookupRecord: existingExportOperationRecord("op_existing_export", hash, map[string]any{"ttl_seconds": 120}), session: session}
+	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want existing replay", rec.Code, rec.Body.String())
+	}
+	env := decodeOperationEnvelope(t, rec.Body.Bytes())
+	if _, ok := env.Result["access"]; ok {
+		t.Fatalf("replay during reconciliation returned access credential: %#v", env.Result)
+	}
+	if store.restoreReconciliationCalls != 0 || store.createCalls != 0 {
+		t.Fatalf("gate/create calls = %d/%d, want replay before reconciliation denial and no new credential", store.restoreReconciliationCalls, store.createCalls)
+	}
 }
 
 func TestCreateExportAdmissionDisabledReportsHashConflictBeforeCapabilityDenied(t *testing.T) {
@@ -822,18 +892,20 @@ func (reader *fakeExportVolumeReader) GetVolume(context.Context, string) (resour
 }
 
 type fakeExportStore struct {
-	createCalls  int
-	revokeCalls  int
-	getCalls     int
-	create       exportaccess.CreateRequest
-	revoke       exportaccess.RevokeRequest
-	reused       bool
-	err          error
-	session      exportaccess.Session
-	lookupCalls  int
-	lookupErr    error
-	lookupRecord *operations.OperationRecord
-	lookupScope  operations.IdempotencyScope
+	createCalls                  int
+	revokeCalls                  int
+	getCalls                     int
+	create                       exportaccess.CreateRequest
+	revoke                       exportaccess.RevokeRequest
+	reused                       bool
+	err                          error
+	session                      exportaccess.Session
+	lookupCalls                  int
+	lookupErr                    error
+	lookupRecord                 *operations.OperationRecord
+	lookupScope                  operations.IdempotencyScope
+	restoreReconciliationBlocked bool
+	restoreReconciliationCalls   int
 }
 
 type fakeNoLookupExportStore struct {
@@ -884,6 +956,14 @@ func (store *fakeExportStore) GetExportSession(_ context.Context, exportID strin
 		return store.session, nil
 	}
 	return exportSessionFixture(sessionstate.ExportStatusActive), nil
+}
+
+func (store *fakeExportStore) RestoreReconciliationWriteBlocked(_ context.Context, namespaceID, repoID string) (bool, error) {
+	store.restoreReconciliationCalls++
+	if strings.TrimSpace(namespaceID) == "" || strings.TrimSpace(repoID) == "" {
+		return false, errors.New("unexpected restore reconciliation target")
+	}
+	return store.restoreReconciliationBlocked, nil
 }
 
 func existingExportOperationRecord(operationID string, requestHash operations.RequestHash, inputSummary map[string]any) *operations.OperationRecord {

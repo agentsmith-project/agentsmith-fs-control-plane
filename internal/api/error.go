@@ -56,6 +56,7 @@ const (
 	CodePurgeRetentionNotMet          ErrorCode = "PURGE_RETENTION_NOT_MET"
 	CodePurgeRequiresOperatorApproval ErrorCode = "PURGE_REQUIRES_OPERATOR_APPROVAL"
 	CodeOperationRecoveryRequired     ErrorCode = "OPERATION_RECOVERY_REQUIRED"
+	CodeRestoreReconciliationActive   ErrorCode = "RESTORE_RECONCILIATION_ACTIVE"
 )
 
 var allErrorCodes = []ErrorCode{
@@ -98,6 +99,7 @@ var allErrorCodes = []ErrorCode{
 	CodePurgeRetentionNotMet,
 	CodePurgeRequiresOperatorApproval,
 	CodeOperationRecoveryRequired,
+	CodeRestoreReconciliationActive,
 }
 
 func ErrorCodes() []ErrorCode {

@@ -11,6 +11,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operatorrepair"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restorereconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
@@ -71,6 +72,15 @@ type OperationWorkerCommitStore interface {
 type OperatorRepairStore interface {
 	ReadOperationForRepair(ctx context.Context, operationID string) (operations.OperationRecord, error)
 	CommitOperatorRepairFailed(ctx context.Context, request operatorrepair.CommitRequest) (operations.OperationRecord, error)
+}
+
+type RestoreReconciliationStore interface {
+	RestoreReconciliationWriteBlocked(ctx context.Context, namespaceID, repoID string) (bool, error)
+	ActiveRun(ctx context.Context) (restorereconcile.Run, error)
+	ListTargets(ctx context.Context, runID string) ([]restorereconcile.Target, error)
+	ObserveTarget(ctx context.Context, target restorereconcile.Target) (restorereconcile.Observation, error)
+	CompleteRestoreReconciliationRun(ctx context.Context, runID string, now time.Time) error
+	CommitRestoreReconciliationMismatch(ctx context.Context, request restorereconcile.MismatchCommit) error
 }
 
 // VolumeEnsureOperationCommitStore atomically commits volume metadata, a

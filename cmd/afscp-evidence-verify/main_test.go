@@ -51,6 +51,19 @@ func TestRunCheckOnlyAcceptsOperatorRepairSafeManifest(t *testing.T) {
 	}
 }
 
+func TestRunCheckOnlyAcceptsRestoreReconciliationManifest(t *testing.T) {
+	root := t.TempDir()
+	writeEvidenceCLIScripts(t, root)
+	manifestPath := filepath.Join(root, "manifest.json")
+	writeEvidenceCLIFile(t, manifestPath, evidenceCLIManifest(`["bash","scripts/pass.sh"]`, "scripts/pass.sh"))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-mode", "seed", "-manifest", manifestPath, "-repo-root", root, "-check-only"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestRunExecutesRequiredCommandsByDefault(t *testing.T) {
 	root := t.TempDir()
 	writeEvidenceCLIScripts(t, root)
@@ -369,6 +382,17 @@ func evidenceCLIManifest(command, anchor string) string {
       "default_ga_required":true
     },
     {
+      "id":"restore_reconciliation_safe_unit",
+      "capability_id":"jvs_save_restore",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/restorereconcile","./internal/store/postgres","./internal/api","./internal/workerapp","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(RestoreReconciliationDecisionDeniesDangerousWritesUntilSafe|RestoreReconciliationDecisionPurgedStoragePresentDoesNotResurrect|RestoreReconciliationEvidenceRedactsSensitiveMaterial|RestoreReconciliationRejectsSecretShapedEvidenceRefsAndMarkers|RestoreReconciliationCleanObservationRequiresMarkersAndEvidence|RestoreReconciliationRunOnceCompletesCleanRun|RestoreReconciliationRunOnceFailsClosedWhenTargetSetIsEmptyOrMissingObservation|RestoreReconciliationRunOnceMismatchBlocksAndMarksIntervention|RestoreReconciliationRunOnceObservedMarkerMismatchBlocksAndDoesNotComplete|RunOnceRestoreReconciliationOnlyRunsWhenExplicitlyEnabled|RestoreReconciliationRunOncePurgedRepoNeverResurrects|RestoreReconciliationMigrationDefinesRunAndObservationTables|CommitRestoreReconciliationMismatchMarksRepoOperatorInterventionAndAudits|CommitRestoreReconciliationMismatchRequiresEligibleReconcilingRunBeforeSideEffects|RestoreReconciliationPurgedStoragePresentDoesNotResurrect|ObserveRestoreReconciliationTargetDerivesObservedMarkersFromCurrentRepoNotExpectedEcho|CompleteRestoreReconciliationRunRequiresAllReposObservedClean|RestoreReconciliationStoreDoesNotTouchCredentialsFencesOrStorageSideEffects|BeginExportRuntimeWriteRequestFailsClosedDuringRestoreReconciliationBeforeLedgerMutation|RestoreReconciliationModeDeniesExportCreateBeforePassword|RestoreReconciliationModeDeniesRestoreSaveLifecycleBeforeOperationCreate|RestoreReconciliationModeExportReplayDoesNotReturnAccess|RestoreReconciliationModeDeniesWorkloadMountMutationsAndPlanBeforeIntake|ErrorCodesExposeStableSchemaEnumOrder|ProductCallerOperationResponsesDoNotLeakStorageInternals|RunOnceRestoreReconciliationRunsBeforeOperationRecovery|RunOnceRestoreReconciliationBlockedSkipsOperationRecovery|RestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch|CurrentRepoManifestContainsP4bRestoreReconciliationEvidence|RestoreReconciliationReplacementRejectsWrongShapeBroadSelectorOrP1cOnly|RunCheckOnlyAcceptsRestoreReconciliationManifest)$"],
+      "anchors":["` + anchor + `"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -510,7 +534,6 @@ var package0CLISeedGapMetadata = []struct {
 	{"seed_gap_admin_bootstrap_ready_open", "CLAIM_ADMIN_BOOTSTRAP_READY", "F3"},
 	{"seed_gap_workload_fixture_ready_open", "CLAIM_WORKLOAD_FIXTURE_READY", "F9"},
 	{"seed_gap_purge_approval_safe_open", "CLAIM_PURGE_APPROVAL_SAFE", "F13"},
-	{"seed_gap_restore_reconciliation_open", "CLAIM_RESTORE_RECONCILIATION", "F14"},
 	{"seed_gap_residual_risk_catalog_open", "CLAIM_RESIDUAL_RISK_CATALOG", "F12"},
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_profile_boundary_open", "CLAIM_PROFILE_BOUNDARY", "F1"},
@@ -552,6 +575,7 @@ var package0CLIMetadata = []struct {
 	{"default_user_loop_trace_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_trace", "P1E_DEFAULT_USER_LOOP_TRACE", "F2", "both", "fast", "package", "true", "coverage_guard", "caller-scoped operation audit and recovery trace stays redacted and terminally visible"},
 	{"default_user_loop_positive_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_positive", "P0_DEFAULT_USER_LOOP_POSITIVE", "F2", "positive", "fast", "package", "true", "positive_path", "default user loop passes in default mode"},
 	{"operator_repair_safe_unit", "CLAIM_OPERATOR_REPAIR_SAFE", "operator_repair_safe", "P0_OPERATOR_REPAIR_SAFE", "F11", "both", "fast", "package", "true", "coverage_guard", "operator repair safety passes in default mode"},
+	{"restore_reconciliation_safe_unit", "CLAIM_RESTORE_RECONCILIATION", "restore_reconciliation_safe", "P0_RESTORE_RECONCILIATION_SAFE", "F14", "positive", "fast", "package", "true", "positive_path", "restore reconciliation safety passes in default mode"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "negative", "fast", "package", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "both", "fast", "package", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "both", "fast", "package", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},
@@ -700,6 +724,55 @@ func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand(t *testing.T)
 func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand(t *testing.T) {}
 func TestCurrentRepoManifestContainsP3OperatorRepairSafeEvidence(t *testing.T) {}
 func TestOperatorRepairSafeReplacementRejectsWrongShapeOrBroadSelector(t *testing.T) {}
+func TestCurrentRepoManifestContainsP4bRestoreReconciliationEvidence(t *testing.T) {}
+func TestRestoreReconciliationReplacementRejectsWrongShapeBroadSelectorOrP1cOnly(t *testing.T) {}
+`)
+	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "restorereconcile", "reconcile_test.go"), `package restorereconcile
+
+import "testing"
+
+func TestRestoreReconciliationDecisionDeniesDangerousWritesUntilSafe(t *testing.T) {}
+func TestRestoreReconciliationDecisionPurgedStoragePresentDoesNotResurrect(t *testing.T) {}
+func TestRestoreReconciliationEvidenceRedactsSensitiveMaterial(t *testing.T) {}
+func TestRestoreReconciliationRejectsSecretShapedEvidenceRefsAndMarkers(t *testing.T) {}
+func TestRestoreReconciliationCleanObservationRequiresMarkersAndEvidence(t *testing.T) {}
+func TestRestoreReconciliationRunOnceCompletesCleanRun(t *testing.T) {}
+func TestRestoreReconciliationRunOnceFailsClosedWhenTargetSetIsEmptyOrMissingObservation(t *testing.T) {}
+func TestRestoreReconciliationRunOnceMismatchBlocksAndMarksIntervention(t *testing.T) {}
+func TestRestoreReconciliationRunOnceObservedMarkerMismatchBlocksAndDoesNotComplete(t *testing.T) {}
+func TestRestoreReconciliationRunOncePurgedRepoNeverResurrects(t *testing.T) {}
+`)
+	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "store", "postgres", "restore_reconciliation_test.go"), `package postgres
+
+import "testing"
+
+func TestRestoreReconciliationMigrationDefinesRunAndObservationTables(t *testing.T) {}
+func TestCommitRestoreReconciliationMismatchMarksRepoOperatorInterventionAndAudits(t *testing.T) {}
+func TestCommitRestoreReconciliationMismatchRequiresEligibleReconcilingRunBeforeSideEffects(t *testing.T) {}
+func TestRestoreReconciliationPurgedStoragePresentDoesNotResurrect(t *testing.T) {}
+func TestObserveRestoreReconciliationTargetDerivesObservedMarkersFromCurrentRepoNotExpectedEcho(t *testing.T) {}
+func TestCompleteRestoreReconciliationRunRequiresAllReposObservedClean(t *testing.T) {}
+func TestRestoreReconciliationStoreDoesNotTouchCredentialsFencesOrStorageSideEffects(t *testing.T) {}
+func TestBeginExportRuntimeWriteRequestFailsClosedDuringRestoreReconciliationBeforeLedgerMutation(t *testing.T) {}
+`)
+	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "api", "restore_reconciliation_test.go"), `package api
+
+import "testing"
+
+func TestRestoreReconciliationModeDeniesExportCreateBeforePassword(t *testing.T) {}
+func TestRestoreReconciliationModeDeniesRestoreSaveLifecycleBeforeOperationCreate(t *testing.T) {}
+func TestRestoreReconciliationModeExportReplayDoesNotReturnAccess(t *testing.T) {}
+func TestRestoreReconciliationModeDeniesWorkloadMountMutationsAndPlanBeforeIntake(t *testing.T) {}
+func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {}
+func TestProductCallerOperationResponsesDoNotLeakStorageInternals(t *testing.T) {}
+`)
+	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "workerapp", "restore_reconciliation_test.go"), `package workerapp
+
+import "testing"
+
+func TestRunOnceRestoreReconciliationOnlyRunsWhenExplicitlyEnabled(t *testing.T) {}
+func TestRunOnceRestoreReconciliationRunsBeforeOperationRecovery(t *testing.T) {}
+func TestRunOnceRestoreReconciliationBlockedSkipsOperationRecovery(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "internal", "operatorrepair", "repair_test.go"), `package operatorrepair
 
@@ -737,6 +810,7 @@ import "testing"
 
 func TestOperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL(t *testing.T) {}
 func TestOperatorRepairContractIsLinkedFromContractsReadme(t *testing.T) {}
+func TestRestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch(t *testing.T) {}
 `)
 	writeEvidenceCLIFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
@@ -744,6 +818,7 @@ import "testing"
 
 func TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsOperatorRepairSafeManifest(t *testing.T) {}
+func TestRunCheckOnlyAcceptsRestoreReconciliationManifest(t *testing.T) {}
 `)
 }
 

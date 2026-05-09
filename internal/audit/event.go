@@ -41,6 +41,7 @@ const (
 	EventTypeMountBindingRelease             EventType = "mount_binding_release"
 	EventTypeMountBindingRevoke              EventType = "mount_binding_revoke"
 	EventTypeMigrationCutover                EventType = "migration_cutover"
+	EventTypeRestoreReconciliation           EventType = "restore_reconciliation"
 )
 
 var eventTypes = []EventType{
@@ -74,6 +75,7 @@ var eventTypes = []EventType{
 	EventTypeMountBindingRelease,
 	EventTypeMountBindingRevoke,
 	EventTypeMigrationCutover,
+	EventTypeRestoreReconciliation,
 }
 
 var operationEventTypes = map[string]EventType{

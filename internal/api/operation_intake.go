@@ -18,6 +18,10 @@ type OperationIntakeStore interface {
 	CreateOrReuseOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
+type RestoreReconciliationWriteGate interface {
+	RestoreReconciliationWriteBlocked(ctx context.Context, namespaceID, repoID string) (bool, error)
+}
+
 type RestorePreviewOperationIntakeStore interface {
 	CreateOrReuseRestorePreviewOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
@@ -35,7 +39,8 @@ type OperationIdempotencyLookupStore interface {
 }
 
 type OperationIntakeConfig struct {
-	Store OperationIntakeStore
+	Store                     OperationIntakeStore
+	RestoreReconciliationGate RestoreReconciliationWriteGate
 }
 
 type OperationIntakeRequest struct {
@@ -77,9 +82,11 @@ func CreateOrReuseOperationIntake(ctx context.Context, config OperationIntakeCon
 	if idempotencyStoreNil(config.Store) {
 		return OperationEnvelope{}, internalOperationIntakeError()
 	}
-
 	spec, err := operationIntakeSpec(request)
 	if err != nil {
+		return OperationEnvelope{}, err
+	}
+	if err := checkRestoreReconciliationIntakeGate(ctx, config.Store, config.RestoreReconciliationGate, request); err != nil {
 		return OperationEnvelope{}, err
 	}
 	resolution, err := config.Store.CreateOrReuseOperation(ctx, spec)
@@ -100,6 +107,9 @@ func CreateOrReuseRestorePreviewOperationIntake(ctx context.Context, store Resto
 	if err != nil {
 		return OperationEnvelope{}, err
 	}
+	if err := checkRestoreReconciliationIntakeGate(ctx, store, nil, request); err != nil {
+		return OperationEnvelope{}, err
+	}
 	resolution, err := store.CreateOrReuseRestorePreviewOperation(ctx, spec)
 	if err != nil {
 		return OperationEnvelope{}, mapOperationIntakeError(err)
@@ -116,6 +126,9 @@ func CreateOrReuseRestorePreviewDiscardOperationIntake(ctx context.Context, stor
 	}
 	spec, err := operationIntakeSpec(request)
 	if err != nil {
+		return OperationEnvelope{}, err
+	}
+	if err := checkRestoreReconciliationIntakeGate(ctx, store, nil, request); err != nil {
 		return OperationEnvelope{}, err
 	}
 	resolution, err := store.CreateOrReuseRestorePreviewDiscardOperation(ctx, spec)
@@ -136,11 +149,65 @@ func CreateOrReuseRestoreRunOperationIntake(ctx context.Context, store RestoreRu
 	if err != nil {
 		return OperationEnvelope{}, err
 	}
+	if err := checkRestoreReconciliationIntakeGate(ctx, store, nil, request); err != nil {
+		return OperationEnvelope{}, err
+	}
 	resolution, err := store.CreateOrReuseRestoreRunOperation(ctx, spec)
 	if err != nil {
 		return OperationEnvelope{}, mapOperationIntakeError(err)
 	}
 	return operationEnvelopeFromRecord(resolution.Operation), nil
+}
+
+func checkRestoreReconciliationIntakeGate(ctx context.Context, store any, gate RestoreReconciliationWriteGate, request OperationIntakeRequest) error {
+	if !restoreReconciliationDangerousRoute(request.Route.OperationID) {
+		return nil
+	}
+	if gate == nil {
+		if typed, ok := store.(RestoreReconciliationWriteGate); ok {
+			gate = typed
+		}
+	}
+	if gate == nil {
+		return nil
+	}
+	blocked, err := gate.RestoreReconciliationWriteBlocked(ctx, request.NamespaceID, request.RepoID)
+	if err != nil {
+		return &OperationIntakeError{Code: CodeStorageUnavailable, Status: http.StatusServiceUnavailable, Retryable: true, Message: "durable metadata store is unavailable"}
+	}
+	if blocked {
+		return restoreReconciliationActiveIntakeError()
+	}
+	return nil
+}
+
+func restoreReconciliationDangerousRoute(operationID string) bool {
+	switch operationID {
+	case "createRepo",
+		"archiveRepo",
+		"restoreArchivedRepo",
+		"deleteRepo",
+		"restoreTombstonedRepo",
+		"purgeRepo",
+		"createSavePoint",
+		"restorePreview",
+		"restorePreviewDiscard",
+		"restoreRun",
+		"createRepoTemplate",
+		"cloneRepoTemplate":
+		return true
+	default:
+		return false
+	}
+}
+
+func restoreReconciliationActiveIntakeError() *OperationIntakeError {
+	return &OperationIntakeError{
+		Code:      CodeRestoreReconciliationActive,
+		Status:    http.StatusConflict,
+		Retryable: true,
+		Message:   "restore reconciliation is active",
+	}
 }
 
 func operationIntakeSpec(request OperationIntakeRequest) (operations.QueuedOperationSpec, error) {

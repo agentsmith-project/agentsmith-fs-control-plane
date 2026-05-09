@@ -12,6 +12,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auditdelivery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportreconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restorereconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
@@ -83,23 +84,37 @@ func TestRunOnceSkipsOperationRecoveryWhenSessionEvidencePrerequisiteFails(t *te
 			wantErr:       mountErr,
 			wantErrDetail: "workload mount stale lease scan: mount evidence stale",
 		},
+		{
+			name: "restore reconciliation blocked",
+			config: func(order *[]string) Config {
+				restore := &fakeRestoreReconciliationRunner{name: "restore", order: order, result: restorereconcile.Result{Scanned: 1, Blocked: 1}}
+				op := &fakeOperationRunner{name: "operation", order: order}
+				return Config{RestoreReconciliation: restore, OperationRecovery: op}
+			},
+			wantOrder: "restore",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			order := []string{}
 			result, err := New(tt.config(&order)).RunOnce(context.Background())
-			if err == nil {
+			if tt.wantErr != nil && err == nil {
 				t.Fatal("RunOnce succeeded, want prerequisite error")
 			}
-			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("RunOnce error = %v, want wrapped prerequisite error", err)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("RunOnce error = %v, want wrapped prerequisite error", err)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrDetail) {
+					t.Fatalf("RunOnce error = %v, want visible detail %q", err, tt.wantErrDetail)
+				}
+				if strings.Contains(err.Error(), "operation recovery") {
+					t.Fatalf("RunOnce error = %v, want no operation recovery error", err)
+				}
 			}
-			if !strings.Contains(err.Error(), tt.wantErrDetail) {
-				t.Fatalf("RunOnce error = %v, want visible detail %q", err, tt.wantErrDetail)
-			}
-			if strings.Contains(err.Error(), "operation recovery") {
-				t.Fatalf("RunOnce error = %v, want no operation recovery error", err)
+			if tt.wantErr == nil && err != nil {
+				t.Fatalf("RunOnce error = %v, want nil while skipping operation recovery", err)
 			}
 
 			if strings.Join(order, ",") != tt.wantOrder {
@@ -294,6 +309,20 @@ type fakeWorkloadMountStaleRunner struct {
 	result workloadmount.StaleLeaseResult
 	err    error
 	after  func()
+}
+
+type fakeRestoreReconciliationRunner struct {
+	name   string
+	order  *[]string
+	ctx    context.Context
+	result restorereconcile.Result
+	err    error
+}
+
+func (runner *fakeRestoreReconciliationRunner) RunOnce(ctx context.Context) (restorereconcile.Result, error) {
+	*runner.order = append(*runner.order, runner.name)
+	runner.ctx = ctx
+	return runner.result, runner.err
 }
 
 func (runner *fakeWorkloadMountStaleRunner) RunOnce(ctx context.Context) (workloadmount.StaleLeaseResult, error) {

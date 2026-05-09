@@ -1182,35 +1182,53 @@
       "scope": "doc-guard"
     },
     {
-      "id": "seed_gap_restore_reconciliation_open",
-      "evidence_status": "placeholder",
+      "id": "restore_reconciliation_safe_unit",
+      "evidence_status": "implemented",
       "claim_id": "CLAIM_RESTORE_RECONCILIATION",
-      "subclaim_id": "seed_gap_open",
-      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "subclaim_id": "restore_reconciliation_safe",
+      "acceptance_id": "P0_RESTORE_RECONCILIATION_SAFE",
       "risk_id": "F14",
       "fixture_id": "",
-      "capability_id": "",
+      "capability_id": "jvs_save_restore",
       "evidence_profile": "default",
       "default_mode": true,
       "fixture_enabled_mode": false,
-      "negative_or_positive": "both",
-      "evidence_type": "doc-guard",
-      "required": false,
-      "command": [],
-      "anchors": [
-        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      "negative_or_positive": "positive",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/restorereconcile",
+        "./internal/store/postgres",
+        "./internal/api",
+        "./internal/workerapp",
+        "./internal/contractcheck",
+        "./internal/releaseevidence",
+        "./cmd/afscp-evidence-verify",
+        "-run",
+        "^Test(RestoreReconciliationDecisionDeniesDangerousWritesUntilSafe|RestoreReconciliationDecisionPurgedStoragePresentDoesNotResurrect|RestoreReconciliationEvidenceRedactsSensitiveMaterial|RestoreReconciliationRejectsSecretShapedEvidenceRefsAndMarkers|RestoreReconciliationCleanObservationRequiresMarkersAndEvidence|RestoreReconciliationRunOnceCompletesCleanRun|RestoreReconciliationRunOnceFailsClosedWhenTargetSetIsEmptyOrMissingObservation|RestoreReconciliationRunOnceMismatchBlocksAndMarksIntervention|RestoreReconciliationRunOnceObservedMarkerMismatchBlocksAndDoesNotComplete|RunOnceRestoreReconciliationOnlyRunsWhenExplicitlyEnabled|RestoreReconciliationRunOncePurgedRepoNeverResurrects|RestoreReconciliationMigrationDefinesRunAndObservationTables|CommitRestoreReconciliationMismatchMarksRepoOperatorInterventionAndAudits|CommitRestoreReconciliationMismatchRequiresEligibleReconcilingRunBeforeSideEffects|RestoreReconciliationPurgedStoragePresentDoesNotResurrect|ObserveRestoreReconciliationTargetDerivesObservedMarkersFromCurrentRepoNotExpectedEcho|CompleteRestoreReconciliationRunRequiresAllReposObservedClean|RestoreReconciliationStoreDoesNotTouchCredentialsFencesOrStorageSideEffects|BeginExportRuntimeWriteRequestFailsClosedDuringRestoreReconciliationBeforeLedgerMutation|RestoreReconciliationModeDeniesExportCreateBeforePassword|RestoreReconciliationModeDeniesRestoreSaveLifecycleBeforeOperationCreate|RestoreReconciliationModeExportReplayDoesNotReturnAccess|RestoreReconciliationModeDeniesWorkloadMountMutationsAndPlanBeforeIntake|ErrorCodesExposeStableSchemaEnumOrder|ProductCallerOperationResponsesDoNotLeakStorageInternals|RunOnceRestoreReconciliationRunsBeforeOperationRecovery|RunOnceRestoreReconciliationBlockedSkipsOperationRecovery|RestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch|CurrentRepoManifestContainsP4bRestoreReconciliationEvidence|RestoreReconciliationReplacementRejectsWrongShapeBroadSelectorOrP1cOnly|RunCheckOnlyAcceptsRestoreReconciliationManifest)$"
       ],
-      "doc_only_allowed": true,
+      "anchors": [
+        "docs/contracts/restore-reconciliation-v1.md",
+        "internal/restorereconcile/reconcile.go",
+        "internal/store/postgres/restore_reconciliation.go",
+        "internal/api/operation_intake.go",
+        "internal/api/export_handler.go",
+        "internal/workerapp/run_once.go"
+      ],
+      "doc_only_allowed": false,
       "optional_gated": false,
-      "default_ga_required": false,
+      "default_ga_required": true,
       "pass_criteria": {
-        "kind": "seed_gap",
+        "kind": "positive_path",
         "assertions": [
-          "open"
+          "restore reconciliation safety passes in default mode"
         ]
       },
       "expected_runtime": "fast",
-      "scope": "doc-guard"
+      "scope": "package"
     },
     {
       "id": "seed_gap_residual_risk_catalog_open",
