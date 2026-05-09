@@ -1,30 +1,32 @@
 # GA Release Gates
 
-Status: active seed/baseline evidence gate definition.
+Status: active selector-driven GA release gate definition.
 
-AFSCP currently has one repo-local seed/baseline convergence gate:
+AFSCP has one authoritative repo-local GA release entrypoint:
 
 ```bash
 bash scripts/verify-ga-release.sh
 ```
 
-The command runs the release evidence manifest verifier in `-mode seed` today.
-A successful exit means the current repo-local seed/baseline convergence checks
-passed; it does not mean final GA release acceptance has passed. Final GA
-release acceptance must use this same unique repo-local entrypoint and evaluate
-final acceptance, for example by switching the manifest verifier to or including
-`-mode final`. Any required/final claim, acceptance item, or evidence entry that
-still carries a required/default `seed_gap_*_open` marker without an exact
-implemented/closed replacement, or an equivalent unresolved required/default
-seed-gap marker, must fail final acceptance. Selected optional positive gaps
-block final only when the authoritative final selector claims that optional
-capability. Unselected optional positive gaps may remain visible as
-future/fixture work and must not become default GA blockers. A seed-mode pass
-alone is only current repo-local seed/baseline evidence; it is never sufficient
-for final GA release. In this repo, final mode requires no unresolved
-required/default seed-gap markers and no unresolved selected optional positive
-seed-gap markers; unselected optional future/fixture gaps may remain visible.
-The phrase "no open seed gaps" is a legacy shorthand for that final-mode rule.
+The script is the only release gate entrypoint. It selects the manifest verifier
+mode from `docs/release-evidence/ga-release-selector.json`. When that selector
+is absent, or is present with `release_intent=convergence_seed`, the script runs
+seed/convergence verification. When the selector exists with
+`release_intent=final_candidate`, the same script must invoke the manifest
+verifier in final mode with `-selector docs/release-evidence/ga-release-selector.json`.
+
+Final mode rejects any required/default `seed_gap_*_open` marker without an
+exact implemented or closed replacement, and a selected optional gap produces a
+machine finding with a nonzero final-mode exit when the authoritative selector
+declares the corresponding optional capability. The default GA selector in this
+repo uses `claimed_optional_capabilities=[]`; the remaining workload, purge,
+template, and optional fixture gaps are therefore unselected optional/future
+gaps and do not block final. Once the selector claims an optional capability,
+the matching selected optional gap hard-fails final mode with a machine finding
+and nonzero exit. A direct `-mode final -check-only` run is only a structural
+check and cannot declare final acceptance; final acceptance comes only from
+`bash scripts/verify-ga-release.sh` running final mode without `-check-only`.
+
 Manual review, consumer adoption, sibling project status, generated-client
 approval, security approval, owner approval, and runbook meetings are not
 independent GA gate conditions.

@@ -16,19 +16,24 @@ exposes robust filesystem primitives and enforces storage boundaries.
 
 ## GA Release Gate
 
-AFSCP current release-readiness convergence is checked by this repo-local
-seed/baseline automated gate:
+AFSCP current release readiness is checked by the selector-driven GA release
+gate:
 
 ```bash
 bash scripts/verify-ga-release.sh
 ```
 
-The script exit code is authoritative for the current seed/baseline checks:
-exit code `0` means repo-local convergence evidence passed, and any nonzero
-exit code means the current convergence gate failed. This is not final GA
-release acceptance. Final GA release acceptance must use the same repo-local
-entrypoint in final mode, require no open seed gaps, and reject any required or
-final evidence still represented only by `seed_gap_*_open` markers.
+`bash scripts/verify-ga-release.sh` is the single authoritative GA release
+entrypoint. The script reads
+`docs/release-evidence/ga-release-selector.json`; in this repo that selector
+currently has `release_intent=final_candidate`, so the script runs final mode
+with `-selector docs/release-evidence/ga-release-selector.json`. Exit code `0`
+means the selected repo-local GA release evidence passed; any nonzero exit code
+means the selector-driven GA release gate failed.
+
+The current selector has `claimed_optional_capabilities=[]`. That means
+unselected optional/future gaps do not block default GA; final mode still rejects
+unresolved required/default gaps and selected optional positive gaps.
 
 ## Current Decision
 
@@ -94,7 +99,8 @@ handlers and operations are being implemented incrementally against accepted
 schemas, OpenAPI, auth, JVS, operation/audit, export, mount, and writer-session
 contracts. New or modified handlers and storage mutations must keep repo-local
 release evidence, fences, operation leases, audit behavior, and focused tests
-aligned. Do not claim final production GA from the seed/baseline script.
+aligned with the selector-driven GA release gate; the authoritative decision is
+the exit code from `bash scripts/verify-ga-release.sh`.
 
 ## License
 

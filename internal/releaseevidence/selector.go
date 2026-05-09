@@ -227,8 +227,20 @@ func validateFinalSelectorIdentity(selector ReleaseSelector, repoRoot, manifestP
 			findings = append(findings, Finding{Code: "selector.identity_digest_invalid", Message: fmt.Sprintf("%s must use sha256:<hex>", field.name)})
 		}
 	}
-	if strings.TrimSpace(selector.RollbackRollforwardPolicyRef) != "" && unsafeRepoLocalToken(selector.RollbackRollforwardPolicyRef) {
+	policyRef := strings.TrimSpace(selector.RollbackRollforwardPolicyRef)
+	if policyRef != "" && unsafeRepoLocalToken(policyRef) {
 		findings = append(findings, Finding{Code: "selector.rollback_rollforward_policy_ref_invalid", Message: "rollback_rollforward_policy_ref must be a repo-local safe path"})
+	} else if policyRef != "" {
+		refPath := filepath.ToSlash(filepath.Clean(policyRef))
+		if policyRef != AuthoritativeRollbackRollforwardPolicyPath || refPath != AuthoritativeRollbackRollforwardPolicyPath {
+			findings = append(findings, Finding{Code: "selector.rollback_rollforward_policy_ref_not_authoritative", Message: fmt.Sprintf("rollback_rollforward_policy_ref %s must be %s", refPath, AuthoritativeRollbackRollforwardPolicyPath)})
+		}
+		info, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(refPath)))
+		if err != nil {
+			findings = append(findings, Finding{Code: "selector.rollback_rollforward_policy_ref_missing", Message: fmt.Sprintf("rollback_rollforward_policy_ref %s must exist: %v", refPath, err)})
+		} else if info.IsDir() {
+			findings = append(findings, Finding{Code: "selector.rollback_rollforward_policy_ref_invalid", Message: fmt.Sprintf("rollback_rollforward_policy_ref %s must be a file", refPath)})
+		}
 	}
 	manifestDigest, manifestDigestErr := digestFile(filepath.Join(repoRoot, filepath.FromSlash(manifestPath)))
 	findings = append(findings, compareSelectorDigest("manifest_digest", selector.ManifestDigest, manifestDigest, manifestDigestErr)...)
@@ -324,6 +336,7 @@ func digestPolicyArtifactIdentitySet(repoRoot string) (string, error) {
 		"scripts/verify-ga-baseline.sh",
 		"docs/GA_RELEASE_GATES.md",
 		"docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md",
+		AuthoritativeRollbackRollforwardPolicyPath,
 	}
 	workflow := ".github/workflows/ga-release.yml"
 	if _, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(workflow))); err == nil {

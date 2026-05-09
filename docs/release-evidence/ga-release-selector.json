@@ -1,0 +1,13 @@
+{
+  "schema_version": "1",
+  "release_intent": "final_candidate",
+  "manifest_path": "docs/release-evidence/ga-manifest.json",
+  "seed_gap_policy": "reject_open_seed_gap",
+  "manifest_digest": "sha256:319edea343826ae35cf0937fa7732b7de291ec2d55a146163ce6ff8aa9813c03",
+  "selector_input_digest": "sha256:1ed0d4c48cddf536750889aaa550cff13fd699a5862be31bb251360ea9884685",
+  "schema_migration_set_digest": "sha256:ec2ce755f9a56e61fa5bf1ffbaac88d723a7a7ef0b51f22b6bbb6579ee89d4ff",
+  "policy_artifact_identity_digest": "sha256:a890bcd0e1d96560c5294905e515d1aabbb4143b1a194191be1710e66c06b7cc",
+  "rollback_rollforward_policy_ref": "docs/release-evidence/rollback-rollforward.md",
+  "final_acceptance_selector": [],
+  "claimed_optional_capabilities": []
+}

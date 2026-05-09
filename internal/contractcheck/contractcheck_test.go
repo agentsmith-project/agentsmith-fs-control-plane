@@ -2023,6 +2023,9 @@ func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
 		"GA implementation baseline",
 		"current implementation baseline",
 		"after the implementation baseline",
+		"current release readiness",
+		"current release-readiness",
+		"selector-driven current release",
 	}
 
 	for _, path := range paths {
@@ -2043,6 +2046,9 @@ func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
 			}
 			if !strings.Contains(text, "scripts/verify-ga-release.sh") {
 				t.Fatalf("%s must point GA release decisions at scripts/verify-ga-release.sh", path)
+			}
+			if filepath.Base(path) == "README.md" || filepath.Base(path) == "DEVELOPER_HANDOFF.md" {
+				assertNoStaleEntryDocReleaseGatePhrases(t, path, text)
 			}
 			hasCurrentBaseline := false
 			for _, phrase := range currentBaselinePhrases {
@@ -2073,18 +2079,13 @@ func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
 				t.Fatalf("%s must point GA release decisions at scripts/verify-ga-release.sh", path)
 			}
 			if filepath.Base(path) == "GA_RELEASE_GATES.md" {
-				normalizedText := strings.Join(strings.Fields(text), " ")
-				if !strings.Contains(normalizedText, "seed/baseline") ||
-					!strings.Contains(normalizedText, "final mode") ||
-					!strings.Contains(normalizedText, "no open seed gaps") {
-					t.Fatalf("%s must document the seed/final evidence boundary for scripts/verify-ga-release.sh", path)
-				}
+				assertSelectorDrivenFinalModeDocContract(t, path, text)
 			}
 		})
 	}
 }
 
-func TestCurrentRepoEntryDocsDocumentSeedFinalEvidenceBoundary(t *testing.T) {
+func TestCurrentRepoEntryDocsDocumentSelectorDrivenReleaseGate(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	for _, path := range []string{
 		filepath.Join(repoRoot, "README.md"),
@@ -2095,16 +2096,19 @@ func TestCurrentRepoEntryDocsDocumentSeedFinalEvidenceBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatalf("entry doc must exist at %s: %v", path, err)
 			}
-			normalizedText := strings.Join(strings.Fields(string(body)), " ")
+			text := string(body)
+			normalizedText := strings.Join(strings.Fields(text), " ")
+			assertNoStaleEntryDocReleaseGatePhrases(t, path, text)
 			for _, required := range []string{
-				"seed/baseline",
-				"not final GA release acceptance",
+				"selector-driven",
+				"release_intent=final_candidate",
 				"final mode",
-				"no open seed gaps",
 				"scripts/verify-ga-release.sh",
+				"claimed_optional_capabilities=[]",
+				"unselected optional/future gaps",
 			} {
 				if !strings.Contains(normalizedText, required) {
-					t.Fatalf("%s must document seed/final evidence boundary phrase %q", path, required)
+					t.Fatalf("%s must document selector-driven GA release gate phrase %q", path, required)
 				}
 			}
 		})
@@ -2125,17 +2129,7 @@ func TestCurrentRepoReadinessEvidenceHasCurrentImplementationStatus(t *testing.T
 	if !strings.Contains(text, "scripts/verify-ga-release.sh") {
 		t.Fatalf("%s must point GA release decisions at scripts/verify-ga-release.sh", path)
 	}
-	for _, required := range []string{
-		"-mode seed",
-		"seed/baseline",
-		"not final GA release acceptance",
-		"final mode",
-		"no open seed gaps",
-	} {
-		if !strings.Contains(normalizedText, required) {
-			t.Fatalf("%s must document seed/final evidence boundary phrase %q", path, required)
-		}
-	}
+	assertSelectorDrivenFinalModeDocContract(t, path, text)
 	forbidden := []string{
 		"GA pre-dev",
 		"GA pre-dev narrative draft",
@@ -2160,7 +2154,7 @@ func TestCurrentRepoGAVerificationScriptsAreAuthoritative(t *testing.T) {
 
 	releaseBody, err := os.ReadFile(releasePath)
 	if err != nil {
-		t.Fatalf("authoritative seed/baseline convergence gate must exist at %s: %v", releasePath, err)
+		t.Fatalf("authoritative release gate must exist at %s: %v", releasePath, err)
 	}
 	releaseText := string(releaseBody)
 	for _, required := range []string{
@@ -2179,7 +2173,7 @@ func TestCurrentRepoGAVerificationScriptsAreAuthoritative(t *testing.T) {
 		}
 	}
 	if !releaseScriptRunsEvidenceManifestVerifier(releaseText) {
-		t.Fatalf("%s must run evidence manifest verifier as a non-comment seed/baseline convergence command", releasePath)
+		t.Fatalf("%s must run evidence manifest verifier as a non-comment release command", releasePath)
 	}
 	for _, forbidden := range []string{
 		"mbos-sandbox",
@@ -2219,15 +2213,83 @@ func TestCurrentRepoGAVerificationScriptsAreAuthoritative(t *testing.T) {
 		t.Fatalf("scripts README must exist at %s: %v", readmePath, err)
 	}
 	readmeText := string(readmeBody)
-	if !strings.Contains(readmeText, "scripts/verify-ga-release.sh") ||
-		!strings.Contains(strings.ToLower(readmeText), "authoritative") ||
-		!strings.Contains(readmeText, "-mode seed") ||
-		!strings.Contains(readmeText, "seed/baseline") ||
-		!strings.Contains(readmeText, "final mode") ||
-		!strings.Contains(readmeText, "no open seed gaps") ||
-		!strings.Contains(strings.ToLower(readmeText), "release-only governance checks") ||
+	assertSelectorDrivenFinalModeDocContract(t, readmePath, readmeText)
+	if !strings.Contains(strings.ToLower(readmeText), "release-only governance checks") ||
 		!strings.Contains(readmeText, "scripts/verify-ga-baseline.sh") {
-		t.Fatalf("%s must document release-only governance checks, baseline checks, and scripts/verify-ga-release.sh as the authoritative seed/baseline convergence gate with a final-mode boundary", readmePath)
+		t.Fatalf("%s must document release-only governance checks and baseline checks", readmePath)
+	}
+}
+
+func assertSelectorDrivenFinalModeDocContract(t *testing.T, path, text string) {
+	t.Helper()
+
+	normalizedText := strings.Join(strings.Fields(text), " ")
+	for _, pattern := range []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b(runs|invokes)\b.*-mode seed\b.*\btoday\b`),
+		regexp.MustCompile(`(?i)\bcurrent\b.*-mode seed\b`),
+		regexp.MustCompile(`(?i)\bfuture final ga release acceptance must\b`),
+	} {
+		if pattern.MatchString(normalizedText) {
+			t.Fatalf("%s has stale selector-driven release gate pattern %q", path, pattern.String())
+		}
+	}
+	for _, forbidden := range []string{
+		"active seed/baseline evidence gate definition",
+		"currently has one repo-local seed/baseline convergence gate",
+		"current seed/baseline evidence mode",
+		"The command runs the release evidence manifest verifier in `-mode seed` today",
+		"invokes the release evidence manifest verifier with `-mode seed`",
+		"current `-mode seed`",
+		"future final GA release acceptance must",
+		"in seed mode today",
+		"seed-mode pass alone",
+		"current repo-local seed/baseline evidence",
+		"not final GA evidence",
+	} {
+		if strings.Contains(text, forbidden) || strings.Contains(normalizedText, forbidden) {
+			t.Fatalf("%s has stale selector-driven release gate phrase %q", path, forbidden)
+		}
+	}
+	for _, required := range []string{
+		"scripts/verify-ga-release.sh",
+		"selector-driven",
+		"docs/release-evidence/ga-release-selector.json",
+		"release_intent=convergence_seed",
+		"release_intent=final_candidate",
+		"final mode",
+		"-selector docs/release-evidence/ga-release-selector.json",
+		"claimed_optional_capabilities=[]",
+		"unselected optional/future gaps",
+		"hard",
+		"machine finding",
+		"nonzero exit",
+		"-mode final -check-only",
+		"cannot declare final acceptance",
+	} {
+		if !strings.Contains(normalizedText, required) {
+			t.Fatalf("%s must document selector-driven final mode contract phrase %q", path, required)
+		}
+	}
+}
+
+func assertNoStaleEntryDocReleaseGatePhrases(t *testing.T, path, text string) {
+	t.Helper()
+
+	normalizedText := strings.Join(strings.Fields(text), " ")
+	for _, forbidden := range []string{
+		"seed/baseline automated",
+		"current convergence gate failed",
+		"not final GA release acceptance",
+		"not final GA evidence",
+		"Final GA release acceptance must use the same repo-local entrypoint in final mode",
+		"Final GA release acceptance must use the same entrypoint in future/final mode",
+		"require no open seed gaps",
+		"no open seed gaps",
+		"Do not claim final production GA from seed/baseline script",
+	} {
+		if strings.Contains(text, forbidden) || strings.Contains(normalizedText, forbidden) {
+			t.Fatalf("%s has stale selector-driven GA release gate phrase %q", path, forbidden)
+		}
 	}
 }
 
@@ -2266,6 +2328,20 @@ func TestReleaseScriptConvergenceSelectorStaysSeed(t *testing.T) {
 	}
 	if !strings.Contains(output, "-mode seed") {
 		t.Fatalf("convergence selector must keep seed mode, log:\n%s", output)
+	}
+}
+
+func TestReleaseScriptUsesFinalModeWhenFinalSelectorExists(t *testing.T) {
+	root := writeGAReleaseScriptBehaviorFixture(t, "final_candidate")
+	output := runGAReleaseScriptFixture(t, root, []string{"FAKE_SELECTOR_INTENT=final_candidate"}, true)
+	if !strings.Contains(output, "-mode final") {
+		t.Fatalf("final_candidate selector must invoke final verifier, log:\n%s", output)
+	}
+	if !strings.Contains(output, "-selector docs/release-evidence/ga-release-selector.json") {
+		t.Fatalf("final verifier must receive authoritative selector path, log:\n%s", output)
+	}
+	if strings.Contains(output, "-mode seed") {
+		t.Fatalf("final_candidate selector must not keep seed verifier mode, log:\n%s", output)
 	}
 }
 
@@ -2364,18 +2440,27 @@ func TestCurrentRepoGAReleaseWorkflowRunsAuthoritativeScript(t *testing.T) {
 
 	body, err := os.ReadFile(workflowPath)
 	if err != nil {
-		t.Fatalf("repo-local seed/baseline convergence workflow must exist at %s: %v", workflowPath, err)
+		t.Fatalf("repo-local selector-driven GA release workflow must exist at %s: %v", workflowPath, err)
 	}
 	text := string(body)
 	for _, required := range []string{
-		"Seed/Baseline Convergence Gate",
+		"Selector-Driven GA Release Gate",
 		"actions/checkout",
 		"actions/setup-go",
-		"Run seed/baseline convergence gate",
+		"Run selector-driven GA release gate",
 		"bash scripts/verify-ga-release.sh",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("%s must include %q", workflowPath, required)
+		}
+	}
+	for _, forbidden := range []string{
+		"Seed/Baseline Convergence Gate",
+		"seed-baseline-convergence",
+		"Run seed/baseline convergence gate",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("%s has stale workflow release gate phrase %q", workflowPath, forbidden)
 		}
 	}
 }

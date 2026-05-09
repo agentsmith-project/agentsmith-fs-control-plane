@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	SchemaVersion                    = "2"
-	ReleaseGate                      = "scripts/verify-ga-release.sh"
-	AuthoritativeReleaseSelectorPath = "docs/release-evidence/ga-release-selector.json"
+	SchemaVersion                              = "2"
+	ReleaseGate                                = "scripts/verify-ga-release.sh"
+	AuthoritativeReleaseSelectorPath           = "docs/release-evidence/ga-release-selector.json"
+	AuthoritativeRollbackRollforwardPolicyPath = "docs/release-evidence/rollback-rollforward.md"
 
 	ManifestModeSeed  = "seed"
 	ManifestModeFinal = "final"

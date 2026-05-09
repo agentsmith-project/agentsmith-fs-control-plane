@@ -229,7 +229,9 @@ func TestFinalCheckOnlyCannotDeclareFinalAcceptance(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("expected exit 2, got %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "check-only") || !strings.Contains(stderr.String(), "final") {
+	if !strings.Contains(stderr.String(), "check-only") || !strings.Contains(stderr.String(), "final") ||
+		!strings.Contains(stderr.String(), "cannot declare final acceptance") ||
+		!strings.Contains(stderr.String(), "run the release script without -check-only") {
 		t.Fatalf("expected stderr to distinguish final check-only from final acceptance, got %q", stderr.String())
 	}
 }
@@ -764,6 +766,7 @@ func writeEvidenceCLISelector(t *testing.T, root, manifestPath, intent string) {
 		".github/workflows/ga-release.yml",
 		"docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md",
 		"docs/GA_RELEASE_GATES.md",
+		"docs/release-evidence/rollback-rollforward.md",
 		"scripts/verify-ga-baseline.sh",
 		"scripts/verify-ga-release.sh",
 	}))
@@ -782,6 +785,7 @@ func writeEvidenceCLISelectorIdentityFiles(t *testing.T, root string) {
 		"scripts/verify-ga-baseline.sh",
 		".github/workflows/ga-release.yml",
 		"docs/GA_RELEASE_GATES.md",
+		"docs/release-evidence/rollback-rollforward.md",
 	} {
 		writeEvidenceCLIFile(t, filepath.Join(root, filepath.FromSlash(path)), "fixture "+path+"\n")
 	}

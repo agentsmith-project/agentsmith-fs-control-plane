@@ -1,29 +1,36 @@
 # Scripts
 
-## Current GA Convergence Verification
+## GA Release Verification
 
 `scripts/verify-ga-release.sh` is the single authoritative repo-local
-convergence gate for the current seed/baseline evidence mode. It invokes the
-release evidence manifest verifier with `-mode seed`; a zero exit code means the
-current repo-local seed/baseline checks passed, not that final GA release
-acceptance has passed.
+release gate entrypoint.
 
 ```bash
 bash scripts/verify-ga-release.sh
 ```
 
-The convergence gate runs release-only governance checks first: whitespace
-checks, shell syntax checks for the release and baseline scripts, the seed-mode
-manifest check, and focused contract/governance tests. It then runs
+The release gate runs release-only governance checks first: whitespace checks,
+shell syntax checks for the release and baseline scripts, selector-driven
+manifest verification, and focused contract/governance tests. It then runs
 `scripts/verify-ga-baseline.sh` for the full local baseline, including the
-contract verifier CLI and the full Go test suite. The future final GA release
-acceptance must use this same unique repo-local entrypoint and evaluate final
-acceptance, for example by switching the manifest verifier to or including
-`-mode final`. Any required/final claim, acceptance item, or evidence entry
-with an open `seed_gap_*_open` marker or equivalent open seed gap must fail
-final acceptance; final mode requires no open seed gaps, and a seed-mode pass
-alone is not enough. It does not depend on sibling repositories, external
-product acceptance, or manual sign-off.
+contract verifier CLI and the full Go test suite.
+
+The script selects verifier mode from
+`docs/release-evidence/ga-release-selector.json`. With no authoritative final
+selector, or with `release_intent=convergence_seed`, it runs seed/convergence
+verification. When the selector exists with `release_intent=final_candidate`,
+the same script must run final mode with `-selector docs/release-evidence/ga-release-selector.json`.
+Direct `-mode final -check-only` validates structure only and cannot declare
+final acceptance.
+
+Final mode hard fails required/default `seed_gap_*_open` markers without exact
+implemented or closed replacements. The default GA selector has
+`claimed_optional_capabilities=[]`, so remaining workload, purge, template, and
+optional fixture gaps are unselected optional/future gaps and do not block final.
+If the selector declares an optional capability, the matching selected optional
+gap hard-fails final mode with a machine finding and nonzero exit. The gate does
+not depend on sibling repositories, external product acceptance, or manual
+sign-off.
 
 Optional fixture positive evidence is final-blocking only when the manifest
 entry explicitly declares fixture conformance with
@@ -43,7 +50,7 @@ bash scripts/verify-ga-baseline.sh
 
 Passing this script means the local implementation baseline checks passed. The
 baseline script is intentionally lower-level than the authoritative
-`scripts/verify-ga-release.sh` convergence gate and does not replace the
+`scripts/verify-ga-release.sh` release gate and does not replace the
 release-only governance checks.
 
 Future scripts may include local dev setup, smoke tests, contract generation,
