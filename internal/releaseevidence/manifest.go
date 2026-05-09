@@ -376,6 +376,9 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 		if defaultUserLoopAggregationSpecCanBeSeedOpen(spec.ID) && !requireDefaultLoopAggregation {
 			continue
 		}
+		if mode != ManifestModeFinal && requiredEvidenceSpecCanBeSeedOpen(spec.ID, itemsByID) {
+			continue
+		}
 		item, ok := itemsByID[spec.ID]
 		if !ok {
 			findings = append(findings, Finding{Code: "manifest.required_evidence_missing", Message: fmt.Sprintf("missing exact required evidence item %s", spec.ID)})
@@ -400,6 +403,9 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 			item.DefaultGARequired != spec.DefaultGARequired {
 			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.required_evidence_metadata_invalid", Message: fmt.Sprintf("required evidence item %s metadata does not match release contract", spec.ID)})
 		}
+		if spec.ID == "operator_repair_safe_unit" && !operatorRepairSafeCommandIsPrecise(item.Command) {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.operator_repair_safe_command_invalid", Message: "operator repair safety evidence command must use the exact operator repair selector, not a broad or helper-only selector"})
+		}
 	}
 	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest, requireDefaultLoopAggregation)...)
 	if requireDefaultLoopAggregation {
@@ -416,6 +422,14 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 
 func defaultUserLoopAggregationSpecCanBeSeedOpen(id string) bool {
 	return id == "default_user_loop_trace_unit" || id == "default_user_loop_positive_unit"
+}
+
+func requiredEvidenceSpecCanBeSeedOpen(id string, itemsByID map[string]Item) bool {
+	if id != "operator_repair_safe_unit" {
+		return false
+	}
+	item, ok := itemsByID["seed_gap_operator_repair_safe_open"]
+	return ok && item.EvidenceStatus == "placeholder" && item.ClaimID == "CLAIM_OPERATOR_REPAIR_SAFE" && item.PassCriteria.Kind == "seed_gap" && containsString(item.PassCriteria.Assertions, "open")
 }
 
 func defaultUserLoopAggregationPresent(itemsByID map[string]Item) bool {
@@ -490,6 +504,14 @@ func requiredEvidenceSpecsByID() map[string]requiredEvidenceSpec {
 		specs[spec.ID] = spec
 	}
 	return specs
+}
+
+func itemsByIDFromManifest(manifest Manifest) map[string]Item {
+	itemsByID := make(map[string]Item, len(manifest.Items))
+	for _, item := range manifest.Items {
+		itemsByID[item.ID] = item
+	}
+	return itemsByID
 }
 
 func defaultUserLoopPrereqMetadataMatchesSpec(item Item, spec requiredEvidenceSpec) bool {
@@ -580,6 +602,9 @@ func validateRequiredClaimSubclaimCoverage(manifest Manifest, requireDefaultLoop
 	for _, spec := range requiredClaimSubclaimSpecs {
 		if !requireDefaultLoopAggregation && spec.ClaimID == "CLAIM_DEFAULT_USER_LOOP" &&
 			(spec.SubclaimID == "default_user_loop_trace" || spec.SubclaimID == "default_user_loop_positive") {
+			continue
+		}
+		if spec.ClaimID == "CLAIM_OPERATOR_REPAIR_SAFE" && spec.SubclaimID == "operator_repair_safe" && requiredEvidenceSpecCanBeSeedOpen("operator_repair_safe_unit", itemsByIDFromManifest(manifest)) {
 			continue
 		}
 		if !requiredCoverage[spec] {
@@ -884,6 +909,42 @@ func defaultUserLoopAggregationCommand() []string {
 	}
 }
 
+func operatorRepairSafeCommand() []string {
+	return []string{
+		"go",
+		"test",
+		"-count=1",
+		"./internal/operatorrepair",
+		"./internal/store/postgres",
+		"./internal/api",
+		"./internal/contractcheck",
+		"./internal/releaseevidence",
+		"./cmd/afscp-evidence-verify",
+		"-run",
+		"^Test(OperatorRepairRejectsUnknownAction|OperatorRepairRequiresReasonEvidenceAndAffectedIDs|OperatorRepairRejectsSecretShapedReasonOrEvidenceRef|OperatorRepairRejectsAmbiguousOrFencedIntervention|OperatorRepairBuildsFailedRecordWithRedactedBeforeAfter|StoreImplementsOperatorRepairStore|CommitOperatorRepairFailedUsesAtomicCASAndAuditOutbox|CommitOperatorRepairFailedRequiresSafeInterventionShapeBeforeSQL|CommitOperatorRepairFailedCASRejectsConcurrentAmbiguousPhase|CommitOperatorRepairFailedNoRowsFailsClosed|OperatorRepairHandlerOperatorAdminTerminalizesUnsupportedInterventionWithAudit|OperatorRepairHandlerRejectsProductOperationInspectorBeforeStore|OperatorRepairHandlerRejectsInvalidBodyBeforeStore|OperatorRepairHandlerIdempotentReplayStableWithoutDuplicateAudit|InternalAPIShellServesOperatorRepairThroughInjectedStore|OperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL|OperatorRepairContractIsLinkedFromContractsReadme|CurrentRepoManifestContainsP3OperatorRepairSafeEvidence|OperatorRepairSafeReplacementRejectsWrongShapeOrBroadSelector|RunCheckOnlyAcceptsOperatorRepairSafeManifest)$",
+	}
+}
+
+func operatorRepairSafeCommandIsPrecise(command []string) bool {
+	if !sameStringSlice(command, operatorRepairSafeCommand()) {
+		return false
+	}
+	selector, ok := goTestRunSelector(command)
+	if !ok || broadGoTestSelector(selector) {
+		return false
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		return false
+	}
+	for _, testName := range operatorRepairSafeRequiredTestNames {
+		if !compiled.MatchString(testName) {
+			return false
+		}
+	}
+	return true
+}
+
 var defaultUserLoopAggregationRequiredTestNames = []string{
 	"TestDefaultUserLoopAggregationRejectsMissingPrereq",
 	"TestDefaultUserLoopAggregationRejectsPlaceholderPrereq",
@@ -892,6 +953,29 @@ var defaultUserLoopAggregationRequiredTestNames = []string{
 	"TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand",
 	"TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand",
 	"TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest",
+}
+
+var operatorRepairSafeRequiredTestNames = []string{
+	"TestOperatorRepairRejectsUnknownAction",
+	"TestOperatorRepairRequiresReasonEvidenceAndAffectedIDs",
+	"TestOperatorRepairRejectsSecretShapedReasonOrEvidenceRef",
+	"TestOperatorRepairRejectsAmbiguousOrFencedIntervention",
+	"TestOperatorRepairBuildsFailedRecordWithRedactedBeforeAfter",
+	"TestStoreImplementsOperatorRepairStore",
+	"TestCommitOperatorRepairFailedUsesAtomicCASAndAuditOutbox",
+	"TestCommitOperatorRepairFailedRequiresSafeInterventionShapeBeforeSQL",
+	"TestCommitOperatorRepairFailedCASRejectsConcurrentAmbiguousPhase",
+	"TestCommitOperatorRepairFailedNoRowsFailsClosed",
+	"TestOperatorRepairHandlerOperatorAdminTerminalizesUnsupportedInterventionWithAudit",
+	"TestOperatorRepairHandlerRejectsProductOperationInspectorBeforeStore",
+	"TestOperatorRepairHandlerRejectsInvalidBodyBeforeStore",
+	"TestOperatorRepairHandlerIdempotentReplayStableWithoutDuplicateAudit",
+	"TestInternalAPIShellServesOperatorRepairThroughInjectedStore",
+	"TestOperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL",
+	"TestOperatorRepairContractIsLinkedFromContractsReadme",
+	"TestCurrentRepoManifestContainsP3OperatorRepairSafeEvidence",
+	"TestOperatorRepairSafeReplacementRejectsWrongShapeOrBroadSelector",
+	"TestRunCheckOnlyAcceptsOperatorRepairSafeManifest",
 }
 
 var defaultUserLoopAggregationPrereqIDs = []string{
@@ -922,6 +1006,7 @@ var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "default_user_loop_webdav_access_unit", ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_webdav_access", AcceptanceID: "P1D_DEFAULT_USER_LOOP_WEBDAV_ACCESS", RiskID: "F2", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "webdav_export", EvidenceType: "integration", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "default_user_loop_trace_unit", ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_trace", AcceptanceID: "P1E_DEFAULT_USER_LOOP_TRACE", RiskID: "F2", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "caller_policy_readiness", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "default_user_loop_positive_unit", ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_positive", AcceptanceID: "P0_DEFAULT_USER_LOOP_POSITIVE", RiskID: "F2", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "caller_policy_readiness", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
+	{ID: "operator_repair_safe_unit", ClaimID: "CLAIM_OPERATOR_REPAIR_SAFE", SubclaimID: "operator_repair_safe", AcceptanceID: "P0_OPERATOR_REPAIR_SAFE", RiskID: "F11", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "repo_create_jvs_runtime_unavailable_recovery_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery", AcceptanceID: "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_create", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_terminalization_contract_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract", AcceptanceID: "P2A_OPERATION_TERMINALIZATION_CONTRACT", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_runtime_terminalization_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization", AcceptanceID: "P2B_OPERATION_RUNTIME_TERMINALIZATION", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
@@ -949,6 +1034,7 @@ var requiredClaimSubclaimSpecs = []requiredClaimSubclaimSpec{
 	{ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_webdav_access"},
 	{ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_trace"},
 	{ClaimID: "CLAIM_DEFAULT_USER_LOOP", SubclaimID: "default_user_loop_positive"},
+	{ClaimID: "CLAIM_OPERATOR_REPAIR_SAFE", SubclaimID: "operator_repair_safe"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization"},
@@ -964,7 +1050,7 @@ var seedGapSpecs = []seedGapSpec{
 	{ID: "seed_gap_admin_bootstrap_ready_open", ClaimID: "CLAIM_ADMIN_BOOTSTRAP_READY", RiskID: "F3", FinalSubclaimID: "admin_bootstrap_ready", FinalAcceptanceID: "P0_ADMIN_BOOTSTRAP_READY", FinalCapabilityID: "admin_bootstrap", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "admin bootstrap readiness passes in default mode", FinalOptionalGated: false, FinalDefaultGARequired: true},
 	{ID: "seed_gap_default_user_loop_open", ClaimID: "CLAIM_DEFAULT_USER_LOOP", RiskID: "F2", FinalSubclaimID: "default_user_loop_positive", FinalAcceptanceID: "P0_DEFAULT_USER_LOOP_POSITIVE", FinalCapabilityID: "caller_policy_readiness", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "default user loop passes in default mode", FinalOptionalGated: false, FinalDefaultGARequired: true},
 	{ID: "seed_gap_workload_fixture_ready_open", ClaimID: "CLAIM_WORKLOAD_FIXTURE_READY", RiskID: "F9", FinalSubclaimID: "workload_fixture_ready", FinalAcceptanceID: "P0_WORKLOAD_FIXTURE_READY", FinalCapabilityID: "workload_mount_binding", FinalEvidenceProfile: "repo-local-fixture-enabled", FinalDefaultMode: false, FinalFixtureEnabledMode: true, FinalExpectedRuntime: "integration", FinalScope: "repo-local-e2e", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "workload fixture readiness passes with repo-local fixture", FinalOptionalGated: true, FinalDefaultGARequired: false},
-	{ID: "seed_gap_operator_repair_safe_open", ClaimID: "CLAIM_OPERATOR_REPAIR_SAFE", RiskID: "F11", FinalSubclaimID: "operator_repair_safe", FinalAcceptanceID: "P0_OPERATOR_REPAIR_SAFE", FinalCapabilityID: "operation_recovery", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "operator repair safety passes in default mode", FinalOptionalGated: false, FinalDefaultGARequired: true},
+	{ID: "seed_gap_operator_repair_safe_open", ClaimID: "CLAIM_OPERATOR_REPAIR_SAFE", RiskID: "F11", FinalSubclaimID: "operator_repair_safe", FinalAcceptanceID: "P0_OPERATOR_REPAIR_SAFE", FinalCapabilityID: "operation_recovery", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "both", FinalPassCriteriaKind: "coverage_guard", FinalPassCriteriaAssert: "operator repair safety passes in default mode", FinalOptionalGated: false, FinalDefaultGARequired: true},
 	{ID: "seed_gap_purge_approval_safe_open", ClaimID: "CLAIM_PURGE_APPROVAL_SAFE", RiskID: "F13", FinalSubclaimID: "purge_approval_safe", FinalAcceptanceID: "P0_PURGE_APPROVAL_SAFE", FinalCapabilityID: "repo_purge", FinalEvidenceProfile: "repo-local-fixture-enabled", FinalDefaultMode: false, FinalFixtureEnabledMode: true, FinalExpectedRuntime: "integration", FinalScope: "repo-local-e2e", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "purge approval safety passes with repo-local fixture", FinalOptionalGated: true, FinalDefaultGARequired: false},
 	{ID: "seed_gap_restore_reconciliation_open", ClaimID: "CLAIM_RESTORE_RECONCILIATION", RiskID: "F14", FinalSubclaimID: "restore_reconciliation_safe", FinalAcceptanceID: "P0_RESTORE_RECONCILIATION_SAFE", FinalCapabilityID: "jvs_save_restore", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "positive", FinalPassCriteriaKind: "positive_path", FinalPassCriteriaAssert: "restore reconciliation safety passes in default mode", FinalOptionalGated: false, FinalDefaultGARequired: true},
 	{ID: "seed_gap_residual_risk_catalog_open", ClaimID: "CLAIM_RESIDUAL_RISK_CATALOG", RiskID: "F12", FinalSubclaimID: "residual_risk_catalog_guard", FinalAcceptanceID: "P0_RESIDUAL_RISK_CATALOG_GUARD", FinalCapabilityID: "", FinalEvidenceProfile: "default", FinalDefaultMode: true, FinalFixtureEnabledMode: false, FinalExpectedRuntime: "fast", FinalScope: "package", FinalNegativeOrPositive: "both", FinalPassCriteriaKind: "coverage_guard", FinalPassCriteriaAssert: "residual risk catalog guard covers final release evidence", FinalOptionalGated: false, FinalDefaultGARequired: false},

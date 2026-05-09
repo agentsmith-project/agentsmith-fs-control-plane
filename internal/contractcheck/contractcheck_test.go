@@ -78,6 +78,29 @@ paths:
 	assertNoFindingMessageContains(t, findings, "ensureVolume", CodeOpenAPINamespaceParameterMissing)
 }
 
+func TestOperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/operator-repair-v1.md")
+	requireContractPhrases(t, body,
+		"terminalize_unsupported_intervention_as_failed",
+		"operator_admin",
+		"operator_intervention_required",
+		"OPERATION_RECOVERY_REQUIRED",
+		"reason",
+		"evidence_ref",
+		"affected_ids",
+		"before_state",
+		"after_state",
+		"audit",
+		"arbitrary SQL",
+		"generic state rewrite",
+	)
+}
+
+func TestOperatorRepairContractIsLinkedFromContractsReadme(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/README.md")
+	requireContractPhrases(t, body, "operator-repair-v1.md")
+}
+
 func TestVerifyFilesIgnoresParameterRefsOutsideParametersBlock(t *testing.T) {
 	paths := writeContractFixture(t, contractFixture{
 		openapi: `
@@ -2036,6 +2059,42 @@ type contractPaths struct {
 	schema  string
 	docs    string
 	draft   string
+}
+
+func readRepoFileForContractTest(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(repoRootForContractTest(t), path))
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(body)
+}
+
+func requireContractPhrases(t *testing.T, body string, phrases ...string) {
+	t.Helper()
+	for _, phrase := range phrases {
+		if !strings.Contains(body, phrase) {
+			t.Fatalf("contract missing phrase %q", phrase)
+		}
+	}
+}
+
+func repoRootForContractTest(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(wd, "go.mod")); err == nil {
+			return wd
+		}
+		next := filepath.Dir(wd)
+		if next == wd {
+			t.Fatal("repo root with go.mod not found")
+		}
+		wd = next
+	}
 }
 
 func writeContractFixture(t *testing.T, fixture contractFixture) contractPaths {

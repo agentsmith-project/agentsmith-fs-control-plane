@@ -61,12 +61,14 @@ AFSCP must reject and audit:
 Product display-name rename and catalog detach are outside AFSCP. Repo storage
 lifecycle is in GA through [repo-lifecycle-v1.md](repo-lifecycle-v1.md).
 
-`GET /internal/v1/operations/{operationId}` is the only stable GA internal API
-inspection surface. GA does not define operations list/search APIs, correlated
-resource lookup APIs, intervention queue APIs, held-fence aggregation APIs, or
-audit outbox lag aggregation APIs. Those operator inspection workflows are
-implemented through runbooks, read-only database queries, observability
-dashboards, or deployment-side operator tooling.
+`GET /internal/v1/operations/{operationId}` is the stable GA internal API
+inspection surface. `POST /internal/v1/operations/{operationId}:repair` is the
+only stable GA operator repair write surface and is constrained by
+[operator-repair-v1.md](operator-repair-v1.md). GA does not define operations
+list/search APIs, correlated resource lookup APIs, intervention queue APIs,
+held-fence aggregation APIs, or audit outbox lag aggregation APIs. Those
+operator inspection workflows are implemented through runbooks, read-only
+database queries, observability dashboards, or deployment-side operator tooling.
 
 Restore preview discard is part of the current GA restore slice. The
 machine-readable API contract exposes the endpoint, operation type
@@ -191,6 +193,13 @@ existence; operator/admin policy denials remain authorization failures. This
 operation-by-ID endpoint is not a contract for operation enumeration, search,
 correlated-resource discovery, intervention aggregation, fence aggregation, or
 audit outbox aggregation.
+
+Operator repair returns an operator repair response, not a normal
+`OperationEnvelope`. It requires `operator_admin`, no namespace header, an
+allowlisted action, reason, evidence reference, affected IDs, before/after
+state, and an audit event. It must not expose arbitrary SQL, generic state
+rewrite, fence release, session mutation, restore plan mutation, or
+repo/storage/JVS mutation.
 
 `STORAGE_UNAVAILABLE` is for durable control-plane metadata/store outages,
 timeouts, or connection/query failures and should map to HTTP 503 with

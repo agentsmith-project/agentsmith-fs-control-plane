@@ -319,6 +319,65 @@
         "finished_at": { "type": ["string", "null"], "format": "date-time" }
       }
     },
+    "OperatorRepairAction": {
+      "type": "string",
+      "enum": ["terminalize_unsupported_intervention_as_failed"]
+    },
+    "OperatorRepairRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "reason", "evidence_ref", "affected_ids"],
+      "properties": {
+        "action": { "$ref": "#/$defs/OperatorRepairAction" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "evidence_ref": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "affected_ids": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      }
+    },
+    "OperatorRepairStateSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "$ref": "#/$defs/OperationState" },
+        "phase": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "OperatorRepairResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "operation_id", "before", "after", "repair_outcome", "reason", "evidence_ref", "affected_ids"],
+      "properties": {
+        "action": { "$ref": "#/$defs/OperatorRepairAction" },
+        "operation_id": { "$ref": "#/$defs/OperationId" },
+        "before": { "$ref": "#/$defs/OperatorRepairStateSnapshot" },
+        "after": { "$ref": "#/$defs/OperatorRepairStateSnapshot" },
+        "audit_event_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "repair_outcome": {
+          "type": "string",
+          "enum": ["terminalized_failed", "already_terminal"]
+        },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "evidence_ref": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "affected_ids": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "operation": { "$ref": "#/$defs/OperationRecord" }
+      }
+    },
     "Namespace": {
       "type": "object",
       "additionalProperties": false,

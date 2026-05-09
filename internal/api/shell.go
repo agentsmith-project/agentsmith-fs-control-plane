@@ -51,6 +51,7 @@ type InternalAPIShellConfig struct {
 	SavePointHistoryJVSRunner      JVSHistoryRunner
 	SavePointHistoryVolumeRoots    map[string]string
 	OperationInspectionReader      OperationInspectionStoreReader
+	OperatorRepairStore            OperatorRepairStore
 	RepoCreateIntakeStore          RepoCreateOperationIntakeStore
 	TemplateIntakeStore            TemplateOperationIntakeStore
 	DeploymentGlobalPolicy         AllowedCallerPolicy
@@ -296,6 +297,17 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	})
 	operationInspectionHandler = requestLogHandler(operationInspectionHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/operations/{operationId}", "getOperation")
 
+	operatorRepairHandler := OperatorRepairHandler(OperatorRepairHandlerConfig{
+		Store:             config.OperatorRepairStore,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: OperationInspectionPreflightPolicy{
+			DeploymentGlobal: deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+		},
+		Now:       config.Now,
+		AuditSink: config.AuditSink,
+	})
+	operatorRepairHandler = requestLogHandler(operatorRepairHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/operations/{operationId}:repair", "repairOperation")
+
 	restorePreviewDiscardHandler := RestorePreviewDiscardHandler(RestorePreviewDiscardHandlerConfig{
 		RepoReader:        config.RepoReader,
 		NamespaceReader:   config.NamespaceReader,
@@ -477,6 +489,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"cloneRepoTemplate":         cloneRepoTemplateHandler,
 		"restoreTombstonedRepo":     restoreTombstonedRepoHandler,
 		"getOperation":              operationInspectionHandler,
+		"repairOperation":           operatorRepairHandler,
 		"listSavePoints":            listSavePointsHandler,
 		"putNamespaceVolumeBinding": putBindingHandler,
 		"upsertNamespace":           upsertNamespaceHandler,

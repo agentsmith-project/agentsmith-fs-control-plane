@@ -320,7 +320,7 @@ func TestPackage0RequiresSeedClaimSubclaimCoverage(t *testing.T) {
 }
 
 func TestPackage0RequiresSeedGapMarkers(t *testing.T) {
-	const gapID = "seed_gap_operator_repair_safe_open"
+	const gapID = "seed_gap_purge_approval_safe_open"
 	tests := []struct {
 		name string
 		edit func(string) string
@@ -329,9 +329,9 @@ func TestPackage0RequiresSeedGapMarkers(t *testing.T) {
 		{
 			name: "missing gap marker",
 			edit: func(body string) string {
-				return replacePackage0ItemID(body, gapID, "seed_gap_operator_repair_safe_typo")
+				return replacePackage0ItemID(body, gapID, "seed_gap_purge_approval_safe_typo")
 			},
-			want: "CLAIM_OPERATOR_REPAIR_SAFE",
+			want: "CLAIM_PURGE_APPROVAL_SAFE",
 		},
 		{
 			name: "gap marker cannot become required",

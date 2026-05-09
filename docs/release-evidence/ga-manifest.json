@@ -1102,35 +1102,53 @@
       "scope": "doc-guard"
     },
     {
-      "id": "seed_gap_operator_repair_safe_open",
-      "evidence_status": "placeholder",
+      "id": "operator_repair_safe_unit",
+      "evidence_status": "implemented",
       "claim_id": "CLAIM_OPERATOR_REPAIR_SAFE",
-      "subclaim_id": "seed_gap_open",
-      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "subclaim_id": "operator_repair_safe",
+      "acceptance_id": "P0_OPERATOR_REPAIR_SAFE",
       "risk_id": "F11",
       "fixture_id": "",
-      "capability_id": "",
+      "capability_id": "operation_recovery",
       "evidence_profile": "default",
       "default_mode": true,
       "fixture_enabled_mode": false,
       "negative_or_positive": "both",
-      "evidence_type": "doc-guard",
-      "required": false,
-      "command": [],
-      "anchors": [
-        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/operatorrepair",
+        "./internal/store/postgres",
+        "./internal/api",
+        "./internal/contractcheck",
+        "./internal/releaseevidence",
+        "./cmd/afscp-evidence-verify",
+        "-run",
+        "^Test(OperatorRepairRejectsUnknownAction|OperatorRepairRequiresReasonEvidenceAndAffectedIDs|OperatorRepairRejectsSecretShapedReasonOrEvidenceRef|OperatorRepairRejectsAmbiguousOrFencedIntervention|OperatorRepairBuildsFailedRecordWithRedactedBeforeAfter|StoreImplementsOperatorRepairStore|CommitOperatorRepairFailedUsesAtomicCASAndAuditOutbox|CommitOperatorRepairFailedRequiresSafeInterventionShapeBeforeSQL|CommitOperatorRepairFailedCASRejectsConcurrentAmbiguousPhase|CommitOperatorRepairFailedNoRowsFailsClosed|OperatorRepairHandlerOperatorAdminTerminalizesUnsupportedInterventionWithAudit|OperatorRepairHandlerRejectsProductOperationInspectorBeforeStore|OperatorRepairHandlerRejectsInvalidBodyBeforeStore|OperatorRepairHandlerIdempotentReplayStableWithoutDuplicateAudit|InternalAPIShellServesOperatorRepairThroughInjectedStore|OperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL|OperatorRepairContractIsLinkedFromContractsReadme|CurrentRepoManifestContainsP3OperatorRepairSafeEvidence|OperatorRepairSafeReplacementRejectsWrongShapeOrBroadSelector|RunCheckOnlyAcceptsOperatorRepairSafeManifest)$"
       ],
-      "doc_only_allowed": true,
+      "anchors": [
+        "docs/contracts/operator-repair-v1.md",
+        "internal/operatorrepair/repair.go",
+        "internal/api/operator_repair_handler.go",
+        "internal/store/postgres/operator_repair.go"
+      ],
+      "doc_only_allowed": false,
       "optional_gated": false,
-      "default_ga_required": false,
+      "default_ga_required": true,
       "pass_criteria": {
-        "kind": "seed_gap",
+        "kind": "coverage_guard",
         "assertions": [
-          "open"
+          "operator repair safety passes in default mode",
+          "only operator_admin can invoke the allowlisted repair action",
+          "unsupported operator_intervention_required operation terminalization is atomic with audit",
+          "repair rejects arbitrary action, missing proof, sensitive evidence, active lease, and session/fence ambiguity"
         ]
       },
       "expected_runtime": "fast",
-      "scope": "doc-guard"
+      "scope": "package"
     },
     {
       "id": "seed_gap_purge_approval_safe_open",

@@ -109,6 +109,10 @@ components:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OrchestratorMountPlan
     OperationRecord:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OperationRecord
+    OperatorRepairRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OperatorRepairRequest
+    OperatorRepairResponse:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OperatorRepairResponse
   responses:
     Error:
       description: Standard error envelope.
@@ -1070,5 +1074,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OperationRecord"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/operations/{operationId}:repair:
+    post:
+      operationId: repairOperation
+      summary: Apply an allowlisted operator repair action to an intervention operation.
+      description: >
+        Operator repair does not require X-AFSCP-Namespace-Id. It requires an
+        operator_admin caller and only accepts the
+        terminalize_unsupported_intervention_as_failed action.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/OperationId
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperatorRepairRequest"
+      responses:
+        "400":
+          $ref: "#/components/responses/Error"
+        "200":
+          description: Operator repair result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperatorRepairResponse"
+        "409":
+          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"

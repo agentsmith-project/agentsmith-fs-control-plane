@@ -8,6 +8,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operatorrepair"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
@@ -61,6 +62,15 @@ type OperationLeaseStore interface {
 // leaving one without the other.
 type OperationWorkerCommitStore interface {
 	CommitOperationWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+}
+
+// OperatorRepairStore owns allowlisted operator repair writes. Implementations
+// must use a single conditional durable mutation that both updates the
+// operation and appends the audit outbox event; they must not expose generic
+// state rewrites or arbitrary SQL.
+type OperatorRepairStore interface {
+	ReadOperationForRepair(ctx context.Context, operationID string) (operations.OperationRecord, error)
+	CommitOperatorRepairFailed(ctx context.Context, request operatorrepair.CommitRequest) (operations.OperationRecord, error)
 }
 
 // VolumeEnsureOperationCommitStore atomically commits volume metadata, a

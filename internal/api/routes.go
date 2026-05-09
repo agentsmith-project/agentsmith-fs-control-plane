@@ -49,6 +49,7 @@ var internalV1RouteMetadata = []RouteMetadata{
 	{Method: http.MethodPost, Path: "/internal/v1/workload-mount-bindings/{mountBindingId}:release", OperationID: "releaseWorkloadMountBinding", Class: auth.RouteClassNamespaceBound, Mutating: true, RequiredRole: auth.RoleOrchestratorMount},
 	{Method: http.MethodPost, Path: "/internal/v1/workload-mount-bindings/{mountBindingId}:revoke", OperationID: "revokeWorkloadMountBinding", Class: auth.RouteClassNamespaceBound, Mutating: true, RequiredRole: auth.RoleMountAdmin},
 	{Method: http.MethodGet, Path: "/internal/v1/operations/{operationId}", OperationID: "getOperation", Class: auth.RouteClassOperationInspection, Mutating: false, RequiredRole: auth.RoleOperationInspector},
+	{Method: http.MethodPost, Path: "/internal/v1/operations/{operationId}:repair", OperationID: "repairOperation", Class: auth.RouteClassOperationInspection, Mutating: true, RequiredRole: auth.RoleOperatorAdmin},
 }
 
 type staticRouteClassResolver struct{}

@@ -233,6 +233,12 @@ func TestCreateOrReuseOperationIntakeReusesFailedOperationWithFlatError(t *testi
 func TestRouteOperationTypesCoverMutatingInternalV1Routes(t *testing.T) {
 	for _, route := range InternalV1RouteMetadata() {
 		got, ok := operations.OperationTypeForRouteOperationID(route.OperationID)
+		if route.OperationID == "repairOperation" {
+			if ok {
+				t.Fatalf("operator repair route must not map to queued operation type %q", got)
+			}
+			continue
+		}
 		if route.Mutating && !ok {
 			t.Fatalf("missing operation type mapping for mutating route operationId %q", route.OperationID)
 		}

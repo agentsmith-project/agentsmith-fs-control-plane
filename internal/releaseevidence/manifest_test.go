@@ -1427,6 +1427,106 @@ func TestDefaultUserLoopOpenSeedGapIsRejectedInFinalMode(t *testing.T) {
 	assertReleaseEvidenceFindingContains(t, findings, "default_user_loop_positive_unit")
 }
 
+func TestCurrentRepoManifestContainsP3OperatorRepairSafeEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	item, ok := manifestItemByID(manifest, "operator_repair_safe_unit")
+	if !ok {
+		t.Fatal("manifest missing operator_repair_safe_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_OPERATOR_REPAIR_SAFE" ||
+		item.SubclaimID != "operator_repair_safe" ||
+		item.AcceptanceID != "P0_OPERATOR_REPAIR_SAFE" ||
+		item.RiskID != "F11" ||
+		item.CapabilityID != "operation_recovery" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.NegativeOrPositive != "both" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		!item.DefaultGARequired ||
+		item.PassCriteria.Kind != "coverage_guard" ||
+		!containsString(item.PassCriteria.Assertions, "operator repair safety passes in default mode") {
+		t.Fatalf("%s shape = %+v, want default required operator repair evidence", item.ID, item)
+	}
+	if _, ok := manifestItemByID(manifest, "seed_gap_operator_repair_safe_open"); ok {
+		t.Fatal("operator repair evidence must close seed_gap_operator_repair_safe_open")
+	}
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/operatorrepair", "./internal/store/postgres", "./internal/api", "./internal/contractcheck", "./internal/releaseevidence", "./cmd/afscp-evidence-verify"}) {
+		t.Fatalf("%s command packages = %#v, want operatorrepair, postgres, api, contractcheck, releaseevidence, and CLI verifier", item.ID, packages)
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range operatorRepairSafeRequiredTestNames {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestOperatorRepairSafeReplacementRejectsWrongShapeOrBroadSelector(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(string) string
+		want string
+	}{
+		{
+			name: "placeholder",
+			edit: func(body string) string {
+				return replaceItemField(t, body, "operator_repair_safe_unit", `"evidence_status":"implemented"`, `"evidence_status":"placeholder"`)
+			},
+			want: "operator_repair_safe_unit",
+		},
+		{
+			name: "doc only",
+			edit: func(body string) string {
+				return replaceItemField(t, body, "operator_repair_safe_unit", `"doc_only_allowed":false`, `"doc_only_allowed":true`)
+			},
+			want: "operator_repair_safe_unit",
+		},
+		{
+			name: "broad selector",
+			edit: func(body string) string {
+				return replaceItemCommand(t, body, "operator_repair_safe_unit", `"command":["go","test","./internal/api","-run","Test.*Repair"]`)
+			},
+			want: "selector",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.edit(validReleaseEvidenceManifest()))
+
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.want)
+		})
+	}
+}
+
 func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1522,6 +1622,31 @@ func defaultUserLoopTraceRequiredTestNames() []string {
 		"TestAppendAuditEventInsertsPendingOutboxRecord",
 		"TestRecoverStaleAuditOutboxRecordsAtomicallyUpdatesRetryWaitWithoutTerminalFailure",
 		"TestMarkAuditOutboxDeliveryFailedChoosesRetryWaitOrFailedAndRedactsError",
+	}
+}
+
+func operatorRepairSafeRequiredTestNamesForTest() []string {
+	return []string{
+		"TestOperatorRepairRejectsUnknownAction",
+		"TestOperatorRepairRequiresReasonEvidenceAndAffectedIDs",
+		"TestOperatorRepairRejectsSecretShapedReasonOrEvidenceRef",
+		"TestOperatorRepairRejectsAmbiguousOrFencedIntervention",
+		"TestOperatorRepairBuildsFailedRecordWithRedactedBeforeAfter",
+		"TestStoreImplementsOperatorRepairStore",
+		"TestCommitOperatorRepairFailedUsesAtomicCASAndAuditOutbox",
+		"TestCommitOperatorRepairFailedRequiresSafeInterventionShapeBeforeSQL",
+		"TestCommitOperatorRepairFailedCASRejectsConcurrentAmbiguousPhase",
+		"TestCommitOperatorRepairFailedNoRowsFailsClosed",
+		"TestOperatorRepairHandlerOperatorAdminTerminalizesUnsupportedInterventionWithAudit",
+		"TestOperatorRepairHandlerRejectsProductOperationInspectorBeforeStore",
+		"TestOperatorRepairHandlerRejectsInvalidBodyBeforeStore",
+		"TestOperatorRepairHandlerIdempotentReplayStableWithoutDuplicateAudit",
+		"TestInternalAPIShellServesOperatorRepairThroughInjectedStore",
+		"TestOperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL",
+		"TestOperatorRepairContractIsLinkedFromContractsReadme",
+		"TestCurrentRepoManifestContainsP3OperatorRepairSafeEvidence",
+		"TestOperatorRepairSafeReplacementRejectsWrongShapeOrBroadSelector",
+		"TestRunCheckOnlyAcceptsOperatorRepairSafeManifest",
 	}
 }
 
@@ -1684,6 +1809,28 @@ func TestCurrentRepoManifestFinalModeRequiresSelector(t *testing.T) {
 }
 
 func goTestPackageForTestName(testName string) string {
+	if strings.HasPrefix(testName, "TestOperatorRepairRejects") ||
+		strings.HasPrefix(testName, "TestOperatorRepairRequires") ||
+		strings.HasPrefix(testName, "TestOperatorRepairBuilds") {
+		return "./internal/operatorrepair"
+	}
+	if strings.HasPrefix(testName, "TestOperatorRepairHandler") {
+		return "./internal/api"
+	}
+	if strings.HasPrefix(testName, "TestOperatorRepairContract") {
+		return "./internal/contractcheck"
+	}
+	if strings.HasPrefix(testName, "TestCurrentRepoManifestContainsP3OperatorRepairSafe") ||
+		strings.HasPrefix(testName, "TestOperatorRepairSafeReplacement") {
+		return "./internal/releaseevidence"
+	}
+	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsOperatorRepairSafe") {
+		return "./cmd/afscp-evidence-verify"
+	}
+	if strings.HasPrefix(testName, "TestStoreImplementsOperatorRepairStore") ||
+		strings.HasPrefix(testName, "TestCommitOperatorRepairFailed") {
+		return "./internal/store/postgres"
+	}
 	if strings.HasPrefix(testName, "TestCapabilityMatrixAdmissionDisabled") {
 		return "./internal/api"
 	}
@@ -1894,12 +2041,52 @@ func TestDefaultUserLoopAggregationRejectsWrongProfileDefaultModePolarityRequire
 func TestDefaultUserLoopAggregationRejectsPartialOnlyManifest(t *testing.T) {}
 func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyCommand(t *testing.T) {}
 func TestDefaultUserLoopAggregationRejectsBroadOrHelperOnlyPrereqCommand(t *testing.T) {}
+func TestCurrentRepoManifestContainsP3OperatorRepairSafeEvidence(t *testing.T) {}
+func TestOperatorRepairSafeReplacementRejectsWrongShapeOrBroadSelector(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "operatorrepair", "repair_test.go"), `package operatorrepair
+
+import "testing"
+
+func TestOperatorRepairRejectsUnknownAction(t *testing.T) {}
+func TestOperatorRepairRequiresReasonEvidenceAndAffectedIDs(t *testing.T) {}
+func TestOperatorRepairRejectsSecretShapedReasonOrEvidenceRef(t *testing.T) {}
+func TestOperatorRepairRejectsAmbiguousOrFencedIntervention(t *testing.T) {}
+func TestOperatorRepairBuildsFailedRecordWithRedactedBeforeAfter(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "store", "postgres", "operator_repair_test.go"), `package postgres
+
+import "testing"
+
+func TestStoreImplementsOperatorRepairStore(t *testing.T) {}
+func TestCommitOperatorRepairFailedUsesAtomicCASAndAuditOutbox(t *testing.T) {}
+func TestCommitOperatorRepairFailedRequiresSafeInterventionShapeBeforeSQL(t *testing.T) {}
+func TestCommitOperatorRepairFailedCASRejectsConcurrentAmbiguousPhase(t *testing.T) {}
+func TestCommitOperatorRepairFailedNoRowsFailsClosed(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "api", "operator_repair_handler_test.go"), `package api
+
+import "testing"
+
+func TestOperatorRepairHandlerOperatorAdminTerminalizesUnsupportedInterventionWithAudit(t *testing.T) {}
+func TestOperatorRepairHandlerRejectsProductOperationInspectorBeforeStore(t *testing.T) {}
+func TestOperatorRepairHandlerRejectsInvalidBodyBeforeStore(t *testing.T) {}
+func TestOperatorRepairHandlerIdempotentReplayStableWithoutDuplicateAudit(t *testing.T) {}
+func TestInternalAPIShellServesOperatorRepairThroughInjectedStore(t *testing.T) {}
+`)
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "contractcheck", "operator_repair_contract_test.go"), `package contractcheck
+
+import "testing"
+
+func TestOperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL(t *testing.T) {}
+func TestOperatorRepairContractIsLinkedFromContractsReadme(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
 import "testing"
 
 func TestRunCheckOnlyAcceptsDefaultUserLoopAggregationManifest(t *testing.T) {}
+func TestRunCheckOnlyAcceptsOperatorRepairSafeManifest(t *testing.T) {}
 `)
 	return root
 }
@@ -2097,6 +2284,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":true
     },
     {
+      "id":"operator_repair_safe_unit",
+      "capability_id":"operation_recovery",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/operatorrepair","./internal/store/postgres","./internal/api","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(OperatorRepairRejectsUnknownAction|OperatorRepairRequiresReasonEvidenceAndAffectedIDs|OperatorRepairRejectsSecretShapedReasonOrEvidenceRef|OperatorRepairRejectsAmbiguousOrFencedIntervention|OperatorRepairBuildsFailedRecordWithRedactedBeforeAfter|StoreImplementsOperatorRepairStore|CommitOperatorRepairFailedUsesAtomicCASAndAuditOutbox|CommitOperatorRepairFailedRequiresSafeInterventionShapeBeforeSQL|CommitOperatorRepairFailedCASRejectsConcurrentAmbiguousPhase|CommitOperatorRepairFailedNoRowsFailsClosed|OperatorRepairHandlerOperatorAdminTerminalizesUnsupportedInterventionWithAudit|OperatorRepairHandlerRejectsProductOperationInspectorBeforeStore|OperatorRepairHandlerRejectsInvalidBodyBeforeStore|OperatorRepairHandlerIdempotentReplayStableWithoutDuplicateAudit|InternalAPIShellServesOperatorRepairThroughInjectedStore|OperatorRepairContractDefinesAllowlistPreconditionsAuditAndForbiddenSQL|OperatorRepairContractIsLinkedFromContractsReadme|CurrentRepoManifestContainsP3OperatorRepairSafeEvidence|OperatorRepairSafeReplacementRejectsWrongShapeOrBroadSelector|RunCheckOnlyAcceptsOperatorRepairSafeManifest)$"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":true
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -2237,7 +2435,6 @@ var package0SeedGapFixtureMetadata = []struct {
 }{
 	{"seed_gap_admin_bootstrap_ready_open", "CLAIM_ADMIN_BOOTSTRAP_READY", "F3"},
 	{"seed_gap_workload_fixture_ready_open", "CLAIM_WORKLOAD_FIXTURE_READY", "F9"},
-	{"seed_gap_operator_repair_safe_open", "CLAIM_OPERATOR_REPAIR_SAFE", "F11"},
 	{"seed_gap_purge_approval_safe_open", "CLAIM_PURGE_APPROVAL_SAFE", "F13"},
 	{"seed_gap_restore_reconciliation_open", "CLAIM_RESTORE_RECONCILIATION", "F14"},
 	{"seed_gap_residual_risk_catalog_open", "CLAIM_RESIDUAL_RISK_CATALOG", "F12"},
@@ -2284,6 +2481,7 @@ var package0FixtureMetadata = []struct {
 	{"default_user_loop_webdav_access_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_webdav_access", "P1D_DEFAULT_USER_LOOP_WEBDAV_ACCESS", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "WebDAV access contributes only partial default user loop evidence"},
 	{"default_user_loop_trace_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_trace", "P1E_DEFAULT_USER_LOOP_TRACE", "F2", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "caller-scoped operation audit and recovery trace stays redacted and terminally visible"},
 	{"default_user_loop_positive_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_positive", "P0_DEFAULT_USER_LOOP_POSITIVE", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "default user loop passes in default mode"},
+	{"operator_repair_safe_unit", "CLAIM_OPERATOR_REPAIR_SAFE", "operator_repair_safe", "P0_OPERATOR_REPAIR_SAFE", "F11", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operator repair safety passes in default mode"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},

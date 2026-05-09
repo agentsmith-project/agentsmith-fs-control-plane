@@ -12,6 +12,7 @@ behavior.
 - [export-access-webdav-v1.md](export-access-webdav-v1.md)
 - [workload-mount-binding-v1.md](workload-mount-binding-v1.md)
 - [operation-state-machine-v1.md](operation-state-machine-v1.md)
+- [operator-repair-v1.md](operator-repair-v1.md)
 
 The implementation baseline, generated JSON schemas, and internal OpenAPI now
 exist. Continue new or changed endpoint handler and storage behavior only when

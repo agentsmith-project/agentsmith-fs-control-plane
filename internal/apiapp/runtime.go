@@ -178,6 +178,11 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		savePointHistoryJVSRunner = runner
 	}
 
+	var operatorRepairStore api.OperatorRepairStore
+	if repairStore, ok := handle.Store.(api.OperatorRepairStore); ok {
+		operatorRepairStore = repairStore
+	}
+
 	handler := api.NewInternalAPIShell(api.InternalAPIShellConfig{
 		Logger:                         options.Logger,
 		AuditSink:                      auditOutboxSink{store: handle.Store},
@@ -195,6 +200,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		SavePointHistoryJVSRunner:      savePointHistoryJVSRunner,
 		SavePointHistoryVolumeRoots:    cfg.API.SavePointHistory.VolumeRoots,
 		OperationInspectionReader:      handle.Store,
+		OperatorRepairStore:            operatorRepairStore,
 		RepoCreateIntakeStore:          handle.Store,
 		DeploymentGlobalCallers:        globalCallers,
 		DeploymentNamespaceCallers:     namespaceCallers,

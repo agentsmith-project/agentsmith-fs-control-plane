@@ -1087,7 +1087,7 @@ func verifyRouteOperationTypeMapping(path, body string, routes []api.RouteMetada
 	var findings []Finding
 	for _, route := range routes {
 		routeByOperationID[route.OperationID] = route
-		if !route.Mutating {
+		if !route.Mutating || route.OperationID == "repairOperation" {
 			continue
 		}
 		typ, ok := routeTypes[route.OperationID]
@@ -1915,7 +1915,7 @@ func findOperationID(body string) string {
 
 func isNamespaceBoundOperation(op openAPIOperation) bool {
 	switch op.OperationID {
-	case "ensureVolume", "getVolumeHealth", "getOperation":
+	case "ensureVolume", "getVolumeHealth", "getOperation", "repairOperation":
 		return false
 	default:
 		return true
