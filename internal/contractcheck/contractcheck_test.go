@@ -188,6 +188,20 @@ func TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary(t *
 	)
 }
 
+func TestProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/GA_RELEASE_GATES.md")
+	requireContractPhrases(t, body,
+		"Profile Boundary",
+		"default evidence",
+		"repo-local-fixture-enabled",
+		"deployment-runtime-support",
+		"claimed_optional_capabilities",
+		"selected optional positive",
+		"must not close default",
+		"must not close selected optional fixture conformance",
+	)
+}
+
 func TestVerifyFilesIgnoresParameterRefsOutsideParametersBlock(t *testing.T) {
 	paths := writeContractFixture(t, contractFixture{
 		openapi: `

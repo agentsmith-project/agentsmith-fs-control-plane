@@ -418,6 +418,9 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 			}
 			findings = append(findings, validateSecretPathRedactionEvidenceStrings(item)...)
 		}
+		if spec.ID == "profile_boundary_consistent_unit" && !profileBoundaryCommandIsPrecise(item.Command) {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.profile_boundary_command_invalid", Message: "profile boundary evidence command must use the exact profile boundary selector, not optional-only, runtime-envelope-only, manifest-only, contract-only, broad, or helper-only coverage"})
+		}
 	}
 	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest, requireDefaultLoopAggregation)...)
 	if requireDefaultLoopAggregation {
@@ -452,6 +455,9 @@ func requiredEvidenceSpecCanBeSeedOpen(id string, itemsByID map[string]Item) boo
 	case "secret_path_redaction_unit":
 		gapID = "seed_gap_secret_path_redaction_open"
 		claimID = "CLAIM_SECRET_PATH_REDACTION"
+	case "profile_boundary_consistent_unit":
+		gapID = "seed_gap_profile_boundary_open"
+		claimID = "CLAIM_PROFILE_BOUNDARY"
 	default:
 		return false
 	}
@@ -641,6 +647,9 @@ func validateRequiredClaimSubclaimCoverage(manifest Manifest, requireDefaultLoop
 			continue
 		}
 		if spec.ClaimID == "CLAIM_SECRET_PATH_REDACTION" && spec.SubclaimID == "secret_path_redaction" && requiredEvidenceSpecCanBeSeedOpen("secret_path_redaction_unit", itemsByIDFromManifest(manifest)) {
+			continue
+		}
+		if spec.ClaimID == "CLAIM_PROFILE_BOUNDARY" && spec.SubclaimID == "profile_boundary_consistent" && requiredEvidenceSpecCanBeSeedOpen("profile_boundary_consistent_unit", itemsByIDFromManifest(manifest)) {
 			continue
 		}
 		if !requiredCoverage[spec] {
@@ -1016,6 +1025,47 @@ func secretPathRedactionCommand() []string {
 	}
 }
 
+func profileBoundaryCommand() []string {
+	return []string{
+		"go",
+		"test",
+		"-count=1",
+		"./internal/releaseevidence",
+		"./internal/contractcheck",
+		"./cmd/afscp-evidence-verify",
+		"-run",
+		"^Test(" + strings.Join(profileBoundarySelectorNames(), "|") + ")$",
+	}
+}
+
+func profileBoundarySelectorNames() []string {
+	names := make([]string, 0, len(profileBoundaryRequiredTestNames))
+	for _, name := range profileBoundaryRequiredTestNames {
+		names = append(names, strings.TrimPrefix(name, "Test"))
+	}
+	return names
+}
+
+func profileBoundaryCommandIsPrecise(command []string) bool {
+	if !sameStringSlice(command, profileBoundaryCommand()) {
+		return false
+	}
+	selector, ok := goTestRunSelector(command)
+	if !ok || broadGoTestSelector(selector) {
+		return false
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		return false
+	}
+	for _, testName := range profileBoundaryRequiredTestNames {
+		if !compiled.MatchString(testName) {
+			return false
+		}
+	}
+	return true
+}
+
 func secretPathRedactionSelectorNames() []string {
 	names := make([]string, 0, len(secretPathRedactionRequiredTestNames))
 	for _, name := range secretPathRedactionRequiredTestNames {
@@ -1283,6 +1333,16 @@ var secretPathRedactionRequiredTestNames = []string{
 	"TestRunCheckOnlyAcceptsSecretPathRedactionManifest",
 }
 
+var profileBoundaryRequiredTestNames = []string{
+	"TestProfileBoundaryDefaultFinalRejectsOptionalFixtureAndRuntimeSupportSubstitutes",
+	"TestProfileBoundarySelectedOptionalOnlyBlocksWhenSelectorClaimsCapability",
+	"TestProfileBoundaryDeploymentRuntimeSupportCannotCloseDefaultOrOptionalPositive",
+	"TestProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation",
+	"TestCurrentRepoManifestContainsProfileBoundaryEvidence",
+	"TestProfileBoundaryReplacementRejectsWrongShapeBroadSelectorOptionalRuntimeOrHelperOnly",
+	"TestRunCheckOnlyAcceptsProfileBoundaryManifest",
+}
+
 var defaultUserLoopAggregationPrereqIDs = []string{
 	"default_user_loop_repo_projection_unit",
 	"default_user_loop_jvs_save_restore_unit",
@@ -1315,6 +1375,7 @@ var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "restore_reconciliation_safe_unit", ClaimID: "CLAIM_RESTORE_RECONCILIATION", SubclaimID: "restore_reconciliation_safe", AcceptanceID: "P0_RESTORE_RECONCILIATION_SAFE", RiskID: "F14", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "jvs_save_restore", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "discovery_surfaces_layered_unit", ClaimID: "CLAIM_DISCOVERY_SURFACES", SubclaimID: "discovery_surfaces_layered", AcceptanceID: "P0_DISCOVERY_SURFACES_LAYERED", RiskID: "F7", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "repo_projection", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "secret_path_redaction_unit", ClaimID: "CLAIM_SECRET_PATH_REDACTION", SubclaimID: "secret_path_redaction", AcceptanceID: "P0_SECRET_PATH_REDACTION", RiskID: "F10", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "path_redaction", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
+	{ID: "profile_boundary_consistent_unit", ClaimID: "CLAIM_PROFILE_BOUNDARY", SubclaimID: "profile_boundary_consistent", AcceptanceID: "P0_PROFILE_BOUNDARY_CONSISTENT", RiskID: "F1", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
 	{ID: "repo_create_jvs_runtime_unavailable_recovery_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery", AcceptanceID: "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_create", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_terminalization_contract_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract", AcceptanceID: "P2A_OPERATION_TERMINALIZATION_CONTRACT", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_runtime_terminalization_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization", AcceptanceID: "P2B_OPERATION_RUNTIME_TERMINALIZATION", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
@@ -1346,6 +1407,7 @@ var requiredClaimSubclaimSpecs = []requiredClaimSubclaimSpec{
 	{ClaimID: "CLAIM_RESTORE_RECONCILIATION", SubclaimID: "restore_reconciliation_safe"},
 	{ClaimID: "CLAIM_DISCOVERY_SURFACES", SubclaimID: "discovery_surfaces_layered"},
 	{ClaimID: "CLAIM_SECRET_PATH_REDACTION", SubclaimID: "secret_path_redaction"},
+	{ClaimID: "CLAIM_PROFILE_BOUNDARY", SubclaimID: "profile_boundary_consistent"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization"},

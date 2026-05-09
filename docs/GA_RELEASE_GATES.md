@@ -43,6 +43,19 @@ use the `repo-local-fixture-enabled` profile and declare
 `required=true`. A plain seed gap marker or a fixture test listed for future
 closure does not make that optional capability a default GA requirement.
 
+## Profile Boundary
+
+Default evidence, `repo-local-fixture-enabled` evidence, and
+`deployment-runtime-support` evidence are separate release profiles. Default
+evidence must stay `evidence_profile=default`, `default_mode=true`,
+`fixture_enabled_mode=false`, and `optional_gated=false`; it must not be closed
+by fixture-enabled positive evidence or deployment runtime support evidence. A
+selected optional positive becomes final-blocking only through the authoritative
+selector `claimed_optional_capabilities` and must use the exact fixture-enabled
+shape above. Deployment runtime support may provide repo-local schema, doc,
+audit, or runbook guard evidence, but it must not close default evidence and
+must not close selected optional fixture conformance.
+
 Owner roles in the active docs identify maintenance responsibility. They do not
 add role-approval conditions to the GA release gate.
 

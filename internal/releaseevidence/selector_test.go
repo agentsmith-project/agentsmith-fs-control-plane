@@ -157,7 +157,7 @@ func TestEvidenceStatusContract(t *testing.T) {
 		{
 			name: "seed gap must remain placeholder",
 			edit: func(body string) string {
-				return replacePackage0FieldForItem(body, "seed_gap_profile_boundary_open", `"evidence_status":"placeholder"`, `"evidence_status":"implemented"`)
+				return replacePackage0FieldForItem(body, "seed_gap_residual_risk_catalog_open", `"evidence_status":"placeholder"`, `"evidence_status":"implemented"`)
 			},
 			want: "placeholder",
 		},
@@ -378,6 +378,9 @@ func finalManifestWithRequiredDefaultSeedGapReplacements(body string) string {
 	body = withoutPackage0SeedGapMarkers(body)
 	for _, spec := range seedGapSpecs {
 		if optionalFixtureFinalShape(spec) {
+			continue
+		}
+		if strings.Contains(body, `"id":"`+finalReplacementIDForSeedGap(spec)+`"`) {
 			continue
 		}
 		body = appendReleaseEvidenceItem(body, seedGapReplacementItem(spec, `"bash","scripts/pass.sh"`, "scripts/pass.sh", "implemented"))

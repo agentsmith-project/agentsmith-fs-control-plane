@@ -1340,11 +1340,11 @@
       "scope": "doc-guard"
     },
     {
-      "id": "seed_gap_profile_boundary_open",
-      "evidence_status": "placeholder",
+      "id": "profile_boundary_consistent_unit",
+      "evidence_status": "implemented",
       "claim_id": "CLAIM_PROFILE_BOUNDARY",
-      "subclaim_id": "seed_gap_open",
-      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "subclaim_id": "profile_boundary_consistent",
+      "acceptance_id": "P0_PROFILE_BOUNDARY_CONSISTENT",
       "risk_id": "F1",
       "fixture_id": "",
       "capability_id": "",
@@ -1352,21 +1352,31 @@
       "default_mode": true,
       "fixture_enabled_mode": false,
       "expected_runtime": "fast",
-      "scope": "doc-guard",
+      "scope": "package",
       "negative_or_positive": "both",
-      "evidence_type": "doc-guard",
-      "required": false,
-      "command": [],
-      "anchors": [
-        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/releaseevidence",
+        "./internal/contractcheck",
+        "./cmd/afscp-evidence-verify",
+        "-run",
+        "^Test(ProfileBoundaryDefaultFinalRejectsOptionalFixtureAndRuntimeSupportSubstitutes|ProfileBoundarySelectedOptionalOnlyBlocksWhenSelectorClaimsCapability|ProfileBoundaryDeploymentRuntimeSupportCannotCloseDefaultOrOptionalPositive|ProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation|CurrentRepoManifestContainsProfileBoundaryEvidence|ProfileBoundaryReplacementRejectsWrongShapeBroadSelectorOptionalRuntimeOrHelperOnly|RunCheckOnlyAcceptsProfileBoundaryManifest)$"
       ],
-      "doc_only_allowed": true,
+      "anchors": [
+        "internal/releaseevidence/manifest.go",
+        "docs/GA_RELEASE_GATES.md"
+      ],
+      "doc_only_allowed": false,
       "optional_gated": false,
       "default_ga_required": false,
       "pass_criteria": {
-        "kind": "seed_gap",
+        "kind": "coverage_guard",
         "assertions": [
-          "open"
+          "profile boundary consistency covers final release evidence"
         ]
       }
     },

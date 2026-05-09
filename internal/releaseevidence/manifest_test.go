@@ -1948,6 +1948,197 @@ func TestSecretPathRedactionReplacementRejectsWrongShapeBroadSelectorOptionalDis
 	}
 }
 
+func TestProfileBoundaryDefaultFinalRejectsOptionalFixtureAndRuntimeSupportSubstitutes(t *testing.T) {
+	tests := []struct {
+		name string
+		body func() string
+		want string
+	}{
+		{name: "fixture profile substitute", body: func() string {
+			body := replaceItemField(t, validReleaseEvidenceManifest(), "profile_boundary_consistent_unit", `"evidence_profile":"default"`, `"evidence_profile":"repo-local-fixture-enabled"`)
+			body = replaceItemField(t, body, "profile_boundary_consistent_unit", `"default_mode":true`, `"default_mode":false`)
+			body = replaceItemField(t, body, "profile_boundary_consistent_unit", `"fixture_enabled_mode":false`, `"fixture_enabled_mode":true`)
+			body = replaceItemField(t, body, "profile_boundary_consistent_unit", `"optional_gated":false`, `"optional_gated":true`)
+			return body
+		}, want: "profile_boundary_consistent_unit"},
+		{name: "deployment runtime support substitute", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "profile_boundary_consistent_unit", `"evidence_profile":"default"`, `"evidence_profile":"deployment-runtime-support"`)
+		}, want: "deployment-runtime-support"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.body())
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.want)
+		})
+	}
+}
+
+func TestProfileBoundarySelectedOptionalOnlyBlocksWhenSelectorClaimsCapability(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	manifestPath := filepath.Join(root, "manifest.json")
+	body := finalManifestWithRequiredDefaultSeedGapReplacements(validReleaseEvidenceManifest())
+	writeReleaseEvidenceFile(t, manifestPath, body)
+	selectorPath := writeReleaseSelector(t, root, "manifest.json", "final_candidate", nil)
+
+	_, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeFinal, RepoRoot: root, SelectorPath: selectorPath, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned unexpected error: %v", err)
+	}
+	assertNoReleaseEvidenceFindingContains(t, findings, "CLAIM_PURGE_APPROVAL_SAFE")
+	assertNoReleaseEvidenceFindingContains(t, findings, "CLAIM_OPTIONAL_FIXTURE_CONFORMANT")
+
+	writeReleaseEvidenceFile(t, filepath.Join(root, selectorPath), releaseSelectorBodyWithDigests(t, root, "manifest.json", "final_candidate", []string{"repo_purge"}, nil))
+	_, findings, err = LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeFinal, RepoRoot: root, SelectorPath: selectorPath, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned unexpected error: %v", err)
+	}
+	assertReleaseEvidenceFindingContains(t, findings, "CLAIM_PURGE_APPROVAL_SAFE")
+	assertNoReleaseEvidenceFindingContains(t, findings, "CLAIM_OPTIONAL_FIXTURE_CONFORMANT")
+}
+
+func TestProfileBoundaryDeploymentRuntimeSupportCannotCloseDefaultOrOptionalPositive(t *testing.T) {
+	tests := []struct {
+		name string
+		body func() string
+		want string
+	}{
+		{name: "default replacement", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "profile_boundary_consistent_unit", `"evidence_profile":"default"`, `"evidence_profile":"deployment-runtime-support"`)
+		}, want: "deployment-runtime-support"},
+		{name: "selected optional positive replacement", body: func() string {
+			body := withoutPackage0SeedGapMarker(validReleaseEvidenceManifest(), "seed_gap_optional_fixture_conformant_open")
+			item := seedGapReplacementItem(seedGapSpecByID(t, "seed_gap_optional_fixture_conformant_open"), `"bash","scripts/pass.sh"`, "scripts/pass.sh", "implemented")
+			item = strings.Replace(item, `"evidence_profile":"repo-local-fixture-enabled"`, `"evidence_profile":"deployment-runtime-support"`, 1)
+			return appendReleaseEvidenceItem(body, item)
+		}, want: "deployment-runtime-support"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.body())
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.want)
+		})
+	}
+}
+
+func TestCurrentRepoManifestContainsProfileBoundaryEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+	item, ok := manifestItemByID(manifest, "profile_boundary_consistent_unit")
+	if !ok {
+		t.Fatal("manifest missing profile_boundary_consistent_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_PROFILE_BOUNDARY" ||
+		item.SubclaimID != "profile_boundary_consistent" ||
+		item.AcceptanceID != "P0_PROFILE_BOUNDARY_CONSISTENT" ||
+		item.RiskID != "F1" ||
+		item.CapabilityID != "" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.ExpectedRuntime != "fast" ||
+		item.Scope != "package" ||
+		item.NegativeOrPositive != "both" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		item.DefaultGARequired ||
+		item.PassCriteria.Kind != "coverage_guard" ||
+		!containsString(item.PassCriteria.Assertions, "profile boundary consistency covers final release evidence") {
+		t.Fatalf("%s shape = %+v, want default required profile boundary evidence", item.ID, item)
+	}
+	if _, ok := manifestItemByID(manifest, "seed_gap_profile_boundary_open"); ok {
+		t.Fatal("profile boundary evidence must close seed_gap_profile_boundary_open")
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range profileBoundaryRequiredTestNamesForTest {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestProfileBoundaryReplacementRejectsWrongShapeBroadSelectorOptionalRuntimeOrHelperOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		body func() string
+		want string
+	}{
+		{name: "placeholder", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "profile_boundary_consistent_unit", `"evidence_status":"implemented"`, `"evidence_status":"placeholder"`)
+		}, want: "profile_boundary_consistent_unit"},
+		{name: "doc only", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "profile_boundary_consistent_unit", `"doc_only_allowed":false`, `"doc_only_allowed":true`)
+		}, want: "profile_boundary_consistent_unit"},
+		{name: "broad selector", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "profile_boundary_consistent_unit", `"command":["go","test","-count=1","./internal/releaseevidence","-run","Test.*Profile"]`)
+		}, want: "profile"},
+		{name: "manifest only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "profile_boundary_consistent_unit", `"command":["go","test","-count=1","./internal/releaseevidence","-run","^Test(CurrentRepoManifestContainsProfileBoundaryEvidence)$"]`)
+		}, want: "profile"},
+		{name: "contract only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "profile_boundary_consistent_unit", `"command":["go","test","-count=1","./internal/contractcheck","-run","^Test(ProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation)$"]`)
+		}, want: "profile"},
+		{name: "optional only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "profile_boundary_consistent_unit", `"command":["go","test","-count=1","./internal/releaseevidence","-run","^Test(ProfileBoundarySelectedOptionalOnlyBlocksWhenSelectorClaimsCapability)$"]`)
+		}, want: "profile"},
+		{name: "runtime envelope only", body: func() string {
+			body := replaceItemField(t, validReleaseEvidenceManifest(), "profile_boundary_consistent_unit", `"evidence_profile":"default"`, `"evidence_profile":"deployment-runtime-support"`)
+			return replaceItemField(t, body, "profile_boundary_consistent_unit", `"command":["go","test","-count=1","./internal/releaseevidence","./internal/contractcheck","./cmd/afscp-evidence-verify","-run","^Test(ProfileBoundaryDefaultFinalRejectsOptionalFixtureAndRuntimeSupportSubstitutes|ProfileBoundarySelectedOptionalOnlyBlocksWhenSelectorClaimsCapability|ProfileBoundaryDeploymentRuntimeSupportCannotCloseDefaultOrOptionalPositive|ProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation|CurrentRepoManifestContainsProfileBoundaryEvidence|ProfileBoundaryReplacementRejectsWrongShapeBroadSelectorOptionalRuntimeOrHelperOnly|RunCheckOnlyAcceptsProfileBoundaryManifest)$"]`, `"command":["bash","scripts/pass.sh"]`)
+		}, want: "deployment-runtime-support"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.body())
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.want)
+		})
+	}
+}
+
+var profileBoundaryRequiredTestNamesForTest = []string{
+	"TestProfileBoundaryDefaultFinalRejectsOptionalFixtureAndRuntimeSupportSubstitutes",
+	"TestProfileBoundarySelectedOptionalOnlyBlocksWhenSelectorClaimsCapability",
+	"TestProfileBoundaryDeploymentRuntimeSupportCannotCloseDefaultOrOptionalPositive",
+	"TestProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation",
+	"TestCurrentRepoManifestContainsProfileBoundaryEvidence",
+	"TestProfileBoundaryReplacementRejectsWrongShapeBroadSelectorOptionalRuntimeOrHelperOnly",
+	"TestRunCheckOnlyAcceptsProfileBoundaryManifest",
+}
+
 var secretPathRedactionRequiredTestNamesForTest = []string{
 	"TestSecretPathRedactionCorpusCoversForbiddenKeysAndRawStringForms",
 	"TestSecretPathRedactionAuditOutboxAndStableEventsUseCommonRedactor",
@@ -1984,7 +2175,7 @@ func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1b(t *testing.T) 
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_profile_boundary_open",
+		"seed_gap_residual_risk_catalog_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
 		if !ok {
@@ -2014,7 +2205,7 @@ func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1c(t *testing.T) 
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_profile_boundary_open",
+		"seed_gap_residual_risk_catalog_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
 		if !ok {
@@ -2237,6 +2428,16 @@ func goTestPackageForTestName(testName string) string {
 	}
 	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsSecretPathRedaction") {
 		return "./cmd/afscp-evidence-verify"
+	}
+	if strings.HasPrefix(testName, "TestProfileBoundaryContract") {
+		return "./internal/contractcheck"
+	}
+	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsProfileBoundary") {
+		return "./cmd/afscp-evidence-verify"
+	}
+	if strings.HasPrefix(testName, "TestProfileBoundary") ||
+		strings.HasPrefix(testName, "TestCurrentRepoManifestContainsProfileBoundary") {
+		return "./internal/releaseevidence"
 	}
 	if strings.HasPrefix(testName, "TestCapabilityMatrixAdmissionDisabled") {
 		return "./internal/api"
@@ -2474,6 +2675,11 @@ func TestCurrentRepoManifestContainsDiscoverySurfacesEvidence(t *testing.T) {}
 func TestDiscoverySurfacesReplacementRejectsWrongShapeBroadSelectorMatrixOnlyOrRuntimeOnly(t *testing.T) {}
 func TestCurrentRepoManifestContainsSecretPathRedactionEvidence(t *testing.T) {}
 func TestSecretPathRedactionReplacementRejectsWrongShapeBroadSelectorOptionalDiscoveryRuntimeOrHelperOnly(t *testing.T) {}
+func TestProfileBoundaryDefaultFinalRejectsOptionalFixtureAndRuntimeSupportSubstitutes(t *testing.T) {}
+func TestProfileBoundarySelectedOptionalOnlyBlocksWhenSelectorClaimsCapability(t *testing.T) {}
+func TestProfileBoundaryDeploymentRuntimeSupportCannotCloseDefaultOrOptionalPositive(t *testing.T) {}
+func TestCurrentRepoManifestContainsProfileBoundaryEvidence(t *testing.T) {}
+func TestProfileBoundaryReplacementRejectsWrongShapeBroadSelectorOptionalRuntimeOrHelperOnly(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "operatorrepair", "repair_test.go"), `package operatorrepair
 
@@ -2514,6 +2720,7 @@ func TestOperatorRepairContractIsLinkedFromContractsReadme(t *testing.T) {}
 func TestRestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch(t *testing.T) {}
 func TestDiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries(t *testing.T) {}
 func TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary(t *testing.T) {}
+func TestProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
@@ -2524,6 +2731,7 @@ func TestRunCheckOnlyAcceptsOperatorRepairSafeManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsRestoreReconciliationManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsDiscoverySurfacesManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsSecretPathRedactionManifest(t *testing.T) {}
+func TestRunCheckOnlyAcceptsProfileBoundaryManifest(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "restorereconcile", "restore_reconciliation_test.go"), `package restorereconcile
 
@@ -2846,6 +3054,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":true
     },
     {
+      "id":"profile_boundary_consistent_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/releaseevidence","./internal/contractcheck","./cmd/afscp-evidence-verify","-run","^Test(ProfileBoundaryDefaultFinalRejectsOptionalFixtureAndRuntimeSupportSubstitutes|ProfileBoundarySelectedOptionalOnlyBlocksWhenSelectorClaimsCapability|ProfileBoundaryDeploymentRuntimeSupportCannotCloseDefaultOrOptionalPositive|ProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation|CurrentRepoManifestContainsProfileBoundaryEvidence|ProfileBoundaryReplacementRejectsWrongShapeBroadSelectorOptionalRuntimeOrHelperOnly|RunCheckOnlyAcceptsProfileBoundaryManifest)$"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -2989,7 +3208,6 @@ var package0SeedGapFixtureMetadata = []struct {
 	{"seed_gap_purge_approval_safe_open", "CLAIM_PURGE_APPROVAL_SAFE", "F13"},
 	{"seed_gap_residual_risk_catalog_open", "CLAIM_RESIDUAL_RISK_CATALOG", "F12"},
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
-	{"seed_gap_profile_boundary_open", "CLAIM_PROFILE_BOUNDARY", "F1"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
 	{"seed_gap_workflow_hardening_guard_open", "CLAIM_WORKFLOW_HARDENING_GUARD", "F18"},
@@ -3033,6 +3251,7 @@ var package0FixtureMetadata = []struct {
 	{"restore_reconciliation_safe_unit", "CLAIM_RESTORE_RECONCILIATION", "restore_reconciliation_safe", "P0_RESTORE_RECONCILIATION_SAFE", "F14", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "restore reconciliation safety passes in default mode"},
 	{"discovery_surfaces_layered_unit", "CLAIM_DISCOVERY_SURFACES", "discovery_surfaces_layered", "P0_DISCOVERY_SURFACES_LAYERED", "F7", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "discovery surfaces pass layered default checks"},
 	{"secret_path_redaction_unit", "CLAIM_SECRET_PATH_REDACTION", "secret_path_redaction", "P0_SECRET_PATH_REDACTION", "F10", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "secret path redaction denies secret path disclosure"},
+	{"profile_boundary_consistent_unit", "CLAIM_PROFILE_BOUNDARY", "profile_boundary_consistent", "P0_PROFILE_BOUNDARY_CONSISTENT", "F1", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "profile boundary consistency covers final release evidence"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},
