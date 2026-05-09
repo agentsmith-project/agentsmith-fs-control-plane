@@ -79,7 +79,7 @@ deployment state can become a GA blocker or substitute.
 | Default safety/ops | Capability matrix, API admission, worker execution/recovery, readyz/discovery, operator inspection, stable errors, operation/audit/recovery terminalization. | P2 owns matrix and terminalization; P3 owns shared operator repair contract/test suite/audit schema. | Do not let readyz replace actor-specific contracts. Do not use ad hoc SQL or manual review as the safety mechanism. |
 | Default negatives | Workload mount, template/clone, purge/break-glass, and real deployment runtime are disabled/denied/recovery/fail-closed by default. | P2 owns default negative admission/recovery evidence; P4 owns purge approval fixture-positive and default denial evidence. | Do not skip default negative evidence because optional positives are unselected. |
 | Optional fixture positives | Optional positive capability evidence can block final only when selected by the final selector. | P4 owns repo-local fixture positive evidence; P0/P5 own selector semantics and final blocking. | Do not infer optional positive final-required from manifest shape alone. Do not use deployment runtime support as optional fixture conformance. |
-| Deployment-runtime-support | Runtime support is an envelope: detection, configuration, redaction, runbook, risk acceptance, fixture docs. It is never a required local GA positive gate. | P5 owns final wording and risk envelope evidence. | Do not let real CSI/POSIX/subPath/orchestrator/deployment state become repo-local final proof. |
+| Deployment-runtime-support | Runtime support is an envelope: detection, configuration, redaction, runbook, structured residual risk records, fixture docs. It is never a required local GA positive gate. | P5 owns final wording and risk envelope evidence. | Do not let real CSI/POSIX/subPath/orchestrator/deployment state become repo-local final proof. |
 | Non-goals | No business catalog, connector UI, external orchestrator implementation, template marketplace, manual release approval, sibling gate, or production deployment gate. | All packages preserve this boundary; P5 doc-sync removes stale wording. | Do not introduce business project names or make caller product lifecycle an AFSCP gate. |
 
 ## Canonical Optional Rule
@@ -117,10 +117,10 @@ test names may differ.
 | `CLAIM_TEMPLATE_QUOTA_BOUNDARY` | Default negative plus selected optional subclaim | Template/clone default denial, same-namespace/same-volume fixture boundary when selected, quota machine-readable status and no hard-enforcement implication. | P1/P4c/P5 |
 | `CLAIM_PURGE_APPROVAL_SAFE` | Selected optional positive | Fixture approval object; expiry/scope/policy/hash/replay negatives; audit hash binding. Default purge denial belongs to `CLAIM_OPTIONAL_DENIED_SAFE` and remains always required. | P4 |
 | `CLAIM_RESTORE_RECONCILIATION` | Default safety | Backup/restore reconciliation; dangerous writes denied; no credential reissue; no purged resurrection; mismatch to intervention. | P4 |
-| `CLAIM_RESIDUAL_RISK_CATALOG` | Default safety/runtime-risk subclaim | Residual-risk acceptance uses predefined risk IDs, scope, expiry/review point, evidence reference, and audit shape; not human GA approval. | P3/P4/P5 |
+| `CLAIM_RESIDUAL_RISK_CATALOG` | Default safety/runtime-risk subclaim | Structured residual risk records use predefined risk IDs, scope, expiry/review point, evidence reference, and audit shape; not a human release decision. | P3/P4/P5 |
 | `CLAIM_RELEASE_GATE_TRACEABLE` | Release safety | Single release script; selector/digest/artifact identity; generated reports; seed vs final semantics. | P0/P5 |
 | `CLAIM_WORKFLOW_HARDENING_GUARD` | Release safety subclaim | Repo-local workflow YAML/script declarations for single gate, permissions, artifact/report publication, and no final bypass. | P5 |
-| `CLAIM_DEPLOYMENT_RISK_ENVELOPE` | Runtime support only | Runtime configuration, detection, redaction, rollback/roll-forward, runbook, residual-risk acceptance. Never required local positive. | P5 |
+| `CLAIM_DEPLOYMENT_RISK_ENVELOPE` | Runtime support only | Runtime configuration, detection, redaction, rollback/roll-forward, runbook, structured residual risk record linkage. Never required local positive. | P5 |
 
 Default-loop evidence must not absorb other default claims. A P1b/P1c/P1d PR can
 add partial default-loop evidence, but it must not close
@@ -897,7 +897,7 @@ do not infer release status from this highlight list alone.
 | `seed_gap_secret_path_redaction_open` | `CLAIM_SECRET_PATH_REDACTION` | P1/P2/P5 | Default safety; final requires redaction evidence for touched caller/operator/runtime/audit/evidence surfaces. |
 | `seed_gap_discovery_surfaces_open` | `CLAIM_DISCOVERY_SURFACES` | P2/P3 | Default safety; caller/orchestrator/operator/readyz surfaces must stay layered. |
 | `seed_gap_profile_boundary_open` | `CLAIM_PROFILE_BOUNDARY` | P0/P5 | Default release/profile guard; final requires profile boundary evidence. |
-| `seed_gap_residual_risk_catalog_open` | `CLAIM_RESIDUAL_RISK_CATALOG` | P3/P4/P5 | Default/runtime-risk safety; risk acceptance shape is repo-local schema/fixture/audit, not human approval. |
+| `seed_gap_residual_risk_catalog_open` | `CLAIM_RESIDUAL_RISK_CATALOG` | P3/P4/P5 | Default/runtime-risk safety; residual risk record shape is repo-local schema/fixture/audit, not a human release decision. |
 | `seed_gap_optional_fixture_conformant_open` | `CLAIM_OPTIONAL_FIXTURE_CONFORMANT` | P4/P5 | Selected optional umbrella; does not block default final unless selector claims optional capability. |
 | `seed_gap_workload_fixture_ready_open` | `CLAIM_WORKLOAD_FIXTURE_READY` | P4c | Selected optional workload fixture; only required under `repo-local-fixture-enabled` when selected by `claimed_optional_capabilities`. |
 | `seed_gap_template_quota_boundary_open` | `CLAIM_TEMPLATE_QUOTA_BOUNDARY` | P4c/P5 | Default template/quota wording safety plus selected template positive boundary. Keep selected positive non-default. |
@@ -1040,7 +1040,7 @@ Evidence status:
 | Operation terminalization | Operation inventory, side-effect boundary, failed vs intervention, idempotent replay, historical visibility, and real worker/store recovery tests for runtime closure. | Contract table alone for runtime behavior. |
 | Optional positives | Repo-local fixture-enabled evidence selected by final selector; default profile must still prove disabled/denied/fail-closed. | Manifest item marked required without selector claim; deployment-runtime-support. |
 | Workload/template/purge positive and hard quota enforcement | Keep as selected optional or product wording/risk work unless explicitly selected by selector and exact fixture evidence exists. | Treating these as default positive scope. |
-| Shared-volume/deployment runtime envelope | Detection, config, redaction, runbook, risk acceptance schema/audit; never required local positive proof. | CSI/POSIX/subPath/orchestrator/production state as GA gate. |
+| Shared-volume/deployment runtime envelope | Detection, config, redaction, runbook, structured residual risk schema/audit; never required local positive proof. | CSI/POSIX/subPath/orchestrator/production state as GA gate. |
 | Product-neutral conformance | Repo-local smoke/fixture hooks for caller credential relay, connector WebDAV access/revoke, orchestrator default-denied/discovery, operation inspection negative cases. | Sibling or business product acceptance. |
 | Release evidence | Selector, digests, artifact identity, generated reports, workflow hardening, rollback/roll-forward, and release script guard. | Manual `-mode final`, generated report as same-run input, or human sign-off. |
 

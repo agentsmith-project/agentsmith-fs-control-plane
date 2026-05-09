@@ -1278,11 +1278,11 @@
       "scope": "package"
     },
     {
-      "id": "seed_gap_residual_risk_catalog_open",
-      "evidence_status": "placeholder",
+      "id": "residual_risk_catalog_guard_unit",
+      "evidence_status": "implemented",
       "claim_id": "CLAIM_RESIDUAL_RISK_CATALOG",
-      "subclaim_id": "seed_gap_open",
-      "acceptance_id": "P0_SEED_GAP_OPEN",
+      "subclaim_id": "residual_risk_catalog_guard",
+      "acceptance_id": "P0_RESIDUAL_RISK_CATALOG_GUARD",
       "risk_id": "F12",
       "fixture_id": "",
       "capability_id": "",
@@ -1290,23 +1290,34 @@
       "default_mode": true,
       "fixture_enabled_mode": false,
       "negative_or_positive": "both",
-      "evidence_type": "doc-guard",
-      "required": false,
-      "command": [],
-      "anchors": [
-        "docs/GA_NEXT_PHASE_DEVELOPMENT_HANDOFF_PLAN.md"
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/contractcheck",
+        "./internal/releaseevidence",
+        "./cmd/afscp-evidence-verify",
+        "-run",
+        "^(TestResidualRiskCatalogCurrentRepoDefinesMachineCheckableRiskRows|TestResidualRiskCatalogRejectsHumanApprovalWaiverOrSubjectiveException|TestResidualRiskCatalogRequiresEvidenceRefsOwnerStatusDecisionAndMitigation|TestResidualRiskCatalogSharedVolumeThreatModelHasScopeExpiryReviewAndEscalation|TestResidualRiskAcceptanceRequiresPredefinedRiskScopeReasonEvidenceAndReviewPoint|TestResidualRiskAcceptanceAuditIsOperatorScopedAndRedacted|TestCurrentRepoManifestContainsResidualRiskCatalogEvidence|TestResidualRiskCatalogReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly|TestRunCheckOnlyAcceptsResidualRiskCatalogManifest)$"
       ],
-      "doc_only_allowed": true,
+      "anchors": [
+        "docs/contracts/residual-risk-catalog-v1.md",
+        "internal/contractcheck/contractcheck_test.go",
+        "internal/releaseevidence/manifest.go"
+      ],
+      "doc_only_allowed": false,
       "optional_gated": false,
       "default_ga_required": false,
       "pass_criteria": {
-        "kind": "seed_gap",
+        "kind": "coverage_guard",
         "assertions": [
-          "open"
+          "residual risk catalog guard covers final release evidence"
         ]
       },
       "expected_runtime": "fast",
-      "scope": "doc-guard"
+      "scope": "package"
     },
     {
       "id": "seed_gap_deployment_risk_envelope_open",

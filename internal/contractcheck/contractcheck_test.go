@@ -308,6 +308,143 @@ func TestWorkflowHardeningContractRejectsManualApprovalAlternateGateOrDeployment
 	)
 }
 
+func TestResidualRiskCatalogCurrentRepoDefinesMachineCheckableRiskRows(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/residual-risk-catalog-v1.md")
+	requireContractPhrases(t, body,
+		"Residual Risk Catalog v1",
+		"machine-checkable",
+		"risk_id",
+		"claim",
+		"scope",
+		"profile",
+		"status_decision",
+		"impact",
+		"mitigation",
+		"owner_role",
+		"review_trigger",
+		"evidence_ref",
+		"RR-SV-namespace-isolation",
+		"RR-SV-volume-admin-misconfiguration",
+		"RR-SV-backup-restore-residue",
+		"RR-SV-posix-csi-drift",
+		"RR-SV-detection-signals",
+		"RR-SV-compensating-controls",
+		"RR-SV-dedicated-volume-escalation",
+	)
+}
+
+func TestResidualRiskCatalogRejectsHumanApprovalWaiverOrSubjectiveException(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/residual-risk-catalog-v1.md")
+	for _, forbidden := range []string{
+		"manual approval",
+		"security approval",
+		"risk waiver",
+		"risk exception",
+		"subjective risk exception",
+		"residual-risk acceptance",
+		"residual risk acceptance",
+		"human sign-off",
+		"owner acceptance",
+	} {
+		if strings.Contains(strings.ToLower(body), forbidden) {
+			t.Fatalf("residual risk catalog must not contain human/substitutionary GA phrase %q", forbidden)
+		}
+	}
+	requireContractPhrases(t, body,
+		"structured residual risk record",
+		"catalog guard",
+		"not a GA release gate",
+	)
+}
+
+func TestResidualRiskCatalogRequiresEvidenceRefsOwnerStatusDecisionAndMitigation(t *testing.T) {
+	rows := residualRiskCatalogRows(t)
+	if len(rows) < 7 {
+		t.Fatalf("expected at least 7 residual risk rows, got %d", len(rows))
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		riskID := row["risk_id"]
+		if riskID == "" || seen[riskID] {
+			t.Fatalf("risk rows must have unique stable risk_id, got row %+v", row)
+		}
+		seen[riskID] = true
+		for _, field := range []string{"claim", "scope", "profile", "status_decision", "impact", "mitigation", "owner_role", "review_trigger", "evidence_ref"} {
+			if strings.TrimSpace(row[field]) == "" {
+				t.Fatalf("%s missing %s in row %+v", riskID, field, row)
+			}
+		}
+		if row["claim"] != "CLAIM_RESIDUAL_RISK_CATALOG" {
+			t.Fatalf("%s claim = %q, want CLAIM_RESIDUAL_RISK_CATALOG", riskID, row["claim"])
+		}
+		if row["profile"] != "default" {
+			t.Fatalf("%s profile = %q, want default", riskID, row["profile"])
+		}
+		if strings.Contains(row["profile"], "deployment") || strings.Contains(row["profile"], "optional") {
+			t.Fatalf("%s must not use optional/deployment profile as default proof: %+v", riskID, row)
+		}
+		if !strings.Contains(row["evidence_ref"], "docs/contracts/") {
+			t.Fatalf("%s evidence_ref must be repo-local contract evidence, got %q", riskID, row["evidence_ref"])
+		}
+	}
+}
+
+func TestResidualRiskCatalogSharedVolumeThreatModelHasScopeExpiryReviewAndEscalation(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/residual-risk-catalog-v1.md")
+	for _, required := range []string{
+		"shared-volume threat model",
+		"namespace isolation assumptions",
+		"volume-admin misconfiguration",
+		"backup/restore cross-namespace residue",
+		"POSIX/CSI drift",
+		"detection signals/metrics",
+		"compensating controls",
+		"dedicated-volume escalation rule",
+		"review_at",
+		"expires_at",
+		"escalate_to_dedicated_volume",
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("residual risk catalog missing shared-volume boundary %q", required)
+		}
+	}
+}
+
+func TestResidualRiskAcceptanceRequiresPredefinedRiskScopeReasonEvidenceAndReviewPoint(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/residual-risk-catalog-v1.md")
+	requireContractPhrases(t, body,
+		"structured residual risk record",
+		"predefined risk_id",
+		"scope",
+		"reason",
+		"evidence_ref",
+		"review_at",
+		"expires_at",
+		"operator_admin",
+		"unknown risk_id",
+		"wrong actor",
+		"missing reason",
+		"missing evidence_ref",
+		"missing scope",
+		"missing review_at and expires_at",
+	)
+}
+
+func TestResidualRiskAcceptanceAuditIsOperatorScopedAndRedacted(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/contracts/residual-risk-catalog-v1.md")
+	requireContractPhrases(t, body,
+		"audit",
+		"operator_admin",
+		"residual_risk_recorded",
+		"redacted",
+		"SecretRef",
+		"/srv/afscp",
+		".jvs",
+		"payload/",
+		"control/",
+	)
+}
+
 func TestVerifyFilesIgnoresParameterRefsOutsideParametersBlock(t *testing.T) {
 	paths := writeContractFixture(t, contractFixture{
 		openapi: `
@@ -2284,6 +2421,71 @@ func requireContractPhrases(t *testing.T, body string, phrases ...string) {
 			t.Fatalf("contract missing phrase %q", phrase)
 		}
 	}
+}
+
+func residualRiskCatalogRows(t *testing.T) []map[string]string {
+	t.Helper()
+	body := readRepoFileForContractTest(t, "docs/contracts/residual-risk-catalog-v1.md")
+	lines := strings.Split(body, "\n")
+	var rows []map[string]string
+	var header []string
+	inCatalog := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## Catalog Rows") {
+			inCatalog = true
+			continue
+		}
+		if inCatalog && strings.HasPrefix(trimmed, "## ") {
+			break
+		}
+		if !inCatalog || !strings.HasPrefix(trimmed, "|") {
+			continue
+		}
+		cells := markdownTableCells(trimmed)
+		if len(cells) == 0 {
+			continue
+		}
+		if len(header) == 0 {
+			header = cells
+			continue
+		}
+		if markdownSeparatorCells(cells) {
+			continue
+		}
+		if len(cells) != len(header) {
+			t.Fatalf("catalog row has %d cells, want %d: %q", len(cells), len(header), line)
+		}
+		row := map[string]string{}
+		for i, key := range header {
+			row[key] = cells[i]
+		}
+		rows = append(rows, row)
+	}
+	if len(header) == 0 {
+		t.Fatal("residual risk catalog table header not found")
+	}
+	return rows
+}
+
+func markdownTableCells(line string) []string {
+	trimmed := strings.Trim(line, "|")
+	parts := strings.Split(trimmed, "|")
+	cells := make([]string, 0, len(parts))
+	for _, part := range parts {
+		cells = append(cells, strings.TrimSpace(part))
+	}
+	return cells
+}
+
+func markdownSeparatorCells(cells []string) bool {
+	for _, cell := range cells {
+		cleaned := strings.Trim(cell, " :-")
+		if cleaned != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func repoRootForContractTest(t *testing.T) string {

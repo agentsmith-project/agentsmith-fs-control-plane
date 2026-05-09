@@ -58,7 +58,7 @@ AFSCP 的职责是提供稳定的 storage control plane primitive：
 | Template 心智与 clone primitive 不一致 | Workstream H | GA 语义收口为 namespace-scoped repo clone；cross-namespace/cross-volume 稳定拒绝 |
 | Quota 字段容易被误解为硬 enforcement | Workstream H | 暴露机器可读 quota enforcement status，并进入 schema/OpenAPI/client fixture |
 | Lifecycle/restore archived/tombstoned session drain 契约错位 | Workstream F、Workstream H | 对 restore 是否需要 `no_sessions` 做一等契约决策，并补 API/worker/recovery 测试 |
-| Shared-volume 多租户 residual risk 未充分威胁建模 | Cross-cutting: Shared-volume residual risk | 隔离假设、失败模式、补偿控制、dedicated-volume escalation 与 residual-risk acceptance 审计 |
+| Shared-volume 多租户 residual risk 未充分威胁建模 | Cross-cutting: Shared-volume residual risk | 隔离假设、失败模式、补偿控制、dedicated-volume escalation 与 structured residual risk record 审计 |
 | stale wording、cmd README、文档一致性清理 | Workstream H、Workstream I、Developer Handoff 清单 | doc guard、contractcheck、schema/OpenAPI drift guard 与 stale wording cleanup |
 
 ## 非目标
@@ -183,7 +183,7 @@ TDD 与自动化验收：
 
 - 定义最小 operator inspection surface：correlated operation lookup、intervention queue、held fence/session view、audit outbox lag、stale mount lease、runtime request recovery status。
 - 定义最小 operator API/CLI/tooling contract，不要求一次性做成完整 OpenAPI 管理平台。
-- 定义最小 repair/intervention 写路径，只允许受控动作：terminalize operation、release writer/lifecycle fence、revoke/terminalize session、记录 residual-risk acceptance。
+- 定义最小 repair/intervention 写路径，只允许受控动作：terminalize operation、release writer/lifecycle fence、revoke/terminalize session、记录 structured residual risk record。
 - 每个 repair 必须包含 operator identity、reason、evidence reference、affected IDs、before/after state、correlation ID 和 audit event IDs。
 - 无法证明安全状态时默认保持 blocking，不允许强行 release。
 
@@ -193,7 +193,7 @@ TDD 与自动化验收：
 - namespace-scoped caller 不能查看或修复 global/operator records。
 - 缺少 reason/evidence 的 repair 请求失败。
 - release fence 前必须证明 operation/session/runtime/audit 状态安全。
-- repair、residual-risk acceptance、session revoke、terminalize 都产生审计事件并脱敏。
+- repair、structured residual risk record、session revoke、terminalize 都产生审计事件并脱敏。
 
 交付结果：
 
@@ -274,19 +274,19 @@ TDD 与自动化验收：
 - 明确失败模式：path traversal、symlink escape、cross-namespace resource mismatch、volume-level admin 误配置、backup/restore residual data、POSIX/CSI/subPath 权限漂移。
 - 明确补偿控制：payload-only access、gateway/path policy、SecretRef redaction、runtime config RBAC、audit correlation、operator inspection。
 - 明确何时必须升级为 dedicated volume：隔离证据不足、合规要求需要物理/volume 级隔离、shared volume residual risk 无法被 operator 接受时。
-- residual-risk acceptance 只能由具备对应权限的 operator/admin 记录，必须包含 reason、evidence reference、scope、expiry 或 review point，并产生审计事件。
+- structured residual risk record 只能由具备对应权限的 operator/admin 记录，必须包含 reason、evidence reference、scope、expiry 或 review point，并产生审计事件。
 
 TDD 与自动化验收：
 
 - path traversal、symlink escape、`.jvs` 访问、cross-namespace resource mismatch 全部 fail-closed。
 - 普通 caller 永远拿不到 raw root path、metadata URL、SecretRef 或 JuiceFS credential。
-- residual-risk acceptance 缺少 reason/evidence/scope 时失败，成功时写入审计并脱敏。
+- structured residual risk record 缺少 reason/evidence/scope 时失败，成功时写入审计并脱敏。
 
 交付结果：
 
 - shared-volume residual risk threat model。
 - dedicated-volume escalation rule。
-- residual-risk acceptance contract 与 audit tests。
+- structured residual risk record contract 与 audit tests。
 
 ### Workstream G: WebDAV export credential 与 gateway 证据
 

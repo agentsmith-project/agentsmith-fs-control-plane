@@ -2223,6 +2223,133 @@ func TestWorkflowHardeningReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntim
 	}
 }
 
+func TestCurrentRepoManifestContainsResidualRiskCatalogEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+	item, ok := manifestItemByID(manifest, "residual_risk_catalog_guard_unit")
+	if !ok {
+		t.Fatal("manifest missing residual_risk_catalog_guard_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_RESIDUAL_RISK_CATALOG" ||
+		item.SubclaimID != "residual_risk_catalog_guard" ||
+		item.AcceptanceID != "P0_RESIDUAL_RISK_CATALOG_GUARD" ||
+		item.RiskID != "F12" ||
+		item.CapabilityID != "" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.ExpectedRuntime != "fast" ||
+		item.Scope != "package" ||
+		item.NegativeOrPositive != "both" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		item.DefaultGARequired ||
+		item.PassCriteria.Kind != "coverage_guard" ||
+		!containsString(item.PassCriteria.Assertions, "residual risk catalog guard covers final release evidence") {
+		t.Fatalf("%s shape = %+v, want default required residual risk catalog evidence", item.ID, item)
+	}
+	if _, ok := manifestItemByID(manifest, "seed_gap_residual_risk_catalog_open"); ok {
+		t.Fatal("residual risk catalog evidence must close seed_gap_residual_risk_catalog_open")
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range residualRiskCatalogRequiredTestNamesForTest {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestResidualRiskCatalogReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		body func() string
+		want string
+	}{
+		{name: "placeholder", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"evidence_status":"implemented"`, `"evidence_status":"placeholder"`)
+		}, want: "residual_risk_catalog_guard_unit"},
+		{name: "doc only", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"doc_only_allowed":false`, `"doc_only_allowed":true`)
+		}, want: "residual_risk_catalog_guard_unit"},
+		{name: "required false", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"required":true`, `"required":false`)
+		}, want: "residual_risk_catalog_guard_unit"},
+		{name: "wrong profile", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"evidence_profile":"default"`, `"evidence_profile":"repo-local-fixture-enabled"`)
+		}, want: "residual_risk_catalog_guard_unit"},
+		{name: "fixture enabled", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"fixture_enabled_mode":false`, `"fixture_enabled_mode":true`)
+		}, want: "residual_risk_catalog_guard_unit"},
+		{name: "optional gated", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"optional_gated":false`, `"optional_gated":true`)
+		}, want: "residual_risk_catalog_guard_unit"},
+		{name: "runtime support", body: func() string {
+			body := replaceItemField(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"evidence_profile":"default"`, `"evidence_profile":"deployment-runtime-support"`)
+			return replaceItemCommand(t, body, "residual_risk_catalog_guard_unit", `"command":["bash","scripts/pass.sh"]`)
+		}, want: "deployment-runtime-support"},
+		{name: "broad selector", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"command":["go","test","-count=1","./internal/contractcheck","-run","Test.*Residual"]`)
+		}, want: "residual"},
+		{name: "manifest only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"command":["go","test","-count=1","./internal/releaseevidence","-run","^Test(CurrentRepoManifestContainsResidualRiskCatalogEvidence)$"]`)
+		}, want: "residual"},
+		{name: "contract only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"command":["go","test","-count=1","./internal/contractcheck","-run","^Test(ResidualRiskCatalogCurrentRepoDefinesMachineCheckableRiskRows)$"]`)
+		}, want: "residual"},
+		{name: "cli only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"command":["go","test","-count=1","./cmd/afscp-evidence-verify","-run","^TestRunCheckOnlyAcceptsResidualRiskCatalogManifest$"]`)
+		}, want: "residual"},
+		{name: "workflow proxy", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"command":["go","test","-count=1","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(WorkflowHardeningCurrentRepoWorkflowUsesSingleAuthoritativeGate|RunCheckOnlyAcceptsWorkflowHardeningManifest)$"]`)
+		}, want: "residual"},
+		{name: "profile proxy", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "residual_risk_catalog_guard_unit", `"command":["go","test","-count=1","./internal/releaseevidence","./internal/contractcheck","./cmd/afscp-evidence-verify","-run","^Test(ProfileBoundaryDefaultFinalRejectsOptionalFixtureAndRuntimeSupportSubstitutes|RunCheckOnlyAcceptsProfileBoundaryManifest)$"]`)
+		}, want: "residual"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.body())
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.want)
+		})
+	}
+}
+
+var residualRiskCatalogRequiredTestNamesForTest = []string{
+	"TestResidualRiskCatalogCurrentRepoDefinesMachineCheckableRiskRows",
+	"TestResidualRiskCatalogRejectsHumanApprovalWaiverOrSubjectiveException",
+	"TestResidualRiskCatalogRequiresEvidenceRefsOwnerStatusDecisionAndMitigation",
+	"TestResidualRiskCatalogSharedVolumeThreatModelHasScopeExpiryReviewAndEscalation",
+	"TestResidualRiskAcceptanceRequiresPredefinedRiskScopeReasonEvidenceAndReviewPoint",
+	"TestResidualRiskAcceptanceAuditIsOperatorScopedAndRedacted",
+	"TestCurrentRepoManifestContainsResidualRiskCatalogEvidence",
+	"TestResidualRiskCatalogReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly",
+	"TestRunCheckOnlyAcceptsResidualRiskCatalogManifest",
+}
+
 var workflowHardeningRequiredTestNamesForTest = []string{
 	"TestWorkflowHardeningCurrentRepoWorkflowUsesSingleAuthoritativeGate",
 	"TestWorkflowHardeningReleaseScriptCannotBypassManifestOrBaseline",
@@ -2281,7 +2408,7 @@ func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1b(t *testing.T) 
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_residual_risk_catalog_open",
+		"seed_gap_deployment_risk_envelope_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
 		if !ok {
@@ -2311,7 +2438,7 @@ func TestCurrentRepoManifestKeepsOtherSeedGapsOpenAfterPartialP1c(t *testing.T) 
 	}
 
 	for _, gapID := range []string{
-		"seed_gap_residual_risk_catalog_open",
+		"seed_gap_deployment_risk_envelope_open",
 	} {
 		item, ok := manifestItemByID(manifest, gapID)
 		if !ok {
@@ -2564,6 +2691,20 @@ func goTestPackageForTestName(testName string) string {
 		strings.HasPrefix(testName, "TestCurrentRepoManifestContainsWorkflowHardening") {
 		return "./internal/releaseevidence"
 	}
+	if strings.HasPrefix(testName, "TestResidualRiskCatalogCurrentRepo") ||
+		strings.HasPrefix(testName, "TestResidualRiskCatalogRejects") ||
+		strings.HasPrefix(testName, "TestResidualRiskCatalogRequires") ||
+		strings.HasPrefix(testName, "TestResidualRiskCatalogSharedVolume") ||
+		strings.HasPrefix(testName, "TestResidualRiskAcceptance") {
+		return "./internal/contractcheck"
+	}
+	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsResidualRiskCatalog") {
+		return "./cmd/afscp-evidence-verify"
+	}
+	if strings.HasPrefix(testName, "TestCurrentRepoManifestContainsResidualRiskCatalog") ||
+		strings.HasPrefix(testName, "TestResidualRiskCatalogReplacement") {
+		return "./internal/releaseevidence"
+	}
 	if strings.HasPrefix(testName, "TestCapabilityMatrixAdmissionDisabled") {
 		return "./internal/api"
 	}
@@ -2808,6 +2949,8 @@ func TestProfileBoundaryReplacementRejectsWrongShapeBroadSelectorOptionalRuntime
 func TestCurrentRepoManifestContainsWorkflowHardeningEvidence(t *testing.T) {}
 func TestWorkflowHardeningReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly(t *testing.T) {}
 func TestSelectorRejectsUnsafePathAndGeneratedReportDigest(t *testing.T) {}
+func TestCurrentRepoManifestContainsResidualRiskCatalogEvidence(t *testing.T) {}
+func TestResidualRiskCatalogReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "operatorrepair", "repair_test.go"), `package operatorrepair
 
@@ -2853,6 +2996,12 @@ func TestWorkflowHardeningCurrentRepoWorkflowUsesSingleAuthoritativeGate(t *test
 func TestWorkflowHardeningReleaseScriptCannotBypassManifestOrBaseline(t *testing.T) {}
 func TestWorkflowHardeningFinalIntentRequiresSelectorAndRejectsCheckOnlyFinalAcceptance(t *testing.T) {}
 func TestWorkflowHardeningContractRejectsManualApprovalAlternateGateOrDeploymentRuntimeProof(t *testing.T) {}
+func TestResidualRiskCatalogCurrentRepoDefinesMachineCheckableRiskRows(t *testing.T) {}
+func TestResidualRiskCatalogRejectsHumanApprovalWaiverOrSubjectiveException(t *testing.T) {}
+func TestResidualRiskCatalogRequiresEvidenceRefsOwnerStatusDecisionAndMitigation(t *testing.T) {}
+func TestResidualRiskCatalogSharedVolumeThreatModelHasScopeExpiryReviewAndEscalation(t *testing.T) {}
+func TestResidualRiskAcceptanceRequiresPredefinedRiskScopeReasonEvidenceAndReviewPoint(t *testing.T) {}
+func TestResidualRiskAcceptanceAuditIsOperatorScopedAndRedacted(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
@@ -2866,6 +3015,7 @@ func TestRunCheckOnlyAcceptsSecretPathRedactionManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsProfileBoundaryManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsWorkflowHardeningManifest(t *testing.T) {}
 func TestFinalCheckOnlyCannotDeclareFinalAcceptance(t *testing.T) {}
+func TestRunCheckOnlyAcceptsResidualRiskCatalogManifest(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "restorereconcile", "restore_reconciliation_test.go"), `package restorereconcile
 
@@ -3210,6 +3360,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":false
     },
     {
+      "id":"residual_risk_catalog_guard_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^(TestResidualRiskCatalogCurrentRepoDefinesMachineCheckableRiskRows|TestResidualRiskCatalogRejectsHumanApprovalWaiverOrSubjectiveException|TestResidualRiskCatalogRequiresEvidenceRefsOwnerStatusDecisionAndMitigation|TestResidualRiskCatalogSharedVolumeThreatModelHasScopeExpiryReviewAndEscalation|TestResidualRiskAcceptanceRequiresPredefinedRiskScopeReasonEvidenceAndReviewPoint|TestResidualRiskAcceptanceAuditIsOperatorScopedAndRedacted|TestCurrentRepoManifestContainsResidualRiskCatalogEvidence|TestResidualRiskCatalogReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly|TestRunCheckOnlyAcceptsResidualRiskCatalogManifest)$"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -3351,7 +3512,6 @@ var package0SeedGapFixtureMetadata = []struct {
 	{"seed_gap_admin_bootstrap_ready_open", "CLAIM_ADMIN_BOOTSTRAP_READY", "F3"},
 	{"seed_gap_workload_fixture_ready_open", "CLAIM_WORKLOAD_FIXTURE_READY", "F9"},
 	{"seed_gap_purge_approval_safe_open", "CLAIM_PURGE_APPROVAL_SAFE", "F13"},
-	{"seed_gap_residual_risk_catalog_open", "CLAIM_RESIDUAL_RISK_CATALOG", "F12"},
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
@@ -3397,6 +3557,7 @@ var package0FixtureMetadata = []struct {
 	{"secret_path_redaction_unit", "CLAIM_SECRET_PATH_REDACTION", "secret_path_redaction", "P0_SECRET_PATH_REDACTION", "F10", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "secret path redaction denies secret path disclosure"},
 	{"profile_boundary_consistent_unit", "CLAIM_PROFILE_BOUNDARY", "profile_boundary_consistent", "P0_PROFILE_BOUNDARY_CONSISTENT", "F1", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "profile boundary consistency covers final release evidence"},
 	{"workflow_hardening_guard_unit", "CLAIM_WORKFLOW_HARDENING_GUARD", "workflow_hardening_guard", "P0_WORKFLOW_HARDENING_GUARD", "F18", "", "default", "true", "false", "fast", "workflow-guard", "both", "false", "coverage_guard", "workflow hardening guard covers final release evidence"},
+	{"residual_risk_catalog_guard_unit", "CLAIM_RESIDUAL_RISK_CATALOG", "residual_risk_catalog_guard", "P0_RESIDUAL_RISK_CATALOG_GUARD", "F12", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "residual risk catalog guard covers final release evidence"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},

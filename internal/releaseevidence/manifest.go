@@ -424,6 +424,9 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 		if spec.ID == "workflow_hardening_guard_unit" && !workflowHardeningCommandIsPrecise(item.Command) {
 			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.workflow_hardening_command_invalid", Message: "workflow hardening evidence command must use the exact workflow hardening selector, not doc-only, runtime-only, manifest-only, contract-only, broad, or helper-only coverage"})
 		}
+		if spec.ID == "residual_risk_catalog_guard_unit" && !residualRiskCatalogCommandIsPrecise(item.Command) {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.residual_risk_catalog_command_invalid", Message: "residual risk catalog evidence command must use the exact residual risk catalog selector, not doc-only, deployment-only, optional-only, manifest-only, contract-only, CLI-only, workflow/profile proxy, broad, or helper-only coverage"})
+		}
 	}
 	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest, requireDefaultLoopAggregation)...)
 	if requireDefaultLoopAggregation {
@@ -464,6 +467,9 @@ func requiredEvidenceSpecCanBeSeedOpen(id string, itemsByID map[string]Item) boo
 	case "workflow_hardening_guard_unit":
 		gapID = "seed_gap_workflow_hardening_guard_open"
 		claimID = "CLAIM_WORKFLOW_HARDENING_GUARD"
+	case "residual_risk_catalog_guard_unit":
+		gapID = "seed_gap_residual_risk_catalog_open"
+		claimID = "CLAIM_RESIDUAL_RISK_CATALOG"
 	default:
 		return false
 	}
@@ -659,6 +665,9 @@ func validateRequiredClaimSubclaimCoverage(manifest Manifest, requireDefaultLoop
 			continue
 		}
 		if spec.ClaimID == "CLAIM_WORKFLOW_HARDENING_GUARD" && spec.SubclaimID == "workflow_hardening_guard" && requiredEvidenceSpecCanBeSeedOpen("workflow_hardening_guard_unit", itemsByIDFromManifest(manifest)) {
+			continue
+		}
+		if spec.ClaimID == "CLAIM_RESIDUAL_RISK_CATALOG" && spec.SubclaimID == "residual_risk_catalog_guard" && requiredEvidenceSpecCanBeSeedOpen("residual_risk_catalog_guard_unit", itemsByIDFromManifest(manifest)) {
 			continue
 		}
 		if !requiredCoverage[spec] {
@@ -1060,6 +1069,47 @@ func workflowHardeningCommand() []string {
 	}
 }
 
+func residualRiskCatalogCommand() []string {
+	return []string{
+		"go",
+		"test",
+		"-count=1",
+		"./internal/contractcheck",
+		"./internal/releaseevidence",
+		"./cmd/afscp-evidence-verify",
+		"-run",
+		"^(" + strings.Join(residualRiskCatalogSelectorNames(), "|") + ")$",
+	}
+}
+
+func residualRiskCatalogSelectorNames() []string {
+	names := make([]string, 0, len(residualRiskCatalogRequiredTestNames))
+	for _, name := range residualRiskCatalogRequiredTestNames {
+		names = append(names, name)
+	}
+	return names
+}
+
+func residualRiskCatalogCommandIsPrecise(command []string) bool {
+	if !sameStringSlice(command, residualRiskCatalogCommand()) {
+		return false
+	}
+	selector, ok := goTestRunSelector(command)
+	if !ok || broadGoTestSelector(selector) {
+		return false
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		return false
+	}
+	for _, testName := range residualRiskCatalogRequiredTestNames {
+		if !compiled.MatchString(testName) {
+			return false
+		}
+	}
+	return true
+}
+
 func workflowHardeningSelectorNames() []string {
 	names := make([]string, 0, len(workflowHardeningRequiredTestNames))
 	for _, name := range workflowHardeningRequiredTestNames {
@@ -1405,6 +1455,18 @@ var workflowHardeningRequiredTestNames = []string{
 	"TestRunCheckOnlyAcceptsWorkflowHardeningManifest",
 }
 
+var residualRiskCatalogRequiredTestNames = []string{
+	"TestResidualRiskCatalogCurrentRepoDefinesMachineCheckableRiskRows",
+	"TestResidualRiskCatalogRejectsHumanApprovalWaiverOrSubjectiveException",
+	"TestResidualRiskCatalogRequiresEvidenceRefsOwnerStatusDecisionAndMitigation",
+	"TestResidualRiskCatalogSharedVolumeThreatModelHasScopeExpiryReviewAndEscalation",
+	"TestResidualRiskAcceptanceRequiresPredefinedRiskScopeReasonEvidenceAndReviewPoint",
+	"TestResidualRiskAcceptanceAuditIsOperatorScopedAndRedacted",
+	"TestCurrentRepoManifestContainsResidualRiskCatalogEvidence",
+	"TestResidualRiskCatalogReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly",
+	"TestRunCheckOnlyAcceptsResidualRiskCatalogManifest",
+}
+
 var defaultUserLoopAggregationPrereqIDs = []string{
 	"default_user_loop_repo_projection_unit",
 	"default_user_loop_jvs_save_restore_unit",
@@ -1439,6 +1501,7 @@ var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "secret_path_redaction_unit", ClaimID: "CLAIM_SECRET_PATH_REDACTION", SubclaimID: "secret_path_redaction", AcceptanceID: "P0_SECRET_PATH_REDACTION", RiskID: "F10", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "path_redaction", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "profile_boundary_consistent_unit", ClaimID: "CLAIM_PROFILE_BOUNDARY", SubclaimID: "profile_boundary_consistent", AcceptanceID: "P0_PROFILE_BOUNDARY_CONSISTENT", RiskID: "F1", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
 	{ID: "workflow_hardening_guard_unit", ClaimID: "CLAIM_WORKFLOW_HARDENING_GUARD", SubclaimID: "workflow_hardening_guard", AcceptanceID: "P0_WORKFLOW_HARDENING_GUARD", RiskID: "F18", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "workflow-guard", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
+	{ID: "residual_risk_catalog_guard_unit", ClaimID: "CLAIM_RESIDUAL_RISK_CATALOG", SubclaimID: "residual_risk_catalog_guard", AcceptanceID: "P0_RESIDUAL_RISK_CATALOG_GUARD", RiskID: "F12", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
 	{ID: "repo_create_jvs_runtime_unavailable_recovery_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery", AcceptanceID: "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_create", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_terminalization_contract_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract", AcceptanceID: "P2A_OPERATION_TERMINALIZATION_CONTRACT", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_runtime_terminalization_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization", AcceptanceID: "P2B_OPERATION_RUNTIME_TERMINALIZATION", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
@@ -1472,6 +1535,7 @@ var requiredClaimSubclaimSpecs = []requiredClaimSubclaimSpec{
 	{ClaimID: "CLAIM_SECRET_PATH_REDACTION", SubclaimID: "secret_path_redaction"},
 	{ClaimID: "CLAIM_PROFILE_BOUNDARY", SubclaimID: "profile_boundary_consistent"},
 	{ClaimID: "CLAIM_WORKFLOW_HARDENING_GUARD", SubclaimID: "workflow_hardening_guard"},
+	{ClaimID: "CLAIM_RESIDUAL_RISK_CATALOG", SubclaimID: "residual_risk_catalog_guard"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization"},
