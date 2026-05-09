@@ -421,6 +421,9 @@ func validateRequiredEvidenceItems(manifest Manifest, mode string, selector *Rel
 		if spec.ID == "profile_boundary_consistent_unit" && !profileBoundaryCommandIsPrecise(item.Command) {
 			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.profile_boundary_command_invalid", Message: "profile boundary evidence command must use the exact profile boundary selector, not optional-only, runtime-envelope-only, manifest-only, contract-only, broad, or helper-only coverage"})
 		}
+		if spec.ID == "workflow_hardening_guard_unit" && !workflowHardeningCommandIsPrecise(item.Command) {
+			findings = append(findings, Finding{ItemID: item.ID, Code: "manifest.workflow_hardening_command_invalid", Message: "workflow hardening evidence command must use the exact workflow hardening selector, not doc-only, runtime-only, manifest-only, contract-only, broad, or helper-only coverage"})
+		}
 	}
 	findings = append(findings, validateRequiredClaimSubclaimCoverage(manifest, requireDefaultLoopAggregation)...)
 	if requireDefaultLoopAggregation {
@@ -458,6 +461,9 @@ func requiredEvidenceSpecCanBeSeedOpen(id string, itemsByID map[string]Item) boo
 	case "profile_boundary_consistent_unit":
 		gapID = "seed_gap_profile_boundary_open"
 		claimID = "CLAIM_PROFILE_BOUNDARY"
+	case "workflow_hardening_guard_unit":
+		gapID = "seed_gap_workflow_hardening_guard_open"
+		claimID = "CLAIM_WORKFLOW_HARDENING_GUARD"
 	default:
 		return false
 	}
@@ -650,6 +656,9 @@ func validateRequiredClaimSubclaimCoverage(manifest Manifest, requireDefaultLoop
 			continue
 		}
 		if spec.ClaimID == "CLAIM_PROFILE_BOUNDARY" && spec.SubclaimID == "profile_boundary_consistent" && requiredEvidenceSpecCanBeSeedOpen("profile_boundary_consistent_unit", itemsByIDFromManifest(manifest)) {
+			continue
+		}
+		if spec.ClaimID == "CLAIM_WORKFLOW_HARDENING_GUARD" && spec.SubclaimID == "workflow_hardening_guard" && requiredEvidenceSpecCanBeSeedOpen("workflow_hardening_guard_unit", itemsByIDFromManifest(manifest)) {
 			continue
 		}
 		if !requiredCoverage[spec] {
@@ -1038,6 +1047,47 @@ func profileBoundaryCommand() []string {
 	}
 }
 
+func workflowHardeningCommand() []string {
+	return []string{
+		"go",
+		"test",
+		"-count=1",
+		"./internal/contractcheck",
+		"./internal/releaseevidence",
+		"./cmd/afscp-evidence-verify",
+		"-run",
+		"^Test(" + strings.Join(workflowHardeningSelectorNames(), "|") + ")$",
+	}
+}
+
+func workflowHardeningSelectorNames() []string {
+	names := make([]string, 0, len(workflowHardeningRequiredTestNames))
+	for _, name := range workflowHardeningRequiredTestNames {
+		names = append(names, strings.TrimPrefix(name, "Test"))
+	}
+	return names
+}
+
+func workflowHardeningCommandIsPrecise(command []string) bool {
+	if !sameStringSlice(command, workflowHardeningCommand()) {
+		return false
+	}
+	selector, ok := goTestRunSelector(command)
+	if !ok || broadGoTestSelector(selector) {
+		return false
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		return false
+	}
+	for _, testName := range workflowHardeningRequiredTestNames {
+		if !compiled.MatchString(testName) {
+			return false
+		}
+	}
+	return true
+}
+
 func profileBoundarySelectorNames() []string {
 	names := make([]string, 0, len(profileBoundaryRequiredTestNames))
 	for _, name := range profileBoundaryRequiredTestNames {
@@ -1343,6 +1393,18 @@ var profileBoundaryRequiredTestNames = []string{
 	"TestRunCheckOnlyAcceptsProfileBoundaryManifest",
 }
 
+var workflowHardeningRequiredTestNames = []string{
+	"TestWorkflowHardeningCurrentRepoWorkflowUsesSingleAuthoritativeGate",
+	"TestWorkflowHardeningReleaseScriptCannotBypassManifestOrBaseline",
+	"TestWorkflowHardeningFinalIntentRequiresSelectorAndRejectsCheckOnlyFinalAcceptance",
+	"TestWorkflowHardeningContractRejectsManualApprovalAlternateGateOrDeploymentRuntimeProof",
+	"TestSelectorRejectsUnsafePathAndGeneratedReportDigest",
+	"TestFinalCheckOnlyCannotDeclareFinalAcceptance",
+	"TestCurrentRepoManifestContainsWorkflowHardeningEvidence",
+	"TestWorkflowHardeningReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly",
+	"TestRunCheckOnlyAcceptsWorkflowHardeningManifest",
+}
+
 var defaultUserLoopAggregationPrereqIDs = []string{
 	"default_user_loop_repo_projection_unit",
 	"default_user_loop_jvs_save_restore_unit",
@@ -1376,6 +1438,7 @@ var requiredEvidenceSpecs = []requiredEvidenceSpec{
 	{ID: "discovery_surfaces_layered_unit", ClaimID: "CLAIM_DISCOVERY_SURFACES", SubclaimID: "discovery_surfaces_layered", AcceptanceID: "P0_DISCOVERY_SURFACES_LAYERED", RiskID: "F7", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "positive", PassCriteriaKind: "positive_path", CapabilityID: "repo_projection", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "secret_path_redaction_unit", ClaimID: "CLAIM_SECRET_PATH_REDACTION", SubclaimID: "secret_path_redaction", AcceptanceID: "P0_SECRET_PATH_REDACTION", RiskID: "F10", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "path_redaction", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "profile_boundary_consistent_unit", ClaimID: "CLAIM_PROFILE_BOUNDARY", SubclaimID: "profile_boundary_consistent", AcceptanceID: "P0_PROFILE_BOUNDARY_CONSISTENT", RiskID: "F1", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
+	{ID: "workflow_hardening_guard_unit", ClaimID: "CLAIM_WORKFLOW_HARDENING_GUARD", SubclaimID: "workflow_hardening_guard", AcceptanceID: "P0_WORKFLOW_HARDENING_GUARD", RiskID: "F18", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "workflow-guard", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: false},
 	{ID: "repo_create_jvs_runtime_unavailable_recovery_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery", AcceptanceID: "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "negative", PassCriteriaKind: "denial_safety", CapabilityID: "repo_create", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_terminalization_contract_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract", AcceptanceID: "P2A_OPERATION_TERMINALIZATION_CONTRACT", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "contract", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
 	{ID: "operation_runtime_terminalization_unit", ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization", AcceptanceID: "P2B_OPERATION_RUNTIME_TERMINALIZATION", RiskID: "F6", EvidenceProfile: "default", DefaultMode: true, FixtureEnabledMode: false, ExpectedRuntime: "fast", Scope: "package", NegativeOrPositive: "both", PassCriteriaKind: "coverage_guard", CapabilityID: "operation_recovery", EvidenceType: "unit", Required: true, DocOnlyAllowed: false, OptionalGated: false, DefaultGARequired: true},
@@ -1408,6 +1471,7 @@ var requiredClaimSubclaimSpecs = []requiredClaimSubclaimSpec{
 	{ClaimID: "CLAIM_DISCOVERY_SURFACES", SubclaimID: "discovery_surfaces_layered"},
 	{ClaimID: "CLAIM_SECRET_PATH_REDACTION", SubclaimID: "secret_path_redaction"},
 	{ClaimID: "CLAIM_PROFILE_BOUNDARY", SubclaimID: "profile_boundary_consistent"},
+	{ClaimID: "CLAIM_WORKFLOW_HARDENING_GUARD", SubclaimID: "workflow_hardening_guard"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "repo_create_jvs_runtime_unavailable_recovery"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_terminalization_contract"},
 	{ClaimID: "CLAIM_OPERATION_TERMINALIZATION", SubclaimID: "operation_runtime_terminalization"},
@@ -1592,9 +1656,12 @@ func validateCommand(item Item, repoRoot string) []Finding {
 	if _, err := exec.LookPath(item.Command[0]); err != nil {
 		return []Finding{{ItemID: item.ID, Code: "item.command_executable_missing", Message: fmt.Sprintf("executable %q is not available: %v", item.Command[0], err)}}
 	}
-	for _, arg := range item.Command {
+	for index, arg := range item.Command {
 		if unsafeRepoLocalToken(arg) {
 			return []Finding{{ItemID: item.ID, Code: "item.command_not_repo_local", Message: fmt.Sprintf("command argument %q is not repo-local and must not reference sibling repositories", arg)}}
+		}
+		if item.Command[0] == "go" && index > 0 && item.Command[index-1] == "-run" {
+			continue
 		}
 		lower := strings.ToLower(arg)
 		switch {

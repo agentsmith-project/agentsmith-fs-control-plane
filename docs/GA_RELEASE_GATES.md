@@ -56,6 +56,28 @@ shape above. Deployment runtime support may provide repo-local schema, doc,
 audit, or runbook guard evidence, but it must not close default evidence and
 must not close selected optional fixture conformance.
 
+## Workflow Hardening
+
+`scripts/verify-ga-release.sh` is the repo-local authoritative release entrypoint.
+The workflow must call only this script for release acceptance and
+must not bypass it by invoking the manifest verifier, baseline checks, final
+mode, generated reports, or copied evidence directly. The release script must
+run the manifest verifier and the baseline gate; workflow YAML is only the
+repo-local trigger for that script.
+
+Final intent is selected only by the authoritative selector
+`docs/release-evidence/ga-release-selector.json` with
+`release_intent=final_candidate`. Operators must not run final mode directly
+from workflow YAML, and must not use `-check-only` as final acceptance. The
+workflow must not use -check-only as final acceptance.
+The generated report, digest, or copy artifacts are outputs and must not become
+same-run authoritative input.
+
+Do not add person-driven release conditions, role signoff states, hosted workflow
+environment protections, deployment or runtime status checks, sibling-repository
+status, generated-client review status, security-review status, or runbook
+meeting outcomes as alternate GA release gates.
+
 Owner roles in the active docs identify maintenance responsibility. They do not
 add role-approval conditions to the GA release gate.
 

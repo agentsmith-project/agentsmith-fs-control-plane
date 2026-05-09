@@ -2129,6 +2129,112 @@ func TestProfileBoundaryReplacementRejectsWrongShapeBroadSelectorOptionalRuntime
 	}
 }
 
+func TestCurrentRepoManifestContainsWorkflowHardeningEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+	item, ok := manifestItemByID(manifest, "workflow_hardening_guard_unit")
+	if !ok {
+		t.Fatal("manifest missing workflow_hardening_guard_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_WORKFLOW_HARDENING_GUARD" ||
+		item.SubclaimID != "workflow_hardening_guard" ||
+		item.AcceptanceID != "P0_WORKFLOW_HARDENING_GUARD" ||
+		item.RiskID != "F18" ||
+		item.CapabilityID != "" ||
+		item.EvidenceProfile != "default" ||
+		!item.DefaultMode ||
+		item.FixtureEnabledMode ||
+		item.ExpectedRuntime != "fast" ||
+		item.Scope != "workflow-guard" ||
+		item.NegativeOrPositive != "both" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		item.OptionalGated ||
+		item.DefaultGARequired ||
+		item.PassCriteria.Kind != "coverage_guard" ||
+		!containsString(item.PassCriteria.Assertions, "workflow hardening guard covers final release evidence") {
+		t.Fatalf("%s shape = %+v, want default required workflow hardening evidence", item.ID, item)
+	}
+	if _, ok := manifestItemByID(manifest, "seed_gap_workflow_hardening_guard_open"); ok {
+		t.Fatal("workflow hardening evidence must close seed_gap_workflow_hardening_guard_open")
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	compiled, err := regexp.Compile(selector)
+	if err != nil {
+		t.Fatalf("%s has invalid -run selector %q: %v", item.ID, selector, err)
+	}
+	for _, testName := range workflowHardeningRequiredTestNamesForTest {
+		if !compiled.MatchString(testName) {
+			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
+		}
+		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+	}
+}
+
+func TestWorkflowHardeningReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		body func() string
+		want string
+	}{
+		{name: "placeholder", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "workflow_hardening_guard_unit", `"evidence_status":"implemented"`, `"evidence_status":"placeholder"`)
+		}, want: "workflow_hardening_guard_unit"},
+		{name: "doc only", body: func() string {
+			return replaceItemField(t, validReleaseEvidenceManifest(), "workflow_hardening_guard_unit", `"doc_only_allowed":false`, `"doc_only_allowed":true`)
+		}, want: "workflow_hardening_guard_unit"},
+		{name: "broad selector", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "workflow_hardening_guard_unit", `"command":["go","test","-count=1","./internal/contractcheck","-run","Test.*Workflow"]`)
+		}, want: "workflow"},
+		{name: "runtime only", body: func() string {
+			body := replaceItemField(t, validReleaseEvidenceManifest(), "workflow_hardening_guard_unit", `"evidence_profile":"default"`, `"evidence_profile":"deployment-runtime-support"`)
+			return replaceItemCommand(t, body, "workflow_hardening_guard_unit", `"command":["bash","scripts/pass.sh"]`)
+		}, want: "deployment-runtime-support"},
+		{name: "helper only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "workflow_hardening_guard_unit", `"command":["go","test","-count=1","./internal/releaseevidence","-run","^Test(CurrentRepoManifestContainsWorkflowHardeningEvidence)$"]`)
+		}, want: "workflow"},
+		{name: "contract only", body: func() string {
+			return replaceItemCommand(t, validReleaseEvidenceManifest(), "workflow_hardening_guard_unit", `"command":["go","test","-count=1","./internal/contractcheck","-run","^Test(WorkflowHardeningCurrentRepoWorkflowUsesSingleAuthoritativeGate)$"]`)
+		}, want: "workflow"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := releaseEvidenceFixtureRoot(t)
+			path := filepath.Join(root, "manifest.json")
+			writeReleaseEvidenceFile(t, path, tt.body())
+			findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+			if err != nil {
+				t.Fatalf("VerifyFile returned unexpected error: %v", err)
+			}
+			assertReleaseEvidenceFindingContains(t, findings, tt.want)
+		})
+	}
+}
+
+var workflowHardeningRequiredTestNamesForTest = []string{
+	"TestWorkflowHardeningCurrentRepoWorkflowUsesSingleAuthoritativeGate",
+	"TestWorkflowHardeningReleaseScriptCannotBypassManifestOrBaseline",
+	"TestWorkflowHardeningFinalIntentRequiresSelectorAndRejectsCheckOnlyFinalAcceptance",
+	"TestWorkflowHardeningContractRejectsManualApprovalAlternateGateOrDeploymentRuntimeProof",
+	"TestSelectorRejectsUnsafePathAndGeneratedReportDigest",
+	"TestFinalCheckOnlyCannotDeclareFinalAcceptance",
+	"TestCurrentRepoManifestContainsWorkflowHardeningEvidence",
+	"TestWorkflowHardeningReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly",
+	"TestRunCheckOnlyAcceptsWorkflowHardeningManifest",
+}
+
 var profileBoundaryRequiredTestNamesForTest = []string{
 	"TestProfileBoundaryDefaultFinalRejectsOptionalFixtureAndRuntimeSupportSubstitutes",
 	"TestProfileBoundarySelectedOptionalOnlyBlocksWhenSelectorClaimsCapability",
@@ -2439,6 +2545,25 @@ func goTestPackageForTestName(testName string) string {
 		strings.HasPrefix(testName, "TestCurrentRepoManifestContainsProfileBoundary") {
 		return "./internal/releaseevidence"
 	}
+	if strings.HasPrefix(testName, "TestWorkflowHardeningCurrentRepoWorkflow") ||
+		strings.HasPrefix(testName, "TestWorkflowHardeningReleaseScript") ||
+		strings.HasPrefix(testName, "TestWorkflowHardeningFinalIntent") ||
+		strings.HasPrefix(testName, "TestWorkflowHardeningContract") {
+		return "./internal/contractcheck"
+	}
+	if strings.HasPrefix(testName, "TestRunCheckOnlyAcceptsWorkflowHardening") {
+		return "./cmd/afscp-evidence-verify"
+	}
+	if strings.HasPrefix(testName, "TestFinalCheckOnlyCannotDeclareFinalAcceptance") {
+		return "./cmd/afscp-evidence-verify"
+	}
+	if strings.HasPrefix(testName, "TestSelectorRejectsUnsafePathAndGeneratedReportDigest") {
+		return "./internal/releaseevidence"
+	}
+	if strings.HasPrefix(testName, "TestWorkflowHardening") ||
+		strings.HasPrefix(testName, "TestCurrentRepoManifestContainsWorkflowHardening") {
+		return "./internal/releaseevidence"
+	}
 	if strings.HasPrefix(testName, "TestCapabilityMatrixAdmissionDisabled") {
 		return "./internal/api"
 	}
@@ -2680,6 +2805,9 @@ func TestProfileBoundarySelectedOptionalOnlyBlocksWhenSelectorClaimsCapability(t
 func TestProfileBoundaryDeploymentRuntimeSupportCannotCloseDefaultOrOptionalPositive(t *testing.T) {}
 func TestCurrentRepoManifestContainsProfileBoundaryEvidence(t *testing.T) {}
 func TestProfileBoundaryReplacementRejectsWrongShapeBroadSelectorOptionalRuntimeOrHelperOnly(t *testing.T) {}
+func TestCurrentRepoManifestContainsWorkflowHardeningEvidence(t *testing.T) {}
+func TestWorkflowHardeningReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly(t *testing.T) {}
+func TestSelectorRejectsUnsafePathAndGeneratedReportDigest(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "operatorrepair", "repair_test.go"), `package operatorrepair
 
@@ -2721,6 +2849,10 @@ func TestRestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch(t
 func TestDiscoverySurfacesContractDefinesLayeredDiscoveryBoundaries(t *testing.T) {}
 func TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary(t *testing.T) {}
 func TestProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation(t *testing.T) {}
+func TestWorkflowHardeningCurrentRepoWorkflowUsesSingleAuthoritativeGate(t *testing.T) {}
+func TestWorkflowHardeningReleaseScriptCannotBypassManifestOrBaseline(t *testing.T) {}
+func TestWorkflowHardeningFinalIntentRequiresSelectorAndRejectsCheckOnlyFinalAcceptance(t *testing.T) {}
+func TestWorkflowHardeningContractRejectsManualApprovalAlternateGateOrDeploymentRuntimeProof(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "cmd", "afscp-evidence-verify", "main_test.go"), `package main
 
@@ -2732,6 +2864,8 @@ func TestRunCheckOnlyAcceptsRestoreReconciliationManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsDiscoverySurfacesManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsSecretPathRedactionManifest(t *testing.T) {}
 func TestRunCheckOnlyAcceptsProfileBoundaryManifest(t *testing.T) {}
+func TestRunCheckOnlyAcceptsWorkflowHardeningManifest(t *testing.T) {}
+func TestFinalCheckOnlyCannotDeclareFinalAcceptance(t *testing.T) {}
 `)
 	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "restorereconcile", "restore_reconciliation_test.go"), `package restorereconcile
 
@@ -3065,6 +3199,17 @@ func validReleaseEvidenceManifest() string {
       "default_ga_required":false
     },
     {
+      "id":"workflow_hardening_guard_unit",
+      "capability_id":"",
+      "evidence_type":"unit",
+      "required":true,
+      "command":["go","test","-count=1","./internal/contractcheck","./internal/releaseevidence","./cmd/afscp-evidence-verify","-run","^Test(WorkflowHardeningCurrentRepoWorkflowUsesSingleAuthoritativeGate|WorkflowHardeningReleaseScriptCannotBypassManifestOrBaseline|WorkflowHardeningFinalIntentRequiresSelectorAndRejectsCheckOnlyFinalAcceptance|WorkflowHardeningContractRejectsManualApprovalAlternateGateOrDeploymentRuntimeProof|SelectorRejectsUnsafePathAndGeneratedReportDigest|FinalCheckOnlyCannotDeclareFinalAcceptance|CurrentRepoManifestContainsWorkflowHardeningEvidence|WorkflowHardeningReplacementRejectsWrongShapeBroadSelectorDocOnlyRuntimeOnlyOrHelperOnly|RunCheckOnlyAcceptsWorkflowHardeningManifest)$"],
+      "anchors":["scripts/pass.sh"],
+      "doc_only_allowed":false,
+      "optional_gated":false,
+      "default_ga_required":false
+    },
+    {
       "id":"repo_create_jvs_runtime_unavailable_recovery_unit",
       "capability_id":"repo_create",
       "evidence_type":"unit",
@@ -3210,7 +3355,6 @@ var package0SeedGapFixtureMetadata = []struct {
 	{"seed_gap_deployment_risk_envelope_open", "CLAIM_DEPLOYMENT_RISK_ENVELOPE", "F17"},
 	{"seed_gap_optional_fixture_conformant_open", "CLAIM_OPTIONAL_FIXTURE_CONFORMANT", "F9"},
 	{"seed_gap_template_quota_boundary_open", "CLAIM_TEMPLATE_QUOTA_BOUNDARY", "F16"},
-	{"seed_gap_workflow_hardening_guard_open", "CLAIM_WORKFLOW_HARDENING_GUARD", "F18"},
 }
 
 var package0FixtureMetadata = []struct {
@@ -3252,6 +3396,7 @@ var package0FixtureMetadata = []struct {
 	{"discovery_surfaces_layered_unit", "CLAIM_DISCOVERY_SURFACES", "discovery_surfaces_layered", "P0_DISCOVERY_SURFACES_LAYERED", "F7", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "discovery surfaces pass layered default checks"},
 	{"secret_path_redaction_unit", "CLAIM_SECRET_PATH_REDACTION", "secret_path_redaction", "P0_SECRET_PATH_REDACTION", "F10", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "secret path redaction denies secret path disclosure"},
 	{"profile_boundary_consistent_unit", "CLAIM_PROFILE_BOUNDARY", "profile_boundary_consistent", "P0_PROFILE_BOUNDARY_CONSISTENT", "F1", "", "default", "true", "false", "fast", "package", "both", "false", "coverage_guard", "profile boundary consistency covers final release evidence"},
+	{"workflow_hardening_guard_unit", "CLAIM_WORKFLOW_HARDENING_GUARD", "workflow_hardening_guard", "P0_WORKFLOW_HARDENING_GUARD", "F18", "", "default", "true", "false", "fast", "workflow-guard", "both", "false", "coverage_guard", "workflow hardening guard covers final release evidence"},
 	{"repo_create_jvs_runtime_unavailable_recovery_unit", "CLAIM_OPERATION_TERMINALIZATION", "repo_create_jvs_runtime_unavailable_recovery", "P1_OPERATION_TERMINALIZATION_REPO_CREATE_JVS_RUNTIME_UNAVAILABLE_RECOVERY", "F6", "", "default", "true", "false", "fast", "package", "negative", "true", "denial_safety", "repo_create enabled recovery terminalizes when production JVS runtime is unavailable and fail-fast boundaries hold"},
 	{"operation_terminalization_contract_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_terminalization_contract", "P2A_OPERATION_TERMINALIZATION_CONTRACT", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "operation terminalization contract covers inventory side-effect replay and terminal decisions"},
 	{"operation_runtime_terminalization_unit", "CLAIM_OPERATION_TERMINALIZATION", "operation_runtime_terminalization", "P2B_OPERATION_RUNTIME_TERMINALIZATION", "F6", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "real RunOnce tests cover supported worker rows and registry coverage is auxiliary"},

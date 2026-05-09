@@ -202,6 +202,112 @@ func TestProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation
 	)
 }
 
+func TestWorkflowHardeningCurrentRepoWorkflowUsesSingleAuthoritativeGate(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "ga-release.yml")
+	body, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", workflowPath, err)
+	}
+	text := string(body)
+	if strings.Count(text, "bash scripts/verify-ga-release.sh") != 1 {
+		t.Fatalf("%s must call the single authoritative release gate exactly once", workflowPath)
+	}
+	for _, forbidden := range []string{
+		"afscp-evidence-verify",
+		"verify-ga-baseline.sh",
+		"-mode final",
+		"-check-only",
+		"environment:",
+		"manual approval",
+		"deployment-runtime-support",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("%s must not contain alternate gate token %q", workflowPath, forbidden)
+		}
+	}
+}
+
+func TestWorkflowHardeningReleaseScriptCannotBypassManifestOrBaseline(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	releasePath := filepath.Join(repoRoot, "scripts", "verify-ga-release.sh")
+	body, err := os.ReadFile(releasePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", releasePath, err)
+	}
+	text := string(body)
+	for _, required := range []string{
+		"go run ./cmd/afscp-evidence-verify",
+		"-mode \"$mode\"",
+		"-manifest \"$manifest_path\"",
+		"bash scripts/verify-ga-baseline.sh",
+		"bash -n scripts/verify-ga-release.sh",
+		"bash -n scripts/verify-ga-baseline.sh",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("%s must include %q", releasePath, required)
+		}
+	}
+	if !releaseScriptRunsEvidenceManifestVerifier(text) {
+		t.Fatalf("%s must actively run the manifest verifier without swallowing failures", releasePath)
+	}
+	for _, forbidden := range []string{
+		"-check-only",
+		"|| true",
+		"manual approval",
+		"environment approval",
+		"deployment-runtime-support",
+		"../",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("%s must not contain bypass token %q", releasePath, forbidden)
+		}
+	}
+}
+
+func TestWorkflowHardeningFinalIntentRequiresSelectorAndRejectsCheckOnlyFinalAcceptance(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	releasePath := filepath.Join(repoRoot, "scripts", "verify-ga-release.sh")
+	body, err := os.ReadFile(releasePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", releasePath, err)
+	}
+	text := string(body)
+	for _, required := range []string{
+		"selector_path=\"docs/release-evidence/ga-release-selector.json\"",
+		"selector_intent=",
+		"final_candidate",
+		"AFSCP_RELEASE_INTENT",
+		"mode=\"final\"",
+		"selector_args=(-selector \"$selector_path\")",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("%s must include final selector guard %q", releasePath, required)
+		}
+	}
+	if strings.Contains(text, "-mode final") || strings.Contains(text, "-check-only") {
+		t.Fatalf("%s must not hard-code manual final or check-only final acceptance", releasePath)
+	}
+}
+
+func TestWorkflowHardeningContractRejectsManualApprovalAlternateGateOrDeploymentRuntimeProof(t *testing.T) {
+	body := readRepoFileForContractTest(t, "docs/GA_RELEASE_GATES.md")
+	requireContractPhrases(t, body,
+		"Workflow Hardening",
+		"scripts/verify-ga-release.sh",
+		"repo-local authoritative release entrypoint",
+		"workflow",
+		"must call only this script",
+		"must not run final mode directly",
+		"must not use -check-only as final acceptance",
+		"generated report, digest, or copy",
+		"same-run authoritative input",
+		"person-driven release conditions",
+		"deployment or runtime status checks",
+		"sibling-repository",
+	)
+}
+
 func TestVerifyFilesIgnoresParameterRefsOutsideParametersBlock(t *testing.T) {
 	paths := writeContractFixture(t, contractFixture{
 		openapi: `
