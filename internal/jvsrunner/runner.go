@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -112,8 +113,24 @@ type HistorySummary struct {
 type RestorePreviewSummary struct {
 	PlanID            string
 	SourceSavePointID string
+	BaseRevision      string
+	HeadRevision      string
+	Generation        string
+	ManagedFiles      RestorePreviewManagedFilesSummary
 	Workspace         string
 	RunCommandPresent bool
+}
+
+type RestorePreviewChangeSummary struct {
+	Count   int
+	Samples []string
+}
+
+type RestorePreviewManagedFilesSummary struct {
+	Added       RestorePreviewChangeSummary
+	Changed     RestorePreviewChangeSummary
+	Removed     RestorePreviewChangeSummary
+	Destructive bool
 }
 
 type RestoreRunSummary struct {
@@ -363,14 +380,27 @@ func (runner *Runner) RestorePreview(ctx context.Context, controlRoot, savePoint
 	}
 	planID, okPlan := dataSafeID(envelope, "plan_id")
 	source, okSource := dataSafeID(envelope, "source_save_point")
+	base, okBase := dataSafeID(envelope, "expected_newest_save_point")
+	head, okHead := dataSafeID(envelope, "history_head")
+	generation, okGeneration := dataSafeID(envelope, "expected_folder_evidence")
+	managedFiles, okManagedFiles := parseRestorePreviewManagedFiles(envelope.Data["managed_files"])
 	workspace, _ := envelope.Data["workspace"].(string)
 	runCommand, _ := envelope.Data["run_command"].(string)
 	filesChanged, filesOK := envelope.Data["files_changed"].(bool)
 	historyChanged, historyOK := envelope.Data["history_changed"].(bool)
-	if envelope.Data["mode"] != "preview" || workspace != workspaceMain || !okPlan || !okSource || strings.TrimSpace(runCommand) == "" || !filesOK || filesChanged || !historyOK || historyChanged {
+	if envelope.Data["mode"] != "preview" || workspace != workspaceMain || !okPlan || !okSource || !okBase || !okHead || !okGeneration || !okManagedFiles || strings.TrimSpace(runCommand) == "" || !filesOK || filesChanged || !historyOK || historyChanged {
 		return RestorePreviewSummary{}, fmt.Errorf("%w: restore preview", ErrInvalidEnvelope)
 	}
-	return RestorePreviewSummary{PlanID: planID, SourceSavePointID: source, Workspace: workspace, RunCommandPresent: true}, nil
+	return RestorePreviewSummary{
+		PlanID:            planID,
+		SourceSavePointID: source,
+		BaseRevision:      base,
+		HeadRevision:      head,
+		Generation:        generation,
+		ManagedFiles:      managedFiles,
+		Workspace:         workspace,
+		RunCommandPresent: true,
+	}, nil
 }
 
 func (runner *Runner) RestoreRun(ctx context.Context, controlRoot, planID string) (RestoreRunSummary, error) {
@@ -664,6 +694,52 @@ func intData(value any) (int, bool) {
 	}
 }
 
+func parseRestorePreviewManagedFiles(raw any) (RestorePreviewManagedFilesSummary, bool) {
+	object, ok := raw.(map[string]any)
+	if !ok {
+		return RestorePreviewManagedFilesSummary{}, false
+	}
+	changed, okChanged := parseRestorePreviewChangeSummary(object["overwrite"])
+	removed, okRemoved := parseRestorePreviewChangeSummary(object["delete"])
+	added, okAdded := parseRestorePreviewChangeSummary(object["create"])
+	if !okChanged || !okRemoved || !okAdded {
+		return RestorePreviewManagedFilesSummary{}, false
+	}
+	return RestorePreviewManagedFilesSummary{
+		Added:       added,
+		Changed:     changed,
+		Removed:     removed,
+		Destructive: changed.Count > 0 || removed.Count > 0,
+	}, true
+}
+
+func parseRestorePreviewChangeSummary(raw any) (RestorePreviewChangeSummary, bool) {
+	object, ok := raw.(map[string]any)
+	if !ok {
+		return RestorePreviewChangeSummary{}, false
+	}
+	count, ok := intData(object["count"])
+	if !ok || count < 0 {
+		return RestorePreviewChangeSummary{}, false
+	}
+	rawSamples, ok := object["samples"].([]any)
+	if !ok {
+		return RestorePreviewChangeSummary{}, false
+	}
+	if len(rawSamples) > 10 {
+		return RestorePreviewChangeSummary{}, false
+	}
+	samples := make([]string, 0, len(rawSamples))
+	for _, rawSample := range rawSamples {
+		sample, ok := rawSample.(string)
+		if !ok || !safeDisplayPath(sample) {
+			return RestorePreviewChangeSummary{}, false
+		}
+		samples = append(samples, sample)
+	}
+	return RestorePreviewChangeSummary{Count: count, Samples: samples}, true
+}
+
 func knownRestoreState(state string) bool {
 	switch state {
 	case "idle", "none", "pending_restore_preview", "stale_restore_preview":
@@ -773,6 +849,33 @@ func safeOptionalIDFromMap(object map[string]any, key string) (string, bool) {
 		return "", false
 	}
 	return text, true
+}
+
+func safeDisplayPath(value string) bool {
+	if len(value) == 0 || len(value) > 256 || strings.TrimSpace(value) != value {
+		return false
+	}
+	if strings.HasPrefix(value, "/") || strings.Contains(value, "\\") || strings.Contains(value, "\x00") {
+		return false
+	}
+	clean := path.Clean(value)
+	if clean != value || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return false
+	}
+	parts := strings.Split(value, "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	for i := 0; i < len(value); i++ {
+		b := value[i]
+		if b < 0x20 || b == 0x7f {
+			return false
+		}
+	}
+	lower := strings.ToLower(value)
+	return !strings.Contains(lower, ".jvs") && !strings.Contains(lower, "control_root") && !containsShellFragment(lower)
 }
 
 func safeSummaryText(value string) string {

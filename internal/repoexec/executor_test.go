@@ -1047,6 +1047,9 @@ func (store *fakeRepoCreateStore) MarkRestoreRunWriterFencedWithLease(_ context.
 
 func (store *fakeRepoCreateStore) MarkRestoreRunConsumingWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
 	store.restoreRunConsumingMarks++
+	if store.restorePlan.Stale {
+		return restoreplan.Plan{}, operations.OperationRecord{}, errors.New("stale restore plan cannot be consumed")
+	}
 	store.operation = record.Record()
 	store.restorePlan.Status = restoreplan.StatusConsuming
 	store.restorePlan.UpdatedAt = now
@@ -1058,6 +1061,15 @@ func (store *fakeRepoCreateStore) CommitRestoreRunSucceededWithLease(_ context.C
 	store.restorePlan.Status = restoreplan.StatusConsumed
 	store.restorePlan.UpdatedAt = now
 	store.releaseWriterFence(store.operation.SessionFenceID, now)
+	store.auditEvents = append(store.auditEvents, event)
+	return store.restorePlan, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitRestoreRunStalePreviewWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	store.operation = record.Record()
+	store.restorePlan.Stale = plan.Stale
+	store.restorePlan.Blockers = append([]restoreplan.Blocker(nil), plan.Blockers...)
+	store.restorePlan.UpdatedAt = now
 	store.auditEvents = append(store.auditEvents, event)
 	return store.restorePlan, store.operation, nil
 }

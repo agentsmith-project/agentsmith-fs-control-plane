@@ -298,8 +298,9 @@ func restorePreviewSucceededOperationRecord(now time.Time) operations.OperationR
 	record.LeaseOwner = ""
 	record.LeaseExpiresAt = nil
 	record.FinishedAt = &now
-	record.VerificationResult = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "restore_plan_status": "pending"}
-	record.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001"}
+	record.VerificationResult = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "base_revision": "sp_002", "head_revision": "sp_002", "generation": "sha256:preview-base", "fence_marker": "preview_fence_op_preview01", "restore_plan_status": "pending"}
+	record.JVSJSONOutput = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "base_revision": "sp_002", "head_revision": "sp_002", "generation": "sha256:preview-base", "fence_marker": "preview_fence_op_preview01"}
+	record.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001"}
 	return record
 }
 
@@ -310,8 +311,20 @@ func restorePreviewPendingPlan(now time.Time) restoreplan.Plan {
 		RepoID:             "repo_alpha01",
 		PreviewOperationID: "op_preview01",
 		SourceSavePointID:  "sp_001",
-		Status:             restoreplan.StatusPending,
-		CreatedAt:          now.Add(-time.Minute),
-		UpdatedAt:          now.Add(-time.Minute),
+		BaseRevision:       "sp_002",
+		HeadRevision:       "sp_002",
+		Generation:         "sha256:preview-base",
+		FenceMarker:        "preview_fence_op_preview01",
+		Summary: restoreplan.Summary{
+			Added:       restoreplan.ChangeSummary{Count: 1, Samples: []string{"src/new.ts"}},
+			Changed:     restoreplan.ChangeSummary{Count: 1, Samples: []string{"docs/readme.md"}},
+			Removed:     restoreplan.ChangeSummary{Count: 1, Samples: []string{"tmp/cache.txt"}},
+			Destructive: true,
+		},
+		Blockers:  []restoreplan.Blocker{},
+		Stale:     false,
+		Status:    restoreplan.StatusPending,
+		CreatedAt: now.Add(-time.Minute),
+		UpdatedAt: now.Add(-time.Minute),
 	}
 }

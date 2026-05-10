@@ -308,6 +308,15 @@ func TestRestorePreviewRunDiscardAndRecoveryStatusUseFixedCommandsAndParseEnvelo
 				if got.PlanID != "plan_001" || got.SourceSavePointID != "sp_001" || !got.RunCommandPresent {
 					t.Fatalf("summary = %#v", got)
 				}
+				if got.BaseRevision != "sp_002" || got.HeadRevision != "sp_002" || got.Generation != "sha256:preview-base" {
+					t.Fatalf("preview revision metadata = %#v, want base/head/generation", got)
+				}
+				if got.ManagedFiles.Changed.Count != 1 || got.ManagedFiles.Removed.Count != 1 || got.ManagedFiles.Added.Count != 1 || !got.ManagedFiles.Destructive {
+					t.Fatalf("managed files summary = %#v, want redacted changed/removed/added summary", got.ManagedFiles)
+				}
+				if got.ManagedFiles.Changed.Samples[0] != "docs/readme.md" || got.ManagedFiles.Removed.Samples[0] != "tmp/cache.txt" || got.ManagedFiles.Added.Samples[0] != "src/new.ts" {
+					t.Fatalf("managed files samples = %#v, want display-safe relative paths", got.ManagedFiles)
+				}
 			},
 		},
 		{
@@ -1270,6 +1279,15 @@ func restorePreviewStdoutWith(t *testing.T, mutate func(map[string]any)) []byte 
 	data["mode"] = "preview"
 	data["plan_id"] = "plan_001"
 	data["source_save_point"] = "sp_001"
+	data["newest_save_point"] = "sp_002"
+	data["history_head"] = "sp_002"
+	data["expected_newest_save_point"] = "sp_002"
+	data["expected_folder_evidence"] = "sha256:preview-base"
+	data["managed_files"] = map[string]any{
+		"overwrite": map[string]any{"count": 1, "samples": []string{"docs/readme.md"}},
+		"delete":    map[string]any{"count": 1, "samples": []string{"tmp/cache.txt"}},
+		"create":    map[string]any{"count": 1, "samples": []string{"src/new.ts"}},
+	}
 	data["run_command"] = "jvs restore --run plan_001"
 	data["files_changed"] = false
 	data["history_changed"] = false

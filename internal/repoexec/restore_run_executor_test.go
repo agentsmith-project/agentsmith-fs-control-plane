@@ -187,6 +187,88 @@ func TestRestoreRunExecutorPreflightRecoveryMismatchFailsClosedBeforeFence(t *te
 	}
 }
 
+func TestRestoreRunExecutorStalePreviewFailsTypedBeforeWriterFence(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.previewOperation = restorePreviewSucceededOperationRecord(now)
+	store.restorePlan = restorePreviewPendingPlan(now)
+	runner := &fakeJVSRunner{recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "stale_restore_preview", ActivePlanID: "plan_001", Blocking: true, Workspace: "main"}}
+	executor := newTestRestoreRunExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), restoreRunLeasedRecord(now, operations.OperationPhaseRestoreRunValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "recovery_status" || store.restoreRunWriterFenceMarks != 0 {
+		t.Fatalf("JVS/fence marks = %#v/%d, want stale status only and no writer fence", runner.calls, store.restoreRunWriterFenceMarks)
+	}
+	if store.restorePlan.Status != restoreplan.StatusPending || !store.restorePlan.Stale || len(store.restorePlan.Blockers) != 1 || store.restorePlan.Blockers[0].Code != "restore_preview_stale" {
+		t.Fatalf("restore plan = %#v, want pending stale plan with durable blocker preserved for discard", store.restorePlan)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_STALE" {
+		t.Fatalf("operation = %#v, want typed stale failure", store.operation)
+	}
+	verification, _ := store.operation.VerificationResult.(map[string]any)
+	if verification["stale"] != true || verification["restore_state"] != "stale_restore_preview" {
+		t.Fatalf("verification = %#v, want typed stale projection", verification)
+	}
+}
+
+func TestRestoreRunExecutorStoredStalePreviewFailsTypedBeforeJVS(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.previewOperation = restorePreviewSucceededOperationRecord(now)
+	store.restorePlan = restorePreviewPendingPlan(now)
+	store.restorePlan.Stale = true
+	store.restorePlan.Blockers = []restoreplan.Blocker{{Code: "restore_preview_stale", Message: "Preview is stale; discard and create a new preview before running restore."}}
+	runner := &fakeJVSRunner{}
+	executor := newTestRestoreRunExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), restoreRunLeasedRecord(now, operations.OperationPhaseRestoreRunValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if len(runner.calls) != 0 || store.restoreRunWriterFenceMarks != 0 {
+		t.Fatalf("JVS/fence marks = %#v/%d, want durable stale plan to fail before JVS or writer fence", runner.calls, store.restoreRunWriterFenceMarks)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_STALE" {
+		t.Fatalf("operation = %#v, want typed stale failure from durable plan", store.operation)
+	}
+	if !store.restorePlan.Stale || len(store.restorePlan.Blockers) != 1 || store.restorePlan.Blockers[0].Code != "restore_preview_stale" {
+		t.Fatalf("restore plan = %#v, want stale blocker source of truth preserved", store.restorePlan)
+	}
+}
+
+func TestRestoreRunExecutorCannotConsumePlanThatTurnsStaleAfterFence(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.previewOperation = restorePreviewSucceededOperationRecord(now)
+	store.restorePlan = restorePreviewPendingPlan(now)
+	store.beforeListSessions = func() {
+		store.restorePlan.Stale = true
+		store.restorePlan.Blockers = []restoreplan.Blocker{{Code: "restore_preview_stale", Message: "Preview is stale; discard and create a new preview before running restore."}}
+	}
+	runner := &fakeJVSRunner{recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "pending_restore_preview", ActivePlanID: "plan_001", Blocking: true, Workspace: "main"}}
+	executor := newTestRestoreRunExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), restoreRunLeasedRecord(now, operations.OperationPhaseRestoreRunValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err == nil || !strings.Contains(err.Error(), "restore run consuming mark failed") {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want DB consuming predicate failure", err)
+	}
+	if strings.Join(runner.calls, ",") != "recovery_status" || store.restoreRunConsumingMarks != 1 {
+		t.Fatalf("JVS/consuming attempts = %#v/%d, want no restore-run after stale consuming rejection", runner.calls, store.restoreRunConsumingMarks)
+	}
+	if store.restorePlan.Status != restoreplan.StatusPending || !store.restorePlan.Stale {
+		t.Fatalf("restore plan = %#v, want stale pending plan not consumed", store.restorePlan)
+	}
+	if activeWriterFenceCount(store.fences, "op_run") != 1 {
+		t.Fatalf("fences = %#v, want same-op writer fence retained for recovery after DB race rejection", store.fences)
+	}
+}
+
 func TestRestoreRunExecutorRejectsDisabledNamespaceBeforeJVSOrFence(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()

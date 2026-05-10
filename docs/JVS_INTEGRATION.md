@@ -145,7 +145,8 @@ clone JVS mutations with existing stable mutation or recovery errors.
 The durable `RestorePlan` table/entity is the source of truth for this
 lifecycle. `restore_plan_id` is normalized from the JVS preview `plan_id` and
 maps back to the JVS plan ID used for restore-run and discard commands; it is
-not a new top-level `OperationRecord` field.
+not a new top-level `OperationRecord` field. Preview source metadata, stale
+state, and blockers are stored on `RestorePlan`, not only in operation details.
 
 Restore preview flow:
 
@@ -154,7 +155,10 @@ Restore preview flow:
 3. Run `jvs recovery status --json` and require idle recovery status.
 4. Persist a preview preflight idle marker on the operation record.
 5. Run JVS restore preview for the requested save point.
-6. Persist `restore_plan_id`, `source_save_point_id`, and plan `pending`.
+6. Persist `restore_plan_id`, `source_save_point_id`,
+   `expected_newest_save_point`, `history_head`,
+   `expected_folder_evidence`, the redacted `managed_files` summary, and plan
+   `pending`.
 
 Crash recovery after JVS preview may adopt a single pending JVS plan only when
 AFSCP-exclusive-control assumptions hold and the current operation is the
@@ -162,22 +166,29 @@ earliest same-repo non-terminal restore preview or JVS mutation. Any mismatch,
 multiple pending plans, unknown blocking state, unsafe plan ID, or competing
 operation moves the plan or operation to `operator_intervention_required`.
 `stale_restore_preview` defaults to intervention unless the caller explicitly
-uses restore preview discard.
+uses restore preview discard. During restore-run for the matching pending plan,
+`stale_restore_preview` is a typed `RESTORE_PREVIEW_STALE` failure: AFSCP marks
+the durable plan `stale=true`, persists a `restore_preview_stale` blocker, and
+leaves the plan `pending` for discard.
 
 Restore-run flow:
 
 1. Validate the preview operation and durable plan against namespace, repo,
    operation type, succeeded preview state, `restore_plan_id`,
    `source_save_point_id`, `status=pending`, and restore-run references.
-2. Preflight `jvs recovery status --json` and require exactly one pending JVS
-   plan matching the stored `restore_plan_id`.
-3. Acquire the writer-session fence.
-4. Reject active or uncertain read-write sessions.
-5. Mark the plan `consuming`.
-6. Run JVS restore-run.
-7. Run `jvs doctor --strict`.
-8. Verify JVS recovery status is idle.
-9. Atomically record restore-run success, audit success, writer-fence release,
+2. If the durable plan is already `stale=true`, fail typed with
+   `RESTORE_PREVIEW_STALE` before JVS or writer fence.
+3. Preflight `jvs recovery status --json` and require exactly one pending JVS
+   plan matching the stored `restore_plan_id`; matching
+   `stale_restore_preview` fails typed with `RESTORE_PREVIEW_STALE` and updates
+   durable plan stale/blocker fields.
+4. Acquire the writer-session fence.
+5. Reject active or uncertain read-write sessions.
+6. Mark the plan `consuming`.
+7. Run JVS restore-run.
+8. Run `jvs doctor --strict`.
+9. Verify JVS recovery status is idle.
+10. Atomically record restore-run success, audit success, writer-fence release,
    and plan `consumed`.
 
 If writer/session gating denies the run before JVS is invoked, release the

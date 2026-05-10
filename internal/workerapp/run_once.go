@@ -1159,6 +1159,10 @@ func (scoped operationRecoveryStore) CommitRestoreRunSucceededWithLease(ctx cont
 	return scoped.store.CommitRestoreRunSucceededWithLease(ctx, record, owner, now, event)
 }
 
+func (scoped operationRecoveryStore) CommitRestoreRunStalePreviewWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	return scoped.store.CommitRestoreRunStalePreviewWithLease(ctx, plan, record, owner, now, event)
+}
+
 func (scoped operationRecoveryStore) CommitRestoreRunFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	return scoped.store.CommitRestoreRunFailedWithLease(ctx, record, owner, now, event)
 }

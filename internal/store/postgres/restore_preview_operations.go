@@ -214,7 +214,7 @@ func restorePreviewSuccessCommitWithLeaseSQL() string {
 		"), inserted_restore_plan AS (" +
 		"INSERT INTO restore_plans (" + strings.Join(restorePlanColumns, ", ") + ") SELECT " + placeholders(20, len(restorePlanColumns)) + " FROM updated_operation RETURNING " + strings.Join(restorePlanColumns, ", ") +
 		"), inserted_audit AS (" +
-		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(28, len(auditOutboxColumns)) + " FROM updated_operation, inserted_restore_plan RETURNING audit_event_id" +
+		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(20+len(restorePlanColumns), len(auditOutboxColumns)) + " FROM updated_operation, inserted_restore_plan RETURNING audit_event_id" +
 		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM inserted_restore_plan, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
 }
 
@@ -288,22 +288,15 @@ func containsForbiddenRestorePreviewCommand(value any) bool {
 
 func scanRestorePlanAndOperation(row rowScanner) (restoreplan.Plan, operations.OperationRecord, error) {
 	var plan restoreplan.Plan
-	var planStatus string
 	var record operations.OperationRecord
 	var operationType, operationState, requestHash string
 	var leaseOwner, repoID, templateID, exportID, mountBindingID, sessionFenceID, compensationStatus sql.NullString
 	var leaseExpiresAt, startedAt, finishedAt sql.NullTime
 	var externalResourceIDsJSON, inputSummaryJSON, jvsJSONOutputJSON, verificationResultJSON, errorJSON []byte
 
-	if err := row.Scan(
-		&plan.ID,
-		&plan.NamespaceID,
-		&plan.RepoID,
-		&plan.PreviewOperationID,
-		&plan.SourceSavePointID,
-		&planStatus,
-		&plan.CreatedAt,
-		&plan.UpdatedAt,
+	if err := scanRestorePlanPrefix(
+		row,
+		&plan,
 		&record.ID,
 		&operationType,
 		&operationState,
@@ -339,7 +332,6 @@ func scanRestorePlanAndOperation(row rowScanner) (restoreplan.Plan, operations.O
 		return restoreplan.Plan{}, operations.OperationRecord{}, err
 	}
 
-	plan.Status = restoreplan.Status(planStatus)
 	if err := plan.Validate(); err != nil {
 		return restoreplan.Plan{}, operations.OperationRecord{}, err
 	}

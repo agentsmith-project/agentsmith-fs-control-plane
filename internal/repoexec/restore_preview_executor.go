@@ -219,15 +219,59 @@ func (executor *RestorePreviewExecutor) controlRoot(repo resources.Repo) (string
 }
 
 func (executor *RestorePreviewExecutor) commitRestorePreviewSuccess(ctx context.Context, record operations.OperationRecord, now time.Time, preview jvsrunner.RestorePreviewSummary) error {
+	summary := restorePreviewPlanSummary(preview.ManagedFiles)
+	blockers := []restoreplan.Blocker{}
+	fenceMarker := restorePreviewFenceMarker(record.ID)
 	operation := record
 	operation.State = operations.OperationStateSucceeded
 	operation.Phase = operations.OperationPhaseRestorePreviewCommitted
 	operation.ExternalResourceIDs = map[string]string{"restore_plan_id": preview.PlanID, "source_save_point_id": preview.SourceSavePointID}
-	operation.JVSJSONOutput = map[string]any{"restore_plan_id": preview.PlanID, "source_save_point_id": preview.SourceSavePointID, "workspace": preview.Workspace, "run_command_present": preview.RunCommandPresent}
-	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), map[string]any{"restore_plan_id": preview.PlanID, "source_save_point_id": preview.SourceSavePointID, "workspace": preview.Workspace, "run_command_present": preview.RunCommandPresent, "restore_plan_status": restoreplan.StatusPending.String()})
+	operation.JVSJSONOutput = map[string]any{
+		"restore_plan_id":      preview.PlanID,
+		"source_save_point_id": preview.SourceSavePointID,
+		"base_revision":        preview.BaseRevision,
+		"head_revision":        preview.HeadRevision,
+		"generation":           preview.Generation,
+		"fence_marker":         fenceMarker,
+		"summary":              restoreplan.SummaryMap(summary),
+		"blockers":             restoreplan.BlockersList(blockers),
+		"stale":                false,
+		"workspace":            preview.Workspace,
+		"run_command_present":  preview.RunCommandPresent,
+	}
+	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), map[string]any{
+		"restore_plan_id":      preview.PlanID,
+		"source_save_point_id": preview.SourceSavePointID,
+		"base_revision":        preview.BaseRevision,
+		"head_revision":        preview.HeadRevision,
+		"generation":           preview.Generation,
+		"fence_marker":         fenceMarker,
+		"summary":              restoreplan.SummaryMap(summary),
+		"blockers":             restoreplan.BlockersList(blockers),
+		"stale":                false,
+		"workspace":            preview.Workspace,
+		"run_command_present":  preview.RunCommandPresent,
+		"restore_plan_status":  restoreplan.StatusPending.String(),
+	})
 	operation.Error = nil
 	operation.FinishedAt = &now
-	plan := restoreplan.Plan{ID: preview.PlanID, NamespaceID: record.NamespaceID, RepoID: record.RepoID, PreviewOperationID: record.ID, SourceSavePointID: preview.SourceSavePointID, Status: restoreplan.StatusPending, CreatedAt: now, UpdatedAt: now}
+	plan := restoreplan.Plan{
+		ID:                 preview.PlanID,
+		NamespaceID:        record.NamespaceID,
+		RepoID:             record.RepoID,
+		PreviewOperationID: record.ID,
+		SourceSavePointID:  preview.SourceSavePointID,
+		BaseRevision:       preview.BaseRevision,
+		HeadRevision:       preview.HeadRevision,
+		Generation:         preview.Generation,
+		FenceMarker:        fenceMarker,
+		Summary:            summary,
+		Blockers:           blockers,
+		Stale:              false,
+		Status:             restoreplan.StatusPending,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
 	if err := plan.Validate(); err != nil {
 		return executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_RESULT_INVALID", "restore preview result invalid", nil)
 	}
@@ -351,10 +395,33 @@ func validateRestorePreviewSummary(summary jvsrunner.RestorePreviewSummary, save
 	if !restorePreviewSafeOpaqueID(summary.PlanID) || !restorePreviewSafeOpaqueID(summary.SourceSavePointID) {
 		return errors.New("invalid restore preview summary ids")
 	}
+	if !restorePreviewSafeOpaqueID(summary.BaseRevision) || !restorePreviewSafeOpaqueID(summary.HeadRevision) || !restorePreviewSafeOpaqueID(summary.Generation) {
+		return errors.New("invalid restore preview revision metadata")
+	}
+	if err := restorePreviewPlanSummary(summary.ManagedFiles).Validate(); err != nil {
+		return errors.New("invalid restore preview managed file summary")
+	}
 	if summary.SourceSavePointID != savePointID || summary.Workspace != "main" || !summary.RunCommandPresent {
 		return errors.New("invalid restore preview summary")
 	}
 	return nil
+}
+
+func restorePreviewFenceMarker(previewOperationID string) string {
+	return "preview_fence_" + previewOperationID
+}
+
+func restorePreviewPlanSummary(summary jvsrunner.RestorePreviewManagedFilesSummary) restoreplan.Summary {
+	return restoreplan.Summary{
+		Added:       restorePreviewChangeSummary(summary.Added),
+		Changed:     restorePreviewChangeSummary(summary.Changed),
+		Removed:     restorePreviewChangeSummary(summary.Removed),
+		Destructive: summary.Destructive,
+	}
+}
+
+func restorePreviewChangeSummary(summary jvsrunner.RestorePreviewChangeSummary) restoreplan.ChangeSummary {
+	return restoreplan.ChangeSummary{Count: summary.Count, Samples: append([]string(nil), summary.Samples...)}
 }
 
 func restorePreviewSafeOpaqueID(id string) bool {

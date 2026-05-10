@@ -37,6 +37,7 @@ const (
 	CodeWriterSessionFenceHeld      ErrorCode = "WRITER_SESSION_FENCE_HELD"
 	CodeStaleWriterSessionUncertain ErrorCode = "STALE_WRITER_SESSION_UNCERTAIN"
 	CodeRestoreDirtyState           ErrorCode = "RESTORE_DIRTY_STATE"
+	CodeRestorePreviewStale         ErrorCode = "RESTORE_PREVIEW_STALE"
 
 	CodeJVSCommandFailed              ErrorCode = "JVS_COMMAND_FAILED"
 	CodeJVSDoctorFailed               ErrorCode = "JVS_DOCTOR_FAILED"
@@ -81,6 +82,7 @@ var allErrorCodes = []ErrorCode{
 	CodeWriterSessionFenceHeld,
 	CodeStaleWriterSessionUncertain,
 	CodeRestoreDirtyState,
+	CodeRestorePreviewStale,
 	CodeJVSCommandFailed,
 	CodeJVSDoctorFailed,
 	CodeSourceDirtyAfterTemplateSave,

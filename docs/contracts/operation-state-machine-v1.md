@@ -238,9 +238,11 @@ The durable `RestorePlan` table/entity is the source of truth for restore plan
 lifecycle. `restore_plan_id` is the AFSCP-safe identifier normalized from the
 JVS preview `plan_id`; workers use the matching JVS plan ID when invoking
 `jvs restore --run <plan_id>` and `jvs restore discard <plan_id>`.
-`source_save_point_id` is also stored on the durable plan. These values must
-not be added as top-level `OperationRecord` DTO fields unless the
-OpenAPI/schema, Go structs, and migrations are updated in the same change.
+`source_save_point_id`, `base_revision`, `head_revision`, `generation`,
+`fence_marker`, `summary_json`, `stale`, and `blockers_json` are also stored
+on the durable plan. These values must not be added as top-level
+`OperationRecord` DTO fields unless the OpenAPI/schema, Go structs, and
+migrations are updated in the same change.
 
 `OperationRecord` carries only safe restore metadata in existing structured
 containers: `external_resource_ids.restore_plan_id` and
@@ -271,14 +273,19 @@ block unrelated same-repo JVS mutations, including save, restore preview,
 unrelated restore-run, template create, and template clone, but do not block
 ordinary file IO. The only allowed same-repo JVS mutations while a plan is
 active are the matching restore-run and matching discard operation.
+`stale` and `blockers_json` are durable plan source-of-truth fields. A stale
+pending plan is not consumable; it remains pending only for matching discard or
+for a typed restore-run failure that returns `RESTORE_PREVIEW_STALE`.
 
 Valid restore-run input requires a preview operation and plan in the same
 namespace, repo, and resource boundary. The preview operation must have type
 `restore_preview`, be `succeeded`, and contain durable `restore_plan_id` and
-`source_save_point_id`. The plan must be `pending`, not consumed, discarded,
-discarding, or consuming, and not already referenced by a succeeded or
-non-terminal restore-run. Cross-namespace or cross-repo preview references use
-`OPERATION_NOT_FOUND` or the existing non-leaking equivalent.
+`source_save_point_id`. The plan must be `pending` and `stale=false` to be
+consumed, must not be consumed, discarded, discarding, or consuming, and must
+not already be referenced by a succeeded or non-terminal restore-run. A pending
+plan with `stale=true` may only drive the typed `RESTORE_PREVIEW_STALE`
+failure or matching discard. Cross-namespace or cross-repo preview references
+use `OPERATION_NOT_FOUND` or the existing non-leaking equivalent.
 
 Restore preview recovery must persist a preflight idle marker before invoking
 JVS preview. After a crash, worker recovery may adopt a single pending JVS plan
@@ -292,15 +299,20 @@ explicitly uses the discard flow.
 Restore-run phases are ordered:
 
 1. Validate the preview operation and durable plan.
-2. Preflight JVS recovery status and require exactly one pending plan matching
-   stored `restore_plan_id`.
-3. Acquire the writer-session fence.
-4. Reject active or uncertain read-write sessions.
-5. Mark the plan `consuming`.
-6. Invoke JVS restore-run.
-7. Run `jvs doctor --strict`.
-8. Verify JVS recovery status is idle.
-9. Atomically commit operation success, audit success, writer-fence release, and
+2. If the durable plan is already `stale=true`, fail the restore-run operation
+   with `RESTORE_PREVIEW_STALE` before JVS or writer fence.
+3. Preflight JVS recovery status and require exactly one pending plan matching
+   stored `restore_plan_id`. If JVS reports matching `stale_restore_preview`,
+   persist `RestorePlan.stale=true` plus a `restore_preview_stale` blocker,
+   fail typed with `RESTORE_PREVIEW_STALE`, and leave the plan `pending` for
+   discard.
+4. Acquire the writer-session fence.
+5. Reject active or uncertain read-write sessions.
+6. Mark the plan `consuming`.
+7. Invoke JVS restore-run.
+8. Run `jvs doctor --strict`.
+9. Verify JVS recovery status is idle.
+10. Atomically commit operation success, audit success, writer-fence release, and
    plan `consumed`.
 
 Writer/session denial before JVS invocation releases the writer-session fence,

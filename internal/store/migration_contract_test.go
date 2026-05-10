@@ -221,6 +221,13 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		table.requireColumn(t, "repo_id", "text", "not null")
 		table.requireColumn(t, "preview_operation_id", "text", "not null", "references operations")
 		table.requireColumn(t, "source_save_point_id", "text", "not null")
+		table.requireColumn(t, "base_revision", "text", "not null")
+		table.requireColumn(t, "head_revision", "text", "not null")
+		table.requireColumn(t, "generation", "text", "not null")
+		table.requireColumn(t, "fence_marker", "text", "not null")
+		table.requireColumn(t, "summary_json", "jsonb", "not null")
+		table.requireColumn(t, "blockers_json", "jsonb", "not null")
+		table.requireColumn(t, "stale", "boolean", "not null", "default false")
 		table.requireColumn(t, "status", "text", "not null")
 		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
 		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
@@ -228,8 +235,35 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		table.requireCheckMentions(t, "status", expectedRestorePlanStatusValuesForMigrationContract()...)
 		table.requireBodyFragments(t,
 			"foreign key (namespace_id, repo_id) references repos (namespace_id, repo_id)",
+			"jsonb_typeof(summary_json) = 'object'",
+			"jsonb_typeof(blockers_json) = 'array'",
 		)
 		contract.requirePartialUniqueIndex(t, "restore_plans", []string{"repo_id"}, "status in ('pending', 'consuming', 'discarding', 'operator_intervention_required')")
+	})
+
+	t.Run("restore plan preview metadata has pre-GA upgrade guard", func(t *testing.T) {
+		contract.requireRawFragments(
+			t,
+			"alter table restore_plans add column if not exists base_revision text",
+			"alter table restore_plans add column if not exists head_revision text",
+			"alter table restore_plans add column if not exists generation text",
+			"alter table restore_plans add column if not exists fence_marker text",
+			"alter table restore_plans add column if not exists summary_json jsonb",
+			"alter table restore_plans add column if not exists blockers_json jsonb",
+			"alter table restore_plans add column if not exists stale boolean",
+			"update restore_plans p",
+			"from operations o",
+			"p.preview_operation_id = o.operation_id",
+			"pre_ga_restore_plan_metadata_missing",
+			"alter table restore_plans alter column base_revision set not null",
+			"alter table restore_plans alter column head_revision set not null",
+			"alter table restore_plans alter column generation set not null",
+			"alter table restore_plans alter column fence_marker set not null",
+			"alter table restore_plans alter column summary_json set not null",
+			"alter table restore_plans alter column blockers_json set not null",
+			"alter table restore_plans alter column stale set default false",
+			"alter table restore_plans alter column stale set not null",
+		)
 	})
 
 	t.Run("export sessions table", func(t *testing.T) {

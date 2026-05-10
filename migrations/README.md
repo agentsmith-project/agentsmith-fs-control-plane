@@ -17,6 +17,11 @@ not implement a store adapter, endpoint handler, or storage-side action.
 - `0003_export_runtime_request_ledger.sql`: dedicated WebDAV export runtime
   request ledger for durable begin/heartbeat/end accounting and stale open
   request recovery without creating per-request operation rows.
+- `0004_restore_reconciliation.sql`: restore reconciliation run, target, and
+  observation tables for operator-visible storage mismatch closure.
+- `0005_restore_plan_preview_metadata.sql`: upgrade guard for environments that
+  already applied an older `0001`; adds durable restore-plan preview metadata,
+  stale marker, and blockers source-of-truth columns.
 
 ## Contract
 

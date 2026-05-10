@@ -137,6 +137,9 @@ func (executor *RestoreRunExecutor) ExecuteOperationRecovery(ctx context.Context
 	if record.Phase == operations.OperationPhaseRestoreRunConsuming && durablePlan.Status != restoreplan.StatusConsuming {
 		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_PLAN_NOT_CONSUMING", "restore run plan is not consuming", map[string]any{"restore_plan_id": durablePlan.ID, "restore_plan_status": durablePlan.Status.String()})
 	}
+	if record.Phase == operations.OperationPhaseRestoreRunValidate && durablePlan.Stale {
+		return executor.commitRestoreRunStalePreview(ctx, record, durablePlan, now, restoreRunStalePreviewStatusFromPlan(durablePlan))
+	}
 	if record.Phase == operations.OperationPhaseRestoreRunConsuming {
 		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_CONSUMING_RECOVERY_REQUIRES_OPERATOR", "restore run consuming recovery requires durable applied evidence", map[string]any{"restore_plan_id": durablePlan.ID, "restore_plan_status": durablePlan.Status.String(), "missing_evidence": "restore_run_applied"})
 	}
@@ -156,6 +159,9 @@ func (executor *RestoreRunExecutor) ExecuteOperationRecovery(ctx context.Context
 	status, err := executor.jvs.RecoveryStatus(ctx, controlRoot)
 	if err != nil {
 		return executor.commitRestoreRunIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", withJVSErrorDetails(nil, err))
+	}
+	if restoreRunRecoveryStatusStalePreview(status, durablePlan.ID) {
+		return executor.commitRestoreRunStalePreview(ctx, record, durablePlan, now, status)
 	}
 	if !restoreRunRecoveryStatusMatchesPendingPlan(status, durablePlan.ID) {
 		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_RECOVERY_STATE_MISMATCH", "restore run recovery state mismatch", restoreRunRecoveryStatusDetails(status, durablePlan.ID))
@@ -350,6 +356,22 @@ func (executor *RestoreRunExecutor) commitRestoreRunFailed(ctx context.Context, 
 	return nil
 }
 
+func (executor *RestoreRunExecutor) commitRestoreRunStalePreview(ctx context.Context, record operations.OperationRecord, plan restoreplan.Plan, now time.Time, status jvsrunner.RecoveryStatusSummary) error {
+	stalePlan := restoreRunStalePreviewPlan(plan)
+	details := restoreRunStalePreviewDetails(status, stalePlan)
+	operation := restoreRunFailedOperation(record, now, operations.OperationStateFailed, "RESTORE_PREVIEW_STALE", "restore preview is stale")
+	operation.ExternalResourceIDs = map[string]string{"restore_plan_id": stalePlan.ID}
+	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "restore_preview_stale", map[string]any{"repo_id": record.RepoID, "restore_plan_id": stalePlan.ID, "stale": true})
+	if err != nil {
+		return err
+	}
+	if _, _, err := executor.store.CommitRestoreRunStalePreviewWithLease(ctx, stalePlan, operation.SanitizedForPersistence(), executor.owner, now, event); err != nil {
+		return errors.New("restore run stale preview commit failed")
+	}
+	return nil
+}
+
 func (executor *RestoreRunExecutor) commitRestoreRunIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
 	operation := restoreRunFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
@@ -439,6 +461,56 @@ func validateRestoreRunPreviewAndPlan(record, preview operations.OperationRecord
 	if plan.PreviewOperationID != previewOperationID || plan.NamespaceID != record.NamespaceID || plan.RepoID != record.RepoID {
 		return errors.New("restore plan does not match restore run target")
 	}
+	if !restoreRunPreviewMetadataMatchesPlan(preview, plan) {
+		return errors.New("restore preview metadata does not match restore plan")
+	}
+	return nil
+}
+
+func restoreRunPreviewMetadataMatchesPlan(preview operations.OperationRecord, plan restoreplan.Plan) bool {
+	return restoreRunPreviewMetadataFieldMatches(preview, "restore_plan_id", plan.ID, restoreplan.ValidateID) &&
+		restoreRunPreviewMetadataFieldMatches(preview, "source_save_point_id", plan.SourceSavePointID, restorePreviewValidateSavePointID) &&
+		restoreRunPreviewMetadataFieldMatches(preview, "base_revision", plan.BaseRevision, restoreplan.ValidateID) &&
+		restoreRunPreviewMetadataFieldMatches(preview, "head_revision", plan.HeadRevision, restoreplan.ValidateID) &&
+		restoreRunPreviewMetadataFieldMatches(preview, "generation", plan.Generation, restoreplan.ValidateID) &&
+		restoreRunPreviewMetadataFieldMatches(preview, "fence_marker", plan.FenceMarker, restoreplan.ValidateID)
+}
+
+func restoreRunPreviewMetadataFieldMatches(preview operations.OperationRecord, key, expected string, validate func(string) error) bool {
+	seen := false
+	for _, value := range restoreRunPreviewSafeMetadataValues(preview, key) {
+		seen = true
+		if value != expected || validate(value) != nil {
+			return false
+		}
+	}
+	return seen
+}
+
+func restoreRunPreviewSafeMetadataValues(preview operations.OperationRecord, key string) []string {
+	values := []string{}
+	for _, source := range []any{preview.ExternalResourceIDs, preview.VerificationResult, preview.JVSJSONOutput} {
+		switch typed := source.(type) {
+		case map[string]string:
+			value := strings.TrimSpace(typed[key])
+			if value != "" {
+				values = append(values, value)
+			}
+		case map[string]any:
+			value, _ := typed[key].(string)
+			value = strings.TrimSpace(value)
+			if value != "" {
+				values = append(values, value)
+			}
+		}
+	}
+	return values
+}
+
+func restorePreviewValidateSavePointID(id string) error {
+	if !restorePreviewSafeOpaqueID(id) {
+		return errors.New("invalid save point id")
+	}
 	return nil
 }
 
@@ -484,12 +556,52 @@ func restoreRunRecoveryStatusMatchesPendingPlan(status jvsrunner.RecoveryStatusS
 		status.Blocking
 }
 
+func restoreRunRecoveryStatusStalePreview(status jvsrunner.RecoveryStatusSummary, planID string) bool {
+	return status.RestoreState == "stale_restore_preview" &&
+		status.Workspace == "main" &&
+		strings.TrimSpace(status.ActivePlanID) == planID &&
+		status.Blocking
+}
+
+func restoreRunStalePreviewPlan(plan restoreplan.Plan) restoreplan.Plan {
+	plan.Stale = true
+	if !restoreRunPlanHasBlocker(plan, "restore_preview_stale") {
+		plan.Blockers = append(append([]restoreplan.Blocker(nil), plan.Blockers...), restoreplan.Blocker{
+			Code:    "restore_preview_stale",
+			Message: "Preview is stale; discard and create a new preview before running restore.",
+		})
+	}
+	return plan
+}
+
+func restoreRunStalePreviewStatusFromPlan(plan restoreplan.Plan) jvsrunner.RecoveryStatusSummary {
+	return jvsrunner.RecoveryStatusSummary{RestoreState: "stale_restore_preview", ActivePlanID: plan.ID, Blocking: true, Workspace: "main"}
+}
+
+func restoreRunPlanHasBlocker(plan restoreplan.Plan, code string) bool {
+	for _, blocker := range plan.Blockers {
+		if blocker.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func restoreRunRecoveryStatusIdle(status jvsrunner.RecoveryStatusSummary) bool {
 	return status.RestoreState == "idle" &&
 		status.Workspace == "main" &&
 		strings.TrimSpace(status.ActivePlanID) == "" &&
 		strings.TrimSpace(status.ActiveRecoveryPlanID) == "" &&
 		!status.Blocking
+}
+
+func restoreRunStalePreviewDetails(status jvsrunner.RecoveryStatusSummary, plan restoreplan.Plan) map[string]any {
+	details := restoreRunRecoveryStatusDetails(status, plan.ID)
+	details["preview_operation_id"] = plan.PreviewOperationID
+	details["restore_plan_id"] = plan.ID
+	details["stale"] = plan.Stale
+	details["blockers"] = restoreplan.BlockersList(plan.Blockers)
+	return details
 }
 
 func restoreRunRecoveryStatusDetails(status jvsrunner.RecoveryStatusSummary, planID string) map[string]any {

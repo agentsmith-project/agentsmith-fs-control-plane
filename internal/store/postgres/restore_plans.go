@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,6 +19,13 @@ var restorePlanColumns = []string{
 	"repo_id",
 	"preview_operation_id",
 	"source_save_point_id",
+	"base_revision",
+	"head_revision",
+	"generation",
+	"fence_marker",
+	"summary_json",
+	"blockers_json",
+	"stale",
 	"status",
 	"created_at",
 	"updated_at",
@@ -88,12 +96,27 @@ func restorePlanActiveStatusSQLList() string {
 }
 
 func restorePlanInsertArgs(plan restoreplan.Plan) []any {
+	summaryJSON, err := marshalRestorePlanSummary(plan.Summary)
+	if err != nil {
+		panic(err)
+	}
+	blockersJSON, err := marshalRestorePlanBlockers(plan.Blockers)
+	if err != nil {
+		panic(err)
+	}
 	return []any{
 		plan.ID,
 		plan.NamespaceID,
 		plan.RepoID,
 		plan.PreviewOperationID,
 		plan.SourceSavePointID,
+		plan.BaseRevision,
+		plan.HeadRevision,
+		plan.Generation,
+		plan.FenceMarker,
+		summaryJSON,
+		blockersJSON,
+		plan.Stale,
 		string(plan.Status),
 		plan.CreatedAt.UTC(),
 		plan.UpdatedAt.UTC(),
@@ -102,22 +125,79 @@ func restorePlanInsertArgs(plan restoreplan.Plan) []any {
 
 func scanRestorePlan(row rowScanner) (restoreplan.Plan, error) {
 	var plan restoreplan.Plan
+	if err := scanRestorePlanPrefix(row, &plan); err != nil {
+		return restoreplan.Plan{}, err
+	}
+	if err := plan.Validate(); err != nil {
+		return restoreplan.Plan{}, err
+	}
+	return plan, nil
+}
+
+func scanRestorePlanPrefix(row rowScanner, plan *restoreplan.Plan, extra ...any) error {
 	var status string
-	if err := row.Scan(
+	var summaryJSON, blockersJSON []byte
+	dest := []any{
 		&plan.ID,
 		&plan.NamespaceID,
 		&plan.RepoID,
 		&plan.PreviewOperationID,
 		&plan.SourceSavePointID,
+		&plan.BaseRevision,
+		&plan.HeadRevision,
+		&plan.Generation,
+		&plan.FenceMarker,
+		&summaryJSON,
+		&blockersJSON,
+		&plan.Stale,
 		&status,
 		&plan.CreatedAt,
 		&plan.UpdatedAt,
-	); err != nil {
-		return restoreplan.Plan{}, err
 	}
+	dest = append(dest, extra...)
+	if err := row.Scan(dest...); err != nil {
+		return err
+	}
+	summary, err := unmarshalRestorePlanSummary(summaryJSON)
+	if err != nil {
+		return err
+	}
+	blockers, err := unmarshalRestorePlanBlockers(blockersJSON)
+	if err != nil {
+		return err
+	}
+	plan.Summary = summary
+	plan.Blockers = blockers
 	plan.Status = restoreplan.Status(status)
-	if err := plan.Validate(); err != nil {
-		return restoreplan.Plan{}, err
+	return nil
+}
+
+func marshalRestorePlanSummary(summary restoreplan.Summary) ([]byte, error) {
+	if err := summary.Validate(); err != nil {
+		return nil, err
 	}
-	return plan, nil
+	return json.Marshal(restoreplan.SummaryMap(summary))
+}
+
+func marshalRestorePlanBlockers(blockers []restoreplan.Blocker) ([]byte, error) {
+	if err := restoreplan.ValidateBlockers(blockers); err != nil {
+		return nil, err
+	}
+	return json.Marshal(restoreplan.BlockersList(blockers))
+}
+
+func unmarshalRestorePlanSummary(data []byte) (restoreplan.Summary, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return restoreplan.Summary{}, err
+	}
+	return restoreplan.SummaryFromMap(raw)
+}
+
+func unmarshalRestorePlanBlockers(data []byte) ([]restoreplan.Blocker, error) {
+	var raw []any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	return restoreplan.BlockersFromList(raw)
 }

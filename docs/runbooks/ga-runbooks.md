@@ -89,8 +89,10 @@ Actions:
   hold and the preview operation is the earliest same-repo non-terminal restore
   preview or JVS mutation; otherwise move the plan or operation to
   `operator_intervention_required`.
-- Treat `stale_restore_preview` as intervention unless a caller explicitly
-  invokes restore preview discard.
+- Treat `stale_restore_preview` during preview recovery as intervention unless
+  a caller explicitly invokes restore preview discard. During restore-run for
+  the matching pending plan, expect typed `RESTORE_PREVIEW_STALE`, durable
+  `RestorePlan.stale=true`, and a `restore_preview_stale` blocker.
 - Do not create restore-run operation without a valid preview operation and
   durable plan.
 
@@ -141,6 +143,10 @@ Actions:
 - Run `jvs recovery status` through the runner contract only.
 - Before JVS restore-run, require exactly one pending JVS plan matching the
   stored plan ID.
+- If the durable plan already has `stale=true` or JVS reports matching
+  `stale_restore_preview`, confirm restore-run failed with
+  `RESTORE_PREVIEW_STALE`, no writer fence was acquired, and the plan remains
+  pending for discard with stale/blockers persisted.
 - If writer/session gating denies the run before JVS is invoked, release the
   writer-session fence and leave the plan `pending`.
 - After writer/session gating passes, confirm the plan was marked `consuming`

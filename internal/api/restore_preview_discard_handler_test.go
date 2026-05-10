@@ -369,15 +369,36 @@ func apiRestorePreviewOperationRecord(now time.Time) operations.OperationRecord 
 		RepoID:              "repo_alpha01",
 		InputSummary:        map[string]any{"save_point_id": "sp_001"},
 		ExternalResourceIDs: map[string]string{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001"},
-		JVSJSONOutput:       map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001"},
-		VerificationResult:  map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001"},
+		JVSJSONOutput:       map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "base_revision": "sp_002", "head_revision": "sp_002", "generation": "sha256:preview-base", "fence_marker": "preview_fence_op_preview01"},
+		VerificationResult:  map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "base_revision": "sp_002", "head_revision": "sp_002", "generation": "sha256:preview-base", "fence_marker": "preview_fence_op_preview01"},
 		CreatedAt:           now.Add(-time.Hour),
 		FinishedAt:          &now,
 	}
 }
 
 func apiRestorePreviewPendingPlan(now time.Time) restoreplan.Plan {
-	return restoreplan.Plan{ID: "plan_001", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", PreviewOperationID: "op_preview01", SourceSavePointID: "sp_001", Status: restoreplan.StatusPending, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute)}
+	return restoreplan.Plan{
+		ID:                 "plan_001",
+		NamespaceID:        "ns_alpha01",
+		RepoID:             "repo_alpha01",
+		PreviewOperationID: "op_preview01",
+		SourceSavePointID:  "sp_001",
+		BaseRevision:       "sp_002",
+		HeadRevision:       "sp_002",
+		Generation:         "sha256:preview-base",
+		FenceMarker:        "preview_fence_op_preview01",
+		Summary: restoreplan.Summary{
+			Added:       restoreplan.ChangeSummary{Count: 1, Samples: []string{"src/new.ts"}},
+			Changed:     restoreplan.ChangeSummary{Count: 1, Samples: []string{"docs/readme.md"}},
+			Removed:     restoreplan.ChangeSummary{Count: 1, Samples: []string{"tmp/cache.txt"}},
+			Destructive: true,
+		},
+		Blockers:  []restoreplan.Blocker{},
+		Stale:     false,
+		Status:    restoreplan.StatusPending,
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now.Add(-time.Minute),
+	}
 }
 
 func apiRestorePreviewDiscardQueuedOperation(now time.Time) operations.OperationRecord {

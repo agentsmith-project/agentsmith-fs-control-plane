@@ -301,20 +301,23 @@ func (handler restoreRunLeafHandler) loadMetadata(w http.ResponseWriter, r *http
 }
 
 func restoreRunPreviewMetadataMatchesPlan(preview operations.OperationRecord, plan restoreplan.Plan) bool {
-	seenPlanID, seenSourceSavePointID := false, false
-	for _, value := range restoreRunPreviewSafeMetadataValues(preview, "restore_plan_id") {
-		seenPlanID = true
-		if value != plan.ID || restoreplan.ValidateID(value) != nil {
+	return restoreRunPreviewMetadataFieldMatches(preview, "restore_plan_id", plan.ID, restoreplan.ValidateID) &&
+		restoreRunPreviewMetadataFieldMatches(preview, "source_save_point_id", plan.SourceSavePointID, operations.ValidateSavePointID) &&
+		restoreRunPreviewMetadataFieldMatches(preview, "base_revision", plan.BaseRevision, restoreplan.ValidateID) &&
+		restoreRunPreviewMetadataFieldMatches(preview, "head_revision", plan.HeadRevision, restoreplan.ValidateID) &&
+		restoreRunPreviewMetadataFieldMatches(preview, "generation", plan.Generation, restoreplan.ValidateID) &&
+		restoreRunPreviewMetadataFieldMatches(preview, "fence_marker", plan.FenceMarker, restoreplan.ValidateID)
+}
+
+func restoreRunPreviewMetadataFieldMatches(preview operations.OperationRecord, key, expected string, validate func(string) error) bool {
+	seen := false
+	for _, value := range restoreRunPreviewSafeMetadataValues(preview, key) {
+		seen = true
+		if value != expected || validate(value) != nil {
 			return false
 		}
 	}
-	for _, value := range restoreRunPreviewSafeMetadataValues(preview, "source_save_point_id") {
-		seenSourceSavePointID = true
-		if value != plan.SourceSavePointID || operations.ValidateSavePointID(value) != nil {
-			return false
-		}
-	}
-	return seenPlanID && seenSourceSavePointID
+	return seen
 }
 
 func restoreRunPreviewSafeMetadataValues(preview operations.OperationRecord, key string) []string {

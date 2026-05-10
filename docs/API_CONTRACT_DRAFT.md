@@ -118,6 +118,7 @@ GA error families:
 - `WRITER_SESSION_FENCE_HELD`
 - `STALE_WRITER_SESSION_UNCERTAIN`
 - `RESTORE_DIRTY_STATE`
+- `RESTORE_PREVIEW_STALE`
 - `JVS_COMMAND_FAILED`
 - `JVS_DOCTOR_FAILED`
 - `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE`
@@ -147,15 +148,18 @@ Missing volume metadata on volume-global health uses `VOLUME_NOT_FOUND` with
 HTTP 404 and must not reveal raw store or SQL details.
 `REPO_JVS_MUTATION_IN_PROGRESS` means a same-repo JVS mutation is non-terminal;
 handlers should map it to HTTP 409 with `retryable=true`.
-Restore plan validation must use existing stable codes. A restore-run request
+Restore plan validation must use stable codes. A restore-run request
 that references a preview operation outside the caller namespace, repo, or
 resource boundary must return `OPERATION_NOT_FOUND` or the existing equivalent
 that does not reveal existence. Active or stale writers use
 `ACTIVE_WRITER_SESSIONS`, `WRITER_SESSION_FENCE_HELD`, or
 `STALE_WRITER_SESSION_UNCERTAIN`. Dirty restore state uses
-`RESTORE_DIRTY_STATE`. JVS blocking, mismatched plan IDs, multiple pending
-plans, stale preview plans, or ambiguous recovery state use
-`OPERATION_RECOVERY_REQUIRED` and/or move the operation or plan to
+`RESTORE_DIRTY_STATE`. A matching stale restore preview discovered by
+restore-run uses `RESTORE_PREVIEW_STALE`: the restore-run operation fails as a
+typed caller-visible terminal result, the durable plan remains `pending` for
+discard, and `RestorePlan.stale/blockers` record the source of truth. JVS
+blocking, mismatched plan IDs, multiple pending plans, or ambiguous recovery
+state use `OPERATION_RECOVERY_REQUIRED` and/or move the operation or plan to
 `operator_intervention_required` rather than falling through to generic
 `JVS_COMMAND_FAILED` when caller or operator action is required.
 
@@ -286,6 +290,18 @@ the JVS preview `plan_id`; workers use the matching JVS plan ID for
   "repo_id": "repo_123",
   "preview_operation_id": "op_preview_123",
   "source_save_point_id": "sp_456",
+  "base_revision": "sp_789",
+  "head_revision": "sp_789",
+  "generation": "sha256:preview-base",
+  "fence_marker": "preview_fence_op_preview_123",
+  "summary": {
+    "added": { "count": 0, "samples": [] },
+    "changed": { "count": 1, "samples": ["docs/readme.md"] },
+    "removed": { "count": 0, "samples": [] },
+    "destructive": false
+  },
+  "stale": false,
+  "blockers": [],
   "status": "pending",
   "created_at": "2026-05-03T12:00:00Z",
   "updated_at": "2026-05-03T12:00:00Z"
@@ -301,6 +317,10 @@ unrelated restore-run, template create, and template clone. They do not block
 ordinary file IO. The only allowed same-repo JVS mutations while a plan is
 active are the matching restore-run that consumes the plan and the matching
 discard that cleans it up. `consumed` and `discarded` are terminal.
+`base_revision`, `head_revision`, `generation`, `fence_marker`, `summary`,
+`stale`, and `blockers` are durable restore-plan metadata, not operation-only
+details. A stale pending plan is not consumable; it remains pending only so the
+matching discard path can clean it up.
 
 ### RepoTemplate
 
@@ -601,8 +621,12 @@ adopt a single pending JVS plan only when AFSCP-exclusive-control assumptions
 hold and the recovering operation is the earliest same-repo non-terminal
 restore preview or JVS mutation; otherwise the plan or operation enters
 `operator_intervention_required`. `stale_restore_preview` defaults to
-operator intervention unless the caller explicitly discards it through the
-discard flow below.
+operator intervention during restore-preview recovery unless the caller
+explicitly discards it through the discard flow below. During restore-run,
+a matching `stale_restore_preview` is a typed `RESTORE_PREVIEW_STALE` failure:
+the worker marks the durable plan `stale=true`, persists a
+`restore_preview_stale` blocker, does not acquire the writer fence, and leaves
+the plan `pending` for discard.
 Current GA namespace-bound restore preview follows ordinary namespace policy and
 fails closed when the namespace or namespace binding is disabled; any operator
 or break-glass exception is a future explicit capability, not this API path.
@@ -617,7 +641,7 @@ succeeded or non-terminal restore-run operation. The preview operation record
 stores only safe metadata in existing containers such as
 `input_summary.preview_operation_id`, `external_resource_ids` when safe, and
 redacted `jvs_json_output` or `verification_result`; it does not gain new
-top-level DTO fields in this doc-only pass.
+top-level DTO fields.
 Brand-new restore-run intake follows ordinary restore mutation admission and
 fails closed when the namespace is disabled, even if the namespace volume
 binding remains active.
@@ -625,15 +649,19 @@ binding remains active.
 Restore-run phase order is fixed:
 
 1. Validate the preview operation and durable plan.
-2. Preflight JVS recovery status and require exactly one pending plan matching
-   the stored `restore_plan_id`.
-3. Acquire the per-repo writer-session fence.
-4. Reject active or uncertain read-write sessions.
-5. Mark the restore plan `consuming` before invoking JVS.
-6. Run the JVS restore-run command for `<plan_id>` through the runner.
-7. Run `jvs doctor --strict`.
-8. Verify JVS recovery status is idle.
-9. Atomically record operation success, audit success, writer-fence release, and
+2. If the durable plan is already `stale=true`, fail typed with
+   `RESTORE_PREVIEW_STALE` before JVS or writer fence.
+3. Preflight JVS recovery status and require exactly one pending plan matching
+   the stored `restore_plan_id`. If JVS reports matching
+   `stale_restore_preview`, fail typed with `RESTORE_PREVIEW_STALE`, persist
+   `RestorePlan.stale/blockers`, and leave the plan `pending` for discard.
+4. Acquire the per-repo writer-session fence.
+5. Reject active or uncertain read-write sessions.
+6. Mark the restore plan `consuming` before invoking JVS.
+7. Run the JVS restore-run command for `<plan_id>` through the runner.
+8. Run `jvs doctor --strict`.
+9. Verify JVS recovery status is idle.
+10. Atomically record operation success, audit success, writer-fence release, and
    restore plan `consumed`.
 
 Writer-session denial before JVS is invoked releases the writer-session fence

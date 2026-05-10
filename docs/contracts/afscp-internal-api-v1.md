@@ -197,18 +197,23 @@ ask operators to delete private JVS files.
 
 The durable `RestorePlan` entity is the source of truth for pending, consuming,
 consumed, discarding, discarded, and operator-intervention restore states.
+It also owns restore-preview source metadata (`base_revision`, `head_revision`,
+`generation`, `fence_marker`, `summary`) and stale preview closure metadata
+(`stale`, `blockers`). These are not operation-only details.
 Operation records should reference restore plans only through safe existing
 metadata containers such as `external_resource_ids`, redacted
 `jvs_json_output`, `input_summary`, and `verification_result` until the
 OpenAPI/schema/Go/DB contracts are intentionally upgraded.
 
-Restore error mapping should reuse existing codes. Active or stale writer
+Restore error mapping should use stable codes. Active or stale writer
 denials use the writer-session codes. Dirty restore state uses
-`RESTORE_DIRTY_STATE`. JVS blocking state, mismatched or multiple pending
-plans, stale preview plans, or ambiguous recovery use
-`OPERATION_RECOVERY_REQUIRED` or operator intervention instead of introducing a
-new public enum or returning generic `JVS_COMMAND_FAILED` when caller/operator
-action is required.
+`RESTORE_DIRTY_STATE`. A matching stale preview discovered by restore-run uses
+`RESTORE_PREVIEW_STALE`: the restore-run operation fails, the durable plan
+stays `pending` for discard, and `RestorePlan.stale/blockers` are updated in
+the same durable boundary as operation failure and audit. JVS blocking state,
+mismatched or multiple pending plans, or ambiguous recovery use
+`OPERATION_RECOVERY_REQUIRED` or operator intervention instead of returning
+generic `JVS_COMMAND_FAILED` when caller/operator action is required.
 
 Repo-create intake resolves idempotency before checking target repo metadata:
 the same idempotency key and same request body reuses the original operation

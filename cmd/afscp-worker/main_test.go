@@ -578,6 +578,10 @@ func (store *cmdWorkerAppStore) CommitRestoreRunSucceededWithLease(context.Conte
 	return restoreplan.Plan{}, operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
+func (store *cmdWorkerAppStore) CommitRestoreRunStalePreviewWithLease(context.Context, restoreplan.Plan, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	return restoreplan.Plan{}, operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
 func (store *cmdWorkerAppStore) CommitRestoreRunFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }

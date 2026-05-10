@@ -89,6 +89,40 @@ func (store *Store) CommitRestoreRunSucceededWithLease(ctx context.Context, sani
 	return gotPlan, gotOperation, nil
 }
 
+func (store *Store) CommitRestoreRunStalePreviewWithLease(ctx context.Context, plan restoreplan.Plan, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	record := sanitized.Record()
+	if err := validateRestoreRunStalePreviewRecord(plan, record); err != nil {
+		return restoreplan.Plan{}, operations.OperationRecord{}, err
+	}
+	if err := validateRestoreRunAuditEvent(record, event, audit.OutcomeFailed); err != nil {
+		return restoreplan.Plan{}, operations.OperationRecord{}, err
+	}
+	operationArgs, err := operationLeaseFencedUpdateArgs(record, owner, now)
+	if err != nil {
+		return restoreplan.Plan{}, operations.OperationRecord{}, err
+	}
+	blockersJSON, err := marshalRestorePlanBlockers(plan.Blockers)
+	if err != nil {
+		return restoreplan.Plan{}, operations.OperationRecord{}, err
+	}
+	outboxRecord, err := audit.NewOutboxRecord(event, now)
+	if err != nil {
+		return restoreplan.Plan{}, operations.OperationRecord{}, err
+	}
+	args := append(operationArgs, restoreRunStoredPredicateArgs(record)...)
+	args = append(args, plan.Stale, blockersJSON)
+	args = append(args, auditOutboxInsertArgs(outboxRecord)...)
+	row := store.exec.QueryRowContext(ctx, restoreRunStalePreviewCommitWithLeaseSQL(), args...)
+	gotPlan, gotOperation, err := scanRestorePlanAndOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return restoreplan.Plan{}, operations.OperationRecord{}, operationLeaseUnavailable("restore run stale preview commit", record.ID, err)
+		}
+		return restoreplan.Plan{}, operations.OperationRecord{}, err
+	}
+	return gotPlan, gotOperation, nil
+}
+
 func (store *Store) CommitRestoreRunFailedWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	record := sanitized.Record()
 	if err := validateRestoreRunFailureRecord(record); err != nil {
@@ -208,6 +242,46 @@ func validateRestoreRunFailureRecord(record operations.OperationRecord) error {
 	return validateRestoreRunRecordResource(record, true)
 }
 
+func validateRestoreRunStalePreviewRecord(plan restoreplan.Plan, record operations.OperationRecord) error {
+	if err := validateRestoreRunFailureRecord(record); err != nil {
+		return err
+	}
+	if record.State != operations.OperationStateFailed {
+		return operationLeaseInvalidRequest("operation_state", "stale restore preview must be a typed failed operation")
+	}
+	if record.Phase != operations.OperationPhaseRestoreRunValidate {
+		return operationLeaseInvalidRequest("phase", "stale restore preview must fail before writer fence")
+	}
+	if strings.TrimSpace(record.SessionFenceID) != "" {
+		return operationLeaseInvalidRequest("session_fence_id", "stale restore preview must not hold a writer fence")
+	}
+	if record.Error == nil || record.Error.Code != "RESTORE_PREVIEW_STALE" {
+		return operationLeaseInvalidRequest("error", "stale restore preview requires RESTORE_PREVIEW_STALE")
+	}
+	if err := plan.Validate(); err != nil {
+		return err
+	}
+	if plan.Status != restoreplan.StatusPending || !plan.Stale {
+		return operationLeaseInvalidRequest("restore_plan", "stale restore preview requires a pending stale restore plan")
+	}
+	if plan.NamespaceID != record.NamespaceID || plan.RepoID != record.RepoID || plan.PreviewOperationID != restoreRunPreviewOperationID(record) {
+		return operationLeaseInvalidRequest("restore_plan", "stale restore preview plan must match operation input")
+	}
+	if !restorePlanHasBlocker(plan, "restore_preview_stale") {
+		return operationLeaseInvalidRequest("restore_plan", "stale restore preview requires durable blocker")
+	}
+	return nil
+}
+
+func restorePlanHasBlocker(plan restoreplan.Plan, code string) bool {
+	for _, blocker := range plan.Blockers {
+		if blocker.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func validateRestoreRunRecordResource(record operations.OperationRecord, requireError bool) error {
 	if strings.TrimSpace(record.NamespaceID) == "" || strings.TrimSpace(record.RepoID) == "" || record.Resource.Type != "repo" || record.Resource.ID != record.RepoID {
 		return operationLeaseInvalidRequest("resource", "restore run requires target repo resource")
@@ -287,7 +361,7 @@ func restoreRunConsumingMarkWithLeaseSQL() string {
 		"AND o.namespace_id = $14 AND o.repo_id = $15 AND o.resource_type = 'repo' AND o.resource_id = $15 LIMIT 1" +
 		"), pending_restore_plan AS (" +
 		"SELECT p.restore_plan_id FROM restore_plans p, eligible_operation e, preview_operation po WHERE p.preview_operation_id = po.operation_id AND p.preview_operation_id = $20 " +
-		"AND p.namespace_id = $14 AND p.repo_id = $15 AND p.status = 'pending' FOR UPDATE" +
+		"AND p.namespace_id = $14 AND p.repo_id = $15 AND p.status = 'pending' AND p.stale = false FOR UPDATE" +
 		"), updated_plan AS (" +
 		"UPDATE restore_plans SET status = 'consuming', updated_at = $11 FROM pending_restore_plan, active_writer_fence WHERE restore_plans.restore_plan_id = pending_restore_plan.restore_plan_id RETURNING " + strings.Join(restorePlanColumns, ", ") +
 		"), updated_operation AS (" +
@@ -317,6 +391,26 @@ func restoreRunSuccessCommitWithLeaseSQL() string {
 		"FROM eligible_operation, updated_plan, released_writer_fence WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(23, len(auditOutboxColumns)) + " FROM updated_operation, updated_plan, released_writer_fence RETURNING audit_event_id" +
+		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM updated_plan, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
+}
+
+func restoreRunStalePreviewCommitWithLeaseSQL() string {
+	return "WITH eligible_operation AS (" +
+		"SELECT operation_id, input_summary FROM operations WHERE operation_id = $12 AND operation_state = 'running' AND lease_owner = $13 AND lease_expires_at IS NOT NULL AND lease_expires_at > $11 " +
+		"AND operation_type = 'restore_run' AND phase = 'validate_restore_run' " +
+		"AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
+		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 " +
+		"AND input_summary->>'preview_operation_id' = $20 AND $21 = '' FOR UPDATE" +
+		"), pending_restore_plan AS (" +
+		"SELECT p.restore_plan_id FROM restore_plans p, eligible_operation e WHERE p.preview_operation_id = e.input_summary->>'preview_operation_id' " +
+		"AND p.namespace_id = $14 AND p.repo_id = $15 AND p.status = 'pending' FOR UPDATE" +
+		"), updated_plan AS (" +
+		"UPDATE restore_plans SET stale = $22, blockers_json = $23, updated_at = $11 FROM pending_restore_plan WHERE restore_plans.restore_plan_id = pending_restore_plan.restore_plan_id RETURNING " + strings.Join(restorePlanColumns, ", ") +
+		"), updated_operation AS (" +
+		operationLeaseFencedUpdateSetSQL() +
+		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"), inserted_audit AS (" +
+		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(24, len(auditOutboxColumns)) + " FROM updated_operation, updated_plan RETURNING audit_event_id" +
 		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM updated_plan, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
 }
 

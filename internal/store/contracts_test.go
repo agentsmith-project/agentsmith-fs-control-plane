@@ -188,16 +188,7 @@ func TestRestorePlanStoreContractOwnsPreviewRunDiscardLifecycle(t *testing.T) {
 	var _ RestorePlanStore = fake
 
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
-	plan := restoreplan.Plan{
-		ID:                 "b644aec4-bcb6-4480-b5fa-a283927dd3cd",
-		NamespaceID:        "ns_alpha01",
-		RepoID:             "repo_alpha01",
-		PreviewOperationID: "op_preview01",
-		SourceSavePointID:  "sp_001",
-		Status:             restoreplan.StatusPending,
-		CreatedAt:          now,
-		UpdatedAt:          now,
-	}
+	plan := storeContractRestorePlan("b644aec4-bcb6-4480-b5fa-a283927dd3cd", "op_preview01", now)
 	if err := fake.CreatePendingRestorePlan(context.Background(), plan); err != nil {
 		t.Fatalf("create pending restore plan: %v", err)
 	}
@@ -215,6 +206,31 @@ func TestRestorePlanStoreContractOwnsPreviewRunDiscardLifecycle(t *testing.T) {
 	}
 	if discarding.Status != restoreplan.StatusDiscarding || discarding.PreviewOperationID != "op_preview01" {
 		t.Fatalf("transitioned plan = %#v, want discarding with preview linkage", discarding)
+	}
+}
+
+func storeContractRestorePlan(id, previewOperationID string, now time.Time) restoreplan.Plan {
+	return restoreplan.Plan{
+		ID:                 id,
+		NamespaceID:        "ns_alpha01",
+		RepoID:             "repo_alpha01",
+		PreviewOperationID: previewOperationID,
+		SourceSavePointID:  "sp_001",
+		BaseRevision:       "sp_002",
+		HeadRevision:       "sp_002",
+		Generation:         "sha256:preview-base",
+		FenceMarker:        "preview_fence_" + previewOperationID,
+		Summary: restoreplan.Summary{
+			Added:       restoreplan.ChangeSummary{Count: 1, Samples: []string{"src/new.ts"}},
+			Changed:     restoreplan.ChangeSummary{Count: 1, Samples: []string{"docs/readme.md"}},
+			Removed:     restoreplan.ChangeSummary{Count: 1, Samples: []string{"tmp/cache.txt"}},
+			Destructive: true,
+		},
+		Blockers:  []restoreplan.Blocker{},
+		Stale:     false,
+		Status:    restoreplan.StatusPending,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 }
 
@@ -261,10 +277,10 @@ func TestRestorePreviewOperationRecoveryStoreContractCommitsPlanOperationAndAudi
 	terminal.State = operations.OperationStateSucceeded
 	terminal.Phase = operations.OperationPhaseRestorePreviewCommitted
 	terminal.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001"}
-	terminal.JVSJSONOutput = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "run_command_present": true}
-	terminal.VerificationResult = map[string]any{"preflight_recovery_status_captured": true, "preflight_restore_state": "idle", "preflight_blocking": false, "restore_plan_id": "plan_001", "source_save_point_id": "sp_001"}
+	terminal.JVSJSONOutput = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "base_revision": "sp_002", "head_revision": "sp_002", "generation": "sha256:preview-base", "fence_marker": "preview_fence_op_preview01", "run_command_present": true}
+	terminal.VerificationResult = map[string]any{"preflight_recovery_status_captured": true, "preflight_restore_state": "idle", "preflight_blocking": false, "restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "base_revision": "sp_002", "head_revision": "sp_002", "generation": "sha256:preview-base", "fence_marker": "preview_fence_op_preview01"}
 	terminal.FinishedAt = &now
-	plan := restoreplan.Plan{ID: "plan_001", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", PreviewOperationID: "op_preview01", SourceSavePointID: "sp_001", Status: restoreplan.StatusPending, CreatedAt: now, UpdatedAt: now}
+	plan := storeContractRestorePlan("plan_001", "op_preview01", now)
 	event := audit.NewEvent(audit.Event{EventID: "audit-preview", Type: audit.EventTypeRestorePreview, Time: now, OperationID: "op_preview01", CallerService: "caller-alpha", CorrelationID: "corr-preview", AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"}, Resource: audit.Resource{Type: "repo", ID: "repo_alpha01", NamespaceID: "ns_alpha01"}, Outcome: audit.OutcomeSucceeded, Reason: "restore_preview_committed"})
 
 	gotPlan, gotOperation, err := fake.CommitRestorePreviewSucceededWithLease(context.Background(), plan, terminal.SanitizedForPersistence(), "worker-a", now, event)
@@ -299,7 +315,9 @@ func TestRestoreRunOperationRecoveryStoreContractOwnsFencePlanOperationAndAudit(
 		Resource:    operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		CreatedAt:   now.Add(-time.Hour),
 	}
-	fake.plan = restoreplan.Plan{ID: "plan_001", NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", PreviewOperationID: "op_preview01", SourceSavePointID: "sp_001", Status: restoreplan.StatusPending, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)}
+	fake.previewOperation.JVSJSONOutput = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "base_revision": "sp_002", "head_revision": "sp_002", "generation": "sha256:preview-base", "fence_marker": "preview_fence_op_preview01"}
+	fake.previewOperation.VerificationResult = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "base_revision": "sp_002", "head_revision": "sp_002", "generation": "sha256:preview-base", "fence_marker": "preview_fence_op_preview01"}
+	fake.plan = storeContractRestorePlan("plan_001", "op_preview01", now.Add(-time.Hour))
 	fake.record = operations.OperationRecord{
 		ID:               "op_restore_run01",
 		Type:             operations.OperationRestoreRun,
@@ -1586,6 +1604,34 @@ func (fake *fakeRestoreRunOperationStore) CommitRestoreRunSucceededWithLease(_ c
 	fake.fence.Status = fences.StatusReleased
 	fake.fence.ReleasedAt = &now
 	fake.fence.UpdatedAt = now
+	update.LeaseOwner = ""
+	update.LeaseExpiresAt = nil
+	fake.record = update
+	fake.auditEvents = append(fake.auditEvents, event.Sanitized())
+	return fake.plan, update, nil
+}
+
+func (fake *fakeRestoreRunOperationStore) CommitRestoreRunStalePreviewWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	update := record.Record()
+	if fake.record.ID != update.ID ||
+		fake.record.LeaseOwner != strings.TrimSpace(owner) ||
+		fake.record.LeaseExpiresAt == nil ||
+		!fake.record.LeaseExpiresAt.After(now) ||
+		fake.record.Phase != operations.OperationPhaseRestoreRunValidate ||
+		fake.plan.Status != restoreplan.StatusPending ||
+		plan.Status != restoreplan.StatusPending ||
+		!plan.Stale ||
+		len(plan.Blockers) == 0 ||
+		update.State != operations.OperationStateFailed ||
+		update.Phase != operations.OperationPhaseRestoreRunValidate ||
+		event.OperationID != update.ID ||
+		event.Type != audit.EventTypeRestoreRun ||
+		event.Outcome != audit.OutcomeFailed {
+		return restoreplan.Plan{}, operations.OperationRecord{}, operations.ErrInvalidLeaseRequest
+	}
+	fake.plan.Stale = plan.Stale
+	fake.plan.Blockers = append([]restoreplan.Blocker(nil), plan.Blockers...)
+	fake.plan.UpdatedAt = now
 	update.LeaseOwner = ""
 	update.LeaseExpiresAt = nil
 	fake.record = update

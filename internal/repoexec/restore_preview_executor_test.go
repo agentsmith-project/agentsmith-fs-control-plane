@@ -21,7 +21,21 @@ func TestRestorePreviewExecutorPersistsIdleMarkerBeforePreviewAndCommitsPlan(t *
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
 		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "idle", Workspace: "main"},
-		restorePreviewSummary: jvsrunner.RestorePreviewSummary{PlanID: "plan_001", SourceSavePointID: "sp_001", Workspace: "main", RunCommandPresent: true},
+		restorePreviewSummary: jvsrunner.RestorePreviewSummary{
+			PlanID:            "plan_001",
+			SourceSavePointID: "sp_001",
+			BaseRevision:      "sp_002",
+			HeadRevision:      "sp_002",
+			Generation:        "sha256:preview-base",
+			ManagedFiles: jvsrunner.RestorePreviewManagedFilesSummary{
+				Added:       jvsrunner.RestorePreviewChangeSummary{Count: 1, Samples: []string{"src/new.ts"}},
+				Changed:     jvsrunner.RestorePreviewChangeSummary{Count: 1, Samples: []string{"docs/readme.md"}},
+				Removed:     jvsrunner.RestorePreviewChangeSummary{Count: 1, Samples: []string{"tmp/cache.txt"}},
+				Destructive: true,
+			},
+			Workspace:         "main",
+			RunCommandPresent: true,
+		},
 	}
 	runner.beforeRestorePreview = func() {
 		if store.restorePreviewProgressUpdates != 1 {
@@ -42,11 +56,14 @@ func TestRestorePreviewExecutorPersistsIdleMarkerBeforePreviewAndCommitsPlan(t *
 	if store.restorePlan.ID != "plan_001" || store.restorePlan.Status != restoreplan.StatusPending || store.restorePlan.PreviewOperationID != "op_preview" {
 		t.Fatalf("restore plan = %#v, want pending plan linked to preview operation", store.restorePlan)
 	}
+	if store.restorePlan.BaseRevision != "sp_002" || store.restorePlan.HeadRevision != "sp_002" || store.restorePlan.Generation != "sha256:preview-base" || store.restorePlan.FenceMarker != "preview_fence_op_preview" {
+		t.Fatalf("restore plan metadata = %#v, want preview revision and fence metadata", store.restorePlan)
+	}
 	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestorePreviewCommitted {
 		t.Fatalf("operation = %#v, want succeeded committed", store.operation)
 	}
 	verification := store.operation.VerificationResult.(map[string]any)
-	if verification["preflight_recovery_status_captured"] != true || verification["restore_plan_id"] != "plan_001" || verification["source_save_point_id"] != "sp_001" {
+	if verification["preflight_recovery_status_captured"] != true || verification["restore_plan_id"] != "plan_001" || verification["source_save_point_id"] != "sp_001" || verification["stale"] != false {
 		t.Fatalf("verification = %#v, want marker and plan summary", verification)
 	}
 	jvsOutput := store.operation.JVSJSONOutput.(map[string]any)

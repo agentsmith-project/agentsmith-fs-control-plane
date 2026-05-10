@@ -214,9 +214,21 @@ func restorePreviewPlan(record operations.OperationRecord, now time.Time) restor
 		RepoID:             record.RepoID,
 		PreviewOperationID: record.ID,
 		SourceSavePointID:  "sp_001",
-		Status:             restoreplan.StatusPending,
-		CreatedAt:          now,
-		UpdatedAt:          now,
+		BaseRevision:       "sp_002",
+		HeadRevision:       "sp_002",
+		Generation:         "sha256:preview-base",
+		FenceMarker:        "preview_fence_" + record.ID,
+		Summary: restoreplan.Summary{
+			Added:       restoreplan.ChangeSummary{Count: 1, Samples: []string{"src/new.ts"}},
+			Changed:     restoreplan.ChangeSummary{Count: 1, Samples: []string{"docs/readme.md"}},
+			Removed:     restoreplan.ChangeSummary{Count: 1, Samples: []string{"tmp/cache.txt"}},
+			Destructive: true,
+		},
+		Blockers:  []restoreplan.Blocker{},
+		Stale:     false,
+		Status:    restoreplan.StatusPending,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 }
 

@@ -32,6 +32,7 @@ func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {
 		CodeWriterSessionFenceHeld,
 		CodeStaleWriterSessionUncertain,
 		CodeRestoreDirtyState,
+		CodeRestorePreviewStale,
 		CodeJVSCommandFailed,
 		CodeJVSDoctorFailed,
 		CodeSourceDirtyAfterTemplateSave,

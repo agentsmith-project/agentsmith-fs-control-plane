@@ -142,8 +142,20 @@ func TestMarkRestoreRunConsumingWithLeaseCASPlanAndConfirmsFenceAndPreview(t *te
 		"operation_state = 'succeeded'",
 		"pending_restore_plan AS",
 		"status = 'pending'",
+		"stale = false",
 		"UPDATE restore_plans SET status = 'consuming'",
 		"updated_operation AS",
+	)
+}
+
+func TestMarkRestoreRunConsumingWithLeaseRejectsStalePendingPlanInSQL(t *testing.T) {
+	sql := restoreRunConsumingMarkWithLeaseSQL()
+
+	assertSQLContainsInOrder(t, sql,
+		"pending_restore_plan AS",
+		"status = 'pending'",
+		"stale = false",
+		"UPDATE restore_plans SET status = 'consuming'",
 	)
 }
 
@@ -232,6 +244,41 @@ func TestCommitRestoreRunFailedWithLeaseHandlesValidateWriterFencedAndConsumingB
 			assertSQLContainsInOrder(t, exec.query, tt.wantParts...)
 		})
 	}
+}
+
+func TestCommitRestoreRunStalePreviewWithLeaseMarksPlanStaleAndFailsOperationAtomically(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := restoreRunOperationRecord(now, operations.OperationStateFailed, operations.OperationPhaseRestoreRunValidate)
+	record.Error = &operations.OperationError{Code: "RESTORE_PREVIEW_STALE", Message: "restore preview is stale", CorrelationID: record.CorrelationID, OperationID: record.ID}
+	record.VerificationResult = map[string]any{"restore_plan_id": "plan_001", "stale": true, "blockers": []any{map[string]any{"code": "restore_preview_stale"}}}
+	record.FinishedAt = &now
+	plan := restorePreviewPlan(restorePreviewOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseRestorePreviewCommitted), now)
+	plan.Stale = true
+	plan.Blockers = []restoreplan.Blocker{{Code: "restore_preview_stale", Message: "Preview is stale; discard and create a new preview before running restore."}}
+	exec := &fakeExecutor{row: fakeRow{values: append(restorePlanRowValues(plan), operationRowValues(record)...)}}
+	st := &Store{exec: exec}
+
+	gotPlan, gotOperation, err := st.CommitRestoreRunStalePreviewWithLease(context.Background(), plan, record.SanitizedForPersistence(), "worker-a", now, restoreRunAudit(record, audit.OutcomeFailed, now))
+	if err != nil {
+		t.Fatalf("CommitRestoreRunStalePreviewWithLease: %v", err)
+	}
+	if !gotPlan.Stale || len(gotPlan.Blockers) != 1 || gotPlan.Blockers[0].Code != "restore_preview_stale" || gotOperation.State != operations.OperationStateFailed {
+		t.Fatalf("plan/operation = %#v/%#v, want stale plan source of truth and failed operation", gotPlan, gotOperation)
+	}
+
+	assertSQLContainsInOrder(t, exec.query,
+		"WITH eligible_operation AS",
+		"operation_type = 'restore_run'",
+		"phase = 'validate_restore_run'",
+		"pending_restore_plan AS",
+		"status = 'pending'",
+		"updated_plan AS",
+		"UPDATE restore_plans SET stale = $22, blockers_json = $23, updated_at = $11",
+		"updated_operation AS",
+		"inserted_audit AS",
+		"INSERT INTO audit_outbox",
+		"FROM updated_operation, updated_plan",
+	)
 }
 
 func TestRestoreRunCommitsRejectRawCommandsBeforeSQL(t *testing.T) {
