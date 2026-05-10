@@ -88,7 +88,7 @@ func volumeEnsureOperationCommitWithLeaseSQL() string {
 		"AND correlation_id = $16 " +
 		"AND authorized_actor_type = $17 " +
 		"AND authorized_actor_id = $18 " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"RETURNING " + operationReturningColumnsSQL() +
 		"), upserted_volume AS (" +
 		"INSERT INTO volumes (" + strings.Join(volumeColumns, ", ") + ") " +
 		"SELECT " + placeholders(19, len(volumeColumns)) + " FROM updated_operation " +

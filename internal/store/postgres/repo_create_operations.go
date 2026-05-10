@@ -198,7 +198,7 @@ func repoCreateSuccessCommitWithLeaseSQL() string {
 		operationLeaseFencedUpdateSetSQL() +
 		"FROM eligible_operation, inserted_repo " +
 		"WHERE operations.operation_id = eligible_operation.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"RETURNING " + operationReturningColumnsSQL() +
 		"), released_fence AS (" +
 		"UPDATE repo_fences SET status = 'released', released_at = $11, updated_at = $11 FROM updated_operation, held_fence " +
 		"WHERE repo_fences.repo_id = $19 AND repo_fences.fence_id = held_fence.fence_id " +
@@ -239,7 +239,7 @@ func repoCreateFailureCommitWithLeaseSQL() string {
 		"FROM eligible_operation " +
 		"WHERE operations.operation_id = eligible_operation.operation_id " +
 		"AND ($20 = '' OR EXISTS (SELECT 1 FROM released_fence)) " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") " +
 		"SELECT " + placeholders(21, len(auditOutboxColumns)) + " FROM updated_operation " +

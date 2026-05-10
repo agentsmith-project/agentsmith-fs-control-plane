@@ -217,7 +217,7 @@ func restorePreviewDiscardMarkWithLeaseSQL() string {
 		"UPDATE restore_plans SET status = 'discarding', updated_at = $11 FROM pending_restore_plan WHERE restore_plans.restore_plan_id = pending_restore_plan.restore_plan_id RETURNING " + strings.Join(restorePlanColumns, ", ") +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
-		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM updated_plan, updated_operation"
 }
 
@@ -234,7 +234,7 @@ func restorePreviewDiscardSuccessCommitWithLeaseSQL() string {
 		"UPDATE restore_plans SET status = 'discarded', updated_at = $11 FROM discarding_restore_plan WHERE restore_plans.restore_plan_id = discarding_restore_plan.restore_plan_id RETURNING " + strings.Join(restorePlanColumns, ", ") +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
-		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(21, len(auditOutboxColumns)) + " FROM updated_operation, updated_plan RETURNING audit_event_id" +
 		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM updated_plan, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
@@ -254,7 +254,7 @@ func restorePreviewDiscardFailureCommitWithLeaseSQL() string {
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
 		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id " +
-		"AND (eligible_operation.phase = 'validate_restore_preview_discard' OR EXISTS (SELECT 1 FROM updated_plan)) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"AND (eligible_operation.phase = 'validate_restore_preview_discard' OR EXISTS (SELECT 1 FROM updated_plan)) RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(20, len(auditOutboxColumns)) + " FROM updated_operation RETURNING audit_event_id" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"

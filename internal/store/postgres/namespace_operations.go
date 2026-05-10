@@ -161,7 +161,7 @@ func validateNamespaceUpsertAuditEvent(namespace resources.Namespace, record ope
 func namespaceUpsertOperationCommitWithLeaseSQL() string {
 	return "WITH updated_operation AS (" +
 		namespaceUpsertOperationLeaseFencedUpdateBaseSQL() +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"RETURNING " + operationReturningColumnsSQL() +
 		"), upserted_namespace AS (" +
 		"INSERT INTO namespaces (" + strings.Join(namespaceColumns, ", ") + ") " +
 		"SELECT " + placeholders(19, len(namespaceColumns)) + " FROM updated_operation " +
@@ -182,7 +182,7 @@ func namespaceUpsertOperationCommitWithLeaseSQL() string {
 func namespaceDisableOperationCommitWithLeaseSQL() string {
 	return "WITH updated_operation AS (" +
 		namespaceDisableOperationLeaseFencedUpdateBaseSQL() +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"RETURNING " + operationReturningColumnsSQL() +
 		"), disabled_namespace AS (" +
 		"UPDATE namespaces SET status = $20, disabled_reason = $21, disabled_at = $22, updated_at = $24 " +
 		"FROM updated_operation WHERE namespaces.namespace_id = $19 AND namespaces.status = 'active' " +

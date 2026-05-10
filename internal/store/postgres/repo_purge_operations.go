@@ -120,10 +120,10 @@ func repoPurgeSuccessCommitWithLeaseSQL() string {
 		"), no_earlier_lifecycle AS (" +
 		"SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM operations earlier WHERE earlier.repo_id = $15 AND (earlier.created_at < (SELECT created_at FROM eligible_operation) OR (earlier.created_at = (SELECT created_at FROM eligible_operation) AND earlier.operation_id < $12)) AND earlier.operation_type IN ('repo_archive','repo_restore_archived','repo_delete','repo_restore_tombstoned','repo_purge') AND earlier.operation_state NOT IN ('succeeded','failed','cancelled'))" +
 		"), updated_repo AS (" +
-		"UPDATE repos SET status = $25, lifecycle_status = $28, retention_expires_at = $29, last_lifecycle_operation_id = $30, pre_delete_status = $31, updated_at = $33 " +
-		"FROM eligible_operation, held_fence, no_sessions, no_earlier_lifecycle WHERE repos.repo_id = $15 AND repos.namespace_id = $14 AND repos.volume_id = $22 AND repos.jvs_repo_id = $23 AND repos.repo_kind = $24 AND repos.control_volume_subdir = $26 AND repos.payload_volume_subdir = $27 AND repos.status = 'tombstoned' AND eligible_operation.created_at > repos.updated_at AND $25 = 'purged' AND $28 = 'purged' AND $29 IS NULL AND $31 = repos.pre_delete_status RETURNING " + strings.Join(repoColumns, ", ") +
+		"UPDATE repos SET status = $25, lifecycle_status = $28, retention_expires_at = $29::timestamptz, last_lifecycle_operation_id = $30, pre_delete_status = $31::text, updated_at = $33 " +
+		"FROM eligible_operation, held_fence, no_sessions, no_earlier_lifecycle WHERE repos.repo_id = $20 AND repos.repo_id = $15 AND repos.namespace_id = $21 AND repos.namespace_id = $14 AND repos.volume_id = $22 AND repos.jvs_repo_id = $23 AND repos.repo_kind = $24 AND repos.control_volume_subdir = $26 AND repos.payload_volume_subdir = $27 AND repos.created_at = $32 AND repos.status = 'tombstoned' AND eligible_operation.created_at > repos.updated_at AND $25 = 'purged' AND $28 = 'purged' AND $29::timestamptz IS NULL AND $31::text = repos.pre_delete_status RETURNING " + repoReturningColumnsSQL() +
 		"), updated_operation AS (" +
-		operationLeaseFencedUpdateSetSQL() + "FROM eligible_operation, updated_repo WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		operationLeaseFencedUpdateSetSQL() + "FROM eligible_operation, updated_repo WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		"), released_fence AS (" +
 		"UPDATE repo_fences SET status = 'released', released_at = $11, updated_at = $11 FROM updated_operation, held_fence WHERE repo_fences.repo_id = $15 AND repo_fences.fence_id = held_fence.fence_id RETURNING repo_fences.fence_id" +
 		"), inserted_audit AS (" +
@@ -137,7 +137,7 @@ func repoPurgeFailureCommitWithLeaseSQL() string {
 		"AND operation_type = 'repo_purge' AND phase = 'validate_repo_lifecycle' AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
 		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 FOR UPDATE" +
 		"), updated_operation AS (" +
-		operationLeaseFencedUpdateSetSQL() + "FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND $20 = '' RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		operationLeaseFencedUpdateSetSQL() + "FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND $20 = '' RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(21, len(auditOutboxColumns)) + " FROM updated_operation RETURNING audit_event_id" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"

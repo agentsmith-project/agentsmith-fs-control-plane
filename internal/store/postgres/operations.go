@@ -52,6 +52,10 @@ var operationColumns = []string{
 
 var operationSelectColumns = operationColumns[:len(operationColumns)-1]
 
+func operationReturningColumnsSQL() string {
+	return prefixedColumns("operations", operationSelectColumns)
+}
+
 func (store *Store) CreateOperation(ctx context.Context, sanitized operations.SanitizedOperationRecord) error {
 	record := sanitized.Record()
 	args, err := operationInsertArgs(record)
@@ -1144,7 +1148,7 @@ func operationInsertSQL() string {
 func operationCreateOrReuseSQL() string {
 	return "INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") VALUES (" + placeholders(1, len(operationColumns)) + ") " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted"
+		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted"
 }
 
 func repoCreateOperationCreateOrReuseSQL() string {
@@ -1160,7 +1164,7 @@ func repoCreateOperationCreateOrReuseSQL() string {
 		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
 		"AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = $18) " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted" +
+		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM existing_operation " +
 		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM inserted_operation " +
 		"LIMIT 1"
@@ -1176,7 +1180,7 @@ func templateCreateOperationCreateOrReuseSQL() string {
 		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
 		"AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = $19) " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted" +
+		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM existing_operation " +
 		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM inserted_operation LIMIT 1"
 }
@@ -1191,7 +1195,7 @@ func templateCloneOperationCreateOrReuseSQL() string {
 		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
 		"AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = $18) " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted" +
+		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM existing_operation " +
 		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted FROM inserted_operation LIMIT 1"
 }
@@ -1216,7 +1220,7 @@ func restorePreviewOperationCreateOrReuseSQL() string {
 		"AND NOT EXISTS (SELECT 1 FROM same_repo_jvs_mutation) " +
 		"AND NOT EXISTS (SELECT 1 FROM active_restore_plan) " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted, '' AS gate_code" +
+		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted, '' AS gate_code" +
 		"), selected_operation AS (" +
 		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM existing_operation " +
 		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM inserted_operation" +
@@ -1251,7 +1255,7 @@ func restoreRunOperationCreateOrReuseSQL() string {
 		"AND EXISTS (SELECT 1 FROM matching_pending_restore_plan) " +
 		"AND NOT EXISTS (SELECT 1 FROM duplicate_restore_run) " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted, '' AS gate_code" +
+		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted, '' AS gate_code" +
 		"), selected_operation AS (" +
 		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM existing_operation " +
 		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM inserted_operation" +
@@ -1278,7 +1282,7 @@ func restorePreviewDiscardOperationCreateOrReuseSQL() string {
 		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
 		"AND EXISTS (SELECT 1 FROM matching_pending_restore_plan) " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted, '' AS gate_code" +
+		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted, '' AS gate_code" +
 		"), selected_operation AS (" +
 		"SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM existing_operation " +
 		"UNION ALL SELECT " + strings.Join(operationSelectColumns, ", ") + ", inserted, gate_code FROM inserted_operation" +
@@ -1524,7 +1528,7 @@ func operationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 " +
@@ -1533,7 +1537,7 @@ func operationAcquireLeaseSQL() string {
 		"(operation_state = 'running' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'operator_intervention_required' AND $5 = 'explicit_recovery_action' AND " + validLeasePair + ") OR " +
 		"(operation_state = 'cancel_requested' AND $6 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
-		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+		") RETURNING " + operationReturningColumnsSQL()
 }
 
 func namespaceUpsertOperationAcquireLeaseSQL() string {
@@ -1542,7 +1546,7 @@ func namespaceUpsertOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 " +
@@ -1553,7 +1557,7 @@ func namespaceUpsertOperationAcquireLeaseSQL() string {
 		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
-		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+		") RETURNING " + operationReturningColumnsSQL()
 }
 
 func namespaceDisableOperationAcquireLeaseSQL() string {
@@ -1562,7 +1566,7 @@ func namespaceDisableOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 " +
@@ -1573,7 +1577,7 @@ func namespaceDisableOperationAcquireLeaseSQL() string {
 		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
-		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+		") RETURNING " + operationReturningColumnsSQL()
 }
 
 func scopedOperationAcquireLeaseSQL(operationType, phase string) string {
@@ -1582,7 +1586,7 @@ func scopedOperationAcquireLeaseSQL(operationType, phase string) string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 " +
@@ -1593,7 +1597,7 @@ func scopedOperationAcquireLeaseSQL(operationType, phase string) string {
 		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
-		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+		") RETURNING " + operationReturningColumnsSQL()
 }
 
 func volumeEnsureOperationAcquireLeaseSQL() string {
@@ -1602,7 +1606,7 @@ func volumeEnsureOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 " +
@@ -1614,7 +1618,7 @@ func volumeEnsureOperationAcquireLeaseSQL() string {
 		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
-		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+		") RETURNING " + operationReturningColumnsSQL()
 }
 
 func namespaceVolumeBindingPutOperationAcquireLeaseSQL() string {
@@ -1623,7 +1627,7 @@ func namespaceVolumeBindingPutOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 " +
@@ -1634,7 +1638,7 @@ func namespaceVolumeBindingPutOperationAcquireLeaseSQL() string {
 		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
-		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+		") RETURNING " + operationReturningColumnsSQL()
 }
 
 func repoCreateOperationAcquireLeaseSQL() string {
@@ -1643,7 +1647,7 @@ func repoCreateOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 " +
@@ -1654,13 +1658,13 @@ func repoCreateOperationAcquireLeaseSQL() string {
 		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
-		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+		") RETURNING " + operationReturningColumnsSQL()
 }
 
 func repoLifecycleOperationAcquireLeaseSQL() string {
 	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
 	return "WITH eligible_operation AS (" +
-		"SELECT operation_id, repo_id, created_at, operation_state FROM operations WHERE operation_id = $1 " +
+		"SELECT operation_id, repo_id, created_at, operation_state AS eligible_operation_state FROM operations WHERE operation_id = $1 " +
 		"AND operation_type IN (" + repoLifecycleOperationTypeSQLList() + ") " +
 		"AND phase = 'validate_repo_lifecycle' " +
 		"AND (" +
@@ -1669,7 +1673,7 @@ func repoLifecycleOperationAcquireLeaseSQL() string {
 		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
 		") FOR UPDATE" +
 		"), held_fence AS (" +
-		"SELECT repo_fences.fence_id FROM repo_fences, eligible_operation WHERE $5 = 'finalize_cancellation' AND eligible_operation.operation_state = 'cancel_requested' AND repo_fences.repo_id = eligible_operation.repo_id AND repo_fences.fence_kind = 'lifecycle' AND repo_fences.holder_operation_id = $1 AND repo_fences.status = 'active' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL FOR UPDATE" +
+		"SELECT repo_fences.fence_id FROM repo_fences, eligible_operation WHERE $5 = 'finalize_cancellation' AND eligible_operation.eligible_operation_state = 'cancel_requested' AND repo_fences.repo_id = eligible_operation.repo_id AND repo_fences.fence_kind = 'lifecycle' AND repo_fences.holder_operation_id = $1 AND repo_fences.status = 'active' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL FOR UPDATE" +
 		"), released_fence AS (" +
 		"UPDATE repo_fences SET status = 'released', released_at = $4, updated_at = $4 FROM held_fence WHERE repo_fences.fence_id = held_fence.fence_id RETURNING repo_fences.fence_id" +
 		"), earlier_jvs_mutation AS (" +
@@ -1684,10 +1688,10 @@ func repoLifecycleOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
-		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)) AND ($5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM active_restore_plan)) AND ($5 <> 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM held_fence) OR EXISTS (SELECT 1 FROM released_fence)) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)) AND ($5 = 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM active_restore_plan)) AND ($5 <> 'finalize_cancellation' OR NOT EXISTS (SELECT 1 FROM held_fence) OR EXISTS (SELECT 1 FROM released_fence)) RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
@@ -1715,14 +1719,14 @@ func repoPurgeOperationAcquireLeaseSQL() string {
 		"lease_owner = $2, " +
 		"lease_expires_at = $3, " +
 		"started_at = COALESCE(started_at, $4), " +
-		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM active_restore_plan) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM active_restore_plan) RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
 func savePointCreateOperationAcquireLeaseSQL() string {
 	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
 	return "WITH eligible_operation AS (" +
-		"SELECT operation_id, repo_id, created_at, operation_state FROM operations WHERE operation_id = $1 " +
+		"SELECT operation_id, repo_id, created_at FROM operations WHERE operation_id = $1 " +
 		"AND operation_type = 'save_point_create' " +
 		"AND phase IN ('validate_save_point_create','save_point_create_prepared') " +
 		"AND (" +
@@ -1746,17 +1750,17 @@ func savePointCreateOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
-		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($5 = 'finalize_cancellation' OR (NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM active_restore_plan))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($5 = 'finalize_cancellation' OR (NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM active_restore_plan))) RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
 func restorePreviewOperationAcquireLeaseSQL() string {
 	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
 	return "WITH eligible_operation AS (" +
-		"SELECT operation_id, repo_id, created_at, operation_state, phase FROM operations WHERE operation_id = $1 " +
+		"SELECT operation_id, repo_id, created_at, phase FROM operations WHERE operation_id = $1 " +
 		"AND operation_type = 'restore_preview' " +
 		"AND phase IN ('validate_restore_preview','restore_preview_preflight_idle') " +
 		"AND (" +
@@ -1780,19 +1784,19 @@ func restorePreviewOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id " +
 		"AND ($5 <> 'finalize_cancellation' OR eligible_operation.phase = 'validate_restore_preview') " +
-		"AND ($5 = 'finalize_cancellation' OR (NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM active_restore_plan))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"AND ($5 = 'finalize_cancellation' OR (NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM active_restore_plan))) RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
 func restorePreviewDiscardOperationAcquireLeaseSQL() string {
 	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
 	return "WITH eligible_operation AS (" +
-		"SELECT operation_id, namespace_id, repo_id, created_at, operation_state, phase, input_summary FROM operations WHERE operation_id = $1 " +
+		"SELECT operation_id, namespace_id, repo_id, created_at, phase, input_summary FROM operations WHERE operation_id = $1 " +
 		"AND operation_type = 'restore_preview_discard' " +
 		"AND phase IN ('validate_restore_preview_discard','restore_preview_discarding') " +
 		"AND (input_summary->>'preview_operation_id') IS NOT NULL AND btrim(input_summary->>'preview_operation_id') <> '' " +
@@ -1823,19 +1827,19 @@ func restorePreviewDiscardOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id " +
 		"AND ($5 <> 'finalize_cancellation' OR eligible_operation.phase = 'validate_restore_preview_discard') " +
-		"AND ($5 = 'finalize_cancellation' OR (EXISTS (SELECT 1 FROM matching_restore_plan) AND NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM unrelated_active_restore_plan))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"AND ($5 = 'finalize_cancellation' OR (EXISTS (SELECT 1 FROM matching_restore_plan) AND NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM unrelated_active_restore_plan))) RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
 func restoreRunOperationAcquireLeaseSQL() string {
 	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
 	return "WITH eligible_operation AS (" +
-		"SELECT operation_id, namespace_id, repo_id, created_at, operation_state, phase, input_summary FROM operations WHERE operation_id = $1 " +
+		"SELECT operation_id, namespace_id, repo_id, created_at, phase, input_summary FROM operations WHERE operation_id = $1 " +
 		"AND operation_type = 'restore_run' " +
 		"AND phase IN ('validate_restore_run','restore_run_writer_fenced','restore_run_consuming') " +
 		"AND (input_summary->>'preview_operation_id') IS NOT NULL AND btrim(input_summary->>'preview_operation_id') <> '' " +
@@ -1865,12 +1869,12 @@ func restoreRunOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id " +
 		"AND ($5 <> 'finalize_cancellation' OR eligible_operation.phase = 'validate_restore_run') " +
-		"AND ($5 = 'finalize_cancellation' OR (EXISTS (SELECT 1 FROM matching_restore_plan) AND NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM unrelated_active_restore_plan))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"AND ($5 = 'finalize_cancellation' OR (EXISTS (SELECT 1 FROM matching_restore_plan) AND NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle) AND NOT EXISTS (SELECT 1 FROM unrelated_active_restore_plan))) RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
@@ -1880,7 +1884,7 @@ func templateCreateOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 " +
@@ -1891,7 +1895,7 @@ func templateCreateOperationAcquireLeaseSQL() string {
 		"(operation_state = 'queued' AND phase = 'validate_template_create' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'cancel_requested' AND phase = 'validate_template_create' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
-		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+		") RETURNING " + operationReturningColumnsSQL()
 }
 
 func templateCloneOperationAcquireLeaseSQL() string {
@@ -1904,7 +1908,7 @@ func workloadMountBindingOperationAcquireLeaseSQL() string {
 		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
 		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
 		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $3 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
 		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
 		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
 		"updated_at = $4 " +
@@ -1915,7 +1919,7 @@ func workloadMountBindingOperationAcquireLeaseSQL() string {
 		"(operation_state = 'queued' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
-		") RETURNING " + strings.Join(operationSelectColumns, ", ")
+		") RETURNING " + operationReturningColumnsSQL()
 }
 
 func repoJVSMutationOperationTypeSQLList() string {
@@ -1943,11 +1947,11 @@ func operationRenewLeaseSQL() string {
 		"lease_expires_at = GREATEST(lease_expires_at, $3), " +
 		"updated_at = $4 " +
 		"WHERE operation_id = $1 AND operation_state = 'running' AND lease_owner = $2 AND lease_expires_at IS NOT NULL AND lease_expires_at > $4 " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ")
+		"RETURNING " + operationReturningColumnsSQL()
 }
 
 func operationLeaseFencedUpdateSQL() string {
-	return operationLeaseFencedUpdateBaseSQL() + "RETURNING " + strings.Join(operationSelectColumns, ", ")
+	return operationLeaseFencedUpdateBaseSQL() + "RETURNING " + operationReturningColumnsSQL()
 }
 
 func operationLeaseFencedUpdateBaseSQL() string {
@@ -1971,7 +1975,7 @@ func operationLeaseFencedUpdateBaseSQL() string {
 func operationCommitWithLeaseSQL() string {
 	return "WITH updated_operation AS (" +
 		operationLeaseFencedUpdateBaseSQL() +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") " +
 		"SELECT " + placeholders(14, len(auditOutboxColumns)) + " FROM updated_operation " +

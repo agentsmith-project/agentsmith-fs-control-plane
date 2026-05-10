@@ -162,6 +162,25 @@ func TestLifecycleExecutorDeleteMissingOrInvalidRetentionSnapshotRequiresManualI
 	}
 }
 
+func TestLifecycleExecutorSuccessCommitWrapsCauseWithoutLeakingDetails(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = repoLifecycleResource(now, resources.RepoStatusActive)
+	store.lifecycleSuccessErr = errors.Join(operations.ErrLeaseUnavailable, errors.New("postgres password=secret failed"))
+	executor := newTestLifecycleExecutor(t, store, &fakeJVSRunner{}, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), repoLifecycleLeasedRecord(now, operations.OperationRepoArchive, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err == nil {
+		t.Fatal("ExecuteOperationRecovery succeeded, want commit error")
+	}
+	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "/srv/afscp") {
+		t.Fatalf("error leaked sensitive detail: %v", err)
+	}
+	if !errors.Is(err, operations.ErrLeaseUnavailable) {
+		t.Fatalf("error = %v, want wrapped ErrLeaseUnavailable for recovery classification", err)
+	}
+}
+
 func TestLifecycleExecutorRestoresTombstonedRepoToPreDeleteStatusAfterDoctor(t *testing.T) {
 	now := repoExecNow()
 	tests := []struct {

@@ -395,7 +395,7 @@ func workloadMountBindingCreateCommitSQL() string {
 		"AND input_summary @> jsonb_build_object('mount_binding_id', $14, 'namespace_id', $15, 'repo_id', $16, 'volume_id', $17, 'mount_path', $18, 'read_only', $19, 'lease_seconds', $21) " +
 		"AND EXISTS (SELECT 1 FROM active_namespace) AND EXISTS (SELECT 1 FROM active_binding) AND EXISTS (SELECT 1 FROM active_repo) AND EXISTS (SELECT 1 FROM active_volume) " +
 		"AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) AND ($19 = true OR NOT EXISTS (SELECT 1 FROM held_writer_fence)) " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_binding AS (" +
 		"INSERT INTO workload_mount_bindings (" + strings.Join(workloadMountFullColumns, ", ") + ") SELECT " + placeholders(14, len(workloadMountFullColumns)) + " FROM updated_operation RETURNING " + strings.Join(workloadMountFullColumns, ", ") +
 		"), inserted_audit AS (" +
@@ -450,7 +450,7 @@ func workloadMountBindingUpdateCommitSQL(operationType, phase, setClause string)
 	return "WITH updated_operation AS (" + operationLeaseFencedUpdateBaseSQL() +
 		"AND operation_type = '" + operationType + "' AND phase = '" + phase + "' AND mount_binding_id = $14 " +
 		"AND resource_type = 'workload_mount_binding' AND resource_id = $14 " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"RETURNING " + operationReturningColumnsSQL() +
 		"), updated_binding AS (" +
 		"UPDATE workload_mount_bindings SET " + setClause + "updated_at = $11 FROM updated_operation WHERE workload_mount_bindings.mount_binding_id = $14 AND workload_mount_bindings.namespace_id = updated_operation.namespace_id AND workload_mount_bindings.repo_id = updated_operation.repo_id RETURNING " + prefixedColumns("workload_mount_bindings", workloadMountFullColumns) +
 		"), inserted_audit AS (" +

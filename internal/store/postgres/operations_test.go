@@ -1118,6 +1118,67 @@ func TestCreateOrReuseRestorePreviewDiscardOperationMapsJVSUniqueIndexViolation(
 	}
 }
 
+func TestOperationAcquireLeaseSQLCastsLeaseExpiresAtCaseToTimestamptz(t *testing.T) {
+	tests := []struct {
+		name              string
+		query             string
+		cancelPolicyParam string
+	}{
+		{name: "generic", query: operationAcquireLeaseSQL(), cancelPolicyParam: "$6"},
+		{name: "namespace upsert", query: namespaceUpsertOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "namespace disable", query: namespaceDisableOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "volume ensure", query: volumeEnsureOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "namespace volume binding put", query: namespaceVolumeBindingPutOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "repo create", query: repoCreateOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "repo lifecycle", query: repoLifecycleOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "save point create", query: savePointCreateOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "restore preview", query: restorePreviewOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "restore preview discard", query: restorePreviewDiscardOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "restore run", query: restoreRunOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "template create", query: templateCreateOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "template clone", query: templateCloneOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+		{name: "workload mount binding", query: workloadMountBindingOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := "lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND " + tt.cancelPolicyParam + " = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END"
+			if !strings.Contains(tt.query, want) {
+				t.Fatalf("acquire SQL does not cast lease_expires_at CASE to timestamptz; want %q in %s", want, tt.query)
+			}
+			if strings.Contains(tt.query, "THEN NULL ELSE $3 END") {
+				t.Fatalf("acquire SQL leaves lease_expires_at CASE untyped: %s", tt.query)
+			}
+		})
+	}
+}
+
+func TestOperationAcquireLeaseSQLDoesNotExposeAmbiguousOperationStateFromSourceCTEs(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "repo lifecycle", query: repoLifecycleOperationAcquireLeaseSQL()},
+		{name: "save point create", query: savePointCreateOperationAcquireLeaseSQL()},
+		{name: "restore preview", query: restorePreviewOperationAcquireLeaseSQL()},
+		{name: "restore preview discard", query: restorePreviewDiscardOperationAcquireLeaseSQL()},
+		{name: "restore run", query: restoreRunOperationAcquireLeaseSQL()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if strings.Contains(tt.query, "SELECT operation_id, repo_id, created_at, operation_state FROM operations") ||
+				strings.Contains(tt.query, "SELECT operation_id, repo_id, created_at, operation_state,") ||
+				strings.Contains(tt.query, "SELECT operation_id, namespace_id, repo_id, created_at, operation_state,") {
+				t.Fatalf("acquire SQL exposes source operation_state that can be ambiguous in UPDATE ... FROM: %s", tt.query)
+			}
+			if strings.Contains(tt.query, "eligible_operation.operation_state") {
+				t.Fatalf("acquire SQL should use an aliased source operation state when needed: %s", tt.query)
+			}
+		})
+	}
+}
+
 func TestAcquireOperationLeaseUsesAtomicConditionalUpdateReturningRecord(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	leaseExpiresAt := now.Add(30 * time.Minute)

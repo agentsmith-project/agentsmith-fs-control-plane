@@ -107,7 +107,7 @@ func TestCreateOrReuseExportSQLOnlyCreatesSessionAndAuditForNewOperation(t *test
 
 	assertSQLContainsInOrder(t, sql,
 		"inserted_operation AS (",
-		"RETURNING "+strings.Join(operationSelectColumns, ", ")+", (xmax = 0) AS inserted",
+		"RETURNING "+operationReturningColumnsSQL()+", (xmax = 0) AS inserted",
 		"inserted_session AS (",
 		"INSERT INTO export_sessions",
 		"FROM inserted_operation WHERE inserted_operation.inserted RETURNING",

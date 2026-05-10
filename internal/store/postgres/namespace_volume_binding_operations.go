@@ -121,7 +121,7 @@ func namespaceVolumeBindingPutOperationCommitWithLeaseSQL() string {
 		"SELECT volume_id FROM volumes WHERE volume_id = $20 AND status = 'active'" +
 		"), updated_operation AS (" +
 		namespaceVolumeBindingPutOperationLeaseFencedUpdateBaseSQL() +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"RETURNING " + operationReturningColumnsSQL() +
 		"), upserted_binding AS (" +
 		"INSERT INTO namespace_volume_bindings (" + strings.Join(namespaceVolumeBindingColumns, ", ") + ") " +
 		"SELECT " + placeholders(19, len(namespaceVolumeBindingColumns)) + " FROM updated_operation, active_namespace, active_volume " +

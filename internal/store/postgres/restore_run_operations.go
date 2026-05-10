@@ -342,7 +342,7 @@ func restoreRunWriterFencedMarkWithLeaseSQL() string {
 		"SELECT " + strings.Join(repoFenceColumns, ", ") + " FROM active_writer_fence UNION ALL SELECT " + strings.Join(repoFenceColumns, ", ") + " FROM inserted_writer_fence LIMIT 1" +
 		"), updated_operation AS (" +
 		restoreRunWriterFencedOperationUpdateSetSQL() +
-		"FROM eligible_operation, confirmed_writer_fence WHERE operations.operation_id = eligible_operation.operation_id AND confirmed_writer_fence.fence_id = $21 AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation, confirmed_writer_fence WHERE operations.operation_id = eligible_operation.operation_id AND confirmed_writer_fence.fence_id = $21 AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + prefixedColumns("confirmed_writer_fence", repoFenceColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) + " FROM confirmed_writer_fence, updated_operation"
 }
 
@@ -366,7 +366,7 @@ func restoreRunConsumingMarkWithLeaseSQL() string {
 		"UPDATE restore_plans SET status = 'consuming', updated_at = $11 FROM pending_restore_plan, active_writer_fence WHERE restore_plans.restore_plan_id = pending_restore_plan.restore_plan_id RETURNING " + strings.Join(restorePlanColumns, ", ") +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
-		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM updated_plan, updated_operation"
 }
 
@@ -388,7 +388,7 @@ func restoreRunSuccessCommitWithLeaseSQL() string {
 		"UPDATE restore_plans SET status = 'consumed', updated_at = $11 FROM consuming_restore_plan, released_writer_fence WHERE restore_plans.restore_plan_id = consuming_restore_plan.restore_plan_id RETURNING " + strings.Join(restorePlanColumns, ", ") +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
-		"FROM eligible_operation, updated_plan, released_writer_fence WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation, updated_plan, released_writer_fence WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(23, len(auditOutboxColumns)) + " FROM updated_operation, updated_plan, released_writer_fence RETURNING audit_event_id" +
 		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM updated_plan, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
@@ -408,7 +408,7 @@ func restoreRunStalePreviewCommitWithLeaseSQL() string {
 		"UPDATE restore_plans SET stale = $22, blockers_json = $23, updated_at = $11 FROM pending_restore_plan WHERE restore_plans.restore_plan_id = pending_restore_plan.restore_plan_id RETURNING " + strings.Join(restorePlanColumns, ", ") +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
-		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(24, len(auditOutboxColumns)) + " FROM updated_operation, updated_plan RETURNING audit_event_id" +
 		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM updated_plan, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
@@ -435,7 +435,7 @@ func restoreRunFailureCommitWithLeaseSQL() string {
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
 		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id " +
-		"AND (eligible_operation.phase = 'validate_restore_run' OR (eligible_operation.phase = 'restore_run_writer_fenced' AND EXISTS (SELECT 1 FROM pending_restore_plan) AND EXISTS (SELECT 1 FROM released_writer_fence)) OR (eligible_operation.phase = 'restore_run_consuming' AND EXISTS (SELECT 1 FROM updated_plan))) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"AND (eligible_operation.phase = 'validate_restore_run' OR (eligible_operation.phase = 'restore_run_writer_fenced' AND EXISTS (SELECT 1 FROM pending_restore_plan) AND EXISTS (SELECT 1 FROM released_writer_fence)) OR (eligible_operation.phase = 'restore_run_consuming' AND EXISTS (SELECT 1 FROM updated_plan))) RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(22, len(auditOutboxColumns)) + " FROM updated_operation RETURNING audit_event_id" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"

@@ -199,7 +199,7 @@ func restorePreviewPreflightUpdateWithLeaseSQL() string {
 		"AND operation_type = 'restore_preview' AND phase = 'validate_restore_preview' " +
 		"AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
 		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ")
+		"RETURNING " + operationReturningColumnsSQL()
 }
 
 func restorePreviewSuccessCommitWithLeaseSQL() string {
@@ -210,7 +210,7 @@ func restorePreviewSuccessCommitWithLeaseSQL() string {
 		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 FOR UPDATE" +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
-		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_restore_plan AS (" +
 		"INSERT INTO restore_plans (" + strings.Join(restorePlanColumns, ", ") + ") SELECT " + placeholders(20, len(restorePlanColumns)) + " FROM updated_operation RETURNING " + strings.Join(restorePlanColumns, ", ") +
 		"), inserted_audit AS (" +
@@ -226,7 +226,7 @@ func restorePreviewFailureCommitWithLeaseSQL() string {
 		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 FOR UPDATE" +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
-		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(20, len(auditOutboxColumns)) + " FROM updated_operation RETURNING audit_event_id" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"

@@ -169,15 +169,15 @@ func repoLifecycleSuccessCommitWithLeaseSQL() string {
 		"), no_sessions AS (" +
 		"SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM export_sessions WHERE repo_id = $15 AND (status NOT IN ('revoked','expired','failed') OR terminal_observed_at IS NULL OR active_request_count <> 0 OR active_write_count <> 0 OR (status = 'failed' AND btrim(status_reason) = ''))) AND NOT EXISTS (SELECT 1 FROM workload_mount_bindings WHERE repo_id = $15 AND (status NOT IN ('released','revoked','expired','failed') OR confirmed_unmounted_at IS NULL))" +
 		"), updated_repo AS (" +
-		"UPDATE repos SET status = $25, lifecycle_status = $28, retention_expires_at = $29, last_lifecycle_operation_id = $30, pre_delete_status = $31, updated_at = $33 " +
-		"FROM eligible_operation, active_namespace, active_binding, active_volume, held_fence, no_sessions WHERE repos.repo_id = $15 AND repos.namespace_id = $14 AND repos.volume_id = active_volume.volume_id AND repos.volume_id = $22 AND repos.jvs_repo_id = $23 AND repos.repo_kind = $24 AND repos.control_volume_subdir = $26 AND repos.payload_volume_subdir = $27 AND (" +
-		"(eligible_operation.operation_type = 'repo_archive' AND repos.status = 'active' AND $25 = 'archived' AND $28 = 'archived' AND $29 IS NULL AND $31 IS NULL) OR " +
-		"(eligible_operation.operation_type = 'repo_restore_archived' AND repos.status = 'archived' AND $25 = 'active' AND $28 = 'active' AND $29 IS NULL AND $31 IS NULL) OR " +
-		"(eligible_operation.operation_type = 'repo_delete' AND repos.status IN ('active','archived') AND $25 = 'tombstoned' AND $28 = 'tombstoned' AND $29 IS NOT NULL AND $31 = repos.status) OR " +
-		"(eligible_operation.operation_type = 'repo_restore_tombstoned' AND repos.status = 'tombstoned' AND eligible_operation.created_at < repos.retention_expires_at AND eligible_operation.created_at > repos.updated_at AND $25 = repos.pre_delete_status AND $28 = repos.pre_delete_status AND $29 IS NULL AND $31 IS NULL)" +
-		") RETURNING " + strings.Join(repoColumns, ", ") +
+		"UPDATE repos SET status = $25, lifecycle_status = $28, retention_expires_at = $29::timestamptz, last_lifecycle_operation_id = $30, pre_delete_status = $31::text, updated_at = $33 " +
+		"FROM eligible_operation, active_namespace, active_binding, active_volume, held_fence, no_sessions WHERE repos.repo_id = $20 AND repos.repo_id = $15 AND repos.namespace_id = $21 AND repos.namespace_id = $14 AND repos.volume_id = active_volume.volume_id AND repos.volume_id = $22 AND repos.jvs_repo_id = $23 AND repos.repo_kind = $24 AND repos.control_volume_subdir = $26 AND repos.payload_volume_subdir = $27 AND repos.created_at = $32 AND (" +
+		"(eligible_operation.operation_type = 'repo_archive' AND repos.status = 'active' AND $25 = 'archived' AND $28 = 'archived' AND $29::timestamptz IS NULL AND $31::text IS NULL) OR " +
+		"(eligible_operation.operation_type = 'repo_restore_archived' AND repos.status = 'archived' AND $25 = 'active' AND $28 = 'active' AND $29::timestamptz IS NULL AND $31::text IS NULL) OR " +
+		"(eligible_operation.operation_type = 'repo_delete' AND repos.status IN ('active','archived') AND $25 = 'tombstoned' AND $28 = 'tombstoned' AND $29::timestamptz IS NOT NULL AND $31::text = repos.status) OR " +
+		"(eligible_operation.operation_type = 'repo_restore_tombstoned' AND repos.status = 'tombstoned' AND eligible_operation.created_at < repos.retention_expires_at AND eligible_operation.created_at > repos.updated_at AND $25 = repos.pre_delete_status AND $28 = repos.pre_delete_status AND $29::timestamptz IS NULL AND $31::text IS NULL)" +
+		") RETURNING " + repoReturningColumnsSQL() +
 		"), updated_operation AS (" +
-		operationLeaseFencedUpdateSetSQL() + "FROM eligible_operation, updated_repo WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		operationLeaseFencedUpdateSetSQL() + "FROM eligible_operation, updated_repo WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		"), released_fence AS (" +
 		"UPDATE repo_fences SET status = 'released', released_at = $11, updated_at = $11 FROM updated_operation, held_fence WHERE repo_fences.repo_id = $15 AND repo_fences.fence_id = held_fence.fence_id RETURNING repo_fences.fence_id" +
 		"), inserted_audit AS (" +
@@ -193,7 +193,7 @@ func repoLifecycleFailureCommitWithLeaseSQL() string {
 		"), released_fence AS (" +
 		"UPDATE repo_fences SET status = 'released', released_at = $11, updated_at = $11 FROM eligible_operation WHERE $20 <> '' AND repo_fences.repo_id = $15 AND repo_fences.fence_id = $20 AND repo_fences.fence_kind = 'lifecycle' AND repo_fences.holder_operation_id = $12 AND repo_fences.status = 'active' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL RETURNING repo_fences.fence_id" +
 		"), updated_operation AS (" +
-		operationLeaseFencedUpdateSetSQL() + "FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($20 = '' OR EXISTS (SELECT 1 FROM released_fence)) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		operationLeaseFencedUpdateSetSQL() + "FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND ($20 = '' OR EXISTS (SELECT 1 FROM released_fence)) RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(21, len(auditOutboxColumns)) + " FROM updated_operation RETURNING audit_event_id" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"

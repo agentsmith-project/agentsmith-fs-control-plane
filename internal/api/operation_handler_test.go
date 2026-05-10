@@ -131,6 +131,46 @@ func TestOperationInspectionHandlerRequiresStoredBindingForProductCaller(t *test
 	assertOperationInspectionResponseDoesNotLeak(t, rec.Body.String())
 }
 
+func TestOperationInspectionHandlerHidesRepoAdminOnlyBindingAsNotFound(t *testing.T) {
+	reader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
+		"op_repo_create": operationInspectionRecord("op_repo_create", "ns_123"),
+	}}
+	bindingReader := &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{
+		CallerService: "product-caller",
+		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
+	})}
+	sink := &fakeAuditSink{}
+	handler := OperationInspectionHandler(OperationInspectionHandlerConfig{
+		Reader:                    reader,
+		StoredNamespaceAuthorizer: operationInspectionNamespaceBindingAuthorizer{Reader: bindingReader},
+		AllowedCallers: operationInspectionPolicy(auth.AllowedCaller{
+			CallerService: "product-caller",
+			Kind:          auth.CallerKindProduct,
+			Roles:         []auth.Role{auth.RoleOperationInspector},
+		}),
+		PrincipalResolver: namespaceBindingPrincipalResolver(),
+		AuditSink:         sink,
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, operationInspectionRequest("op_repo_create", "", "product-caller"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s, want 404", rec.Code, rec.Body.String())
+	}
+	if bindingReader.calls != 1 || bindingReader.namespaceID != "ns_123" {
+		t.Fatalf("binding reads = %d namespace = %q, want stored namespace authorization", bindingReader.calls, bindingReader.namespaceID)
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeOperationNotFound {
+		t.Fatalf("error code = %s, want OPERATION_NOT_FOUND", env.Error.Code)
+	}
+	if len(sink.events) != 1 || sink.events[0].Outcome != audit.OutcomeDenied {
+		t.Fatalf("audit events = %#v, want denied audit", sink.events)
+	}
+	assertOperationInspectionResponseDoesNotLeak(t, rec.Body.String())
+}
+
 func TestDiscoverySurfacesCallerOperationInspectionRedactsCallerUnsafeFields(t *testing.T) {
 	reader := &fakeInspectionOperationReader{records: map[string]operations.OperationRecord{
 		"op_secret": operationInspectionRecord("op_secret", "ns_123"),

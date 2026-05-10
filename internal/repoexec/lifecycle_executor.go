@@ -191,8 +191,10 @@ func (executor *LifecycleExecutor) ExecuteOperationRecovery(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	if _, _, err := executor.store.CommitRepoLifecycleSucceededWithLease(ctx, targetRepo, operation.SanitizedForPersistence(), executor.owner, now, event, fenceID); err != nil {
-		return errors.New("repo lifecycle success commit failed")
+	commitCtx, cancel := durableCommitContext(ctx)
+	defer cancel()
+	if _, _, err := executor.store.CommitRepoLifecycleSucceededWithLease(commitCtx, targetRepo, operation.SanitizedForPersistence(), executor.owner, now, event, fenceID); err != nil {
+		return repoLifecycleCommitError("repo lifecycle success commit failed", err)
 	}
 	return nil
 }
@@ -247,8 +249,10 @@ func (executor *LifecycleExecutor) commitLifecycleFailed(ctx context.Context, re
 	if err != nil {
 		return err
 	}
-	if _, err := executor.store.CommitRepoLifecycleFailedWithLease(ctx, operation.SanitizedForPersistence(), executor.owner, now, event, releaseFenceID); err != nil {
-		return errors.New("repo lifecycle failure commit failed")
+	commitCtx, cancel := durableCommitContext(ctx)
+	defer cancel()
+	if _, err := executor.store.CommitRepoLifecycleFailedWithLease(commitCtx, operation.SanitizedForPersistence(), executor.owner, now, event, releaseFenceID); err != nil {
+		return repoLifecycleCommitError("repo lifecycle failure commit failed", err)
 	}
 	return nil
 }
@@ -261,10 +265,16 @@ func (executor *LifecycleExecutor) commitLifecycleIntervention(ctx context.Conte
 	if err != nil {
 		return err
 	}
-	if _, err := executor.store.CommitRepoLifecycleFailedWithLease(ctx, operation.SanitizedForPersistence(), executor.owner, now, event, ""); err != nil {
-		return errors.New("repo lifecycle intervention commit failed")
+	commitCtx, cancel := durableCommitContext(ctx)
+	defer cancel()
+	if _, err := executor.store.CommitRepoLifecycleFailedWithLease(commitCtx, operation.SanitizedForPersistence(), executor.owner, now, event, ""); err != nil {
+		return repoLifecycleCommitError("repo lifecycle intervention commit failed", err)
 	}
 	return fmt.Errorf("%w: repo lifecycle operator intervention required", recovery.ErrOperationManualIntervention)
+}
+
+func repoLifecycleCommitError(message string, cause error) error {
+	return commitError{message: message, cause: cause}
 }
 
 func repoLifecycleFailedOperation(record operations.OperationRecord, now time.Time, state operations.OperationState, code, message string) operations.OperationRecord {

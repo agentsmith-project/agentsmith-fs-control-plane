@@ -50,15 +50,18 @@ func TestCommitRepoCreateSucceededWithLeaseAtomicBoundary(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	repo := repoCreateRepoFixture(now)
 	record := repoCreateSucceededRecord(now)
-	exec := &fakeExecutor{row: fakeRow{values: append(repoRowValues(repo), operationRowValues(record.SanitizedForPersistence().Record())...)}}
+	committedRecord := record.SanitizedForPersistence().Record()
+	committedRecord.LeaseOwner = ""
+	committedRecord.LeaseExpiresAt = nil
+	exec := &fakeExecutor{row: fakeRow{values: append(repoRowValues(repo), operationRowValues(committedRecord)...)}}
 	st := &Store{exec: exec}
 
 	gotRepo, gotOperation, err := st.CommitRepoCreateSucceededWithLease(context.Background(), repo, record.SanitizedForPersistence(), "worker-a", now, repoCreateAuditEvent("audit-repo", record.ID, repo.ID, now, audit.OutcomeSucceeded), "fence-repo")
 	if err != nil {
 		t.Fatalf("CommitRepoCreateSucceededWithLease: %v", err)
 	}
-	if gotRepo.ID != repo.ID || gotOperation.ID != record.ID || gotOperation.State != operations.OperationStateSucceeded {
-		t.Fatalf("commit returned repo/operation = %#v/%#v", gotRepo, gotOperation)
+	if gotRepo.ID != repo.ID || gotOperation.ID != record.ID || gotOperation.State != operations.OperationStateSucceeded || gotOperation.Phase != operations.OperationPhaseRepoCreateCommitted || gotOperation.LeaseOwner != "" || gotOperation.LeaseExpiresAt != nil {
+		t.Fatalf("commit returned repo/operation = %#v/%#v, want committed operation without running lease", gotRepo, gotOperation)
 	}
 	assertSQLContainsInOrder(t, exec.query,
 		"WITH eligible_operation AS (",
@@ -98,6 +101,7 @@ func TestCommitRepoCreateSucceededWithLeaseAtomicBoundary(t *testing.T) {
 		"UPDATE operations SET",
 		"FROM eligible_operation, inserted_repo",
 		"operations.operation_id = eligible_operation.operation_id",
+		"RETURNING operations.operation_id",
 		"), released_fence AS (",
 		"UPDATE repo_fences SET",
 		"released_at = $11",
@@ -106,6 +110,9 @@ func TestCommitRepoCreateSucceededWithLeaseAtomicBoundary(t *testing.T) {
 		"INSERT INTO audit_outbox",
 		"FROM updated_operation, inserted_repo, released_fence",
 	)
+	if strings.Contains(exec.query, "RETURNING operation_id") {
+		t.Fatalf("repo_create success commit uses ambiguous operation RETURNING columns: %s", exec.query)
+	}
 	if exec.queryRowCalls != 1 || exec.execCalls != 0 || exec.queryCalls != 0 {
 		t.Fatalf("executor calls queryRow/exec/query = %d/%d/%d, want 1/0/0", exec.queryRowCalls, exec.execCalls, exec.queryCalls)
 	}

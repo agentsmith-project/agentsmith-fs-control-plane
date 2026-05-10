@@ -136,11 +136,16 @@ func TestRepoLifecycleSuccessCommitSQLIsAtomicBoundaryWithSessionGuardAndFenceRe
 		"workload_mount_bindings",
 		"updated_repo AS",
 		"FROM eligible_operation, active_namespace, active_binding, active_volume, held_fence, no_sessions",
+		"repos.repo_id = $20",
+		"repos.repo_id = $15",
+		"repos.namespace_id = $21",
+		"repos.namespace_id = $14",
 		"repos.volume_id = active_volume.volume_id",
 		"repos.jvs_repo_id = $23",
 		"repos.repo_kind = $24",
 		"repos.control_volume_subdir = $26",
 		"repos.payload_volume_subdir = $27",
+		"repos.created_at = $32",
 		"updated_operation AS",
 		"released_fence AS",
 		"inserted_audit AS",
@@ -155,6 +160,55 @@ func TestRepoLifecycleSuccessCommitSQLIsAtomicBoundaryWithSessionGuardAndFenceRe
 	}
 }
 
+func TestRepoLifecycleSuccessCommitSQLUsesAllRepoArgs(t *testing.T) {
+	sql := repoLifecycleSuccessCommitWithLeaseSQL()
+	assertSQLContainsInOrder(t, sql,
+		"updated_repo AS",
+		"repos.repo_id = $20",
+		"repos.repo_id = $15",
+		"repos.namespace_id = $21",
+		"repos.namespace_id = $14",
+	)
+	assertSQLContainsAll(t, sql,
+		"repos.volume_id = $22",
+		"repos.jvs_repo_id = $23",
+		"repos.repo_kind = $24",
+		"status = $25",
+		"repos.control_volume_subdir = $26",
+		"repos.payload_volume_subdir = $27",
+		"lifecycle_status = $28",
+		"$29::timestamptz",
+		"last_lifecycle_operation_id = $30",
+		"$31::text",
+		"repos.created_at = $32",
+		"updated_at = $33",
+	)
+}
+
+func TestRepoLifecycleCommitSQLQualifiesOperationReturningColumns(t *testing.T) {
+	successSQL := repoLifecycleSuccessCommitWithLeaseSQL()
+	assertSQLContainsInOrder(t, successSQL,
+		"), updated_operation AS (",
+		"FROM eligible_operation, updated_repo",
+		"RETURNING "+operationReturningColumnsSQL(),
+		"), released_fence AS (",
+	)
+	if strings.Contains(successSQL, "RETURNING operation_id") {
+		t.Fatalf("repo lifecycle success commit uses ambiguous operation RETURNING columns: %s", successSQL)
+	}
+
+	failureSQL := repoLifecycleFailureCommitWithLeaseSQL()
+	assertSQLContainsInOrder(t, failureSQL,
+		"), updated_operation AS (",
+		"FROM eligible_operation",
+		"RETURNING "+operationReturningColumnsSQL(),
+		"), inserted_audit AS (",
+	)
+	if strings.Contains(failureSQL, "RETURNING operation_id") {
+		t.Fatalf("repo lifecycle failure commit uses ambiguous operation RETURNING columns: %s", failureSQL)
+	}
+}
+
 func TestRepoLifecycleSuccessCommitSQLHasDeleteAndRestoreTombstonedPredicates(t *testing.T) {
 	sql := repoLifecycleSuccessCommitWithLeaseSQL()
 	assertSQLContainsInOrder(t, sql,
@@ -162,8 +216,8 @@ func TestRepoLifecycleSuccessCommitSQLHasDeleteAndRestoreTombstonedPredicates(t 
 		"repos.status IN ('active','archived')",
 		"$25 = 'tombstoned'",
 		"$28 = 'tombstoned'",
-		"$29 IS NOT NULL",
-		"$31 = repos.status",
+		"$29::timestamptz IS NOT NULL",
+		"$31::text = repos.status",
 	)
 	assertSQLContainsInOrder(t, sql,
 		"eligible_operation.operation_type = 'repo_restore_tombstoned'",
@@ -172,11 +226,56 @@ func TestRepoLifecycleSuccessCommitSQLHasDeleteAndRestoreTombstonedPredicates(t 
 		"eligible_operation.created_at > repos.updated_at",
 		"$25 = repos.pre_delete_status",
 		"$28 = repos.pre_delete_status",
-		"$29 IS NULL",
-		"$31 IS NULL",
+		"$29::timestamptz IS NULL",
+		"$31::text IS NULL",
 	)
 	if strings.Contains(sql, "repo_purge") {
 		t.Fatalf("success SQL includes repo_purge: %s", sql)
+	}
+}
+
+func TestRepoLifecycleSuccessCommitSQLCastsRetentionParameter(t *testing.T) {
+	sql := repoLifecycleSuccessCommitWithLeaseSQL()
+	assertSQLContainsAll(t, sql,
+		"retention_expires_at = $29::timestamptz",
+		"$29::timestamptz IS NOT NULL",
+		"$29::timestamptz IS NULL",
+		"pre_delete_status = $31::text",
+		"$31::text = repos.status",
+		"$31::text IS NULL",
+	)
+	for _, forbidden := range []string{
+		"retention_expires_at = $29,",
+		"pre_delete_status = $31,",
+		"$29 IS NOT NULL",
+		"$29 IS NULL",
+		"$31 = repos.status",
+		"$31 IS NULL",
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("repo lifecycle success SQL leaves nullable lifecycle parameter untyped via %q: %s", forbidden, sql)
+		}
+	}
+}
+
+func TestRepoLifecycleSuccessCommitSQLQualifiesUpdateReturningColumns(t *testing.T) {
+	sql := repoLifecycleSuccessCommitWithLeaseSQL()
+	updatedRepo := sqlBetween(t, sql, "updated_repo AS (", "), updated_operation AS (")
+	updatedOperation := sqlBetween(t, sql, "updated_operation AS (", "), released_fence AS (")
+
+	assertSQLContainsAll(t, updatedRepo,
+		"RETURNING "+prefixedColumns("repos", repoColumns),
+	)
+	assertSQLContainsAll(t, updatedOperation,
+		"RETURNING "+operationReturningColumnsSQL(),
+	)
+	for _, forbidden := range []string{
+		"RETURNING " + strings.Join(repoColumns, ", "),
+		"RETURNING " + strings.Join(operationSelectColumns, ", "),
+	} {
+		if strings.Contains(updatedRepo, forbidden) || strings.Contains(updatedOperation, forbidden) {
+			t.Fatalf("lifecycle success SQL uses ambiguous RETURNING columns %q: %s", forbidden, sql)
+		}
 	}
 }
 

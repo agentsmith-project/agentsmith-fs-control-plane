@@ -49,6 +49,34 @@ func TestExecutorFirstAttemptInitializesDoctorsAndCommitsRepo(t *testing.T) {
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
+func TestExecutorSuccessCommitSurvivesCallerContextCancellationAfterJVS(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.failOnCanceledCommitContext = true
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &fakeJVSRunner{
+		initSummary:   jvsrunner.InitSummary{RepoID: "jvs_repo_alpha", Workspace: "main"},
+		doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
+		afterDoctor: func(context.Context) {
+			cancel()
+		},
+	}
+	executor := newTestExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(ctx, repoCreateLeasedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("test context was not cancelled after JVS success")
+	}
+	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRepoCreateCommitted {
+		t.Fatalf("operation = %#v, want succeeded committed despite caller context cancellation", store.operation)
+	}
+	if store.releasedFenceID != "fence_op_repo" {
+		t.Fatalf("released fence = %q, want created fence", store.releasedFenceID)
+	}
+}
+
 func TestSavePointExecutorPersistsPreSaveMarkerThenSavesAndCommits(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
@@ -464,7 +492,7 @@ func TestExecutorInitDoctorRepoIDMismatchRequiresIntervention(t *testing.T) {
 func TestExecutorPropagatesCommitErrorsSafely(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
-	store.successErr = errors.New("postgres password=secret failed")
+	store.successErr = fmt.Errorf("%w: postgres password=secret failed", operations.ErrLeaseUnavailable)
 	runner := &fakeJVSRunner{initSummary: jvsrunner.InitSummary{RepoID: "jvs_repo_alpha", Workspace: "main"}, doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}
 	executor := newTestExecutor(t, store, runner, now)
 
@@ -474,6 +502,9 @@ func TestExecutorPropagatesCommitErrorsSafely(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "/srv/afscp") {
 		t.Fatalf("error leaked sensitive detail: %v", err)
+	}
+	if !errors.Is(err, operations.ErrLeaseUnavailable) {
+		t.Fatalf("error = %v, want wrapped ErrLeaseUnavailable for recovery classification", err)
 	}
 }
 
@@ -815,6 +846,8 @@ type fakeRepoCreateStore struct {
 	templateCreateWriterFenceMarks       int
 	releasedFenceID                      string
 	successErr                           error
+	lifecycleSuccessErr                  error
+	failOnCanceledCommitContext          bool
 	blockingLifecycle                    []operations.OperationRecord
 	beforeListSessions                   func()
 }
@@ -840,7 +873,12 @@ func (store *fakeRepoCreateStore) CreateRepoFence(_ context.Context, fence fence
 	return nil
 }
 func (store *fakeRepoCreateStore) ReleaseRepoFence(context.Context, string, string) error { return nil }
-func (store *fakeRepoCreateStore) CommitRepoCreateSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+func (store *fakeRepoCreateStore) CommitRepoCreateSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+	if store.failOnCanceledCommitContext {
+		if err := ctx.Err(); err != nil {
+			return resources.Repo{}, operations.OperationRecord{}, err
+		}
+	}
 	if store.successErr != nil {
 		return resources.Repo{}, operations.OperationRecord{}, store.successErr
 	}
@@ -850,7 +888,12 @@ func (store *fakeRepoCreateStore) CommitRepoCreateSucceededWithLease(_ context.C
 	store.auditEvents = append(store.auditEvents, event)
 	return repo, store.operation, nil
 }
-func (store *fakeRepoCreateStore) CommitRepoCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
+func (store *fakeRepoCreateStore) CommitRepoCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error) {
+	if store.failOnCanceledCommitContext {
+		if err := ctx.Err(); err != nil {
+			return operations.OperationRecord{}, err
+		}
+	}
 	store.operation = record.Record()
 	store.releasedFenceID = releaseFenceID
 	store.auditEvents = append(store.auditEvents, event)
@@ -872,6 +915,9 @@ func (store *fakeRepoCreateStore) ListEarlierNonTerminalRepoLifecycleOperations(
 	return append([]operations.OperationRecord(nil), store.blockingLifecycle...), nil
 }
 func (store *fakeRepoCreateStore) CommitRepoLifecycleSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
+	if store.lifecycleSuccessErr != nil {
+		return resources.Repo{}, operations.OperationRecord{}, store.lifecycleSuccessErr
+	}
 	store.repo = repo
 	store.operation = record.Record()
 	store.releasedFenceID = fenceID
@@ -1127,6 +1173,7 @@ type fakeJVSRunner struct {
 	restoreRunErr           error
 	restoreDiscardErr       error
 	repoCloneErr            error
+	afterDoctor             func(context.Context)
 }
 
 func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot string) (jvsrunner.InitSummary, error) {
@@ -1135,9 +1182,12 @@ func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot st
 	runner.controlRoot = controlRoot
 	return runner.initSummary, runner.initErr
 }
-func (runner *fakeJVSRunner) DoctorStrict(_ context.Context, controlRoot string) (jvsrunner.DoctorSummary, error) {
+func (runner *fakeJVSRunner) DoctorStrict(ctx context.Context, controlRoot string) (jvsrunner.DoctorSummary, error) {
 	runner.calls = append(runner.calls, "doctor")
 	runner.controlRoot = controlRoot
+	if runner.afterDoctor != nil {
+		runner.afterDoctor(ctx)
+	}
 	return runner.doctorSummary, runner.doctorErr
 }
 

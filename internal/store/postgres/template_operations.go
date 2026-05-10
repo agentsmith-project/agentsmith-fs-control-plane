@@ -255,7 +255,7 @@ func templateSuccessCommitWithLeaseSQL(operationType, phase string, withProvenan
 	if !withProvenance {
 		return common + ", updated_operation AS (" +
 			operationLeaseFencedUpdateSetSQL() +
-			"FROM eligible_operation, inserted_repo WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+			"FROM eligible_operation, inserted_repo WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 			"), inserted_audit AS (" +
 			"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(39, len(auditOutboxColumns)) + " FROM updated_operation, inserted_repo RETURNING audit_event_id" +
 			") SELECT " + prefixedColumns("inserted_repo", repoColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) + " FROM inserted_repo, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
@@ -266,7 +266,7 @@ func templateSuccessCommitWithLeaseSQL(operationType, phase string, withProvenan
 		"UPDATE repo_fences SET status = 'released', released_at = $11, updated_at = $11 FROM held_writer_fence WHERE repo_fences.fence_id = held_writer_fence.fence_id RETURNING repo_fences.fence_id" +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
-		"FROM eligible_operation, inserted_repo, released_writer_fence WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation, inserted_repo, released_writer_fence WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(39, len(auditOutboxColumns)) + " FROM updated_operation, inserted_repo, released_writer_fence RETURNING audit_event_id" +
 		") SELECT " + prefixedColumns("inserted_repo", repoColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) + " FROM inserted_repo, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
@@ -283,7 +283,7 @@ func templateFailureCommitWithLeaseSQL() string {
 		"UPDATE repo_fences SET status = 'released', released_at = $11, updated_at = $11 FROM held_writer_fence WHERE $1 = 'failed' AND repo_fences.fence_id = held_writer_fence.fence_id RETURNING repo_fences.fence_id" +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
-		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND (eligible_operation.phase <> 'template_create_writer_fenced' OR $1 = 'operator_intervention_required' OR EXISTS (SELECT 1 FROM released_writer_fence)) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND (eligible_operation.phase <> 'template_create_writer_fenced' OR $1 = 'operator_intervention_required' OR EXISTS (SELECT 1 FROM released_writer_fence)) RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(22, len(auditOutboxColumns)) + " FROM updated_operation RETURNING audit_event_id" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
@@ -306,6 +306,6 @@ func templateCreateWriterFencedMarkWithLeaseSQL() string {
 		"SELECT " + strings.Join(repoFenceColumns, ", ") + " FROM active_writer_fence UNION ALL SELECT " + strings.Join(repoFenceColumns, ", ") + " FROM inserted_writer_fence LIMIT 1" +
 		"), updated_operation AS (" +
 		restoreRunWriterFencedOperationUpdateSetSQL() +
-		"FROM eligible_operation, confirmed_writer_fence WHERE operations.operation_id = eligible_operation.operation_id AND confirmed_writer_fence.fence_id = $21 AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"FROM eligible_operation, confirmed_writer_fence WHERE operations.operation_id = eligible_operation.operation_id AND confirmed_writer_fence.fence_id = $21 AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + prefixedColumns("confirmed_writer_fence", repoFenceColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) + " FROM confirmed_writer_fence, updated_operation"
 }

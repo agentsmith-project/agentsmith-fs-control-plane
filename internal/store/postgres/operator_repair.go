@@ -107,7 +107,7 @@ func operatorRepairCommitSQL() string {
 		"), updated_operation AS (" +
 		"UPDATE operations SET operation_state = $1, phase = $2, lease_owner = NULL, lease_expires_at = NULL, external_resource_ids = $3, input_summary = $4, jvs_json_output = $5, verification_result = $6, compensation_status = $7, error_json = $8, started_at = COALESCE(started_at, $9, $11), finished_at = COALESCE($10, $11), updated_at = $11 " +
 		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id AND $1 = 'failed' " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") +
+		"RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") " +
 		"SELECT " + placeholders(13, len(auditOutboxColumns)) + " FROM updated_operation " +

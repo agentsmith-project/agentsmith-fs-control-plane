@@ -90,12 +90,17 @@ func TestRepoPurgeSuccessCommitSQLIsDedicatedAtomicBoundary(t *testing.T) {
 		"earlier.created_at = (SELECT created_at FROM eligible_operation)",
 		"earlier.operation_id < $12",
 		"updated_repo AS",
+		"repos.repo_id = $20",
+		"repos.repo_id = $15",
+		"repos.namespace_id = $21",
+		"repos.namespace_id = $14",
+		"repos.created_at = $32",
 		"repos.status = 'tombstoned'",
 		"eligible_operation.created_at > repos.updated_at",
 		"$25 = 'purged'",
 		"$28 = 'purged'",
-		"$29 IS NULL",
-		"$31 = repos.pre_delete_status",
+		"$29::timestamptz IS NULL",
+		"$31::text = repos.pre_delete_status",
 		"updated_operation AS",
 		"released_fence AS",
 		"inserted_audit AS",
@@ -108,6 +113,53 @@ func TestRepoPurgeSuccessCommitSQLIsDedicatedAtomicBoundary(t *testing.T) {
 	for _, forbidden := range []string{"SET volume_id", "SET jvs_repo_id", "SET repo_kind", "SET control_volume_subdir", "SET payload_volume_subdir"} {
 		if strings.Contains(exec.query, forbidden) {
 			t.Fatalf("purge success SQL rewrites immutable identity %q: %s", forbidden, exec.query)
+		}
+	}
+}
+
+func TestRepoPurgeSuccessCommitSQLUsesAllRepoArgs(t *testing.T) {
+	sql := repoPurgeSuccessCommitWithLeaseSQL()
+	assertSQLContainsInOrder(t, sql,
+		"updated_repo AS",
+		"repos.repo_id = $20",
+		"repos.repo_id = $15",
+		"repos.namespace_id = $21",
+		"repos.namespace_id = $14",
+	)
+	assertSQLContainsAll(t, sql,
+		"repos.volume_id = $22",
+		"repos.jvs_repo_id = $23",
+		"repos.repo_kind = $24",
+		"status = $25",
+		"repos.control_volume_subdir = $26",
+		"repos.payload_volume_subdir = $27",
+		"lifecycle_status = $28",
+		"$29::timestamptz",
+		"last_lifecycle_operation_id = $30",
+		"$31::text",
+		"repos.created_at = $32",
+		"updated_at = $33",
+	)
+}
+
+func TestRepoPurgeSuccessCommitSQLCastsRetentionParameterAndQualifiesRepoReturning(t *testing.T) {
+	sql := repoPurgeSuccessCommitWithLeaseSQL()
+	assertSQLContainsAll(t, sql,
+		"retention_expires_at = $29::timestamptz",
+		"$29::timestamptz IS NULL",
+		"pre_delete_status = $31::text",
+		"$31::text = repos.pre_delete_status",
+		"RETURNING "+repoReturningColumnsSQL(),
+	)
+	for _, forbidden := range []string{
+		"retention_expires_at = $29,",
+		"pre_delete_status = $31,",
+		"$29 IS NULL",
+		"$31 = repos.pre_delete_status",
+		"RETURNING " + strings.Join(repoColumns, ", "),
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("repo purge success SQL leaves unsafe fragment %q: %s", forbidden, sql)
 		}
 	}
 }

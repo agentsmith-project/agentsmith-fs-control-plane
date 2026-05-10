@@ -439,7 +439,7 @@ func exportCreateOrReuseSQL() string {
 		"AND EXISTS (SELECT 1 FROM active_namespace) AND EXISTS (SELECT 1 FROM active_binding) AND EXISTS (SELECT 1 FROM active_repo) AND EXISTS (SELECT 1 FROM active_volume) " +
 		"AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) AND ($37 = 'read_only' OR NOT EXISTS (SELECT 1 FROM held_writer_fence)) " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted" +
+		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted" +
 		"), inserted_session AS (" +
 		"INSERT INTO export_sessions (" + strings.Join(exportSessionPersistColumns, ", ") + ") SELECT " + placeholders(33, len(exportSessionPersistColumns)) + " FROM inserted_operation WHERE inserted_operation.inserted RETURNING " + strings.Join(exportSessionPublicColumns, ", ") +
 		"), inserted_audit AS (" +
@@ -460,7 +460,7 @@ func exportRevokeSQL() string {
 		"), inserted_operation AS (" +
 		"INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") SELECT " + placeholders(1, len(operationColumns)) + " WHERE NOT EXISTS (SELECT 1 FROM existing_operation) AND $20 = $33 AND $17 = $34 " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted" +
+		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted" +
 		"), updated_session AS (" +
 		"UPDATE export_sessions SET status = CASE WHEN status IN ('revoked','expired','failed') THEN status ELSE 'revoking' END, revoked_at = COALESCE(revoked_at, $35), updated_at = $35 " +
 		"FROM inserted_operation WHERE export_sessions.export_id = $33 AND export_sessions.namespace_id = $34 RETURNING " + prefixedColumns("export_sessions", exportSessionPublicColumns) +
@@ -584,7 +584,7 @@ func exportReconcileTerminalSQL() string {
 		"AND $3 = 'succeeded' AND $2 = 'export_session_reconcile' AND $4 = 'export_session_reconcile_committed' AND $15 = 'export' AND $16 = $20 AND $20 = $34 " +
 		"AND EXISTS (SELECT 1 FROM eligible_session) " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
-		"RETURNING " + strings.Join(operationSelectColumns, ", ") + ", (xmax = 0) AS inserted" +
+		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted" +
 		"), updated_session AS (" +
 		"UPDATE export_sessions SET status = $33, terminal_observed_at = $35, active_request_count = 0, active_write_count = 0, write_drained_at = COALESCE(write_drained_at, $35), status_reason = $36, updated_at = $35 " +
 		"FROM eligible_session, inserted_operation WHERE inserted_operation.inserted AND export_sessions.export_id = eligible_session.export_id RETURNING " + prefixedColumns("export_sessions", exportSessionPublicColumns) +

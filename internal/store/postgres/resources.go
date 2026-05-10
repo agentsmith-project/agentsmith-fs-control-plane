@@ -61,6 +61,10 @@ var repoColumns = []string{
 	"updated_at",
 }
 
+func repoReturningColumnsSQL() string {
+	return prefixedColumns("repos", repoColumns)
+}
+
 func (store *Store) UpsertVolume(ctx context.Context, volume resources.Volume) error {
 	if err := volume.Validate(); err != nil {
 		return err

@@ -18,6 +18,8 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
 )
 
+const durableCommitTimeout = 10 * time.Second
+
 type AuditEventIDGenerator func() string
 
 type JVSRunner interface {
@@ -209,8 +211,10 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 	if err != nil {
 		return err
 	}
-	if _, _, err := executor.store.CommitRepoCreateSucceededWithLease(ctx, repo, operation.SanitizedForPersistence(), executor.owner, now, event, fenceID); err != nil {
-		return errors.New("repo create success commit failed")
+	commitCtx, cancel := durableCommitContext(ctx)
+	defer cancel()
+	if _, _, err := executor.store.CommitRepoCreateSucceededWithLease(commitCtx, repo, operation.SanitizedForPersistence(), executor.owner, now, event, fenceID); err != nil {
+		return repoCreateCommitError("repo create success commit failed", err)
 	}
 	return nil
 }
@@ -251,8 +255,10 @@ func (executor *Executor) commitFailed(ctx context.Context, record operations.Op
 	if err != nil {
 		return err
 	}
-	if _, err := executor.store.CommitRepoCreateFailedWithLease(ctx, operation.SanitizedForPersistence(), executor.owner, now, event, releaseFenceID); err != nil {
-		return errors.New("repo create failure commit failed")
+	commitCtx, cancel := durableCommitContext(ctx)
+	defer cancel()
+	if _, err := executor.store.CommitRepoCreateFailedWithLease(commitCtx, operation.SanitizedForPersistence(), executor.owner, now, event, releaseFenceID); err != nil {
+		return repoCreateCommitError("repo create failure commit failed", err)
 	}
 	return nil
 }
@@ -265,10 +271,36 @@ func (executor *Executor) commitIntervention(ctx context.Context, record operati
 	if err != nil {
 		return err
 	}
-	if _, err := executor.store.CommitRepoCreateFailedWithLease(ctx, operation.SanitizedForPersistence(), executor.owner, now, event, ""); err != nil {
-		return errors.New("repo create intervention commit failed")
+	commitCtx, cancel := durableCommitContext(ctx)
+	defer cancel()
+	if _, err := executor.store.CommitRepoCreateFailedWithLease(commitCtx, operation.SanitizedForPersistence(), executor.owner, now, event, ""); err != nil {
+		return repoCreateCommitError("repo create intervention commit failed", err)
 	}
 	return nil
+}
+
+type commitError struct {
+	message string
+	cause   error
+}
+
+func repoCreateCommitError(message string, cause error) error {
+	return commitError{message: message, cause: cause}
+}
+
+func (err commitError) Error() string {
+	return err.message
+}
+
+func (err commitError) Unwrap() error {
+	return err.cause
+}
+
+func durableCommitContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), durableCommitTimeout)
 }
 
 func failedOperation(record operations.OperationRecord, now time.Time, state operations.OperationState, code, message string) operations.OperationRecord {
