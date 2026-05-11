@@ -279,6 +279,26 @@ func TestRepoLifecycleSuccessCommitSQLQualifiesUpdateReturningColumns(t *testing
 	}
 }
 
+func TestRepoLifecycleSuccessCommitSQLQualifiesOperationLeasePreservation(t *testing.T) {
+	sql := repoLifecycleSuccessCommitWithLeaseSQL()
+	updatedOperation := sqlBetween(t, sql, "updated_operation AS (", "), released_fence AS (")
+
+	assertSQLContainsAll(t, updatedOperation,
+		"lease_owner = CASE WHEN $1 = 'running' THEN operations.lease_owner ELSE NULL END",
+		"lease_expires_at = CASE WHEN $1 = 'running' THEN operations.lease_expires_at ELSE NULL END",
+		"started_at = COALESCE(operations.started_at, $9, $11)",
+	)
+	for _, forbidden := range []string{
+		"THEN lease_owner ELSE NULL END",
+		"THEN lease_expires_at ELSE NULL END",
+		"COALESCE(started_at, $9, $11)",
+	} {
+		if strings.Contains(updatedOperation, forbidden) {
+			t.Fatalf("repo lifecycle success operation update preserves lease with ambiguous source column %q: %s", forbidden, updatedOperation)
+		}
+	}
+}
+
 func TestRepoLifecycleSuccessCommitSQLRequiresConfirmedUnmountedMountEvidence(t *testing.T) {
 	sql := repoLifecycleSuccessCommitWithLeaseSQL()
 	noSessions := sqlBetween(t, sql, "), no_sessions AS (", "), updated_repo AS (")

@@ -1648,8 +1648,8 @@ func TestUpdateOperationWithLeaseUsesAtomicFenceAndPreservesRunningLease(t *test
 		"UPDATE operations",
 		"operation_state = $1",
 		"phase = $2",
-		"lease_owner = CASE WHEN $1 = 'running' THEN lease_owner ELSE NULL END",
-		"lease_expires_at = CASE WHEN $1 = 'running' THEN lease_expires_at ELSE NULL END",
+		"lease_owner = CASE WHEN $1 = 'running' THEN operations.lease_owner ELSE NULL END",
+		"lease_expires_at = CASE WHEN $1 = 'running' THEN operations.lease_expires_at ELSE NULL END",
 		"updated_at = $11",
 		"WHERE operation_id = $12",
 		"operation_state = 'running'",
@@ -1711,8 +1711,8 @@ func TestUpdateOperationWithLeaseCanWriteTerminalAndClearLease(t *testing.T) {
 		t.Fatalf("terminal finished_at = %v, want %v", got.FinishedAt, now)
 	}
 	assertSQLContainsInOrder(t, exec.query,
-		"lease_owner = CASE WHEN $1 = 'running' THEN lease_owner ELSE NULL END",
-		"lease_expires_at = CASE WHEN $1 = 'running' THEN lease_expires_at ELSE NULL END",
+		"lease_owner = CASE WHEN $1 = 'running' THEN operations.lease_owner ELSE NULL END",
+		"lease_expires_at = CASE WHEN $1 = 'running' THEN operations.lease_expires_at ELSE NULL END",
 		"finished_at = CASE WHEN $1 IN ('succeeded', 'failed', 'cancelled') THEN COALESCE($10, $11) ELSE NULL END",
 	)
 }

@@ -655,18 +655,110 @@ func TestWorkloadMountUpdateCommitSQLBindsOperationAndBindingBoundary(t *testing
 	}
 }
 
+func TestWorkloadMountUpdateCommitSQLQualifiesBindingLeaseSources(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{
+			name: "status",
+			sql:  workloadMountBindingStatusCommitSQL(),
+			want: []string{
+				"WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed') THEN workload_mount_bindings.lease_expires_at",
+				"WHEN workload_mount_bindings.status = 'releasing' AND $15 IN ('pending','active') THEN workload_mount_bindings.lease_expires_at",
+				"ELSE workload_mount_bindings.lease_expires_at END",
+			},
+		},
+		{
+			name: "heartbeat",
+			sql:  workloadMountBindingHeartbeatCommitSQL(),
+			want: []string{
+				"last_heartbeat_at = CASE WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed','releasing') THEN workload_mount_bindings.last_heartbeat_at ELSE $15 END",
+				"lease_expires_at = CASE WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed','releasing') THEN workload_mount_bindings.lease_expires_at ELSE $15 + (workload_mount_bindings.lease_seconds || ' seconds')::interval END",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			updatedBinding := sqlBetween(t, tt.sql, "), updated_binding AS (", "), inserted_audit AS (")
+			for _, want := range tt.want {
+				if !strings.Contains(updatedBinding, want) {
+					t.Fatalf("workload mount %s commit SQL missing qualified binding source %q in %s", tt.name, want, updatedBinding)
+				}
+			}
+			for _, forbidden := range []string{
+				"THEN lease_expires_at",
+				"ELSE lease_expires_at END",
+				"(lease_seconds || ' seconds')",
+			} {
+				if strings.Contains(updatedBinding, forbidden) {
+					t.Fatalf("workload mount %s commit SQL has ambiguous binding source %q in %s", tt.name, forbidden, updatedBinding)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkloadMountUpdateCommitSQLUsesOperationSpecificParameterShape(t *testing.T) {
+	heartbeatSQL := workloadMountBindingHeartbeatCommitSQL()
+	heartbeatBinding := sqlBetween(t, heartbeatSQL, "), updated_binding AS (", "), inserted_audit AS (")
+	assertSQLContainsInOrder(t, heartbeatBinding,
+		"last_heartbeat_at = CASE",
+		"ELSE $15 END",
+		"lease_expires_at = CASE",
+		"ELSE $15 + (workload_mount_bindings.lease_seconds || ' seconds')::interval END",
+	)
+	for _, forbidden := range []string{"$16", "$17", "$18"} {
+		if strings.Contains(heartbeatBinding, forbidden) {
+			t.Fatalf("heartbeat binding update uses non-heartbeat parameter %s in %s", forbidden, heartbeatBinding)
+		}
+	}
+	assertSQLContainsInOrder(t, heartbeatSQL,
+		"), inserted_audit AS (",
+		"SELECT "+placeholders(16, len(auditOutboxColumns)),
+	)
+
+	for _, tt := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "release", sql: workloadMountBindingReleaseCommitSQL()},
+		{name: "revoke", sql: workloadMountBindingRevokeCommitSQL()},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			updatedBinding := sqlBetween(t, tt.sql, "), updated_binding AS (", "), inserted_audit AS (")
+			assertSQLContainsInOrder(t, updatedBinding,
+				"last_observed_at = $16",
+				"status_reason = CASE",
+				"ELSE $15 END",
+			)
+			for _, forbidden := range []string{"$17", "$18"} {
+				if strings.Contains(updatedBinding, forbidden) {
+					t.Fatalf("%s binding update uses non-%s parameter %s in %s", tt.name, tt.name, forbidden, updatedBinding)
+				}
+			}
+			assertSQLContainsInOrder(t, tt.sql,
+				"), inserted_audit AS (",
+				"SELECT "+placeholders(17, len(auditOutboxColumns)),
+			)
+		})
+	}
+}
+
 func TestWorkloadMountStatusCommitSQLPreservesRevokeIntent(t *testing.T) {
 	sql := workloadMountBindingStatusCommitSQL()
 
 	assertSQLContainsInOrder(t, sql,
 		"status = CASE",
-		"WHEN status IN ('released','revoked','expired','failed') THEN status",
-		"WHEN status = 'releasing' AND $15 IN ('pending','active') THEN status",
+		"WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed') THEN workload_mount_bindings.status",
+		"WHEN workload_mount_bindings.status = 'releasing' AND $15 IN ('pending','active') THEN workload_mount_bindings.status",
 		"ELSE $15 END",
 		"last_observed_at = CASE",
-		"WHEN status = 'releasing' AND $15 IN ('pending','active') THEN last_observed_at",
+		"WHEN workload_mount_bindings.status = 'releasing' AND $15 IN ('pending','active') THEN workload_mount_bindings.last_observed_at",
 		"lease_expires_at = CASE",
-		"WHEN status = 'releasing' AND $15 IN ('pending','active') THEN lease_expires_at",
+		"WHEN workload_mount_bindings.status = 'releasing' AND $15 IN ('pending','active') THEN workload_mount_bindings.lease_expires_at",
 	)
 }
 
@@ -678,18 +770,21 @@ func TestWorkloadMountStatusCommitSQLContractTreatsReleasedRevokedAsEvidenceOnly
 
 	assertSQLContainsInOrder(t, terminalObserved,
 		"$15 IN ('released','revoked','expired','failed')",
+		"workload_mount_bindings.status NOT IN ('released','revoked','expired','failed')",
 		"THEN $17",
-		"ELSE terminal_observed_at END",
+		"ELSE workload_mount_bindings.terminal_observed_at END",
 	)
 	assertSQLContainsInOrder(t, confirmedUnmounted,
 		"$15 IN ('released','revoked')",
+		"workload_mount_bindings.status NOT IN ('released','revoked','expired','failed')",
 		"THEN $17",
-		"ELSE confirmed_unmounted_at END",
+		"ELSE workload_mount_bindings.confirmed_unmounted_at END",
 	)
 	assertSQLContainsInOrder(t, unableToWrite,
 		"$15 IN ('released','revoked')",
+		"workload_mount_bindings.status NOT IN ('released','revoked','expired','failed')",
 		"THEN $17",
-		"ELSE unable_to_write_at END",
+		"ELSE workload_mount_bindings.unable_to_write_at END",
 	)
 	for name, fragment := range map[string]string{"confirmed_unmounted_at": confirmedUnmounted, "unable_to_write_at": unableToWrite} {
 		if strings.Contains(fragment, "$15 IN ('released','revoked','expired','failed')") {

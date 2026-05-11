@@ -110,9 +110,21 @@ func TestMarkRestoreRunWriterFencedWithLeaseCreatesOrConfirmsWriterFence(t *test
 		"ON CONFLICT (repo_id, fence_kind) WHERE released_at IS NULL DO NOTHING",
 		"confirmed_writer_fence AS",
 		"updated_operation AS",
+		"lease_owner = CASE WHEN $1 = 'running' THEN operations.lease_owner ELSE NULL END",
+		"lease_expires_at = CASE WHEN $1 = 'running' THEN operations.lease_expires_at ELSE NULL END",
+		"started_at = COALESCE(operations.started_at, $9, $11)",
 		"session_fence_id = $21",
 		"NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)",
 	)
+	for _, forbidden := range []string{
+		"THEN lease_owner ELSE NULL END",
+		"THEN lease_expires_at ELSE NULL END",
+		"COALESCE(started_at, $9, $11)",
+	} {
+		if strings.Contains(exec.query, forbidden) {
+			t.Fatalf("restore run writer-fence SQL preserves operation fields with ambiguous source column %q: %s", forbidden, exec.query)
+		}
+	}
 }
 
 func TestMarkRestoreRunConsumingWithLeaseCASPlanAndConfirmsFenceAndPreview(t *testing.T) {

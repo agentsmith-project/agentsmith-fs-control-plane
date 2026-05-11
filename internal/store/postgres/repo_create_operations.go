@@ -251,15 +251,15 @@ func operationLeaseFencedUpdateSetSQL() string {
 	return "UPDATE operations SET " +
 		"operation_state = $1, " +
 		"phase = $2, " +
-		"lease_owner = CASE WHEN $1 = 'running' THEN lease_owner ELSE NULL END, " +
-		"lease_expires_at = CASE WHEN $1 = 'running' THEN lease_expires_at ELSE NULL END, " +
+		"lease_owner = CASE WHEN $1 = 'running' THEN operations.lease_owner ELSE NULL END, " +
+		"lease_expires_at = CASE WHEN $1 = 'running' THEN operations.lease_expires_at ELSE NULL END, " +
 		"external_resource_ids = $3, " +
 		"input_summary = $4, " +
 		"jvs_json_output = $5, " +
 		"verification_result = $6, " +
 		"compensation_status = $7, " +
 		"error_json = $8, " +
-		"started_at = COALESCE(started_at, $9, $11), " +
+		"started_at = COALESCE(operations.started_at, $9, $11), " +
 		"finished_at = CASE WHEN $1 IN ('succeeded', 'failed', 'cancelled') THEN COALESCE($10, $11) ELSE NULL END, " +
 		"updated_at = $11 "
 }

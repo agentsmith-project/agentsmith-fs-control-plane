@@ -184,7 +184,7 @@ func (store *Store) CommitWorkloadMountBindingHeartbeatWithLease(ctx context.Con
 	if err := validateWorkloadMountAuditEvent(record, event); err != nil {
 		return workloadmount.Binding{}, operations.OperationRecord{}, err
 	}
-	args, err := workloadMountBindingUpdateCommitArgs(mountBindingID, "", "", now, nil, record, owner, now, event)
+	args, err := workloadMountBindingHeartbeatCommitArgs(mountBindingID, now, record, owner, now, event)
 	if err != nil {
 		return workloadmount.Binding{}, operations.OperationRecord{}, err
 	}
@@ -199,7 +199,7 @@ func (store *Store) CommitWorkloadMountBindingReleaseWithLease(ctx context.Conte
 	if err := validateWorkloadMountAuditEvent(record, event); err != nil {
 		return workloadmount.Binding{}, operations.OperationRecord{}, err
 	}
-	args, err := workloadMountBindingUpdateCommitArgs(mountBindingID, "", "released", now, nil, record, owner, now, event)
+	args, err := workloadMountBindingReleaseCommitArgs(mountBindingID, "released", now, record, owner, now, event)
 	if err != nil {
 		return workloadmount.Binding{}, operations.OperationRecord{}, err
 	}
@@ -214,7 +214,7 @@ func (store *Store) CommitWorkloadMountBindingRevokeWithLease(ctx context.Contex
 	if err := validateWorkloadMountAuditEvent(record, event); err != nil {
 		return workloadmount.Binding{}, operations.OperationRecord{}, err
 	}
-	args, err := workloadMountBindingUpdateCommitArgs(mountBindingID, "", "releasing", now, nil, record, owner, now, event)
+	args, err := workloadMountBindingReleaseCommitArgs(mountBindingID, "releasing", now, record, owner, now, event)
 	if err != nil {
 		return workloadmount.Binding{}, operations.OperationRecord{}, err
 	}
@@ -289,6 +289,18 @@ func workloadMountBindingCreateCommitArgs(binding workloadmount.Binding, record 
 }
 
 func workloadMountBindingUpdateCommitArgs(mountBindingID, status, reason string, observedAt time.Time, leaseExpiresAt *time.Time, record operations.OperationRecord, owner string, now time.Time, event audit.Event) ([]any, error) {
+	return workloadMountBindingOperationCommitArgs(record, owner, now, event, mountBindingID, status, reason, observedAt.UTC(), timePtrArg(leaseExpiresAt))
+}
+
+func workloadMountBindingHeartbeatCommitArgs(mountBindingID string, observedAt time.Time, record operations.OperationRecord, owner string, now time.Time, event audit.Event) ([]any, error) {
+	return workloadMountBindingOperationCommitArgs(record, owner, now, event, mountBindingID, observedAt.UTC())
+}
+
+func workloadMountBindingReleaseCommitArgs(mountBindingID, reason string, observedAt time.Time, record operations.OperationRecord, owner string, now time.Time, event audit.Event) ([]any, error) {
+	return workloadMountBindingOperationCommitArgs(record, owner, now, event, mountBindingID, reason, observedAt.UTC())
+}
+
+func workloadMountBindingOperationCommitArgs(record operations.OperationRecord, owner string, now time.Time, event audit.Event, bindingArgs ...any) ([]any, error) {
 	operationArgs, err := operationLeaseFencedUpdateArgs(record, owner, now)
 	if err != nil {
 		return nil, err
@@ -297,7 +309,7 @@ func workloadMountBindingUpdateCommitArgs(mountBindingID, status, reason string,
 	if err != nil {
 		return nil, err
 	}
-	args := append(operationArgs, mountBindingID, status, reason, observedAt.UTC(), timePtrArg(leaseExpiresAt))
+	args := append(operationArgs, bindingArgs...)
 	return append(args, auditOutboxInsertArgs(outboxRecord)...), nil
 }
 
@@ -407,46 +419,46 @@ func workloadMountBindingCreateCommitSQL() string {
 func workloadMountBindingStatusCommitSQL() string {
 	return workloadMountBindingUpdateCommitSQL("mount_binding_status_update", "validate_mount_binding_status_update",
 		"status = CASE "+
-			"WHEN status IN ('released','revoked','expired','failed') THEN status "+
-			"WHEN status = 'releasing' AND $15 IN ('pending','active') THEN status "+
+			"WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed') THEN workload_mount_bindings.status "+
+			"WHEN workload_mount_bindings.status = 'releasing' AND $15 IN ('pending','active') THEN workload_mount_bindings.status "+
 			"ELSE $15 END, "+
 			"last_observed_at = CASE "+
-			"WHEN status IN ('released','revoked','expired','failed') THEN last_observed_at "+
-			"WHEN status = 'releasing' AND $15 IN ('pending','active') THEN last_observed_at "+
+			"WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed') THEN workload_mount_bindings.last_observed_at "+
+			"WHEN workload_mount_bindings.status = 'releasing' AND $15 IN ('pending','active') THEN workload_mount_bindings.last_observed_at "+
 			"ELSE $17 END, "+
 			"lease_expires_at = CASE "+
-			"WHEN status IN ('released','revoked','expired','failed') THEN lease_expires_at "+
-			"WHEN status = 'releasing' AND $15 IN ('pending','active') THEN lease_expires_at "+
+			"WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed') THEN workload_mount_bindings.lease_expires_at "+
+			"WHEN workload_mount_bindings.status = 'releasing' AND $15 IN ('pending','active') THEN workload_mount_bindings.lease_expires_at "+
 			"WHEN $18::timestamptz IS NOT NULL THEN $18::timestamptz "+
-			"ELSE lease_expires_at END, "+
-			"terminal_observed_at = CASE WHEN $15 IN ('released','revoked','expired','failed') AND status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE terminal_observed_at END, "+
-			"confirmed_unmounted_at = CASE WHEN $15 IN ('released','revoked') AND status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE confirmed_unmounted_at END, "+
-			"unable_to_write_at = CASE WHEN $15 IN ('released','revoked') AND status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE unable_to_write_at END, "+
+			"ELSE workload_mount_bindings.lease_expires_at END, "+
+			"terminal_observed_at = CASE WHEN $15 IN ('released','revoked','expired','failed') AND workload_mount_bindings.status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE workload_mount_bindings.terminal_observed_at END, "+
+			"confirmed_unmounted_at = CASE WHEN $15 IN ('released','revoked') AND workload_mount_bindings.status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE workload_mount_bindings.confirmed_unmounted_at END, "+
+			"unable_to_write_at = CASE WHEN $15 IN ('released','revoked') AND workload_mount_bindings.status NOT IN ('released','revoked','expired','failed') THEN $17 ELSE workload_mount_bindings.unable_to_write_at END, "+
 			"status_reason = CASE "+
-			"WHEN status IN ('released','revoked','expired','failed') THEN status_reason "+
-			"WHEN status = 'releasing' AND $15 IN ('pending','active') THEN status_reason "+
-			"ELSE $16 END, ")
+			"WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed') THEN workload_mount_bindings.status_reason "+
+			"WHEN workload_mount_bindings.status = 'releasing' AND $15 IN ('pending','active') THEN workload_mount_bindings.status_reason "+
+			"ELSE $16 END, ", 19)
 }
 
 func workloadMountBindingHeartbeatCommitSQL() string {
 	return workloadMountBindingUpdateCommitSQL("mount_binding_heartbeat", "validate_mount_binding_heartbeat",
-		"last_heartbeat_at = CASE WHEN status IN ('released','revoked','expired','failed','releasing') THEN last_heartbeat_at ELSE $17 END, "+
-			"lease_expires_at = CASE WHEN status IN ('released','revoked','expired','failed','releasing') THEN lease_expires_at ELSE $17 + (lease_seconds || ' seconds')::interval END, ")
+		"last_heartbeat_at = CASE WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed','releasing') THEN workload_mount_bindings.last_heartbeat_at ELSE $15 END, "+
+			"lease_expires_at = CASE WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed','releasing') THEN workload_mount_bindings.lease_expires_at ELSE $15 + (workload_mount_bindings.lease_seconds || ' seconds')::interval END, ", 16)
 }
 
 func workloadMountBindingReleaseCommitSQL() string {
 	return workloadMountBindingUpdateCommitSQL("mount_binding_release", "validate_mount_binding_release",
-		"status = CASE WHEN status IN ('released','revoked','expired','failed') THEN status ELSE 'releasing' END, "+
-			"last_observed_at = $17, status_reason = CASE WHEN status IN ('released','revoked','expired','failed') THEN status_reason ELSE $16 END, ")
+		"status = CASE WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed') THEN workload_mount_bindings.status ELSE 'releasing' END, "+
+			"last_observed_at = $16, status_reason = CASE WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed') THEN workload_mount_bindings.status_reason ELSE $15 END, ", 17)
 }
 
 func workloadMountBindingRevokeCommitSQL() string {
 	return workloadMountBindingUpdateCommitSQL("mount_binding_revoke", "validate_mount_binding_revoke",
-		"status = CASE WHEN status IN ('released','revoked','expired','failed') THEN status ELSE 'releasing' END, "+
-			"last_observed_at = $17, status_reason = CASE WHEN status IN ('released','revoked','expired','failed') THEN status_reason ELSE $16 END, ")
+		"status = CASE WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed') THEN workload_mount_bindings.status ELSE 'releasing' END, "+
+			"last_observed_at = $16, status_reason = CASE WHEN workload_mount_bindings.status IN ('released','revoked','expired','failed') THEN workload_mount_bindings.status_reason ELSE $15 END, ", 17)
 }
 
-func workloadMountBindingUpdateCommitSQL(operationType, phase, setClause string) string {
+func workloadMountBindingUpdateCommitSQL(operationType, phase, setClause string, auditPlaceholderStart int) string {
 	return "WITH updated_operation AS (" + operationLeaseFencedUpdateBaseSQL() +
 		"AND operation_type = '" + operationType + "' AND phase = '" + phase + "' AND mount_binding_id = $14 " +
 		"AND resource_type = 'workload_mount_binding' AND resource_id = $14 " +
@@ -454,7 +466,7 @@ func workloadMountBindingUpdateCommitSQL(operationType, phase, setClause string)
 		"), updated_binding AS (" +
 		"UPDATE workload_mount_bindings SET " + setClause + "updated_at = $11 FROM updated_operation WHERE workload_mount_bindings.mount_binding_id = $14 AND workload_mount_bindings.namespace_id = updated_operation.namespace_id AND workload_mount_bindings.repo_id = updated_operation.repo_id RETURNING " + prefixedColumns("workload_mount_bindings", workloadMountFullColumns) +
 		"), inserted_audit AS (" +
-		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(19, len(auditOutboxColumns)) + " FROM updated_operation, updated_binding RETURNING audit_event_id" +
+		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(auditPlaceholderStart, len(auditOutboxColumns)) + " FROM updated_operation, updated_binding RETURNING audit_event_id" +
 		") SELECT " + prefixedColumns("updated_binding", workloadMountFullColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) +
 		" FROM updated_binding, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
 }
