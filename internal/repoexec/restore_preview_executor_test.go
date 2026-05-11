@@ -67,6 +67,9 @@ func TestRestorePreviewExecutorPersistsIdleMarkerBeforePreviewAndCommitsPlan(t *
 		t.Fatalf("verification = %#v, want marker and plan summary", verification)
 	}
 	jvsOutput := store.operation.JVSJSONOutput.(map[string]any)
+	if jvsOutput["restore_plan_id"] != "plan_001" || jvsOutput["source_save_point_id"] != "sp_001" {
+		t.Fatalf("jvs output = %#v, want product-visible restore plan metadata", jvsOutput)
+	}
 	for _, forbidden := range []string{"run_command", "recommended_next_command"} {
 		if _, ok := jvsOutput[forbidden]; ok {
 			t.Fatalf("jvs output persisted forbidden command field %q: %#v", forbidden, jvsOutput)
@@ -133,24 +136,140 @@ func TestRestorePreviewExecutorNonIdleRecoveryStatusRequiresOperatorIntervention
 	}
 }
 
-func TestRestorePreviewExecutorPreflightRetryFailsClosedWithoutPreview(t *testing.T) {
+func TestRestorePreviewExecutorValidateDiscardsOrphanPendingPreviewWithoutDBPlan(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = activeRepoResource(now)
-	runner := &fakeJVSRunner{recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "idle", Workspace: "main"}}
+	runner := &fakeJVSRunner{
+		recoveryStatusSummaries: []jvsrunner.RecoveryStatusSummary{
+			{RestoreState: "pending_restore_preview", ActivePlanID: "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7", Blocking: true, Workspace: "main"},
+			{RestoreState: "idle", Workspace: "main"},
+		},
+		restoreDiscardSummary: jvsrunner.RestoreDiscardSummary{PlanID: "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7", PlanDiscarded: true, Workspace: "main"},
+		restorePreviewSummary: jvsrunner.RestorePreviewSummary{
+			PlanID:            "7f9bc1aa-7c81-4861-bbfd-366bc734d851",
+			SourceSavePointID: "sp_001",
+			BaseRevision:      "sp_002",
+			HeadRevision:      "sp_002",
+			Generation:        "sha256:preview-base",
+			ManagedFiles: jvsrunner.RestorePreviewManagedFilesSummary{
+				Added:       jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Changed:     jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Removed:     jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Destructive: false,
+			},
+			Workspace:         "main",
+			RunCommandPresent: true,
+		},
+	}
+	executor := newTestRestorePreviewExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), restorePreviewLeasedRecord(now, operations.OperationPhaseRestorePreviewValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "recovery_status,restore_discard,recovery_status,restore_preview" {
+		t.Fatalf("JVS calls = %#v, want cleanup then same-operation preview", runner.calls)
+	}
+	if store.restorePlan.ID != "7f9bc1aa-7c81-4861-bbfd-366bc734d851" || store.operation.State != operations.OperationStateSucceeded {
+		t.Fatalf("plan/operation = %#v/%#v, want same-operation preview after orphan cleanup", store.restorePlan, store.operation)
+	}
+	verification := store.operation.VerificationResult.(map[string]any)
+	if verification["orphan_restore_plan_id"] != "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7" || verification["jvs_orphan_preview_discarded"] != true || verification["restore_plan_id"] != "7f9bc1aa-7c81-4861-bbfd-366bc734d851" {
+		t.Fatalf("verification = %#v, want discarded orphan JVS pending plan evidence", verification)
+	}
+}
+
+func TestRestorePreviewExecutorValidatePreservesDurablePendingPlan(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.restorePlan = restoreplan.Plan{ID: "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7", RepoID: "repo_alpha01", Status: restoreplan.StatusPending}
+	runner := &fakeJVSRunner{
+		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "pending_restore_preview", ActivePlanID: "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7", Blocking: true, Workspace: "main"},
+		restoreDiscardSummary: jvsrunner.RestoreDiscardSummary{PlanID: "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7", PlanDiscarded: true, Workspace: "main"},
+	}
+	executor := newTestRestorePreviewExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), restorePreviewLeasedRecord(now, operations.OperationPhaseRestorePreviewValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention for durable active plan", err)
+	}
+	if strings.Join(runner.calls, ",") != "recovery_status" {
+		t.Fatalf("JVS calls = %#v, want no discard while durable plan exists", runner.calls)
+	}
+	if store.restorePlan.Status != restoreplan.StatusPending || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_ACTIVE_PLAN_PRESENT" {
+		t.Fatalf("plan/operation = %#v/%#v, want durable plan preserved", store.restorePlan, store.operation)
+	}
+}
+
+func TestRestorePreviewExecutorPreflightRetryRerunsPreviewWhenRecoveryStatusIsIdle(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "idle", Workspace: "main"},
+		restorePreviewSummary: jvsrunner.RestorePreviewSummary{
+			PlanID:            "7f9bc1aa-7c81-4861-bbfd-366bc734d851",
+			SourceSavePointID: "sp_001",
+			BaseRevision:      "sp_002",
+			HeadRevision:      "sp_002",
+			Generation:        "sha256:preview-base",
+			ManagedFiles: jvsrunner.RestorePreviewManagedFilesSummary{
+				Added:       jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Changed:     jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Removed:     jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Destructive: false,
+			},
+			Workspace:         "main",
+			RunCommandPresent: true,
+		},
+	}
 	executor := newTestRestorePreviewExecutor(t, store, runner, now)
 	record := restorePreviewLeasedRecord(now, operations.OperationPhaseRestorePreviewPreflightIdle)
 	record.VerificationResult = map[string]any{"preflight_recovery_status_captured": true, "preflight_restore_state": "idle", "preflight_blocking": false}
 
 	err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim})
-	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
-		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "recovery_status" {
-		t.Fatalf("JVS calls = %#v, want recovery_status only", runner.calls)
+	if strings.Join(runner.calls, ",") != "recovery_status,restore_preview" {
+		t.Fatalf("JVS calls = %#v, want recovery_status then retry restore_preview", runner.calls)
 	}
-	if store.operation.State != operations.OperationStateOperatorInterventionRequired {
-		t.Fatalf("operation = %#v, want operator intervention", store.operation)
+	if store.restorePlan.ID != "7f9bc1aa-7c81-4861-bbfd-366bc734d851" || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestorePreviewCommitted {
+		t.Fatalf("plan/operation = %#v/%#v, want rerun preview committed from idle preflight recovery", store.restorePlan, store.operation)
+	}
+}
+
+func TestRestorePreviewExecutorPreflightRetryDiscardsPendingPreviewWithoutDBPlan(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "pending_restore_preview", ActivePlanID: "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7", Blocking: true, Workspace: "main"},
+		restoreDiscardSummary: jvsrunner.RestoreDiscardSummary{PlanID: "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7", PlanDiscarded: true, Workspace: "main"},
+	}
+	executor := newTestRestorePreviewExecutor(t, store, runner, now)
+	record := restorePreviewLeasedRecord(now, operations.OperationPhaseRestorePreviewPreflightIdle)
+	record.VerificationResult = map[string]any{"preflight_recovery_status_captured": true, "preflight_restore_state": "idle", "preflight_blocking": false}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "recovery_status,restore_discard" {
+		t.Fatalf("JVS calls = %#v, want recovery_status then restore_discard", runner.calls)
+	}
+	if store.restorePlan.ID != "" {
+		t.Fatalf("restore plan = %#v, want no DB plan adoption without durable preview metadata", store.restorePlan)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Phase != operations.OperationPhaseRestorePreviewPreflightIdle {
+		t.Fatalf("operation = %#v, want terminal failed preflight operation", store.operation)
+	}
+	if store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_DURABLE_COMMIT_LOST" {
+		t.Fatalf("operation error = %#v, want durable commit lost failure", store.operation.Error)
+	}
+	verification := store.operation.VerificationResult.(map[string]any)
+	if verification["restore_plan_id"] != "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7" || verification["jvs_pending_preview_discarded"] != true {
+		t.Fatalf("verification = %#v, want discarded JVS pending plan evidence", verification)
 	}
 }
 
@@ -194,6 +313,189 @@ func TestRestorePreviewExecutorPreviewFailureAfterPreflightRequiresOperatorInter
 		t.Fatalf("operation/plan = %#v/%#v, want operator intervention without plan", store.operation, store.restorePlan)
 	}
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
+func TestRestorePreviewExecutorPreviewTimeoutReconcilesAndDiscardsPendingPreview(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &fakeJVSRunner{
+		recoveryStatusSummaries: []jvsrunner.RecoveryStatusSummary{
+			{RestoreState: "idle", Workspace: "main"},
+			{RestoreState: "pending_restore_preview", ActivePlanID: "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7", Blocking: true, Workspace: "main"},
+		},
+		restorePreviewErr:                   context.Canceled,
+		restoreDiscardSummary:               jvsrunner.RestoreDiscardSummary{PlanID: "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7", PlanDiscarded: true, Workspace: "main"},
+		failRecoveryStatusOnCanceledContext: true,
+		failRestoreDiscardOnCanceledContext: true,
+		beforeRestorePreview: func() {
+			cancel()
+		},
+	}
+	executor := newTestRestorePreviewExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(ctx, restorePreviewLeasedRecord(now, operations.OperationPhaseRestorePreviewValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("test context was not cancelled by restore preview")
+	}
+	if strings.Join(runner.calls, ",") != "recovery_status,restore_preview,recovery_status,restore_discard" {
+		t.Fatalf("JVS calls = %#v, want status, preview, detached status, discard", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_DURABLE_COMMIT_LOST" {
+		t.Fatalf("operation = %#v, want failed durable commit lost after timeout reconciliation", store.operation)
+	}
+	verification := store.operation.VerificationResult.(map[string]any)
+	if verification["restore_plan_id"] != "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7" || verification["jvs_pending_preview_discarded"] != true {
+		t.Fatalf("verification = %#v, want discarded pending preview evidence", verification)
+	}
+}
+
+func TestRestorePreviewExecutorPreviewTimeoutIdleRecoveryStatusFailsRetryable(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &fakeJVSRunner{
+		recoveryStatusSummaries: []jvsrunner.RecoveryStatusSummary{
+			{RestoreState: "idle", Workspace: "main"},
+			{RestoreState: "idle", Workspace: "main"},
+		},
+		restorePreviewErr:                   context.Canceled,
+		failRecoveryStatusOnCanceledContext: true,
+		beforeRestorePreview: func() {
+			cancel()
+		},
+	}
+	executor := newTestRestorePreviewExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(ctx, restorePreviewLeasedRecord(now, operations.OperationPhaseRestorePreviewValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("test context was not cancelled by restore preview")
+	}
+	if strings.Join(runner.calls, ",") != "recovery_status,restore_preview,recovery_status" {
+		t.Fatalf("JVS calls = %#v, want status, preview, detached status", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_TIMEOUT_RETRYABLE" || !store.operation.Error.Retryable {
+		t.Fatalf("operation = %#v, want retryable timeout failure when JVS has no pending plan", store.operation)
+	}
+	if store.restorePlan.ID != "" {
+		t.Fatalf("restore plan = %#v, want no DB plan when JVS has no pending preview", store.restorePlan)
+	}
+}
+
+func TestRestorePreviewExecutorPreviewTimeoutUnknownRecoveryStatusRequiresOperator(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &fakeJVSRunner{
+		recoveryStatusSummaries: []jvsrunner.RecoveryStatusSummary{
+			{RestoreState: "idle", Workspace: "main"},
+			{RestoreState: "unknown", Workspace: "main", Blocking: true},
+		},
+		restorePreviewErr:                   context.Canceled,
+		failRecoveryStatusOnCanceledContext: true,
+		beforeRestorePreview: func() {
+			cancel()
+		},
+	}
+	executor := newTestRestorePreviewExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(ctx, restorePreviewLeasedRecord(now, operations.OperationPhaseRestorePreviewValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+	}
+	if strings.Join(runner.calls, ",") != "recovery_status,restore_preview,recovery_status" {
+		t.Fatalf("JVS calls = %#v, want status, preview, detached status", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_TIMEOUT_RECONCILE_REQUIRES_OPERATOR" {
+		t.Fatalf("operation = %#v, want timeout reconcile operator intervention for ambiguous JVS recovery state", store.operation)
+	}
+}
+
+func TestRestorePreviewExecutorSuccessCommitSurvivesCallerContextCancellationAfterJVS(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.failOnCanceledCommitContext = true
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &fakeJVSRunner{
+		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "idle", Workspace: "main"},
+		restorePreviewSummary: jvsrunner.RestorePreviewSummary{
+			PlanID:            "plan_001",
+			SourceSavePointID: "sp_001",
+			BaseRevision:      "sp_002",
+			HeadRevision:      "sp_002",
+			Generation:        "sha256:preview-base",
+			ManagedFiles: jvsrunner.RestorePreviewManagedFilesSummary{
+				Added:       jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Changed:     jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Removed:     jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Destructive: false,
+			},
+			Workspace:         "main",
+			RunCommandPresent: true,
+		},
+		beforeRestorePreview: func() {
+			cancel()
+		},
+	}
+	executor := newTestRestorePreviewExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(ctx, restorePreviewLeasedRecord(now, operations.OperationPhaseRestorePreviewValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("test context was not cancelled after JVS success")
+	}
+	if store.restorePlan.ID != "plan_001" || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestorePreviewCommitted {
+		t.Fatalf("plan/operation = %#v/%#v, want durable commit despite caller context cancellation", store.restorePlan, store.operation)
+	}
+}
+
+func TestRestorePreviewExecutorPreservesTypedSuccessCommitFailure(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.restorePreviewSuccessErr = errors.Join(operations.ErrLeaseUnavailable, errors.New("pq: password=secret lease expired"))
+	runner := &fakeJVSRunner{
+		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "idle", Workspace: "main"},
+		restorePreviewSummary: jvsrunner.RestorePreviewSummary{
+			PlanID:            "plan_001",
+			SourceSavePointID: "sp_001",
+			BaseRevision:      "sp_002",
+			HeadRevision:      "sp_002",
+			Generation:        "sha256:preview-base",
+			ManagedFiles: jvsrunner.RestorePreviewManagedFilesSummary{
+				Added:       jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Changed:     jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Removed:     jvsrunner.RestorePreviewChangeSummary{Count: 0, Samples: []string{}},
+				Destructive: false,
+			},
+			Workspace:         "main",
+			RunCommandPresent: true,
+		},
+	}
+	executor := newTestRestorePreviewExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), restorePreviewLeasedRecord(now, operations.OperationPhaseRestorePreviewValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if !errors.Is(err, operations.ErrLeaseUnavailable) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want typed lease unavailable", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "secret") || strings.Contains(strings.ToLower(err.Error()), "password") {
+		t.Fatalf("ExecuteOperationRecovery leaked sensitive commit error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "restore preview success commit failed") {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want commit failure context", err)
+	}
+	if store.restorePlan.ID != "plan_001" || store.operation.State != operations.OperationStateSucceeded {
+		t.Fatalf("fake commit inputs = %#v/%#v, want attempted success commit before failure return", store.restorePlan, store.operation)
+	}
 }
 
 func newTestRestorePreviewExecutor(t *testing.T, store *fakeRepoCreateStore, runner *fakeJVSRunner, now time.Time) *RestorePreviewExecutor {

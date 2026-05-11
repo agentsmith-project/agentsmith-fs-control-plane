@@ -261,7 +261,7 @@ func Load(source Source) (Config, error) {
 	if cfg.Worker, err = loadWorkerConfig(source, cfg.Worker); err != nil {
 		return Config{}, err
 	}
-	if cfg.API, err = loadAPIConfig(source, cfg.API); err != nil {
+	if cfg.API, err = loadAPIConfig(source, cfg.API, cfg.Capabilities); err != nil {
 		return Config{}, err
 	}
 	if cfg.ExportGateway, err = loadExportGatewayConfig(source, cfg.ExportGateway, cfg.ListenAddr); err != nil {
@@ -520,7 +520,7 @@ func loadWorkerWorkloadMountStaleLeaseConfig(source Source, defaults WorkerWorkl
 	return cfg, nil
 }
 
-func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
+func loadAPIConfig(source Source, defaults APIConfig, capabilities Capabilities) (APIConfig, error) {
 	cfg := defaults
 	cfg.Mode = strings.ToLower(valueOrDefault(source, "AFSCP_API_MODE", cfg.Mode))
 	switch cfg.Mode {
@@ -577,7 +577,7 @@ func loadAPIConfig(source Source, defaults APIConfig) (APIConfig, error) {
 			cfg.WorkloadMountRuntimeSecretRefs = refs
 		}
 	}
-	savePointHistory, err := loadJVSConfigWhenCapabilityAvailable(source, "AFSCP_API_SAVE_POINT_HISTORY")
+	savePointHistory, err := loadAPIJVSHistoryConfig(source, cfg, capabilities)
 	if err != nil {
 		return APIConfig{}, err
 	}
@@ -608,28 +608,13 @@ func NormalizeWebDAVExportPublicBaseURL(raw string) (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-func loadJVSConfigWhenCapabilityAvailable(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {
-	apiGate, err := boolValue(source, gateKey+"_ENABLED")
-	if err != nil {
-		return WorkerRepoCreateRecoveryConfig{}, err
-	}
-	if !apiGate {
-		return WorkerRepoCreateRecoveryConfig{VolumeRoots: map[string]string{}}, nil
-	}
-	enabled, err := boolValue(source, "AFSCP_JVS_ENABLED")
-	if err != nil {
-		return WorkerRepoCreateRecoveryConfig{}, err
-	}
-	ready, err := boolValue(source, "AFSCP_JVS_READY")
-	if err != nil {
-		return WorkerRepoCreateRecoveryConfig{}, err
-	}
-	if !enabled || !ready {
+func loadAPIJVSHistoryConfig(source Source, api APIConfig, capabilities Capabilities) (WorkerRepoCreateRecoveryConfig, error) {
+	if api.Mode != "internal" || !capabilities.JVS.Available() {
 		return WorkerRepoCreateRecoveryConfig{VolumeRoots: map[string]string{}}, nil
 	}
 	cfg := WorkerRepoCreateRecoveryConfig{Enabled: true, VolumeRoots: map[string]string{}}
 	cfg.JVSBinaryPath = valueOrDefault(source, "AFSCP_JVS_BINARY_PATH", "")
-	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_BINARY_PATH", cfg.JVSBinaryPath, gateKey); err != nil {
+	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_BINARY_PATH", cfg.JVSBinaryPath, "AFSCP_JVS_READY"); err != nil {
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	cfg.JVSBinarySHA256 = strings.ToLower(valueOrDefault(source, "AFSCP_JVS_BINARY_SHA256", ""))
@@ -637,12 +622,17 @@ func loadJVSConfigWhenCapabilityAvailable(source Source, gateKey string) (Worker
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	cfg.JVSCWD = valueOrDefault(source, "AFSCP_JVS_CWD", "")
-	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_CWD", cfg.JVSCWD, gateKey); err != nil {
+	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_CWD", cfg.JVSCWD, "AFSCP_JVS_READY"); err != nil {
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
-	rootsRaw := valueOrDefault(source, "AFSCP_VOLUME_ROOTS", "")
-	roots, err := parseVolumeRoots(rootsRaw, gateKey)
-	if err != nil {
+	if len(api.VolumeRoots) == 0 {
+		return WorkerRepoCreateRecoveryConfig{}, fmt.Errorf("AFSCP_API_VOLUME_ROOTS or AFSCP_VOLUME_ROOTS is required when AFSCP_JVS_READY is true")
+	}
+	roots := make(map[string]string, len(api.VolumeRoots))
+	for volumeID, root := range api.VolumeRoots {
+		roots[volumeID] = root
+	}
+	if err := validateVolumeRoots(roots, "AFSCP_API_VOLUME_ROOTS or AFSCP_VOLUME_ROOTS"); err != nil {
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	cfg.VolumeRoots = roots

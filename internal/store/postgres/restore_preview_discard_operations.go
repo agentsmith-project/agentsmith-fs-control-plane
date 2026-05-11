@@ -214,11 +214,11 @@ func restorePreviewDiscardMarkWithLeaseSQL() string {
 		"AND p.preview_operation_id = po.operation_id AND p.preview_operation_id = $21 AND p.source_save_point_id = $22 " +
 		"AND p.namespace_id = $14 AND p.repo_id = $15 AND p.status = 'pending' FOR UPDATE" +
 		"), updated_plan AS (" +
-		"UPDATE restore_plans SET status = 'discarding', updated_at = $11 FROM pending_restore_plan WHERE restore_plans.restore_plan_id = pending_restore_plan.restore_plan_id RETURNING " + strings.Join(restorePlanColumns, ", ") +
+		"UPDATE restore_plans SET status = 'discarding', updated_at = $11 FROM pending_restore_plan WHERE restore_plans.restore_plan_id = pending_restore_plan.restore_plan_id RETURNING " + prefixedColumns("restore_plans", restorePlanColumns) +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
 		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
-		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM updated_plan, updated_operation"
+		") SELECT " + prefixedColumns("updated_plan", restorePlanColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) + " FROM updated_plan, updated_operation"
 }
 
 func restorePreviewDiscardSuccessCommitWithLeaseSQL() string {
@@ -231,13 +231,13 @@ func restorePreviewDiscardSuccessCommitWithLeaseSQL() string {
 		"SELECT p.restore_plan_id FROM restore_plans p, eligible_operation e WHERE p.restore_plan_id = $20 " +
 		"AND p.preview_operation_id = e.input_summary->>'preview_operation_id' AND p.namespace_id = $14 AND p.repo_id = $15 AND p.status = 'discarding' FOR UPDATE" +
 		"), updated_plan AS (" +
-		"UPDATE restore_plans SET status = 'discarded', updated_at = $11 FROM discarding_restore_plan WHERE restore_plans.restore_plan_id = discarding_restore_plan.restore_plan_id RETURNING " + strings.Join(restorePlanColumns, ", ") +
+		"UPDATE restore_plans SET status = 'discarded', updated_at = $11 FROM discarding_restore_plan WHERE restore_plans.restore_plan_id = discarding_restore_plan.restore_plan_id RETURNING " + prefixedColumns("restore_plans", restorePlanColumns) +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
 		"FROM eligible_operation, updated_plan WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(21, len(auditOutboxColumns)) + " FROM updated_operation, updated_plan RETURNING audit_event_id" +
-		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM updated_plan, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
+		") SELECT " + prefixedColumns("updated_plan", restorePlanColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) + " FROM updated_plan, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
 }
 
 func restorePreviewDiscardFailureCommitWithLeaseSQL() string {
@@ -250,7 +250,7 @@ func restorePreviewDiscardFailureCommitWithLeaseSQL() string {
 		"SELECT p.restore_plan_id FROM restore_plans p, eligible_operation e WHERE e.phase = 'restore_preview_discarding' " +
 		"AND p.preview_operation_id = e.input_summary->>'preview_operation_id' AND p.namespace_id = $14 AND p.repo_id = $15 AND p.status = 'discarding' FOR UPDATE" +
 		"), updated_plan AS (" +
-		"UPDATE restore_plans SET status = 'operator_intervention_required', updated_at = $11 FROM discarding_restore_plan WHERE restore_plans.restore_plan_id = discarding_restore_plan.restore_plan_id RETURNING " + strings.Join(restorePlanColumns, ", ") +
+		"UPDATE restore_plans SET status = 'operator_intervention_required', updated_at = $11 FROM discarding_restore_plan WHERE restore_plans.restore_plan_id = discarding_restore_plan.restore_plan_id RETURNING " + prefixedColumns("restore_plans", restorePlanColumns) +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
 		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id " +

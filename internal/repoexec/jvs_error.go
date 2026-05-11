@@ -37,3 +37,8 @@ func attachJVSErrorDetails(operation *operations.OperationRecord, details map[st
 	}
 	operation.Error.Details = errorDetails
 }
+
+func isJVSRecoveryBlockingError(err error) bool {
+	var commandErr *jvsrunner.CommandError
+	return errors.As(err, &commandErr) && commandErr.Code == "E_RECOVERY_BLOCKING"
+}

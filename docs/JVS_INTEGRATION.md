@@ -107,6 +107,11 @@ External control root rules for AFSCP:
   bundle are pinned by G-005 evidence and must remain aligned with the runner
   contract and packaged binary.
 - The packaged JVS binary must come from the pinned GitHub release asset; CI should verify the checksum, verify Sigstore/cosign bundles where supported, and smoke-test the required commands instead of trusting a stale local artifact.
+- When `AFSCP_JVS_READY=true`, the API image needs the same pinned JVS binary
+  config as workers because save-point history/list is JVS-backed in the
+  internal API runtime. Missing `AFSCP_JVS_BINARY_PATH`, accepted checksum,
+  clean JVS CWD, or volume-root mapping is a startup/readiness failure, not an
+  optional history feature toggle.
 - AFSCP should run JVS commands from a clean working directory outside another JVS repo; explicit `--control-root --workspace main` is the target selector and CWD must not affect target resolution.
 - Cross-resource operations must use deterministic lock ordering.
 
@@ -162,9 +167,13 @@ Restore preview flow:
 
 Crash recovery after JVS preview may adopt a single pending JVS plan only when
 AFSCP-exclusive-control assumptions hold and the current operation is the
-earliest same-repo non-terminal restore preview or JVS mutation. Any mismatch,
-multiple pending plans, unknown blocking state, unsafe plan ID, or competing
-operation moves the plan or operation to `operator_intervention_required`.
+earliest same-repo non-terminal restore preview or JVS mutation. If recovery
+after the durable preflight marker still reports idle/no-pending, AFSCP retries
+the preview from that marker; if timeout reconciliation reports idle/no-pending,
+AFSCP records a retryable failure instead of manual intervention because there
+is no JVS side effect to reconcile. Any mismatch, multiple pending plans,
+unknown blocking state, unsafe plan ID, discard failure, or competing operation
+moves the plan or operation to `operator_intervention_required`.
 `stale_restore_preview` defaults to intervention unless the caller explicitly
 uses restore preview discard. During restore-run for the matching pending plan,
 `stale_restore_preview` is a typed `RESTORE_PREVIEW_STALE` failure: AFSCP marks

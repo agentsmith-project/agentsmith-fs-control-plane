@@ -383,6 +383,41 @@ func TestRestorePreviewRunDiscardAndRecoveryStatusUseFixedCommandsAndParseEnvelo
 	}
 }
 
+func TestRestorePreviewParsesRealJVSZeroCountBucketsWithoutSamples(t *testing.T) {
+	t.Parallel()
+
+	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: restorePreviewStdoutWith(t, func(env map[string]any) {
+		data := env["data"].(map[string]any)
+		data["plan_id"] = "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7"
+		data["source_save_point"] = "1778482397674-64d97186"
+		data["newest_save_point"] = "1778482397734-bc8dc9ff"
+		data["history_head"] = "1778482397734-bc8dc9ff"
+		data["expected_newest_save_point"] = "1778482397734-bc8dc9ff"
+		data["expected_folder_evidence"] = "4395c73549f237da40314869dd1d0f86db76bd4855d79d3df7b3a31075788abd"
+		data["run_command"] = "jvs --control-root /tmp/afscp/control --workspace main restore --run 1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7"
+		data["managed_files"] = map[string]any{
+			"create":    map[string]any{"count": 0},
+			"delete":    map[string]any{"count": 0},
+			"overwrite": map[string]any{"count": 1, "samples": []string{"file.txt"}},
+		}
+	})}}
+	runner := newTestRunner(t, commandRunner)
+
+	summary, err := runner.RestorePreview(context.Background(), testControlRoot, "1778482397674-64d97186")
+	if err != nil {
+		t.Fatalf("RestorePreview returned error for real JVS preview shape: %v", err)
+	}
+	if summary.PlanID != "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7" || summary.SourceSavePointID != "1778482397674-64d97186" {
+		t.Fatalf("summary IDs = %#v, want real JVS plan/source IDs", summary)
+	}
+	if summary.ManagedFiles.Added.Count != 0 || len(summary.ManagedFiles.Added.Samples) != 0 || summary.ManagedFiles.Removed.Count != 0 || len(summary.ManagedFiles.Removed.Samples) != 0 {
+		t.Fatalf("zero-count buckets = %#v, want empty sample lists", summary.ManagedFiles)
+	}
+	if summary.ManagedFiles.Changed.Count != 1 || summary.ManagedFiles.Changed.Samples[0] != "file.txt" {
+		t.Fatalf("changed bucket = %#v, want real JVS overwrite sample", summary.ManagedFiles.Changed)
+	}
+}
+
 func TestRecoveryStatusAllowsIdleWithoutRestoreState(t *testing.T) {
 	t.Parallel()
 
@@ -497,6 +532,18 @@ func TestRepoCloneCommandErrorEnvelopeFromNonZeroStdoutSourceRoot(t *testing.T) 
 
 	_, err := runner.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
 	assertJVSCommandError(t, err, "repo clone", 31, "E_SOURCE_DIRTY")
+}
+
+func TestRestoreDiscardCommandErrorEnvelopeUsesRestoreDiscardCommand(t *testing.T) {
+	t.Parallel()
+
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
+		ExitCode: 29,
+		Stdout:   jvsErrorStdout(t, "restore discard", testControlRoot, "E_RECOVERY_BLOCKING"),
+	}})
+
+	_, err := runner.RestoreDiscard(context.Background(), testControlRoot, "plan_001")
+	assertJVSCommandError(t, err, "restore discard", 29, "E_RECOVERY_BLOCKING")
 }
 
 func TestInitCommandErrorEnvelopeFromNonZeroStdout(t *testing.T) {
@@ -1326,7 +1373,7 @@ func restoreDiscardSuccessStdout(t *testing.T) []byte {
 
 func restoreDiscardStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	t.Helper()
-	env := baseEnvelope("restore")
+	env := baseEnvelope("restore discard")
 	data := env["data"].(map[string]any)
 	data["workspace"] = "main"
 	data["mode"] = "discard"

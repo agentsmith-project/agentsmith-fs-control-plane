@@ -1278,6 +1278,51 @@ func TestRunOnceTemplateCreateDisabledScansAndPersistsUnsupportedIntervention(t 
 	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeTemplateCreate)
 }
 
+func TestRunOnceTemplateCreateEnabledBlocksActiveRestorePlanWithoutManualOrFence(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppTemplateCreateOperationRecord("op_template_create", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	store.restorePlan = workerAppRestorePreviewPendingPlan(now)
+	jvs := &workerAppFakeJVSRunner{}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppTemplateCreateConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_template_create" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want claimed business-blocked template_create without manual recovery", summary)
+	}
+	if store.templateCreateListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
+		t.Fatalf("list/acquire = %d/%#v, want template_create listed and acquired", store.templateCreateListCalls, store.acquireIDs)
+	}
+	if len(jvs.calls) != 0 || len(store.fences) != 0 {
+		t.Fatalf("jvs/fences = %#v/%#v, want active restore plan blocked before fence and JVS", jvs.calls, store.fences)
+	}
+	got := store.records[record.ID]
+	if got.State != operations.OperationStateFailed || got.Phase != operations.OperationPhaseTemplateCreateValidate || got.Error == nil || got.Error.Code != "TEMPLATE_CREATE_RESTORE_BLOCKED" || !got.Error.Retryable {
+		t.Fatalf("operation = %#v, want retryable restore-blocked failed operation", got)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeTemplateCreate || store.auditEvents[0].Outcome != audit.OutcomeFailed || store.auditEvents[0].Reason != "template_create_restore_blocked" {
+		t.Fatalf("audit events = %#v, want template_create_restore_blocked failed audit", store.auditEvents)
+	}
+}
+
 func TestRunOnceTemplateCloneDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
 	now := workerAppNow()
 	record := workerAppTemplateCloneOperationRecord("op_template_clone", now)
@@ -1431,6 +1476,9 @@ func TestRunOnceRestorePreviewDiscardEnabledClaimsThroughDiscardExecutor(t *test
 	}
 	if store.restorePlan.ID != "plan_001" || store.restorePlan.Status != restoreplan.StatusDiscarded || store.operation.Type != operations.OperationRestorePreviewDiscard || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestorePreviewDiscardCommitted {
 		t.Fatalf("plan/operation = %#v/%#v, want discarded restore plan and succeeded discard operation", store.restorePlan, store.operation)
+	}
+	if active, err := store.GetActiveRestorePlanByRepo(context.Background(), "repo_alpha01"); !errors.Is(err, sql.ErrNoRows) || active.ID != "" {
+		t.Fatalf("active restore plan after discard = %#v/%v, want no active blocker", active, err)
 	}
 	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestorePreviewDiscard || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
 		t.Fatalf("audit events = %#v, want restore preview discard success", store.auditEvents)
@@ -2185,6 +2233,20 @@ func workerAppSavePointConfigSource(overrides config.MapSource) config.MapSource
 		"AFSCP_JVS_BINARY_SHA256":           acceptedJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                     "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return source
+}
+
+func workerAppTemplateCreateConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppConfigSource(config.MapSource{
+		"AFSCP_TEMPLATE_CREATE_RECOVERY_ENABLED": "true",
+		"AFSCP_JVS_BINARY_PATH":                  "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":                acceptedJVSBinarySHA256,
+		"AFSCP_JVS_CWD":                          "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                     "vol_123=/srv/afscp/volumes/vol_123",
 	})
 	for key, value := range overrides {
 		source[key] = value
@@ -3746,8 +3808,8 @@ func (store *fakeWorkerAppStore) MarkTemplateCreateWriterFencedWithLease(_ conte
 	return fence, operation, nil
 }
 
-func (store *fakeWorkerAppStore) CommitTemplateCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
-	return store.commitTemplateFailed(record, event)
+func (store *fakeWorkerAppStore) CommitTemplateCreateFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return store.commitTemplateFailed(record, now, event)
 }
 
 func (store *fakeWorkerAppStore) CommitTemplateCloneSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {
@@ -3761,17 +3823,20 @@ func (store *fakeWorkerAppStore) CommitTemplateCloneSucceededWithLease(_ context
 	return repo, operation, nil
 }
 
-func (store *fakeWorkerAppStore) CommitTemplateCloneFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
-	return store.commitTemplateFailed(record, event)
+func (store *fakeWorkerAppStore) CommitTemplateCloneFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return store.commitTemplateFailed(record, now, event)
 }
 
-func (store *fakeWorkerAppStore) commitTemplateFailed(record operations.SanitizedOperationRecord, event audit.Event) (operations.OperationRecord, error) {
+func (store *fakeWorkerAppStore) commitTemplateFailed(record operations.SanitizedOperationRecord, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	operation := record.Record()
 	operation.LeaseOwner = ""
 	operation.LeaseExpiresAt = nil
 	store.records[operation.ID] = operation
 	store.operation = operation
 	store.auditEvents = append(store.auditEvents, event)
+	if operation.Type == operations.OperationTemplateCreate && operation.Phase == operations.OperationPhaseTemplateCreateWriterFenced && operation.State == operations.OperationStateFailed {
+		store.releaseWorkerAppWriterFence(operation.SessionFenceID, now)
+	}
 	return operation, nil
 }
 
@@ -3934,7 +3999,10 @@ func (store *fakeWorkerAppStore) GetRestorePlanByPreviewOperation(_ context.Cont
 	return restoreplan.Plan{}, errors.New("restore plan not found")
 }
 
-func (store *fakeWorkerAppStore) GetActiveRestorePlanByRepo(context.Context, string) (restoreplan.Plan, error) {
+func (store *fakeWorkerAppStore) GetActiveRestorePlanByRepo(_ context.Context, repoID string) (restoreplan.Plan, error) {
+	if store.restorePlan.ID == "" || store.restorePlan.RepoID != repoID || !store.restorePlan.Active() {
+		return restoreplan.Plan{}, sql.ErrNoRows
+	}
 	return store.restorePlan, nil
 }
 
@@ -4064,6 +4132,7 @@ type workerAppFakeJVSRunner struct {
 	restorePreviewSummary   jvsrunner.RestorePreviewSummary
 	restoreRunSummary       jvsrunner.RestoreRunSummary
 	restoreDiscardSummary   jvsrunner.RestoreDiscardSummary
+	repoCloneSummary        jvsrunner.RepoCloneSummary
 }
 
 type workerAppFakeStoragePurger struct {
@@ -4097,6 +4166,14 @@ func (runner *workerAppFakeJVSRunner) Save(context.Context, string, string) (jvs
 		runner.saveSummary = jvsrunner.SaveSummary{SavePointID: "sp_001", NewestSavePointID: "sp_001", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"}
 	}
 	return runner.saveSummary, nil
+}
+
+func (runner *workerAppFakeJVSRunner) RepoClone(context.Context, string, string, string) (jvsrunner.RepoCloneSummary, error) {
+	runner.calls = append(runner.calls, "repo_clone")
+	if runner.repoCloneSummary.SourceRepoID == "" {
+		runner.repoCloneSummary = jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"}
+	}
+	return runner.repoCloneSummary, nil
 }
 
 func (runner *workerAppFakeJVSRunner) History(context.Context, string) (jvsrunner.HistorySummary, error) {

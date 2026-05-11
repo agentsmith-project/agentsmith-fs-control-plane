@@ -259,6 +259,7 @@ type TemplateOperationMetadataReader interface {
 	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
 	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
 	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
+	GetActiveRestorePlanByRepo(ctx context.Context, repoID string) (restoreplan.Plan, error)
 	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
 	ListExportSessionsByRepo(ctx context.Context, repoID string) ([]sessionstate.ExportSession, error)
 	ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error)

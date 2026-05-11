@@ -430,7 +430,7 @@ func (runner *Runner) RestoreDiscard(ctx context.Context, controlRoot, planID st
 	if !safeOpaqueID(planID) {
 		return RestoreDiscardSummary{}, fmt.Errorf("%w: plan id", ErrInvalidArgument)
 	}
-	envelope, err := runner.runControlJSON(ctx, "restore", controlRoot, []string{"restore", "discard", planID, "--json"})
+	envelope, err := runner.runControlJSON(ctx, "restore discard", controlRoot, []string{"restore", "discard", planID, "--json"})
 	if err != nil {
 		return RestoreDiscardSummary{}, err
 	}
@@ -724,6 +724,9 @@ func parseRestorePreviewChangeSummary(raw any) (RestorePreviewChangeSummary, boo
 	}
 	rawSamples, ok := object["samples"].([]any)
 	if !ok {
+		if count == 0 {
+			return RestorePreviewChangeSummary{Count: count, Samples: []string{}}, true
+		}
 		return RestorePreviewChangeSummary{}, false
 	}
 	if len(rawSamples) > 10 {

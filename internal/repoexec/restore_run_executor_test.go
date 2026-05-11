@@ -241,6 +241,70 @@ func TestRestoreRunExecutorStoredStalePreviewFailsTypedBeforeJVS(t *testing.T) {
 	}
 }
 
+func TestRestoreRunExecutorStoredStalePreviewBypassesStrongMetadataValidation(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.previewOperation = restorePreviewSucceededOperationRecord(now)
+	store.previewOperation.VerificationResult = map[string]any{}
+	store.previewOperation.JVSJSONOutput = map[string]any{
+		"restore_plan_id":      "9ccf3e43-8ddd-422b-bd18-e70eb77126ee",
+		"source_save_point_id": "1778483953184-45dd97b9",
+	}
+	store.restorePlan = restorePreviewPendingPlan(now)
+	store.restorePlan.Stale = true
+	store.restorePlan.Blockers = []restoreplan.Blocker{{Code: "restore_preview_stale", Message: "Preview is stale; discard and create a new preview before running restore."}}
+	runner := &fakeJVSRunner{}
+	executor := newTestRestoreRunExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), restoreRunLeasedRecord(now, operations.OperationPhaseRestoreRunValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if len(runner.calls) != 0 || store.restoreRunWriterFenceMarks != 0 {
+		t.Fatalf("JVS/fence marks = %#v/%d, want durable stale plan to fail before metadata JVS or writer fence", runner.calls, store.restoreRunWriterFenceMarks)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_STALE" {
+		t.Fatalf("operation = %#v, want typed stale failure instead of plan mismatch", store.operation)
+	}
+	if !store.restorePlan.Stale || len(store.restorePlan.Blockers) != 1 || store.restorePlan.Blockers[0].Code != "restore_preview_stale" {
+		t.Fatalf("restore plan = %#v, want stale blocker source of truth preserved", store.restorePlan)
+	}
+}
+
+func TestRestoreRunPreviewMetadataIgnoresRedactedExternalResourceIDs(t *testing.T) {
+	preview, plan := restoreRunRealJVSPreviewAndPlan()
+	preview.ExternalResourceIDs = map[string]string{
+		"restore_plan_id":      "[REDACTED]",
+		"source_save_point_id": "[REDACTED]",
+	}
+
+	if !restoreRunPreviewMetadataMatchesPlan(preview, plan) {
+		t.Fatalf("restoreRunPreviewMetadataMatchesPlan returned false for redacted external_resource_ids with matching verification/JVS metadata")
+	}
+}
+
+func TestRestoreRunPreviewMetadataRequiresVerificationAndJVSAgreement(t *testing.T) {
+	preview, plan := restoreRunRealJVSPreviewAndPlan()
+	preview.ExternalResourceIDs = map[string]string{
+		"restore_plan_id":      "[REDACTED]",
+		"source_save_point_id": "[REDACTED]",
+	}
+
+	missing := preview
+	missing.VerificationResult = map[string]any{}
+	missing.JVSJSONOutput = map[string]any{}
+	if restoreRunPreviewMetadataMatchesPlan(missing, plan) {
+		t.Fatal("restoreRunPreviewMetadataMatchesPlan accepted missing verification/JVS metadata")
+	}
+
+	mismatched := preview
+	mismatched.JVSJSONOutput = mergeStringAnyMap(asStringAnyMap(mismatched.JVSJSONOutput), map[string]any{"restore_plan_id": "9ccf3e43-8ddd-422b-bd18-e70eb77126ee"})
+	if restoreRunPreviewMetadataMatchesPlan(mismatched, plan) {
+		t.Fatal("restoreRunPreviewMetadataMatchesPlan accepted inconsistent verification/JVS metadata")
+	}
+}
+
 func TestRestoreRunExecutorCannotConsumePlanThatTurnsStaleAfterFence(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
@@ -479,6 +543,44 @@ func activeWriterFenceCount(existing []fences.Fence, operationID string) int {
 
 func restoreRunWriterFence(now time.Time, operationID string) fences.Fence {
 	return fences.Fence{ID: "fence_" + operationID, RepoID: "repo_alpha01", Kind: fences.KindWriterSession, HolderOperationID: operationID, Status: fences.StatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}
+}
+
+func restoreRunRealJVSPreviewAndPlan() (operations.OperationRecord, restoreplan.Plan) {
+	now := repoExecNow()
+	plan := restoreplan.Plan{
+		ID:                 "7598f605-313b-4161-b0dd-7c24d9e8614e",
+		NamespaceID:        "ns_alpha01",
+		RepoID:             "repo_alpha01",
+		PreviewOperationID: "op_api_1778483956585312684_41",
+		SourceSavePointID:  "1778483953184-45dd97b9",
+		BaseRevision:       "1778483957000-a51c776d",
+		HeadRevision:       "1778483957000-a51c776d",
+		Generation:         "4395c73549f237da40314869dd1d0f86db76bd4855d79d3df7b3a31075788abd",
+		FenceMarker:        "preview_fence_op_api_1778483956585312684_41",
+		Status:             restoreplan.StatusPending,
+		CreatedAt:          now.Add(-time.Minute),
+		UpdatedAt:          now.Add(-time.Minute),
+	}
+	preview := restorePreviewSucceededOperationRecord(now)
+	preview.ID = plan.PreviewOperationID
+	preview.VerificationResult = map[string]any{
+		"restore_plan_id":      plan.ID,
+		"source_save_point_id": plan.SourceSavePointID,
+		"base_revision":        plan.BaseRevision,
+		"head_revision":        plan.HeadRevision,
+		"generation":           plan.Generation,
+		"fence_marker":         plan.FenceMarker,
+		"restore_plan_status":  restoreplan.StatusPending.String(),
+	}
+	preview.JVSJSONOutput = map[string]any{
+		"restore_plan_id":      plan.ID,
+		"source_save_point_id": plan.SourceSavePointID,
+		"base_revision":        plan.BaseRevision,
+		"head_revision":        plan.HeadRevision,
+		"generation":           plan.Generation,
+		"fence_marker":         plan.FenceMarker,
+	}
+	return preview, plan
 }
 
 func assertNoRestoreRunCommandLeak(t *testing.T, operation operations.OperationRecord, events []audit.Event) {

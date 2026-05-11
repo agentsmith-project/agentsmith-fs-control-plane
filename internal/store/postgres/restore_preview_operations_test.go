@@ -105,18 +105,34 @@ func TestUpdateRestorePreviewPreflightWithLeaseRequiresSafeMarkerAndStoredValida
 
 func TestCommitRestorePreviewSucceededWithLeaseInsertsPlanAuditAndOperationAtomically(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	planID := "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7"
+	sourceSavePointID := "1778482397674-64d97186"
+	headSavePointID := "1778482397734-bc8dc9ff"
+	generation := "4395c73549f237da40314869dd1d0f86db76bd4855d79d3df7b3a31075788abd"
 	record := restorePreviewOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseRestorePreviewCommitted)
-	record.VerificationResult = map[string]any{"preflight_recovery_status_captured": true, "preflight_restore_state": "idle", "preflight_blocking": false, "restore_plan_id": "plan_001", "source_save_point_id": "sp_001"}
-	record.JVSJSONOutput = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "workspace": "main", "run_command_present": true}
-	record.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001"}
+	record.InputSummary = map[string]any{"save_point_id": sourceSavePointID}
+	record.VerificationResult = map[string]any{"preflight_recovery_status_captured": true, "preflight_restore_state": "idle", "preflight_blocking": false, "restore_plan_id": planID, "source_save_point_id": sourceSavePointID, "base_revision": headSavePointID, "head_revision": headSavePointID, "generation": generation}
+	record.JVSJSONOutput = map[string]any{"restore_plan_id": planID, "source_save_point_id": sourceSavePointID, "base_revision": headSavePointID, "head_revision": headSavePointID, "generation": generation, "workspace": "main", "run_command_present": true}
+	record.ExternalResourceIDs = map[string]string{"restore_plan_id": planID}
 	record.FinishedAt = &now
 	plan := restorePreviewPlan(record, now)
+	plan.ID = planID
+	plan.SourceSavePointID = sourceSavePointID
+	plan.BaseRevision = headSavePointID
+	plan.HeadRevision = headSavePointID
+	plan.Generation = generation
 	exec := &fakeExecutor{row: fakeRow{values: append(restorePlanRowValues(plan), operationRowValues(record)...)}}
 	st := &Store{exec: exec}
 
-	_, _, err := st.CommitRestorePreviewSucceededWithLease(context.Background(), plan, record.SanitizedForPersistence(), "worker-a", now, restorePreviewAudit(record, audit.OutcomeSucceeded, now))
+	gotPlan, gotOperation, err := st.CommitRestorePreviewSucceededWithLease(context.Background(), plan, record.SanitizedForPersistence(), "worker-a", now, restorePreviewAudit(record, audit.OutcomeSucceeded, now))
 	if err != nil {
 		t.Fatalf("CommitRestorePreviewSucceededWithLease: %v", err)
+	}
+	if gotPlan.ID != planID || gotPlan.SourceSavePointID != sourceSavePointID || gotOperation.ID != record.ID || gotOperation.State != operations.OperationStateSucceeded {
+		t.Fatalf("commit return = %#v/%#v, want durable plan and succeeded operation", gotPlan, gotOperation)
+	}
+	if got := exec.args[19]; got != planID {
+		t.Fatalf("restore_plan_id insert arg = %#v, want real JVS UUID plan id", got)
 	}
 
 	assertSQLContainsInOrder(t, exec.query,
@@ -131,6 +147,20 @@ func TestCommitRestorePreviewSucceededWithLeaseInsertsPlanAuditAndOperationAtomi
 	)
 	if strings.Contains(exec.query, "CreatePendingRestorePlan") {
 		t.Fatalf("typed commit composed through generic restore plan helper: %s", exec.query)
+	}
+}
+
+func TestRestorePreviewSuccessCommitSQLQualifiesPlanOperationReturnColumns(t *testing.T) {
+	query := restorePreviewSuccessCommitWithLeaseSQL()
+	want := "SELECT inserted_restore_plan.restore_plan_id, inserted_restore_plan.namespace_id, inserted_restore_plan.repo_id"
+	if !strings.Contains(query, want) {
+		t.Fatalf("restore preview success SQL must qualify restore plan columns to avoid ambiguous postgres columns\nwant fragment: %s\nquery: %s", want, query)
+	}
+	if !strings.Contains(query, "updated_operation.operation_id") {
+		t.Fatalf("restore preview success SQL must qualify operation columns in final projection: %s", query)
+	}
+	if strings.Contains(query, ") SELECT "+strings.Join(restorePlanColumns, ", ")+", "+strings.Join(operationSelectColumns, ", ")+" FROM inserted_restore_plan, updated_operation") {
+		t.Fatalf("restore preview success SQL uses ambiguous unqualified plan/operation projection: %s", query)
 	}
 }
 

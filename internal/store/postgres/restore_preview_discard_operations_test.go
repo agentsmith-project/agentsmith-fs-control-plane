@@ -167,6 +167,9 @@ func TestCommitRestorePreviewDiscardSucceededWithLeaseDiscardsPlanAuditAndOperat
 		"inserted_audit AS",
 		"INSERT INTO audit_outbox",
 	)
+	if strings.Contains(exec.query, "operator_intervention_required") {
+		t.Fatalf("restore preview discard success commit must not retain a manual blocker path: %s", exec.query)
+	}
 }
 
 func TestCommitRestorePreviewDiscardFailedWithLeaseMovesDiscardingPlanToOperatorIntervention(t *testing.T) {

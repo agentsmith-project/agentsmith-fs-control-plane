@@ -2,6 +2,7 @@ package repoexec
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 type RestorePreviewJVSRunner interface {
 	RecoveryStatus(ctx context.Context, controlRoot string) (jvsrunner.RecoveryStatusSummary, error)
 	RestorePreview(ctx context.Context, controlRoot, savePointID string) (jvsrunner.RestorePreviewSummary, error)
+	RestoreDiscard(ctx context.Context, controlRoot, planID string) (jvsrunner.RestoreDiscardSummary, error)
 }
 
 type RestorePreviewConfig struct {
@@ -37,6 +39,7 @@ type RestorePreviewConfig struct {
 type restorePreviewStore interface {
 	store.RestorePreviewOperationCommitStore
 	store.RestorePreviewOperationMetadataReader
+	store.RestorePlanReader
 }
 
 type RestorePreviewExecutor struct {
@@ -140,17 +143,43 @@ func (executor *RestorePreviewExecutor) ExecuteOperationRecovery(ctx context.Con
 		if err != nil {
 			return executor.commitRestorePreviewIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", withJVSErrorDetails(nil, err))
 		}
+		if restorePreviewRecoveryStatusPendingPreview(status) {
+			return executor.discardUncommittedRestorePreview(ctx, record, now, controlRoot, status)
+		}
+		if restorePreviewRecoveryStatusIdle(status) {
+			working := withRestorePreviewPreflightMarker(record, status)
+			working.State = operations.OperationStateRunning
+			working.Phase = operations.OperationPhaseRestorePreviewPreflightIdle
+			return executor.executeRestorePreview(ctx, working, now, controlRoot, savePointID)
+		}
 		return executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_PREFLIGHT_REQUIRES_OPERATOR", "restore preview preflight recovery requires operator intervention", restorePreviewRecoveryStatusDetails(status))
 	}
 
+	var cleanupDetails map[string]any
 	status, err := executor.jvs.RecoveryStatus(ctx, controlRoot)
 	if err != nil {
 		return executor.commitRestorePreviewIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", withJVSErrorDetails(nil, err))
 	}
 	if !restorePreviewRecoveryStatusIdle(status) {
+		if restorePreviewRecoveryStatusPendingPreview(status) {
+			handled, details, handleErr := executor.discardOrphanPendingRestorePreview(ctx, record, now, controlRoot, status)
+			if handled {
+				if handleErr != nil {
+					return handleErr
+				}
+				cleanupDetails = details
+				status, err = executor.jvs.RecoveryStatus(ctx, controlRoot)
+				if err != nil {
+					return executor.commitRestorePreviewIntervention(ctx, record, now, "JVS_RECOVERY_STATUS_FAILED", "jvs recovery status failed", mergeStringAnyMap(cleanupDetails, withJVSErrorDetails(nil, err)))
+				}
+			}
+		}
+	}
+	if !restorePreviewRecoveryStatusIdle(status) {
 		return executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_RECOVERY_STATE_NOT_IDLE", "restore preview recovery state is not idle", restorePreviewRecoveryStatusDetails(status))
 	}
 
+	record.VerificationResult = mergeStringAnyMap(asStringAnyMap(record.VerificationResult), cleanupDetails)
 	working := withRestorePreviewPreflightMarker(record, status)
 	working.State = operations.OperationStateRunning
 	working.Phase = operations.OperationPhaseRestorePreviewPreflightIdle
@@ -160,8 +189,15 @@ func (executor *RestorePreviewExecutor) ExecuteOperationRecovery(ctx context.Con
 	}
 	working = updated
 
+	return executor.executeRestorePreview(ctx, working, now, controlRoot, savePointID)
+}
+
+func (executor *RestorePreviewExecutor) executeRestorePreview(ctx context.Context, working operations.OperationRecord, now time.Time, controlRoot, savePointID string) error {
 	preview, err := executor.jvs.RestorePreview(ctx, controlRoot, savePointID)
 	if err != nil {
+		if handled, handleErr := executor.reconcileRestorePreviewTimeout(ctx, working, now, controlRoot, err); handled {
+			return handleErr
+		}
 		return executor.commitRestorePreviewIntervention(ctx, working, now, "JVS_RESTORE_PREVIEW_FAILED", "jvs restore preview failed", withJVSErrorDetails(map[string]any{"source_save_point_id": savePointID}, err))
 	}
 	if err := validateRestorePreviewSummary(preview, savePointID); err != nil {
@@ -279,20 +315,42 @@ func (executor *RestorePreviewExecutor) commitRestorePreviewSuccess(ctx context.
 	if err != nil {
 		return err
 	}
-	if _, _, err := executor.store.CommitRestorePreviewSucceededWithLease(ctx, plan, operation.SanitizedForPersistence(), executor.owner, now, event); err != nil {
-		return errors.New("restore preview success commit failed")
+	commitCtx, cancel := durableCommitContext(ctx)
+	defer cancel()
+	if _, _, err := executor.store.CommitRestorePreviewSucceededWithLease(commitCtx, plan, operation.SanitizedForPersistence(), executor.owner, now, event); err != nil {
+		return restorePreviewCommitError("restore preview success commit failed", err)
 	}
 	return nil
 }
 
 func (executor *RestorePreviewExecutor) commitRestorePreviewFailed(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string) error {
+	return executor.commitRestorePreviewFailedWithDetails(ctx, record, now, code, message, nil)
+}
+
+func (executor *RestorePreviewExecutor) commitRestorePreviewFailedWithDetails(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
+	return executor.commitRestorePreviewFailedWithRetryableDetails(ctx, record, now, code, message, details, false)
+}
+
+func (executor *RestorePreviewExecutor) commitRestorePreviewRetryableFailedWithDetails(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
+	return executor.commitRestorePreviewFailedWithRetryableDetails(ctx, record, now, code, message, details, true)
+}
+
+func (executor *RestorePreviewExecutor) commitRestorePreviewFailedWithRetryableDetails(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any, retryable bool) error {
 	operation := restorePreviewFailedOperation(record, now, operations.OperationStateFailed, code, message)
-	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "restore_preview_failed", map[string]any{"repo_id": record.RepoID})
+	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	if operation.Error != nil {
+		operation.Error.Retryable = retryable
+		operation.Error.Details = mergeStringAnyMap(asStringAnyMap(operation.Error.Details), details)
+	}
+	eventDetails := mergeStringAnyMap(map[string]any{"repo_id": record.RepoID}, details)
+	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "restore_preview_failed", eventDetails)
 	if err != nil {
 		return err
 	}
-	if _, err := executor.store.CommitRestorePreviewFailedWithLease(ctx, operation.SanitizedForPersistence(), executor.owner, now, event); err != nil {
-		return errors.New("restore preview failure commit failed")
+	commitCtx, cancel := durableCommitContext(ctx)
+	defer cancel()
+	if _, err := executor.store.CommitRestorePreviewFailedWithLease(commitCtx, operation.SanitizedForPersistence(), executor.owner, now, event); err != nil {
+		return restorePreviewCommitError("restore preview failure commit failed", err)
 	}
 	return nil
 }
@@ -305,10 +363,86 @@ func (executor *RestorePreviewExecutor) commitRestorePreviewIntervention(ctx con
 	if err != nil {
 		return err
 	}
-	if _, err := executor.store.CommitRestorePreviewFailedWithLease(ctx, operation.SanitizedForPersistence(), executor.owner, now, event); err != nil {
-		return errors.New("restore preview intervention commit failed")
+	commitCtx, cancel := durableCommitContext(ctx)
+	defer cancel()
+	if _, err := executor.store.CommitRestorePreviewFailedWithLease(commitCtx, operation.SanitizedForPersistence(), executor.owner, now, event); err != nil {
+		return restorePreviewCommitError("restore preview intervention commit failed", err)
 	}
 	return fmt.Errorf("%w: restore preview operator intervention required", recovery.ErrOperationManualIntervention)
+}
+
+func (executor *RestorePreviewExecutor) discardUncommittedRestorePreview(ctx context.Context, record operations.OperationRecord, now time.Time, controlRoot string, status jvsrunner.RecoveryStatusSummary) error {
+	planID := strings.TrimSpace(status.ActivePlanID)
+	details := restorePreviewRecoveryStatusDetails(status)
+	details["restore_plan_id"] = planID
+	if !restorePreviewSafeOpaqueID(planID) {
+		return executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_DURABLE_COMMIT_LOST", "restore preview durable commit missing and pending JVS plan id is invalid", details)
+	}
+
+	discard, err := executor.jvs.RestoreDiscard(ctx, controlRoot, planID)
+	if err != nil {
+		return executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_DURABLE_COMMIT_LOST_DISCARD_FAILED", "restore preview durable commit missing and pending JVS preview discard failed", withJVSErrorDetails(details, err))
+	}
+	if err := validateRestoreDiscardSummary(discard, planID); err != nil {
+		return executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_DURABLE_COMMIT_LOST_DISCARD_MISMATCH", "restore preview durable commit missing and pending JVS preview discard result mismatch", details)
+	}
+
+	details["jvs_pending_preview_discarded"] = true
+	details["restore_plan_status"] = restoreplan.StatusDiscarded.String()
+	return executor.commitRestorePreviewFailedWithDetails(ctx, record, now, "RESTORE_PREVIEW_DURABLE_COMMIT_LOST", "restore preview durable commit was not recorded; pending JVS preview was discarded", details)
+}
+
+func (executor *RestorePreviewExecutor) discardOrphanPendingRestorePreview(ctx context.Context, record operations.OperationRecord, now time.Time, controlRoot string, status jvsrunner.RecoveryStatusSummary) (bool, map[string]any, error) {
+	activePlan, err := executor.store.GetActiveRestorePlanByRepo(ctx, record.RepoID)
+	if err == nil {
+		details := restorePreviewRecoveryStatusDetails(status)
+		details["restore_plan_id"] = strings.TrimSpace(status.ActivePlanID)
+		details["durable_restore_plan_id"] = activePlan.ID
+		return true, nil, executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_ACTIVE_PLAN_PRESENT", "restore preview recovery state has an active durable restore plan", details)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return true, nil, executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_ACTIVE_PLAN_LOOKUP_FAILED", "restore preview active plan lookup failed", restorePreviewRecoveryStatusDetails(status))
+	}
+
+	planID := strings.TrimSpace(status.ActivePlanID)
+	details := restorePreviewRecoveryStatusDetails(status)
+	details["restore_plan_id"] = planID
+	if !restorePreviewSafeOpaqueID(planID) {
+		return true, nil, executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_DURABLE_COMMIT_LOST", "restore preview durable commit missing and pending JVS plan id is invalid", details)
+	}
+	discard, err := executor.jvs.RestoreDiscard(ctx, controlRoot, planID)
+	if err != nil {
+		return true, nil, executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_DURABLE_COMMIT_LOST_DISCARD_FAILED", "restore preview durable commit missing and pending JVS preview discard failed", withJVSErrorDetails(details, err))
+	}
+	if err := validateRestoreDiscardSummary(discard, planID); err != nil {
+		return true, nil, executor.commitRestorePreviewIntervention(ctx, record, now, "RESTORE_PREVIEW_DURABLE_COMMIT_LOST_DISCARD_MISMATCH", "restore preview durable commit missing and pending JVS preview discard result mismatch", details)
+	}
+	delete(details, "restore_plan_id")
+	details["orphan_restore_plan_id"] = planID
+	details["jvs_orphan_preview_discarded"] = true
+	details["orphan_restore_plan_status"] = restoreplan.StatusDiscarded.String()
+	return true, details, nil
+}
+
+func (executor *RestorePreviewExecutor) reconcileRestorePreviewTimeout(ctx context.Context, record operations.OperationRecord, now time.Time, controlRoot string, previewErr error) (bool, error) {
+	if !errors.Is(previewErr, context.Canceled) && !errors.Is(previewErr, context.DeadlineExceeded) {
+		return false, nil
+	}
+	reconcileCtx, cancel := durableCommitContext(ctx)
+	defer cancel()
+	status, err := executor.jvs.RecoveryStatus(reconcileCtx, controlRoot)
+	if err != nil {
+		return true, executor.commitRestorePreviewIntervention(reconcileCtx, record, now, "RESTORE_PREVIEW_TIMEOUT_RECONCILE_FAILED", "restore preview timeout reconciliation failed", withJVSErrorDetails(nil, err))
+	}
+	if restorePreviewRecoveryStatusPendingPreview(status) {
+		return true, executor.discardUncommittedRestorePreview(reconcileCtx, record, now, controlRoot, status)
+	}
+	details := restorePreviewRecoveryStatusDetails(status)
+	if restorePreviewRecoveryStatusIdle(status) {
+		details["timeout_reconcile_status"] = "idle_no_pending_preview"
+		return true, executor.commitRestorePreviewRetryableFailedWithDetails(reconcileCtx, record, now, "RESTORE_PREVIEW_TIMEOUT_RETRYABLE", "restore preview timed out without a pending JVS plan; retry restore preview", details)
+	}
+	return true, executor.commitRestorePreviewIntervention(reconcileCtx, record, now, "RESTORE_PREVIEW_TIMEOUT_RECONCILE_REQUIRES_OPERATOR", "restore preview timeout reconciliation found an ambiguous JVS recovery state", details)
 }
 
 func restorePreviewFailedOperation(record operations.OperationRecord, now time.Time, state operations.OperationState, code, message string) operations.OperationRecord {
@@ -381,6 +515,14 @@ func restorePreviewRecoveryStatusIdle(status jvsrunner.RecoveryStatusSummary) bo
 		!status.Blocking
 }
 
+func restorePreviewRecoveryStatusPendingPreview(status jvsrunner.RecoveryStatusSummary) bool {
+	return status.RestoreState == "pending_restore_preview" &&
+		status.Workspace == "main" &&
+		strings.TrimSpace(status.ActivePlanID) != "" &&
+		strings.TrimSpace(status.ActiveRecoveryPlanID) == "" &&
+		status.Blocking
+}
+
 func restorePreviewRecoveryStatusDetails(status jvsrunner.RecoveryStatusSummary) map[string]any {
 	return map[string]any{
 		"restore_state":           status.RestoreState,
@@ -441,6 +583,42 @@ func restorePreviewSafeOpaqueID(id string) bool {
 		}
 	}
 	return true
+}
+
+func restorePreviewCommitError(message string, cause error) error {
+	if cause == nil {
+		return errors.New(message)
+	}
+	if detail := restorePreviewCommitErrorDetail(cause); detail != "" {
+		message += ": " + detail
+	}
+	return commitError{message: message, cause: cause}
+}
+
+func restorePreviewCommitErrorDetail(cause error) string {
+	switch {
+	case errors.Is(cause, operations.ErrLeaseUnavailable):
+		return "operation lease unavailable"
+	case errors.Is(cause, context.Canceled):
+		return "context canceled"
+	case errors.Is(cause, context.DeadlineExceeded):
+		return "context deadline exceeded"
+	}
+	detail := strings.TrimSpace(audit.RedactString(cause.Error()))
+	if detail == "" || restorePreviewCommitErrorDetailSensitive(detail) {
+		return "store commit error redacted"
+	}
+	return detail
+}
+
+func restorePreviewCommitErrorDetailSensitive(detail string) bool {
+	lower := strings.ToLower(detail)
+	for _, token := range []string{"secret", "password", "passwd", "token", "credential", "authorization"} {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func restorePreviewASCIIAlphaNum(b byte) bool {

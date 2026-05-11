@@ -198,6 +198,11 @@ observability 或部署侧 operator tooling 执行。
 - 是否有稳定 finding code：缺少 backend probe、store 不可用、配置不完整等都应表现为稳定原因，
   不应泄露 raw path、secret 或 backend 细节。
 
+当部署声明 `AFSCP_JVS_READY=true` 时，API 和 worker 都必须带有同一套 pinned JVS runtime 配置：
+`AFSCP_JVS_BINARY_PATH`、`AFSCP_JVS_BINARY_SHA256`、`AFSCP_JVS_CWD` 和 volume root mapping。API
+侧的 save-point history/list 也会调用 JVS，所以缺少二进制或 checksum 不是可降级开关，而是
+startup/readiness 配置错误。
+
 Volume 本身的健康通过 `GET /internal/v1/volumes/{volumeId}/health` 读取。字段和状态值以 OpenAPI
 为准。
 

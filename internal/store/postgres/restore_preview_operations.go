@@ -215,7 +215,7 @@ func restorePreviewSuccessCommitWithLeaseSQL() string {
 		"INSERT INTO restore_plans (" + strings.Join(restorePlanColumns, ", ") + ") SELECT " + placeholders(20, len(restorePlanColumns)) + " FROM updated_operation RETURNING " + strings.Join(restorePlanColumns, ", ") +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(20+len(restorePlanColumns), len(auditOutboxColumns)) + " FROM updated_operation, inserted_restore_plan RETURNING audit_event_id" +
-		") SELECT " + strings.Join(restorePlanColumns, ", ") + ", " + strings.Join(operationSelectColumns, ", ") + " FROM inserted_restore_plan, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
+		") SELECT " + prefixedColumns("inserted_restore_plan", restorePlanColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) + " FROM inserted_restore_plan, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
 }
 
 func restorePreviewFailureCommitWithLeaseSQL() string {

@@ -234,6 +234,24 @@ func TestSavePointListReturnsHistoryAndFailsClosed(t *testing.T) {
 	assertSavePointResponseDoesNotLeak(t, rec.Body.String())
 }
 
+func TestSavePointListMissingHistoryReaderReturnsTypedCapabilityError(t *testing.T) {
+	handler := savePointTestHandler(&fakeOperationIntakeStore{}, nil, resources.RepoStatusActive, nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, savePointRequest(http.MethodGet, "/internal/v1/repos/repo_123/save-points", "", "ns_123"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d body = %s, want typed 503", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeCapabilityDenied {
+		t.Fatalf("error code = %s, want %s; body=%s", env.Error.Code, CodeCapabilityDenied, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), string(CodeInternalError)) {
+		t.Fatalf("missing history reader returned internal error: %s", rec.Body.String())
+	}
+}
+
 func TestSavePointListReturnsNaturalLanguageSensitiveWords(t *testing.T) {
 	reader := &fakeSavePointHistoryReader{history: SavePointHistory{SavePoints: []SavePointResponse{{SavePointID: "sp_001", Message: "fix secret handling", CreatedAt: "2026-05-05T12:00:00Z", RepoID: "repo_123"}}}}
 	handler := savePointTestHandler(&fakeOperationIntakeStore{}, reader, resources.RepoStatusActive, nil)

@@ -24,6 +24,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
@@ -164,6 +165,7 @@ func TestInternalRuntimeAllowsMissingWorkloadMountRuntimeSecretRefsWhenMountUnav
 		StoreFactory: func(context.Context, string) (StoreHandle, error) {
 			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
 		},
+		SavePointHistoryRunnerFactory: testSavePointHistoryRunnerFactory(),
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime returned error with workload mount unavailable: %v", err)
@@ -207,6 +209,101 @@ func TestNewRuntimeFromConfigSavePointHistoryVerifiesJVSBinaryAgainstAcceptedPin
 	}
 	if !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("error = %q, want checksum mismatch", err)
+	}
+}
+
+func TestNewRuntimeFailsBeforeStoreWhenJVSReadyWithoutSavePointHistoryConfig(t *testing.T) {
+	source := readyTestRuntimeSource()
+	delete(source, "AFSCP_JVS_BINARY_PATH")
+
+	_, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			t.Fatal("store factory should not be called before API JVS history config is validated")
+			return StoreHandle{}, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("NewRuntime succeeded, want API JVS history config error")
+	}
+	if !strings.Contains(err.Error(), "AFSCP_JVS_BINARY_PATH") {
+		t.Fatalf("error = %q, want JVS binary config key", err)
+	}
+}
+
+func TestInternalRuntimeJVSReadyWiresSavePointHistoryReaderWithoutHiddenAPIGate(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	binding := testBinding()
+	binding.AllowedCallers = []resources.AllowedCaller{{
+		CallerService: "svc_api",
+		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
+	}}
+	store := &fakeRuntimeStore{
+		binding: binding,
+		namespace: resources.Namespace{
+			ID:        "ns_alpha",
+			Status:    resources.NamespaceStatusActive,
+			CreatedAt: now.Add(-time.Hour),
+			UpdatedAt: now,
+		},
+		repo: resources.Repo{
+			ID:                  "repo_alpha",
+			NamespaceID:         "ns_alpha",
+			VolumeID:            "vol_main",
+			JVSRepoID:           "jvs_repo_alpha",
+			Kind:                resources.RepoKindRepo,
+			Status:              resources.RepoStatusActive,
+			ControlVolumeSubdir: "afscp/namespaces/ns_alpha/repos/repo_alpha/control",
+			PayloadVolumeSubdir: "afscp/namespaces/ns_alpha/repos/repo_alpha/payload",
+			Lifecycle:           resources.RepoLifecycle{Status: resources.RepoStatusActive},
+			CreatedAt:           now.Add(-time.Hour),
+			UpdatedAt:           now,
+		},
+		volume: activeRuntimeVolume(now),
+	}
+	historyRunner := &runtimeFakeJVSHistoryRunner{summary: jvsrunner.HistorySummary{
+		Workspace:         "main",
+		NewestSavePointID: "sp_001",
+		SavePoints:        []jvsrunner.SavePointSummary{{SavePointID: "sp_001", Message: "first", CreatedAt: "2026-05-05T12:00:00Z"}},
+	}}
+	var runnerConfig config.WorkerRepoCreateRecoveryConfig
+	source := readyTestRuntimeSource()
+	delete(source, "AFSCP_API_SAVE_POINT_HISTORY_ENABLED")
+
+	runtime, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {
+			if dsn != "postgres://api:secret@db/afscp" {
+				t.Fatalf("dsn = %q", dsn)
+			}
+			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+		},
+		SavePointHistoryRunnerFactory: func(cfg config.WorkerRepoCreateRecoveryConfig) (api.JVSHistoryRunner, error) {
+			runnerConfig = cfg
+			return historyRunner, nil
+		},
+		OperationID: func() string { return "op_savepoint_runtime" },
+		Clock:       func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, internalGET("/internal/v1/repos/repo_alpha/save-points", "svc_api", "token-api"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if !runnerConfig.Enabled || runnerConfig.VolumeRoots["vol_main"] != "/srv/afscp/volumes/vol_main" {
+		t.Fatalf("runner config = %#v, want API history config from JVS readiness", runnerConfig)
+	}
+	if historyRunner.calls != 1 || !strings.HasSuffix(historyRunner.controlRoot, "/afscp/namespaces/ns_alpha/repos/repo_alpha/control") {
+		t.Fatalf("history runner calls/root = %d/%q", historyRunner.calls, historyRunner.controlRoot)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"save_point_id":"sp_001"`) || strings.Contains(body, string(api.CodeInternalError)) {
+		t.Fatalf("body = %s, want save point history without internal error", body)
 	}
 }
 
@@ -287,8 +384,9 @@ func TestInternalRuntimeCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testing
 			}
 			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
 		},
-		OperationID: func() string { return "op_export_runtime" },
-		Clock:       func() time.Time { return now },
+		SavePointHistoryRunnerFactory: testSavePointHistoryRunnerFactory(),
+		OperationID:                   func() string { return "op_export_runtime" },
+		Clock:                         func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -388,8 +486,9 @@ func TestInternalRuntimeCreateExportCapabilityDeniedWhenWebDAVUnavailable(t *tes
 					}
 					return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
 				},
-				OperationID: func() string { return "op_export_runtime" },
-				Clock:       func() time.Time { return now },
+				SavePointHistoryRunnerFactory: testSavePointHistoryRunnerFactory(),
+				OperationID:                   func() string { return "op_export_runtime" },
+				Clock:                         func() time.Time { return now },
 			})
 			if err != nil {
 				t.Fatalf("NewRuntime: %v", err)
@@ -706,6 +805,49 @@ func TestInternalRuntimeReadinessGAProfileRequiresDefaultGACapabilitySet(t *test
 				t.Fatalf("%s gate = %#v, want gated or unavailable", tt.wantGate, gate)
 			}
 		})
+	}
+}
+
+func TestInternalRuntimeReadinessGatesJVSHistoryCapabilitiesWhenReaderConfigMissing(t *testing.T) {
+	cfg := config.Config{
+		ReadinessProfile: config.ReadinessProfileGA,
+		API: config.APIConfig{
+			Mode:                              "internal",
+			ServiceTokens:                     "svc_api=token-api",
+			DeploymentGlobalAllowedCallers:    "svc_api:admin:volume_admin|operation_inspector",
+			DeploymentNamespaceAllowedCallers: "svc_api:product:namespace_admin",
+		},
+		Capabilities: config.Capabilities{
+			Storage: config.Capability{Enabled: true, Ready: true},
+			JVS:     config.Capability{Enabled: true, Ready: true},
+			WebDAV:  config.Capability{Enabled: true, Ready: true},
+		},
+	}
+	readiness := internalReadiness(cfg)
+	rec := httptest.NewRecorder()
+	api.ReadinessHandler(readiness).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	for _, capabilityID := range []string{api.CapabilityJVSSaveRestore, api.CapabilityJVSProjection} {
+		gate, ok := body.Capabilities[capabilityID]
+		if !ok {
+			t.Fatalf("missing readiness capability %q", capabilityID)
+		}
+		if !gate.RequiredForServiceReady || !gate.RequiredForDefaultGA || gate.OptionalGated {
+			t.Fatalf("%s gate = %#v, want default GA required service gate", capabilityID, gate)
+		}
+		if !gate.Enabled || gate.Ready || !gate.Gated || gate.Reason != "save_point_history_not_configured" {
+			t.Fatalf("%s gate = %#v, want save point history config gate", capabilityID, gate)
+		}
+	}
+	if body.Ready {
+		t.Fatalf("readiness = ready, want not ready while JVS history reader config is missing")
 	}
 }
 
@@ -1163,8 +1305,9 @@ func TestInternalRuntimeWiresRepoTemplateAndPurgeCapabilitiesToAdmission(t *test
 			}
 			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
 		},
-		OperationID: func() string { return "op_test" },
-		Clock:       func() time.Time { return time.Unix(100, 0).UTC() },
+		SavePointHistoryRunnerFactory: testSavePointHistoryRunnerFactory(),
+		OperationID:                   func() string { return "op_test" },
+		Clock:                         func() time.Time { return time.Unix(100, 0).UTC() },
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -1530,6 +1673,10 @@ func baseTestRuntimeSource() config.MapSource {
 		"AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL":        "https://files.example.test",
 		"AFSCP_JVS_ENABLED":                              "true",
 		"AFSCP_JVS_READY":                                "true",
+		"AFSCP_JVS_BINARY_PATH":                          "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":                        config.JVSAcceptedLinuxAMD64SHA256,
+		"AFSCP_JVS_CWD":                                  "/var/lib/afscp/jvs-cwd",
+		"AFSCP_API_VOLUME_ROOTS":                         "vol_main=/srv/afscp/volumes/vol_main",
 		"AFSCP_WEBDAV_ENABLED":                           "true",
 		"AFSCP_WEBDAV_READY":                             "true",
 		"AFSCP_MOUNT_ENABLED":                            "true",
@@ -1556,8 +1703,9 @@ func newTestRuntimeWithSource(t *testing.T, source config.MapSource, ping func(c
 			store := &fakeRuntimeStore{binding: testBinding()}
 			return StoreHandle{Store: store, Close: store.Close, Ping: ping}, nil
 		},
-		OperationID: func() string { return "op_test" },
-		Clock:       func() time.Time { return time.Unix(100, 0).UTC() },
+		SavePointHistoryRunnerFactory: testSavePointHistoryRunnerFactory(),
+		OperationID:                   func() string { return "op_test" },
+		Clock:                         func() time.Time { return time.Unix(100, 0).UTC() },
 	})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -1787,4 +1935,26 @@ func (*fakeRuntimeStore) RestoreRunExistsForPreviewOperation(context.Context, st
 
 func (*fakeRuntimeStore) AppendAuditEvent(context.Context, audit.Event) error {
 	return nil
+}
+
+type runtimeFakeJVSHistoryRunner struct {
+	calls       int
+	controlRoot string
+	summary     jvsrunner.HistorySummary
+	err         error
+}
+
+func (runner *runtimeFakeJVSHistoryRunner) History(_ context.Context, controlRoot string) (jvsrunner.HistorySummary, error) {
+	runner.calls++
+	runner.controlRoot = controlRoot
+	if runner.err != nil {
+		return jvsrunner.HistorySummary{}, runner.err
+	}
+	return runner.summary, nil
+}
+
+func testSavePointHistoryRunnerFactory() SavePointHistoryRunnerFactory {
+	return func(config.WorkerRepoCreateRecoveryConfig) (api.JVSHistoryRunner, error) {
+		return &runtimeFakeJVSHistoryRunner{summary: jvsrunner.HistorySummary{Workspace: "main"}}, nil
+	}
 }

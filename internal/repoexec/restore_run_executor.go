@@ -128,7 +128,7 @@ func (executor *RestoreRunExecutor) ExecuteOperationRecovery(ctx context.Context
 	if err != nil {
 		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_PLAN_INVALID", "restore run plan invalid", nil)
 	}
-	if err := validateRestoreRunPreviewAndPlan(record, previewOperation, durablePlan); err != nil {
+	if err := validateRestoreRunPreviewAndPlanTarget(record, previewOperation, durablePlan); err != nil {
 		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_PLAN_MISMATCH", "restore run plan mismatch", nil)
 	}
 	if (record.Phase == operations.OperationPhaseRestoreRunValidate || record.Phase == operations.OperationPhaseRestoreRunWriterFenced) && durablePlan.Status != restoreplan.StatusPending {
@@ -139,6 +139,9 @@ func (executor *RestoreRunExecutor) ExecuteOperationRecovery(ctx context.Context
 	}
 	if record.Phase == operations.OperationPhaseRestoreRunValidate && durablePlan.Stale {
 		return executor.commitRestoreRunStalePreview(ctx, record, durablePlan, now, restoreRunStalePreviewStatusFromPlan(durablePlan))
+	}
+	if err := validateRestoreRunPreviewAndPlanMetadata(previewOperation, durablePlan); err != nil {
+		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_PLAN_MISMATCH", "restore run plan mismatch", nil)
 	}
 	if record.Phase == operations.OperationPhaseRestoreRunConsuming {
 		return executor.commitRestoreRunIntervention(ctx, record, now, "RESTORE_RUN_CONSUMING_RECOVERY_REQUIRES_OPERATOR", "restore run consuming recovery requires durable applied evidence", map[string]any{"restore_plan_id": durablePlan.ID, "restore_plan_status": durablePlan.Status.String(), "missing_evidence": "restore_run_applied"})
@@ -448,6 +451,13 @@ func restoreRunPreviewOperationIDOrEmpty(record operations.OperationRecord) stri
 }
 
 func validateRestoreRunPreviewAndPlan(record, preview operations.OperationRecord, plan restoreplan.Plan) error {
+	if err := validateRestoreRunPreviewAndPlanTarget(record, preview, plan); err != nil {
+		return err
+	}
+	return validateRestoreRunPreviewAndPlanMetadata(preview, plan)
+}
+
+func validateRestoreRunPreviewAndPlanTarget(record, preview operations.OperationRecord, plan restoreplan.Plan) error {
 	if preview.Type != operations.OperationRestorePreview || preview.State != operations.OperationStateSucceeded || preview.Phase != operations.OperationPhaseRestorePreviewCommitted {
 		return errors.New("preview operation is not a succeeded restore preview")
 	}
@@ -461,6 +471,10 @@ func validateRestoreRunPreviewAndPlan(record, preview operations.OperationRecord
 	if plan.PreviewOperationID != previewOperationID || plan.NamespaceID != record.NamespaceID || plan.RepoID != record.RepoID {
 		return errors.New("restore plan does not match restore run target")
 	}
+	return nil
+}
+
+func validateRestoreRunPreviewAndPlanMetadata(preview operations.OperationRecord, plan restoreplan.Plan) error {
 	if !restoreRunPreviewMetadataMatchesPlan(preview, plan) {
 		return errors.New("restore preview metadata does not match restore plan")
 	}
@@ -477,31 +491,29 @@ func restoreRunPreviewMetadataMatchesPlan(preview operations.OperationRecord, pl
 }
 
 func restoreRunPreviewMetadataFieldMatches(preview operations.OperationRecord, key, expected string, validate func(string) error) bool {
-	seen := false
-	for _, value := range restoreRunPreviewSafeMetadataValues(preview, key) {
-		seen = true
+	values := restoreRunPreviewVerifiableMetadataValues(preview, key)
+	if len(values) != 2 {
+		return false
+	}
+	for _, value := range values {
 		if value != expected || validate(value) != nil {
 			return false
 		}
 	}
-	return seen
+	return true
 }
 
-func restoreRunPreviewSafeMetadataValues(preview operations.OperationRecord, key string) []string {
+func restoreRunPreviewVerifiableMetadataValues(preview operations.OperationRecord, key string) []string {
 	values := []string{}
-	for _, source := range []any{preview.ExternalResourceIDs, preview.VerificationResult, preview.JVSJSONOutput} {
-		switch typed := source.(type) {
-		case map[string]string:
-			value := strings.TrimSpace(typed[key])
-			if value != "" {
-				values = append(values, value)
-			}
-		case map[string]any:
-			value, _ := typed[key].(string)
-			value = strings.TrimSpace(value)
-			if value != "" {
-				values = append(values, value)
-			}
+	for _, source := range []any{preview.VerificationResult, preview.JVSJSONOutput} {
+		typed, ok := source.(map[string]any)
+		if !ok {
+			continue
+		}
+		value, _ := typed[key].(string)
+		value = strings.TrimSpace(value)
+		if value != "" {
+			values = append(values, value)
 		}
 	}
 	return values

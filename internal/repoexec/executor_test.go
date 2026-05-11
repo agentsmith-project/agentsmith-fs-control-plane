@@ -2,8 +2,11 @@ package repoexec
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -543,6 +546,7 @@ func newTestSavePointExecutor(t *testing.T, store *fakeRepoCreateStore, runner *
 func TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
+	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
 		saveSummary:      jvsrunner.SaveSummary{SavePointID: "sp_template01", NewestSavePointID: "sp_template01", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
@@ -570,6 +574,43 @@ func TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate(t *testin
 	}
 	if store.releasedFenceID != "fence_op_template_create" || activeWriterFenceCount(store.fences, "op_template_create") != 0 {
 		t.Fatalf("released/active writer fence = %q/%#v, want released source writer fence", store.releasedFenceID, store.fences)
+	}
+}
+
+func TestTemplateCreateExecutorPreparesCloneParentWithoutOccupyingTargetRoots(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		saveSummary:      jvsrunner.SaveSummary{SavePointID: "1778487604491-0f57855a", NewestSavePointID: "1778487604491-0f57855a", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
+		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_template_alpha", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_template_alpha", Healthy: true, Workspace: "main"},
+		beforeRepoClone: func(_ string, targetPayloadRoot string, targetControlRoot string) {
+			parent := filepath.Dir(targetPayloadRoot)
+			if filepath.Dir(targetControlRoot) != parent {
+				t.Fatalf("target parents differ: payload=%q control=%q", parent, filepath.Dir(targetControlRoot))
+			}
+			if info, err := os.Stat(parent); err != nil || !info.IsDir() {
+				t.Fatalf("target parent not prepared: info=%#v err=%v", info, err)
+			}
+			for _, targetRoot := range []string{targetPayloadRoot, targetControlRoot} {
+				if _, err := os.Lstat(targetRoot); !os.IsNotExist(err) {
+					t.Fatalf("target root %q existed before JVS repo clone: %v", targetRoot, err)
+				}
+			}
+		},
+	}
+	executor, err := NewTemplateCreateExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_create" }, VolumeRoots: store.volumeRoots})
+	if err != nil {
+		t.Fatalf("NewTemplateCreateExecutor: %v", err)
+	}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "save,repo_clone,doctor" {
+		t.Fatalf("jvs calls = %#v, want save,repo_clone,doctor", runner.calls)
 	}
 }
 
@@ -635,9 +676,82 @@ func TestTemplateCreateExecutorPreJVSWriterSessionDenialReleasesFence(t *testing
 	}
 }
 
+func TestTemplateCreateExecutorActiveRestorePlanBlocksBeforeWriterFence(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
+	store.repo = activeRepoResource(now)
+	store.restorePlan = templateCreateActiveRestorePlan(now)
+	runner := &fakeJVSRunner{}
+	executor, err := NewTemplateCreateExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_create" }, VolumeRoots: store.volumeRoots})
+	if err != nil {
+		t.Fatalf("NewTemplateCreateExecutor: %v", err)
+	}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if store.templateCreateWriterFenceMarks != 0 || len(runner.calls) != 0 {
+		t.Fatalf("writer fence/JVS calls = %d/%#v, want blocked before fence and JVS", store.templateCreateWriterFenceMarks, runner.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Phase != operations.OperationPhaseTemplateCreateValidate || store.operation.Error == nil || store.operation.Error.Code != "TEMPLATE_CREATE_RESTORE_BLOCKED" || !store.operation.Error.Retryable {
+		t.Fatalf("operation = %#v, want retryable restore-blocked failed operation", store.operation)
+	}
+	verification := asStringAnyMap(store.operation.VerificationResult)
+	if verification["active_restore_plan_present"] != true || verification["restore_plan_status"] != "pending" {
+		t.Fatalf("verification = %#v, want active restore blocker evidence without raw plan id", verification)
+	}
+	if _, ok := verification["restore_plan_id"]; ok {
+		t.Fatalf("verification leaked restore_plan_id: %#v", verification)
+	}
+	if activeWriterFenceCount(store.fences, "op_template_create") != 0 || store.releasedFenceID != "" {
+		t.Fatalf("released/active writer fence = %q/%#v, want no fence acquired", store.releasedFenceID, store.fences)
+	}
+}
+
+func TestTemplateCreateExecutorJVSRecoveryBlockingReleasesWriterFence(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		saveErr: &jvsrunner.CommandError{Command: "save", ExitCode: 1, Code: "E_RECOVERY_BLOCKING"},
+	}
+	executor, err := NewTemplateCreateExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_create" }, VolumeRoots: store.volumeRoots})
+	if err != nil {
+		t.Fatalf("NewTemplateCreateExecutor: %v", err)
+	}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if store.templateCreateWriterFenceMarks != 1 || strings.Join(runner.calls, ",") != "save" {
+		t.Fatalf("writer fence/JVS calls = %d/%#v, want fence then save only", store.templateCreateWriterFenceMarks, runner.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Phase != operations.OperationPhaseTemplateCreateWriterFenced || store.operation.Error == nil || store.operation.Error.Code != "TEMPLATE_CREATE_RESTORE_BLOCKED" || !store.operation.Error.Retryable {
+		t.Fatalf("operation = %#v, want retryable restore-blocked failed operation", store.operation)
+	}
+	verification := asStringAnyMap(store.operation.VerificationResult)
+	if verification["jvs_recovery_blocking"] != true || verification["active_restore_plan_present"] != true {
+		t.Fatalf("verification = %#v, want controlled JVS recovery-blocking evidence", verification)
+	}
+	if _, ok := verification["jvs_error_code"]; ok {
+		t.Fatalf("verification leaked raw JVS error details: %#v", verification)
+	}
+	if store.operation.Error.Details["jvs_error_code"] != nil || store.operation.Error.Details["jvs_command"] != nil || store.operation.Error.Details["jvs_exit_code"] != nil {
+		t.Fatalf("error details leaked raw JVS details: %#v", store.operation.Error.Details)
+	}
+	if store.releasedFenceID != "fence_op_template_create" || activeWriterFenceCount(store.fences, "op_template_create") != 0 {
+		t.Fatalf("released/active writer fence = %q/%#v, want released writer fence after controlled blocked failure", store.releasedFenceID, store.fences)
+	}
+}
+
 func TestTemplateCreateExecutorJVSFailureAfterSaveRetainsWriterFence(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
+	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
 		saveSummary:  jvsrunner.SaveSummary{SavePointID: "sp_template01", NewestSavePointID: "sp_template01", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
@@ -663,6 +777,7 @@ func TestTemplateCreateExecutorJVSFailureAfterSaveRetainsWriterFence(t *testing.
 func TestTemplateCloneExecutorClonesTemplateToRepoWithoutSave(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
+	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
 	store.repo = templateResource(now)
 	runner := &fakeJVSRunner{
 		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_template_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
@@ -682,6 +797,34 @@ func TestTemplateCloneExecutorClonesTemplateToRepoWithoutSave(t *testing.T) {
 	}
 	if store.repo.ID != "repo_clone01" || store.repo.Kind != resources.RepoKindRepo || store.operation.Phase != operations.OperationPhaseTemplateCloneCommitted {
 		t.Fatalf("committed repo/operation = %#v %#v", store.repo, store.operation)
+	}
+}
+
+func TestTemplateCloneExecutorSuccessCommitFailurePreservesCause(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
+	store.repo = templateResource(now)
+	commitErr := errors.New("postgres template clone commit detail")
+	store.templateCloneSuccessErr = commitErr
+	runner := &fakeJVSRunner{
+		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_template_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_repo_clone", Healthy: true, Workspace: "main"},
+	}
+	executor, err := NewTemplateCloneExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_clone" }, VolumeRoots: store.volumeRoots})
+	if err != nil {
+		t.Fatalf("NewTemplateCloneExecutor: %v", err)
+	}
+
+	err = executor.ExecuteOperationRecovery(context.Background(), templateCloneLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want wrapped commit cause", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "template clone success commit failed") {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want commit failure context", err)
+	}
+	if strings.Join(runner.calls, ",") != "repo_clone,doctor" {
+		t.Fatalf("jvs calls = %#v, want repo_clone,doctor before durable commit failure", runner.calls)
 	}
 }
 
@@ -752,6 +895,23 @@ func templateCloneLeasedRecord(now time.Time) operations.OperationRecord {
 	record.TemplateID = "tmpl_base01"
 	record.InputSummary = map[string]any{"template_id": "tmpl_base01", "target_repo_id": "repo_clone01", "clone_history_mode": "main"}
 	return record
+}
+
+func templateCreateActiveRestorePlan(now time.Time) restoreplan.Plan {
+	return restoreplan.Plan{
+		ID:                 "7598f605-313b-4161-b0dd-7c24d9e8614e",
+		NamespaceID:        "ns_alpha01",
+		RepoID:             "repo_alpha01",
+		PreviewOperationID: "op_preview01",
+		SourceSavePointID:  "1778489560000-4d2e0211",
+		BaseRevision:       "rev_base01",
+		HeadRevision:       "rev_head01",
+		Generation:         "gen_1778489560",
+		FenceMarker:        "preview_fence_op_preview01",
+		Status:             restoreplan.StatusPending,
+		CreatedAt:          now.Add(-time.Minute),
+		UpdatedAt:          now.Add(-time.Minute),
+	}
 }
 
 func activeRepoResource(now time.Time) resources.Repo {
@@ -847,6 +1007,8 @@ type fakeRepoCreateStore struct {
 	releasedFenceID                      string
 	successErr                           error
 	lifecycleSuccessErr                  error
+	templateCloneSuccessErr              error
+	restorePreviewSuccessErr             error
 	failOnCanceledCommitContext          bool
 	blockingLifecycle                    []operations.OperationRecord
 	beforeListSessions                   func()
@@ -995,6 +1157,9 @@ func (store *fakeRepoCreateStore) CommitTemplateCloneSucceededWithLease(_ contex
 	store.repo = repo
 	store.operation = record.Record()
 	store.auditEvents = append(store.auditEvents, event)
+	if store.templateCloneSuccessErr != nil {
+		return resources.Repo{}, operations.OperationRecord{}, store.templateCloneSuccessErr
+	}
 	return repo, store.operation, nil
 }
 
@@ -1010,10 +1175,18 @@ func (store *fakeRepoCreateStore) UpdateRestorePreviewPreflightWithLease(_ conte
 	return store.operation, nil
 }
 
-func (store *fakeRepoCreateStore) CommitRestorePreviewSucceededWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+func (store *fakeRepoCreateStore) CommitRestorePreviewSucceededWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
+	if store.failOnCanceledCommitContext {
+		if err := ctx.Err(); err != nil {
+			return restoreplan.Plan{}, operations.OperationRecord{}, err
+		}
+	}
 	store.restorePlan = plan
 	store.operation = record.Record()
 	store.auditEvents = append(store.auditEvents, event)
+	if store.restorePreviewSuccessErr != nil {
+		return restoreplan.Plan{}, operations.OperationRecord{}, store.restorePreviewSuccessErr
+	}
 	return plan, store.operation, nil
 }
 
@@ -1037,7 +1210,10 @@ func (store *fakeRepoCreateStore) GetRestorePlanByPreviewOperation(_ context.Con
 	return restoreplan.Plan{}, errors.New("restore plan not found")
 }
 
-func (store *fakeRepoCreateStore) GetActiveRestorePlanByRepo(context.Context, string) (restoreplan.Plan, error) {
+func (store *fakeRepoCreateStore) GetActiveRestorePlanByRepo(_ context.Context, repoID string) (restoreplan.Plan, error) {
+	if store.restorePlan.ID == "" || store.restorePlan.RepoID != repoID || !store.restorePlan.Active() {
+		return restoreplan.Plan{}, sql.ErrNoRows
+	}
 	return store.restorePlan, nil
 }
 
@@ -1147,33 +1323,36 @@ func (store *fakeRepoCreateStore) releaseWriterFence(fenceID string, now time.Ti
 }
 
 type fakeJVSRunner struct {
-	calls                   []string
-	payloadRoot             string
-	controlRoot             string
-	saveMessage             string
-	initSummary             jvsrunner.InitSummary
-	doctorSummary           jvsrunner.DoctorSummary
-	saveSummary             jvsrunner.SaveSummary
-	historySummary          jvsrunner.HistorySummary
-	recoveryStatusSummary   jvsrunner.RecoveryStatusSummary
-	recoveryStatusSummaries []jvsrunner.RecoveryStatusSummary
-	restorePreviewSummary   jvsrunner.RestorePreviewSummary
-	restoreRunSummary       jvsrunner.RestoreRunSummary
-	restoreDiscardSummary   jvsrunner.RestoreDiscardSummary
-	repoCloneSummary        jvsrunner.RepoCloneSummary
-	beforeRestorePreview    func()
-	beforeRestoreRun        func()
-	beforeRestoreDiscard    func()
-	initErr                 error
-	doctorErr               error
-	saveErr                 error
-	historyErr              error
-	recoveryStatusErr       error
-	restorePreviewErr       error
-	restoreRunErr           error
-	restoreDiscardErr       error
-	repoCloneErr            error
-	afterDoctor             func(context.Context)
+	calls                               []string
+	payloadRoot                         string
+	controlRoot                         string
+	saveMessage                         string
+	initSummary                         jvsrunner.InitSummary
+	doctorSummary                       jvsrunner.DoctorSummary
+	saveSummary                         jvsrunner.SaveSummary
+	historySummary                      jvsrunner.HistorySummary
+	recoveryStatusSummary               jvsrunner.RecoveryStatusSummary
+	recoveryStatusSummaries             []jvsrunner.RecoveryStatusSummary
+	restorePreviewSummary               jvsrunner.RestorePreviewSummary
+	restoreRunSummary                   jvsrunner.RestoreRunSummary
+	restoreDiscardSummary               jvsrunner.RestoreDiscardSummary
+	repoCloneSummary                    jvsrunner.RepoCloneSummary
+	beforeRepoClone                     func(sourceControlRoot, targetPayloadRoot, targetControlRoot string)
+	beforeRestorePreview                func()
+	beforeRestoreRun                    func()
+	beforeRestoreDiscard                func()
+	initErr                             error
+	doctorErr                           error
+	saveErr                             error
+	historyErr                          error
+	recoveryStatusErr                   error
+	restorePreviewErr                   error
+	restoreRunErr                       error
+	restoreDiscardErr                   error
+	repoCloneErr                        error
+	afterDoctor                         func(context.Context)
+	failRecoveryStatusOnCanceledContext bool
+	failRestoreDiscardOnCanceledContext bool
 }
 
 func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot string) (jvsrunner.InitSummary, error) {
@@ -1208,6 +1387,9 @@ func (runner *fakeJVSRunner) RepoClone(_ context.Context, sourceControlRoot, tar
 	runner.calls = append(runner.calls, "repo_clone")
 	runner.controlRoot = targetControlRoot
 	runner.payloadRoot = targetPayloadRoot
+	if runner.beforeRepoClone != nil {
+		runner.beforeRepoClone(sourceControlRoot, targetPayloadRoot, targetControlRoot)
+	}
 	if runner.repoCloneSummary.SourceRepoID == "" {
 		runner.repoCloneSummary.SourceRepoID = "jvs_repo_alpha"
 	}
@@ -1215,9 +1397,14 @@ func (runner *fakeJVSRunner) RepoClone(_ context.Context, sourceControlRoot, tar
 	return runner.repoCloneSummary, runner.repoCloneErr
 }
 
-func (runner *fakeJVSRunner) RecoveryStatus(_ context.Context, controlRoot string) (jvsrunner.RecoveryStatusSummary, error) {
+func (runner *fakeJVSRunner) RecoveryStatus(ctx context.Context, controlRoot string) (jvsrunner.RecoveryStatusSummary, error) {
 	runner.calls = append(runner.calls, "recovery_status")
 	runner.controlRoot = controlRoot
+	if runner.failRecoveryStatusOnCanceledContext {
+		if err := ctx.Err(); err != nil {
+			return jvsrunner.RecoveryStatusSummary{}, err
+		}
+	}
 	if len(runner.recoveryStatusSummaries) > 0 {
 		summary := runner.recoveryStatusSummaries[0]
 		runner.recoveryStatusSummaries = runner.recoveryStatusSummaries[1:]
@@ -1244,9 +1431,14 @@ func (runner *fakeJVSRunner) RestoreRun(_ context.Context, controlRoot, planID s
 	return runner.restoreRunSummary, runner.restoreRunErr
 }
 
-func (runner *fakeJVSRunner) RestoreDiscard(_ context.Context, controlRoot, planID string) (jvsrunner.RestoreDiscardSummary, error) {
+func (runner *fakeJVSRunner) RestoreDiscard(ctx context.Context, controlRoot, planID string) (jvsrunner.RestoreDiscardSummary, error) {
 	runner.calls = append(runner.calls, "restore_discard")
 	runner.controlRoot = controlRoot
+	if runner.failRestoreDiscardOnCanceledContext {
+		if err := ctx.Err(); err != nil {
+			return jvsrunner.RestoreDiscardSummary{}, err
+		}
+	}
 	if runner.beforeRestoreDiscard != nil {
 		runner.beforeRestoreDiscard()
 	}

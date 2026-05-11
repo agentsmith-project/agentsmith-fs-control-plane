@@ -421,6 +421,73 @@ func TestLoadAPIVolumeRootsRejectsBadRootsWithoutLeakingValues(t *testing.T) {
 	}
 }
 
+func TestLoadAPIJVSReadyWiresSavePointHistoryWithoutExtraGate(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_API_MODE":                              "internal",
+		"AFSCP_API_POSTGRES_DSN":                      "postgres://api:secret@db/afscp",
+		"AFSCP_API_SERVICE_TOKENS":                    "svc_api=token-api",
+		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS": "svc_api:product:operation_inspector",
+		"AFSCP_JVS_ENABLED":                           "true",
+		"AFSCP_JVS_READY":                             "true",
+		"AFSCP_JVS_BINARY_PATH":                       "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":                     acceptedJVSBinarySHA256,
+		"AFSCP_JVS_CWD":                               "/var/lib/afscp/jvs-cwd",
+		"AFSCP_API_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
+		"AFSCP_API_SAVE_POINT_HISTORY_ENABLED":        "false",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	history := cfg.API.SavePointHistory
+	if !history.Enabled {
+		t.Fatalf("API save point history disabled when JVS is ready: %#v", history)
+	}
+	if history.JVSBinaryPath != "/opt/afscp/bin/jvs" || history.JVSBinarySHA256 != acceptedJVSBinarySHA256 || history.JVSCWD != "/var/lib/afscp/jvs-cwd" {
+		t.Fatalf("API save point history JVS config = %#v", history)
+	}
+	if history.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
+		t.Fatalf("API save point history roots = %#v", history.VolumeRoots)
+	}
+}
+
+func TestLoadAPIJVSReadyRequiresSavePointHistoryRuntimeConfig(t *testing.T) {
+	base := MapSource{
+		"AFSCP_API_MODE":                              "internal",
+		"AFSCP_API_POSTGRES_DSN":                      "postgres://api:secret@db/afscp",
+		"AFSCP_API_SERVICE_TOKENS":                    "svc_api=token-api",
+		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS": "svc_api:product:operation_inspector",
+		"AFSCP_JVS_ENABLED":                           "true",
+		"AFSCP_JVS_READY":                             "true",
+	}
+	tests := []struct {
+		name     string
+		override MapSource
+		want     string
+	}{
+		{name: "missing binary", want: "AFSCP_JVS_BINARY_PATH"},
+		{name: "missing cwd", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256}, want: "AFSCP_JVS_CWD"},
+		{name: "missing roots", override: MapSource{"AFSCP_JVS_BINARY_PATH": "/opt/afscp/bin/jvs", "AFSCP_JVS_BINARY_SHA256": acceptedJVSBinarySHA256, "AFSCP_JVS_CWD": "/var/lib/afscp/jvs-cwd"}, want: "AFSCP_API_VOLUME_ROOTS or AFSCP_VOLUME_ROOTS"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := MapSource{}
+			for key, value := range base {
+				source[key] = value
+			}
+			for key, value := range tt.override {
+				source[key] = value
+			}
+			_, err := Load(source)
+			if err == nil {
+				t.Fatal("Load succeeded, want API JVS history config error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want %s", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadAPIWorkloadMountRuntimeSecretRefs(t *testing.T) {
 	cfg, err := Load(MapSource{
 		"AFSCP_API_MODE":                       "internal",

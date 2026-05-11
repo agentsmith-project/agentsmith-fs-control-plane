@@ -62,6 +62,8 @@ type auditAppendStore interface {
 
 type StoreFactory func(context.Context, string) (StoreHandle, error)
 
+type SavePointHistoryRunnerFactory func(config.WorkerRepoCreateRecoveryConfig) (api.JVSHistoryRunner, error)
+
 type StoreHandle struct {
 	Store InternalStore
 	Close func() error
@@ -69,11 +71,12 @@ type StoreHandle struct {
 }
 
 type Options struct {
-	Source       config.Source
-	StoreFactory StoreFactory
-	Logger       *slog.Logger
-	OperationID  api.OperationIDGenerator
-	Clock        func() time.Time
+	Source                        config.Source
+	StoreFactory                  StoreFactory
+	Logger                        *slog.Logger
+	OperationID                   api.OperationIDGenerator
+	Clock                         func() time.Time
+	SavePointHistoryRunnerFactory SavePointHistoryRunnerFactory
 }
 
 type Runtime struct {
@@ -160,22 +163,32 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	var savePointHistoryJVSRunner api.JVSHistoryRunner
+	var savePointHistoryReader api.SavePointHistoryReader
 	if cfg.API.SavePointHistory.Enabled {
-		if err := verifyFileSHA256(cfg.API.SavePointHistory.JVSBinaryPath, config.JVSAcceptedLinuxAMD64SHA256); err != nil {
-			if handle.Close != nil {
-				err = errors.Join(err, handle.Close())
-			}
-			return nil, err
+		jvsFactory := options.SavePointHistoryRunnerFactory
+		if jvsFactory == nil {
+			jvsFactory = NewSavePointHistoryJVSRunnerFromConfig
 		}
-		runner, err := jvsrunner.New(jvsrunner.Config{BinaryPath: cfg.API.SavePointHistory.JVSBinaryPath, CWD: cfg.API.SavePointHistory.JVSCWD})
+		runner, err := jvsFactory(cfg.API.SavePointHistory)
 		if err != nil {
 			if handle.Close != nil {
 				err = errors.Join(err, handle.Close())
 			}
 			return nil, err
 		}
-		savePointHistoryJVSRunner = runner
+		reader, err := api.NewJVSBackedSavePointHistoryReader(api.JVSBackedSavePointHistoryReaderConfig{
+			RepoReader:   handle.Store,
+			VolumeReader: handle.Store,
+			JVSRunner:    runner,
+			VolumeRoots:  cfg.API.SavePointHistory.VolumeRoots,
+		})
+		if err != nil {
+			if handle.Close != nil {
+				err = errors.Join(err, handle.Close())
+			}
+			return nil, err
+		}
+		savePointHistoryReader = reader
 	}
 
 	var operatorRepairStore api.OperatorRepairStore
@@ -197,7 +210,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		ExportStore:                    handle.Store,
 		RepoFenceReader:                handle.Store,
 		SavePointMutationGate:          handle.Store,
-		SavePointHistoryJVSRunner:      savePointHistoryJVSRunner,
+		SavePointHistoryReader:         savePointHistoryReader,
 		SavePointHistoryVolumeRoots:    cfg.API.SavePointHistory.VolumeRoots,
 		OperationInspectionReader:      handle.Store,
 		OperatorRepairStore:            operatorRepairStore,
@@ -295,6 +308,13 @@ func verifyFileSHA256(path, want string) error {
 		return errors.New("jvs binary checksum mismatch")
 	}
 	return nil
+}
+
+func NewSavePointHistoryJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (api.JVSHistoryRunner, error) {
+	if err := verifyFileSHA256(cfg.JVSBinaryPath, config.JVSAcceptedLinuxAMD64SHA256); err != nil {
+		return nil, err
+	}
+	return jvsrunner.New(jvsrunner.Config{BinaryPath: cfg.JVSBinaryPath, CWD: cfg.JVSCWD})
 }
 
 func (runtime *Runtime) Close() error {
@@ -483,6 +503,7 @@ func internalCapabilityMatrix(cfg config.Config) capability.Matrix {
 	pathRedactionStatus := capability.Status{Enabled: true, Ready: true}
 	adminBootstrapStatus := adminBootstrapReadinessStatus(namespaceBindingStatus, volumePreflightStatus, callerPolicyStatus, pathRedactionStatus)
 	jvsStatus := capabilityStatus(cfg.Capabilities.JVS, "jvs_not_configured", "jvs_not_ready")
+	jvsHistoryStatus := jvsHistoryReadinessStatus(jvsStatus, cfg.API.SavePointHistory)
 	webDAVStatus := capabilityStatus(cfg.Capabilities.WebDAV, "webdav_not_configured", "webdav_not_ready")
 	mountStatus := capability.Status{
 		Enabled: cfg.Capabilities.Mount.Enabled,
@@ -528,6 +549,16 @@ func internalCapabilityMatrix(cfg config.Config) capability.Matrix {
 			ID:          capability.JVS,
 			Status:      jvsStatus,
 			Requirement: internalCapabilityRequirement(cfg, capability.JVS, jvsStatus),
+		},
+		capability.Entry{
+			ID:          capability.JVSSaveRestore,
+			Status:      jvsHistoryStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.JVSSaveRestore, jvsHistoryStatus),
+		},
+		capability.Entry{
+			ID:          capability.JVSProjection,
+			Status:      jvsHistoryStatus,
+			Requirement: internalCapabilityRequirement(cfg, capability.JVSProjection, jvsHistoryStatus),
 		},
 		capability.Entry{
 			ID:          capability.WebDAVExport,
@@ -648,6 +679,8 @@ func internalRequiredForServiceReady(cfg config.Config, id capability.ID) bool {
 			capability.PathRedaction,
 			capability.AdminBootstrap,
 			capability.JVS,
+			capability.JVSSaveRestore,
+			capability.JVSProjection,
 			capability.WebDAVExport:
 			return true
 		default:
@@ -664,6 +697,8 @@ func internalRequiredForServiceReady(cfg config.Config, id capability.ID) bool {
 		capability.AdminBootstrap:
 		return true
 	case capability.JVS:
+		return cfg.Capabilities.JVS.Enabled
+	case capability.JVSSaveRestore, capability.JVSProjection:
 		return cfg.Capabilities.JVS.Enabled
 	case capability.WebDAVExport:
 		return cfg.Capabilities.WebDAV.Enabled
@@ -791,6 +826,19 @@ func capabilityStatus(cap config.Capability, disabledReason string, unreadyReaso
 		status.Reason = unreadyReason
 	}
 	return status
+}
+
+func jvsHistoryReadinessStatus(jvsStatus capability.Status, history config.WorkerRepoCreateRecoveryConfig) capability.Status {
+	if !jvsStatus.Enabled {
+		return capability.Status{Enabled: false, Ready: false, Gated: true, Reason: "jvs_not_configured"}
+	}
+	if !jvsStatus.Ready || jvsStatus.Gated {
+		return capability.Status{Enabled: true, Ready: false, Gated: true, Reason: "jvs_not_ready"}
+	}
+	if !history.Enabled {
+		return capability.Status{Enabled: true, Ready: false, Gated: true, Reason: "save_point_history_not_configured"}
+	}
+	return capability.Status{Enabled: true, Ready: true}
 }
 
 func NewOperationID() string {

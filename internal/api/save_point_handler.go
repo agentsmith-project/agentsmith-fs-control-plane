@@ -229,7 +229,15 @@ func (handler savePointLeafHandler) serveCreate(w http.ResponseWriter, r *http.R
 }
 
 func (handler savePointLeafHandler) serveList(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, namespaceID, repoID string) {
-	if handler.historyReader == nil || handler.mutationGate == nil || handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.fenceReader == nil {
+	if handler.historyReader == nil {
+		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeCapabilityDenied, "save point history capability is not configured", false)
+		return
+	}
+	if handler.mutationGate == nil {
+		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return
+	}
+	if handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.fenceReader == nil {
 		writeSavePointError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return
 	}

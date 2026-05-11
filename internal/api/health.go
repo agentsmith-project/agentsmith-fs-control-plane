@@ -18,6 +18,8 @@ const (
 	CapabilityAdminBootstrap         = string(capability.AdminBootstrap)
 	CapabilityCallerPolicyReadiness  = string(capability.CallerPolicyReadiness)
 	CapabilityPathRedaction          = string(capability.PathRedaction)
+	CapabilityJVSSaveRestore         = string(capability.JVSSaveRestore)
+	CapabilityJVSProjection          = string(capability.JVSProjection)
 	CapabilityWebDAVExport           = string(capability.WebDAVExport)
 	CapabilityWorkloadMount          = string(capability.WorkloadMount)
 	CapabilityWorkloadMountBinding   = string(capability.WorkloadMountBinding)
@@ -79,6 +81,8 @@ func NeutralReadiness() ReadinessResponse {
 			CapabilityAdminBootstrap:         disabled,
 			CapabilityCallerPolicyReadiness:  disabled,
 			CapabilityPathRedaction:          disabled,
+			CapabilityJVSSaveRestore:         disabled,
+			CapabilityJVSProjection:          disabled,
 			CapabilityWebDAVExport:           disabled,
 			CapabilityWorkloadMountBinding:   disabled,
 			CapabilityWorkloadMountDiscovery: disabled,
