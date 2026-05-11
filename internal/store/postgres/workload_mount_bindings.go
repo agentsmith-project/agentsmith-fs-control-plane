@@ -392,7 +392,7 @@ func workloadMountBindingCreateCommitSQL() string {
 		"), updated_operation AS (" + operationLeaseFencedUpdateBaseSQL() +
 		"AND operation_type = 'mount_binding_create' AND phase = 'validate_mount_binding_create' AND mount_binding_id = $14 " +
 		"AND namespace_id = $15 AND repo_id = $16 AND resource_type = 'workload_mount_binding' AND resource_id = $14 " +
-		"AND input_summary @> jsonb_build_object('mount_binding_id', $14, 'namespace_id', $15, 'repo_id', $16, 'volume_id', $17, 'mount_path', $18, 'read_only', $19, 'lease_seconds', $21) " +
+		"AND input_summary @> jsonb_build_object('mount_binding_id', $14::text, 'namespace_id', $15::text, 'repo_id', $16::text, 'volume_id', $17::text, 'mount_path', $18::text, 'read_only', $19::boolean, 'lease_seconds', $21::integer) " +
 		"AND EXISTS (SELECT 1 FROM active_namespace) AND EXISTS (SELECT 1 FROM active_binding) AND EXISTS (SELECT 1 FROM active_repo) AND EXISTS (SELECT 1 FROM active_volume) " +
 		"AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) AND ($19 = true OR NOT EXISTS (SELECT 1 FROM held_writer_fence)) " +
 		"RETURNING " + operationReturningColumnsSQL() +
