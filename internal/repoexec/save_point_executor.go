@@ -156,11 +156,67 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 		return executor.commitSavePointSuccess(ctx, working, now, adopted, message, false, false, true)
 	}
 
-	saved, err := executor.jvs.Save(ctx, controlRoot, message)
-	if err != nil {
-		return executor.commitSavePointIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs save failed", withJVSErrorDetails(map[string]any{"pre_save_newest_save_point_id": preSavePointer}, err))
+	attempt := executor.saveWithRepoBusyRepairRetry(ctx, controlRoot, message)
+	if attempt.err != nil {
+		details := withJVSErrorDetails(map[string]any{"pre_save_newest_save_point_id": preSavePointer}, attempt.err)
+		details = withJVSRepairDetails(details, attempt.repair, attempt.repairErr)
+		if isJVSRepoBusyError(attempt.err) {
+			return executor.commitSavePointFailedWithDetails(ctx, working, now, "JVS_COMMAND_FAILED", "jvs save blocked by active repo access", true, details)
+		}
+		return executor.commitSavePointIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs save failed", details)
 	}
-	return executor.commitSavePointSuccess(ctx, working, now, savePointFromSaveSummary(saved, message), message, saved.UnsavedChanges, true, false)
+	working = withJVSRepairVerification(working, attempt.repair)
+	return executor.commitSavePointSuccess(ctx, working, now, savePointFromSaveSummary(attempt.saved, message), message, attempt.saved.UnsavedChanges, true, false)
+}
+
+type savePointSaveAttempt struct {
+	saved     jvsrunner.SaveSummary
+	repair    *jvsrunner.DoctorRepairRuntimeSummary
+	err       error
+	repairErr error
+}
+
+func (executor *SavePointExecutor) saveWithRepoBusyRepairRetry(ctx context.Context, controlRoot, message string) savePointSaveAttempt {
+	saved, err := executor.jvs.Save(ctx, controlRoot, message)
+	if err == nil || !isJVSRepoBusyError(err) {
+		return savePointSaveAttempt{saved: saved, err: err}
+	}
+
+	repair, repairErr := executor.jvs.DoctorRepairRuntime(ctx, controlRoot)
+	if repairErr != nil {
+		return savePointSaveAttempt{saved: saved, err: err, repairErr: repairErr}
+	}
+
+	attempt := savePointSaveAttempt{repair: &repair}
+	attempt.saved, attempt.err = executor.saveWithTransientRepoBusyRetry(ctx, controlRoot, message)
+	return attempt
+}
+
+func (executor *SavePointExecutor) saveWithTransientRepoBusyRetry(ctx context.Context, controlRoot, message string) (jvsrunner.SaveSummary, error) {
+	const maxAttempts = 2
+	const retryDelay = 100 * time.Millisecond
+
+	var saved jvsrunner.SaveSummary
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		saved, err = executor.jvs.Save(ctx, controlRoot, message)
+		if err == nil || !isJVSRepoBusyError(err) || attempt == maxAttempts-1 {
+			return saved, err
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return jvsrunner.SaveSummary{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return saved, err
 }
 
 func (executor *SavePointExecutor) validateMetadata(ctx context.Context, record operations.OperationRecord, repo resources.Repo) error {
@@ -231,7 +287,14 @@ func (executor *SavePointExecutor) commitSavePointSuccess(ctx context.Context, r
 }
 
 func (executor *SavePointExecutor) commitSavePointFailed(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string) error {
-	operation := savePointFailedOperation(record, now, operations.OperationStateFailed, code, message)
+	return executor.commitSavePointFailedWithDetails(ctx, record, now, code, message, false, nil)
+}
+
+func (executor *SavePointExecutor) commitSavePointFailedWithDetails(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, retryable bool, details map[string]any) error {
+	operation := savePointFailedOperation(record, now, operations.OperationStateFailed, code, message, retryable)
+	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	attachJVSErrorDetails(&operation, details)
+	attachJVSRepairDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "save_point_create_failed", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err
@@ -243,9 +306,10 @@ func (executor *SavePointExecutor) commitSavePointFailed(ctx context.Context, re
 }
 
 func (executor *SavePointExecutor) commitSavePointIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
-	operation := savePointFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
+	operation := savePointFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message, false)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
 	attachJVSErrorDetails(&operation, details)
+	attachJVSRepairDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "save_point_create_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err
@@ -256,15 +320,20 @@ func (executor *SavePointExecutor) commitSavePointIntervention(ctx context.Conte
 	return fmt.Errorf("%w: save point operator intervention required", recovery.ErrOperationManualIntervention)
 }
 
-func savePointFailedOperation(record operations.OperationRecord, now time.Time, state operations.OperationState, code, message string) operations.OperationRecord {
+func savePointFailedOperation(record operations.OperationRecord, now time.Time, state operations.OperationState, code, message string, retryable bool) operations.OperationRecord {
 	operation := record
 	operation.State = state
 	if operation.Phase != operations.OperationPhaseSavePointCreatePrepared {
 		operation.Phase = operations.OperationPhaseSavePointCreateValidate
 	}
-	operation.Error = &operations.OperationError{Code: code, Message: message, Retryable: false, CorrelationID: record.CorrelationID, OperationID: record.ID, Details: map[string]any{"repo_id": record.RepoID}}
+	operation.Error = &operations.OperationError{Code: code, Message: message, Retryable: retryable, CorrelationID: record.CorrelationID, OperationID: record.ID, Details: map[string]any{"repo_id": record.RepoID}}
 	operation.FinishedAt = &now
 	return operation
+}
+
+func isJVSRepoBusyError(err error) bool {
+	var commandErr *jvsrunner.CommandError
+	return errors.As(err, &commandErr) && commandErr.Code == "E_REPO_BUSY"
 }
 
 func (executor *SavePointExecutor) auditEvent(operation operations.OperationRecord, now time.Time, outcome audit.Outcome, reason string, details map[string]any) (audit.Event, error) {
@@ -314,6 +383,18 @@ func withPreSavePointer(record operations.OperationRecord, pointer string) opera
 	verification := asStringAnyMap(record.VerificationResult)
 	verification["pre_save_history_captured"] = true
 	verification["pre_save_newest_save_point_id"] = strings.TrimSpace(pointer)
+	record.VerificationResult = verification
+	return record
+}
+
+func withJVSRepairVerification(record operations.OperationRecord, repair *jvsrunner.DoctorRepairRuntimeSummary) operations.OperationRecord {
+	if repair == nil {
+		return record
+	}
+	verification := asStringAnyMap(record.VerificationResult)
+	verification[jvsRepairAttemptedDetail] = true
+	verification[jvsRepairSucceededDetail] = true
+	verification[jvsRepairCleanLocksCleanedDetail] = repair.CleanLocks.Cleaned
 	record.VerificationResult = verification
 	return record
 }

@@ -1,6 +1,6 @@
 # ADR 0009: Pin Released JVS Runner Binary Before Storage Mutations
 
-Status: accepted for development handoff; G-005 closed by v0.4.8 smoke evidence
+Status: accepted for development handoff; active pin is JVS v0.4.9
 
 ## Context
 
@@ -14,10 +14,10 @@ release asset; it should not require rebuilding JVS locally during GA handoff.
 Pinned release for the AFSCP runner contract:
 
 ```text
-release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8
-version: v0.4.8
+release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.9
+version: v0.4.9
 asset: jvs-linux-amd64
-sha256: f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521
+sha256: 0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944
 signature bundle: jvs-linux-amd64.bundle
 ```
 
@@ -50,24 +50,29 @@ Required smoke surface:
 - recovery status for pending preview and post-discard/post-run idle states
 - `repo clone --target-control-root --save-points main`
 - `doctor --strict`
+- `doctor --strict --repair-runtime` for stale repository mutation lock cleanup
+  after save `E_REPO_BUSY`
 - clean controlled CWD behavior for post-init commands with explicit
   `--control-root <control> --workspace main --json`
 - redacted JSON capture
 
 Accepted evidence:
 
-Pre-dev smoke with the pinned `v0.4.8` release binary passed the required
-external control-root, save/history, restore preview/run, post-restore recovery
-status, doctor, and clone-after-restore checks. After restore-run, recovery
-status returned `ok=true` with no plans, and `doctor --strict` returned healthy.
-Follow-up clean-CWD lifecycle smoke with the same official binary and SHA-256
-verified post-init commands from a clean controlled CWD, restore discard,
-pending preview recovery status with `restore_state` blocking and empty
-`plans`, and idle recovery status after discard and restore-run.
+JVS v0.4.9 release pin evidence records the active release URL, asset, and
+SHA-256 from the official `SHA256SUMS`. AFSCP runner tests pin the argv shape,
+JSON parsing, and fail-closed behavior for the external-control
+`doctor --strict --repair-runtime --json` stale repository mutation lock cleanup
+contract.
+
+Earlier pre-dev smoke with the pinned `v0.4.8` release binary passed the
+required external control-root, save/history, restore preview/run, post-restore
+recovery status, doctor, and clone-after-restore checks. That artifact remains
+historical context and is not the active pin.
 
 Evidence:
 
-- accepted: `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`
+- active pin: `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`
+- historical smoke: `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`
 - historical blocker: `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`
 
 ## Consequences
@@ -76,8 +81,8 @@ Positive:
 
 - Prevents implementing restore-run or clone against ambiguous JVS recovery
   state.
-- Records that the v0.4.7 restore-run recovery plan residual blocker is resolved
-  by v0.4.8 evidence.
+- Records the current v0.4.9 runner pin and stale repository mutation lock
+  repair contract.
 - Keeps AFSCP storage mutation handlers behind evidence instead of hope.
 
 Tradeoffs:

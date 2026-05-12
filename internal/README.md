@@ -65,11 +65,11 @@ needed before real handlers and storage mutation work:
 - `namespacebindingexec`: minimal recovery executor for `namespace_volume_binding_put`;
   it commits binding metadata, the terminal operation update, and the audit
   event through the dedicated namespace volume binding store boundary.
-- `jvsrunner`: JVS v0.4.8 CLI runner abstraction for fixed
+- `jvsrunner`: JVS v0.4.9 CLI runner abstraction for fixed
   external-control-root JSON commands, including `init`, `doctor --strict`,
-  save/history/restore primitives, recovery status, and repo clone. Repo, save
-  point, restore preview/discard/run, and template recovery workers wire these
-  primitives behind explicit worker gates.
+  strict doctor runtime repair, save/history/restore primitives, recovery
+  status, and repo clone. Repo, save point, restore preview/discard/run, and
+  template recovery workers wire these primitives behind explicit worker gates.
 - `repoexec`: opt-in repo recovery executors. `repo_create` resolves metadata,
   acquires the create fence, runs JVS `init`/`doctor --strict`, and commits repo
   metadata, terminal operation, audit, and fence release through dedicated store

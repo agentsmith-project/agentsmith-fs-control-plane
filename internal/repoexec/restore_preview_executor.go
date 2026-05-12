@@ -195,10 +195,7 @@ func (executor *RestorePreviewExecutor) ExecuteOperationRecovery(ctx context.Con
 func (executor *RestorePreviewExecutor) executeRestorePreview(ctx context.Context, working operations.OperationRecord, now time.Time, controlRoot, savePointID string) error {
 	preview, err := executor.jvs.RestorePreview(ctx, controlRoot, savePointID)
 	if err != nil {
-		if handled, handleErr := executor.reconcileRestorePreviewTimeout(ctx, working, now, controlRoot, err); handled {
-			return handleErr
-		}
-		return executor.commitRestorePreviewIntervention(ctx, working, now, "JVS_RESTORE_PREVIEW_FAILED", "jvs restore preview failed", withJVSErrorDetails(map[string]any{"source_save_point_id": savePointID}, err))
+		return executor.reconcileRestorePreviewError(ctx, working, now, controlRoot, savePointID, err)
 	}
 	if err := validateRestorePreviewSummary(preview, savePointID); err != nil {
 		return executor.commitRestorePreviewIntervention(ctx, working, now, "RESTORE_PREVIEW_RESULT_MISMATCH", "restore preview result mismatch", map[string]any{"source_save_point_id": savePointID})
@@ -424,25 +421,40 @@ func (executor *RestorePreviewExecutor) discardOrphanPendingRestorePreview(ctx c
 	return true, details, nil
 }
 
-func (executor *RestorePreviewExecutor) reconcileRestorePreviewTimeout(ctx context.Context, record operations.OperationRecord, now time.Time, controlRoot string, previewErr error) (bool, error) {
-	if !errors.Is(previewErr, context.Canceled) && !errors.Is(previewErr, context.DeadlineExceeded) {
-		return false, nil
-	}
+func (executor *RestorePreviewExecutor) reconcileRestorePreviewError(ctx context.Context, record operations.OperationRecord, now time.Time, controlRoot, savePointID string, previewErr error) error {
+	timeout := errors.Is(previewErr, context.Canceled) || errors.Is(previewErr, context.DeadlineExceeded)
 	reconcileCtx, cancel := durableCommitContext(ctx)
 	defer cancel()
 	status, err := executor.jvs.RecoveryStatus(reconcileCtx, controlRoot)
+	details := withJVSErrorDetails(map[string]any{"source_save_point_id": savePointID}, previewErr)
 	if err != nil {
-		return true, executor.commitRestorePreviewIntervention(reconcileCtx, record, now, "RESTORE_PREVIEW_TIMEOUT_RECONCILE_FAILED", "restore preview timeout reconciliation failed", withJVSErrorDetails(nil, err))
+		code := "RESTORE_PREVIEW_ERROR_RECONCILE_FAILED"
+		message := "restore preview error reconciliation failed"
+		if timeout {
+			code = "RESTORE_PREVIEW_TIMEOUT_RECONCILE_FAILED"
+			message = "restore preview timeout reconciliation failed"
+		}
+		return executor.commitRestorePreviewIntervention(reconcileCtx, record, now, code, message, withJVSErrorDetails(details, err))
 	}
 	if restorePreviewRecoveryStatusPendingPreview(status) {
-		return true, executor.discardUncommittedRestorePreview(reconcileCtx, record, now, controlRoot, status)
+		return executor.discardUncommittedRestorePreview(reconcileCtx, record, now, controlRoot, status)
 	}
-	details := restorePreviewRecoveryStatusDetails(status)
+	details = mergeStringAnyMap(details, restorePreviewRecoveryStatusDetails(status))
 	if restorePreviewRecoveryStatusIdle(status) {
-		details["timeout_reconcile_status"] = "idle_no_pending_preview"
-		return true, executor.commitRestorePreviewRetryableFailedWithDetails(reconcileCtx, record, now, "RESTORE_PREVIEW_TIMEOUT_RETRYABLE", "restore preview timed out without a pending JVS plan; retry restore preview", details)
+		if timeout {
+			details["timeout_reconcile_status"] = "idle_no_pending_preview"
+			return executor.commitRestorePreviewRetryableFailedWithDetails(reconcileCtx, record, now, "RESTORE_PREVIEW_TIMEOUT_RETRYABLE", "restore preview timed out without a pending JVS plan; retry restore preview", details)
+		}
+		details["post_error_reconcile_status"] = "idle_no_pending_preview"
+		return executor.commitRestorePreviewRetryableFailedWithDetails(reconcileCtx, record, now, "RESTORE_PREVIEW_NO_SIDE_EFFECT_RETRYABLE", "restore preview failed without a pending JVS plan; retry restore preview", details)
 	}
-	return true, executor.commitRestorePreviewIntervention(reconcileCtx, record, now, "RESTORE_PREVIEW_TIMEOUT_RECONCILE_REQUIRES_OPERATOR", "restore preview timeout reconciliation found an ambiguous JVS recovery state", details)
+	code := "RESTORE_PREVIEW_ERROR_RECONCILE_REQUIRES_OPERATOR"
+	message := "restore preview error reconciliation found an ambiguous JVS recovery state"
+	if timeout {
+		code = "RESTORE_PREVIEW_TIMEOUT_RECONCILE_REQUIRES_OPERATOR"
+		message = "restore preview timeout reconciliation found an ambiguous JVS recovery state"
+	}
+	return executor.commitRestorePreviewIntervention(reconcileCtx, record, now, code, message, details)
 }
 
 func restorePreviewFailedOperation(record operations.OperationRecord, now time.Time, state operations.OperationState, code, message string) operations.OperationRecord {

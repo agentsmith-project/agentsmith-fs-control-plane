@@ -78,6 +78,20 @@ func TestRepoHasNonTerminalJVSMutationScopesRepoTypeAndNonTerminalState(t *testi
 	}
 }
 
+func TestRepoHasNonTerminalJVSMutationDoesNotBlockFailedNoSideEffectRestorePreview(t *testing.T) {
+	query := repoHasNonTerminalJVSMutationSQL()
+	assertSQLContainsInOrder(t, query,
+		"operation_type IN ('save_point_create', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
+		"operation_state NOT IN ('succeeded','failed','cancelled')",
+	)
+	if strings.Contains(query, "restore_plans") {
+		t.Fatalf("save point history gate must not inspect durable restore plans: %s", query)
+	}
+	if strings.Contains(query, "operation_state = 'failed'") {
+		t.Fatalf("save point history gate must not block failed no-side-effect preview operations: %s", query)
+	}
+}
+
 func TestRestoreRunExistsForPreviewOperationScopesPreviewRepoNamespaceAndBlockingStates(t *testing.T) {
 	exec := &fakeExecutor{row: fakeRow{values: []any{true}}}
 	st := &Store{exec: exec}

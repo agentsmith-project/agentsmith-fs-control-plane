@@ -79,6 +79,26 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		)
 	})
 
+	t.Run("save point repo busy terminalization keeps complete retryable error", func(t *testing.T) {
+		contract.requireRawFragments(t,
+			"with repo_busy_candidates as",
+			"error_json#>>'{details,jvs_error_code}' = 'e_repo_busy'",
+			"verification_result#>>'{jvs_error_code}' = 'e_repo_busy'",
+			"jvs_json_output#>>'{jvs_error_code}' = 'e_repo_busy'",
+			"'code', 'jvs_command_failed'",
+			"'message', 'jvs save blocked by active repo access'",
+			"'retryable', true",
+			"'correlation_id', correlation_id",
+			"'operation_id', operation_id",
+			"'details', jsonb_strip_nulls",
+			"existing_details - 'jvs_exit_code'",
+			"'jvs_error_code', 'e_repo_busy'",
+			"'jvs_command', 'save'",
+			"operation_state = 'failed'",
+			"error_json = repo_busy_errors.normalized_error_json",
+		)
+	})
+
 	t.Run("audit outbox table", func(t *testing.T) {
 		table := contract.requireTable(t, "audit_outbox")
 
@@ -389,6 +409,13 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 
 func TestPostgreSQLMigrationsDoNotEncodeStorageMutationMaterial(t *testing.T) {
 	contract := loadMigrationContract(t)
+	raw := contract.raw
+	for _, allowed := range []string{
+		"jvs_command_failed",
+		"jvs_command",
+	} {
+		raw = strings.ReplaceAll(raw, allowed, "")
+	}
 
 	// Protocol names and one-way verifier/hash/salt columns are safe schema
 	// vocabulary. The migration must still never encode plaintext credentials,
@@ -406,7 +433,7 @@ func TestPostgreSQLMigrationsDoNotEncodeStorageMutationMaterial(t *testing.T) {
 		"storage_mutation",
 	}
 	for _, word := range forbidden {
-		if strings.Contains(contract.raw, word) {
+		if strings.Contains(raw, word) {
 			t.Fatalf("migration SQL contains forbidden storage-mutation/material term %q", word)
 		}
 	}

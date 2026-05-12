@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const acceptedJVSBinarySHA256 = "f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521"
+const acceptedJVSBinarySHA256 = "0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944"
 
 func TestLoadDefaultsFailClosed(t *testing.T) {
 	cfg, err := Load(MapSource{})

@@ -109,6 +109,83 @@ func TestSavePointExecutorPersistsPreSaveMarkerThenSavesAndCommits(t *testing.T)
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
+func TestSavePointExecutorRepoBusyFailsTerminallyWithoutManualIntervention(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
+		saveErr:        &jvsrunner.CommandError{Command: "save", ExitCode: 1, Code: "E_REPO_BUSY"},
+		doctorRepairErr: &jvsrunner.CommandError{
+			Command:  "doctor",
+			ExitCode: 24,
+			Code:     "E_ACTIVE_OPERATION_BLOCKING",
+		},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if strings.Join(runner.calls, ",") != "history,save,doctor_repair" {
+		t.Fatalf("JVS calls = %#v, want repo-busy repair attempt without raw lock mutation", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed {
+		t.Fatalf("operation state = %s, want failed terminal state", store.operation.State)
+	}
+	if store.operation.Error == nil || store.operation.Error.Code != "JVS_COMMAND_FAILED" || !store.operation.Error.Retryable {
+		t.Fatalf("operation error = %#v, want retryable JVS_COMMAND_FAILED", store.operation.Error)
+	}
+	if store.operation.Error.Details["jvs_error_code"] != "E_REPO_BUSY" || store.operation.Error.Details["repo_id"] != "repo_alpha01" {
+		t.Fatalf("operation error details = %#v, want safe repo-busy details", store.operation.Error.Details)
+	}
+	if store.operation.Error.Details["jvs_repair_attempted"] != true || store.operation.Error.Details["jvs_repair_succeeded"] != false {
+		t.Fatalf("operation error details = %#v, want failed repair evidence", store.operation.Error.Details)
+	}
+	if store.operation.VerificationResult.(map[string]any)["jvs_error_code"] != "E_REPO_BUSY" {
+		t.Fatalf("verification = %#v, want repo-busy marker for product projection", store.operation.VerificationResult)
+	}
+	if store.operation.VerificationResult.(map[string]any)["jvs_repair_error_code"] != "E_ACTIVE_OPERATION_BLOCKING" {
+		t.Fatalf("verification = %#v, want repair failure marker", store.operation.VerificationResult)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_failed" {
+		t.Fatalf("audit events = %#v, want ordinary failed save point audit", store.auditEvents)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
+func TestSavePointExecutorRetriesTransientRepoBusySave(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		historySummary:      jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
+		saveSummary:         jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z", UnsavedChanges: true},
+		saveErrs:            []error{&jvsrunner.CommandError{Command: "save", ExitCode: 1, Code: "E_REPO_BUSY"}, nil},
+		doctorRepairSummary: jvsrunner.DoctorRepairRuntimeSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main", CleanLocks: jvsrunner.RepairActionSummary{Action: "clean_locks", Success: true, Cleaned: 1}},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if strings.Join(runner.calls, ",") != "history,save,doctor_repair,save" {
+		t.Fatalf("JVS calls = %#v, want repair-runtime between busy save and retry", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseSavePointCreateCommitted {
+		t.Fatalf("operation = %#v, want succeeded after transient busy retry", store.operation)
+	}
+	result := store.operation.VerificationResult.(map[string]any)
+	if result["save_point_id"] != "sp_after" || result["unsaved_changes"] != true {
+		t.Fatalf("verification = %#v, want retried save point result", result)
+	}
+	if result["jvs_repair_attempted"] != true || result["jvs_repair_succeeded"] != true || result["jvs_repair_clean_locks_cleaned"] != 1 {
+		t.Fatalf("verification = %#v, want successful repair evidence", result)
+	}
+}
+
 func TestSavePointExecutorUsesDurableNaturalLanguageMessageWithoutRedaction(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
@@ -1329,7 +1406,9 @@ type fakeJVSRunner struct {
 	saveMessage                         string
 	initSummary                         jvsrunner.InitSummary
 	doctorSummary                       jvsrunner.DoctorSummary
+	doctorRepairSummary                 jvsrunner.DoctorRepairRuntimeSummary
 	saveSummary                         jvsrunner.SaveSummary
+	saveErrs                            []error
 	historySummary                      jvsrunner.HistorySummary
 	recoveryStatusSummary               jvsrunner.RecoveryStatusSummary
 	recoveryStatusSummaries             []jvsrunner.RecoveryStatusSummary
@@ -1343,6 +1422,7 @@ type fakeJVSRunner struct {
 	beforeRestoreDiscard                func()
 	initErr                             error
 	doctorErr                           error
+	doctorRepairErr                     error
 	saveErr                             error
 	historyErr                          error
 	recoveryStatusErr                   error
@@ -1370,10 +1450,21 @@ func (runner *fakeJVSRunner) DoctorStrict(ctx context.Context, controlRoot strin
 	return runner.doctorSummary, runner.doctorErr
 }
 
+func (runner *fakeJVSRunner) DoctorRepairRuntime(_ context.Context, controlRoot string) (jvsrunner.DoctorRepairRuntimeSummary, error) {
+	runner.calls = append(runner.calls, "doctor_repair")
+	runner.controlRoot = controlRoot
+	return runner.doctorRepairSummary, runner.doctorRepairErr
+}
+
 func (runner *fakeJVSRunner) Save(_ context.Context, controlRoot, message string) (jvsrunner.SaveSummary, error) {
 	runner.calls = append(runner.calls, "save")
 	runner.controlRoot = controlRoot
 	runner.saveMessage = message
+	if len(runner.saveErrs) > 0 {
+		err := runner.saveErrs[0]
+		runner.saveErrs = runner.saveErrs[1:]
+		return runner.saveSummary, err
+	}
 	return runner.saveSummary, runner.saveErr
 }
 

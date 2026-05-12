@@ -40,6 +40,7 @@ import (
 )
 
 type OperationRecoveryStore interface {
+	RenewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
 	store.OperationWorkerCommitStore
 	store.VolumeEnsureOperationRecoveryStore
 	store.NamespaceUpsertOperationRecoveryStore
@@ -106,9 +107,8 @@ type Options struct {
 }
 
 type RunOnceRunner struct {
-	runner  worker.Runner
-	timeout time.Duration
-	close   func() error
+	runner worker.Runner
+	close  func() error
 }
 
 var eventCounter uint64
@@ -682,9 +682,8 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		})
 	}
 	return &RunOnceRunner{
-		runner:  worker.New(workerConfig),
-		timeout: cfg.Worker.RunOnceTimeout,
-		close:   handle.Close,
+		runner: worker.New(workerConfig),
+		close:  handle.Close,
 	}, nil
 }
 
@@ -779,14 +778,7 @@ func (runner *RunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	timeout := runner.timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	result, err := runner.runner.RunOnce(runCtx)
+	result, err := runner.runner.RunOnce(ctx)
 	if err == nil {
 		err = errors.Join(exportSessionReconcileCountError(result.ExportSessionReconcile), workloadMountStaleLeaseCountError(result.WorkloadMountStale), operationRecoveryCountError(result.OperationRecovery), auditDeliveryCountError(result.AuditStaleRecovery, result.AuditDelivery))
 	}
@@ -1019,8 +1011,8 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 	return scoped.store.AcquireRestoreRunOperationLease(ctx, operationID, request)
 }
 
-func (scoped operationRecoveryStore) RenewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
-	return operations.OperationRecord{}, fmt.Errorf("%w: worker operation recovery does not renew leases", operations.ErrInvalidLeaseRequest)
+func (scoped operationRecoveryStore) RenewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	return scoped.store.RenewOperationLease(ctx, operationID, request)
 }
 
 func (scoped operationRecoveryStore) UpdateOperationWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {

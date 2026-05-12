@@ -33,9 +33,9 @@ const (
 )
 
 const (
-	JVSAcceptedReleaseVersion      = "v0.4.8"
+	JVSAcceptedReleaseVersion      = "v0.4.9"
 	JVSAcceptedLinuxAMD64AssetName = "jvs-linux-amd64"
-	JVSAcceptedLinuxAMD64SHA256    = "f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521"
+	JVSAcceptedLinuxAMD64SHA256    = "0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944"
 )
 
 const (

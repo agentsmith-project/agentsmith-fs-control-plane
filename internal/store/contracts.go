@@ -48,6 +48,9 @@ type OperationRecoveryReader interface {
 // progress/terminal writes must be single conditional durable mutations that
 // return the updated redacted operation record only when the operation was
 // still eligible at the database boundary.
+// Long-running operation executors use RenewOperationLease as the durable
+// heartbeat; callers must not replace it with process-local timers or
+// in-memory ownership state.
 type OperationLeaseStore interface {
 	AcquireOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
 	RenewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)

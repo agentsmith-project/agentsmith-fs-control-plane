@@ -89,7 +89,12 @@ const (
 	operationRecoveryRequiredCode      = "OPERATION_RECOVERY_REQUIRED"
 )
 
-var ErrOperationManualIntervention = errors.New("operation recovery committed operator intervention")
+var (
+	ErrOperationManualIntervention = errors.New("operation recovery committed operator intervention")
+	ErrOperationLeaseRenewalFailed = errors.New("operation recovery lease renewal failed")
+)
+
+const minOperationLeaseRenewalInterval = time.Second
 
 func NewOperationCoordinator(config OperationConfig) OperationCoordinator {
 	return OperationCoordinator{config: config}
@@ -361,7 +366,18 @@ func unsupportedOperationEvidence(record operations.OperationRecord, plan Recove
 }
 
 func executeOperation(ctx context.Context, config OperationConfig, record operations.OperationRecord, plan RecoveryPlan, result *OperationBatchResult, item OperationResult) (bool, error) {
-	if err := config.Executor.ExecuteOperationRecovery(ctx, record, plan); err != nil {
+	execCtx, stopRenewal := startOperationLeaseRenewal(ctx, config, record.ID)
+	err := config.Executor.ExecuteOperationRecovery(execCtx, record, plan)
+	renewErr := stopRenewal()
+	if renewErr != nil {
+		err = errors.Join(err, renewErr)
+		item.Outcome = OperationOutcomeFailed
+		item.Error = err
+		result.Failed++
+		result.Results = append(result.Results, item)
+		return false, fmt.Errorf("operation recovery renew %q: %w", item.OperationID, err)
+	}
+	if err != nil {
 		if errors.Is(err, ErrOperationManualIntervention) {
 			item.Outcome = OperationOutcomeManual
 			item.Error = err
@@ -376,6 +392,83 @@ func executeOperation(ctx context.Context, config OperationConfig, record operat
 		return false, fmt.Errorf("operation recovery execute %q: %w", item.OperationID, err)
 	}
 	return true, nil
+}
+
+func startOperationLeaseRenewal(ctx context.Context, config OperationConfig, operationID string) (context.Context, func() error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	execCtx, cancel := context.WithCancel(ctx)
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	interval := operationLeaseRenewalInterval(config.LeaseDuration)
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				request := operations.LeaseRequest{
+					Owner:    config.Owner,
+					Duration: config.LeaseDuration,
+					Now:      operationLeaseRenewalNow(config),
+				}
+				if _, err := config.LeaseStore.RenewOperationLease(execCtx, operationID, request); err != nil {
+					if ctx.Err() != nil {
+						done <- nil
+						return
+					}
+					select {
+					case <-stop:
+						done <- nil
+						return
+					default:
+					}
+					cancel()
+					done <- fmt.Errorf("%w: %s: %w", ErrOperationLeaseRenewalFailed, operationID, err)
+					return
+				}
+			case <-stop:
+				done <- nil
+				return
+			case <-ctx.Done():
+				done <- nil
+				return
+			}
+		}
+	}()
+
+	return execCtx, func() error {
+		close(stop)
+		cancel()
+		return <-done
+	}
+}
+
+func operationLeaseRenewalInterval(leaseDuration time.Duration) time.Duration {
+	if leaseDuration <= 0 {
+		return minOperationLeaseRenewalInterval
+	}
+	interval := leaseDuration / 3
+	if interval < minOperationLeaseRenewalInterval {
+		interval = minOperationLeaseRenewalInterval
+	}
+	latestSafeInterval := leaseDuration / 2
+	if latestSafeInterval > 0 && interval > latestSafeInterval {
+		interval = latestSafeInterval
+	}
+	if interval <= 0 {
+		return time.Millisecond
+	}
+	return interval
+}
+
+func operationLeaseRenewalNow(config OperationConfig) time.Time {
+	if config.Clock != nil {
+		return config.Clock()
+	}
+	return time.Now().UTC()
 }
 
 func recordAcquireError(result *OperationBatchResult, item OperationResult, err error) error {

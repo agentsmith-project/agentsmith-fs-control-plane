@@ -25,6 +25,7 @@ type AuditEventIDGenerator func() string
 type JVSRunner interface {
 	Init(ctx context.Context, payloadRoot, controlRoot string) (jvsrunner.InitSummary, error)
 	DoctorStrict(ctx context.Context, controlRoot string) (jvsrunner.DoctorSummary, error)
+	DoctorRepairRuntime(ctx context.Context, controlRoot string) (jvsrunner.DoctorRepairRuntimeSummary, error)
 	Save(ctx context.Context, controlRoot, message string) (jvsrunner.SaveSummary, error)
 	History(ctx context.Context, controlRoot string) (jvsrunner.HistorySummary, error)
 }

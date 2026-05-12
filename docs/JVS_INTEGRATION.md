@@ -10,9 +10,10 @@ AFSCP is the only ordinary JVS executor in the storage-control path.
 ## Integration Mode
 
 The GA implementation baseline integrates through the JVS CLI with JSON output.
-The JVS `v0.4.8` release pin, asset, checksum, and smoke evidence are accepted
-as G-005 in `docs/READINESS_EVIDENCE.md`; that evidence covers the JVS pin gate
-only and does not by itself close GA release evidence for storage mutation.
+The JVS `v0.4.9` release pin, asset, checksum, and runner contract evidence are
+accepted as G-005 in `docs/READINESS_EVIDENCE.md`; that evidence covers the JVS
+pin gate only and does not by itself close GA release evidence for storage
+mutation.
 
 Do not reimplement JVS save, version restore, or clone semantics inside AFSCP.
 Repo availability, archive, tombstone, and purge semantics are owned by the
@@ -31,6 +32,8 @@ The baseline command expectations include:
 - recovery status/resume/rollback or an explicit operator-intervention state for failed restore runs
 - repo clone
 - `jvs doctor --strict`
+- `jvs doctor --strict --repair-runtime` after save `E_REPO_BUSY` for stale
+  repository mutation lock cleanup
 
 Repo lifecycle operations are GA storage-control operations implemented through
 AFSCP durable lifecycle state, session drain, and the accepted tombstone/purge
@@ -41,8 +44,8 @@ changes that leave JVS control metadata inconsistent.
 
 See:
 
-- JVS `v0.4.8` release/tag documentation and assets:
-  `https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8`
+- JVS `v0.4.9` release/tag documentation and assets:
+  `https://github.com/agentsmith-project/jvs/releases/tag/v0.4.9`
 - [contracts/jvs-runner-contract-v1.md](contracts/jvs-runner-contract-v1.md)
   for the self-contained AFSCP command matrix and fail-closed behavior.
 
@@ -101,6 +104,9 @@ External control root rules for AFSCP:
 - AFSCP should map JVS errors into stable caller-visible error codes.
 - Save point history/list must request complete history; if JVS reports
   `truncated:true`, AFSCP must fail closed instead of returning a partial list.
+- Save point create may run `doctor --strict --repair-runtime` only after JVS
+  save returns `E_REPO_BUSY`; it must require a successful `clean_locks` repair
+  result before retrying and must never delete JVS lock files directly.
 - `doctor --strict` should be run after repo create, restore, and clone in GA smoke paths.
 - `doctor --strict` should be run before reactivating archived or tombstoned repos when retained JVS metadata is expected to remain usable.
 - The supported JVS release version, binary asset name, checksum, and signature
@@ -174,6 +180,18 @@ AFSCP records a retryable failure instead of manual intervention because there
 is no JVS side effect to reconcile. Any mismatch, multiple pending plans,
 unknown blocking state, unsafe plan ID, discard failure, or competing operation
 moves the plan or operation to `operator_intervention_required`.
+`afscp-worker --run-once` startup timeout bounds worker pass setup such as store
+opening; once an operation lease is acquired, long JVS restore-preview work is
+kept single-owner by durable operation lease renewal, not by a fixed
+per-operation 30s wall-clock cap. The recovery worker renews the same
+operation ID and owner well before expiry; renewal failure cancels the operation
+context so the JVS child exits and the executor can reconcile through
+lease-fenced durable commits. If the process dies, renewal stops and another
+worker may reclaim only after the durable lease expires. JVS command
+cancellation or deadline errors must remain visible as
+`context.Canceled`/`context.DeadlineExceeded` so the executor can perform the
+same post-error recovery-status check before choosing retryable failure versus
+`operator_intervention_required`.
 `stale_restore_preview` defaults to intervention unless the caller explicitly
 uses restore preview discard. During restore-run for the matching pending plan,
 `stale_restore_preview` is a typed `RESTORE_PREVIEW_STALE` failure: AFSCP marks

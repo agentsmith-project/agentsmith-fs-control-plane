@@ -292,25 +292,34 @@ func TestRestorePreviewExecutorMissingPreflightMarkerFailsClosed(t *testing.T) {
 	}
 }
 
-func TestRestorePreviewExecutorPreviewFailureAfterPreflightRequiresOperatorIntervention(t *testing.T) {
+func TestRestorePreviewExecutorPreviewCommandErrorIdleStatusFailsRetryableWithoutManualIntervention(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
-		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "idle", Workspace: "main"},
-		restorePreviewErr:     errors.New("jvs restore failed with run_command=secret"),
+		recoveryStatusSummaries: []jvsrunner.RecoveryStatusSummary{
+			{RestoreState: "idle", Workspace: "main"},
+			{RestoreState: "idle", Workspace: "main"},
+		},
+		restorePreviewErr: &jvsrunner.CommandError{Command: "restore", ExitCode: 7, Code: "E_REPO_BUSY"},
 	}
 	executor := newTestRestorePreviewExecutor(t, store, runner, now)
 
 	err := executor.ExecuteOperationRecovery(context.Background(), restorePreviewLeasedRecord(now, operations.OperationPhaseRestorePreviewValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
-	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
-		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "recovery_status,restore_preview" || store.restorePreviewProgressUpdates != 1 {
-		t.Fatalf("JVS/progress = %#v/%d, want preflight then preview", runner.calls, store.restorePreviewProgressUpdates)
+	if strings.Join(runner.calls, ",") != "recovery_status,restore_preview,recovery_status" || store.restorePreviewProgressUpdates != 1 {
+		t.Fatalf("JVS/progress = %#v/%d, want preflight, preview, post-error status", runner.calls, store.restorePreviewProgressUpdates)
 	}
-	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.restorePlan.ID != "" {
-		t.Fatalf("operation/plan = %#v/%#v, want operator intervention without plan", store.operation, store.restorePlan)
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_NO_SIDE_EFFECT_RETRYABLE" || !store.operation.Error.Retryable {
+		t.Fatalf("operation = %#v, want retryable no-side-effect failed preview", store.operation)
+	}
+	if store.restorePlan.ID != "" {
+		t.Fatalf("restore plan = %#v, want no durable plan when post-error status is idle", store.restorePlan)
+	}
+	if store.operation.Error.Details["jvs_error_code"] != "E_REPO_BUSY" || store.operation.Error.Details["jvs_command"] != "restore" {
+		t.Fatalf("operation error details = %#v, want redacted JVS command error details", store.operation.Error.Details)
 	}
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }

@@ -31,7 +31,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
-const acceptedJVSBinarySHA256 = "f011699fa92abae59e70153d32f3b9a10de1159fc23a390b22208db23f965521"
+const acceptedJVSBinarySHA256 = "0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944"
 
 func TestNewRunOnceRunnerDisabledFailsBeforeOpeningStore(t *testing.T) {
 	factoryCalls := 0
@@ -1417,6 +1417,55 @@ func TestRunOnceRestorePreviewEnabledClaimsThroughRestorePreviewExecutor(t *test
 	}
 }
 
+func TestRunOnceRestorePreviewNoSideEffectFailureDoesNotCountManual(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppRestorePreviewOperationRecord("op_preview", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	jvs := &workerAppFakeJVSRunner{
+		recoveryStatusSummaries: []jvsrunner.RecoveryStatusSummary{
+			{RestoreState: "idle", Workspace: "main"},
+			{RestoreState: "idle", Workspace: "main"},
+		},
+		restorePreviewErr: &jvsrunner.CommandError{Command: "restore", ExitCode: 7, Code: "E_REPO_BUSY"},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRestorePreviewConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_restore_preview" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Scanned != 1 || summary.Claimed != 1 || summary.Manual != 0 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want claimed retryable failed restore_preview without worker manual count", summary)
+	}
+	if strings.Join(jvs.calls, ",") != "recovery_status,restore_preview,recovery_status" {
+		t.Fatalf("jvs calls = %#v, want post-error recovery status check", jvs.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_NO_SIDE_EFFECT_RETRYABLE" || !store.operation.Error.Retryable {
+		t.Fatalf("operation = %#v, want retryable no-side-effect failed preview", store.operation)
+	}
+	if store.restorePlan.ID != "" {
+		t.Fatalf("restore plan = %#v, want no durable pending plan", store.restorePlan)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestorePreview || store.auditEvents[0].Outcome != audit.OutcomeFailed {
+		t.Fatalf("audit events = %#v, want failed restore preview audit", store.auditEvents)
+	}
+}
+
 func TestRunOnceRestorePreviewDiscardDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
 	now := workerAppNow()
 	record := workerAppRestorePreviewDiscardOperationRecord("op_discard", now)
@@ -1716,20 +1765,85 @@ func TestOpenPostgresOperationRecoveryStorePingErrorsFailClosed(t *testing.T) {
 	}
 }
 
-func TestRunOnceAppliesConfiguredTimeout(t *testing.T) {
-	store := newWorkerAppStore(workerAppOperationRecord(workerAppNow()))
-	runner := newWorkerAppRunner(t, store, workerAppConfigSource(config.MapSource{"AFSCP_WORKER_RUN_ONCE_TIMEOUT": "123ms"}), workerAppNow(), nil)
+func TestNewRunOnceRunnerAppliesConfiguredTimeoutOnlyToStoreOpen(t *testing.T) {
+	now := workerAppNow()
+	store := newWorkerAppStore(workerAppOperationRecord(now))
+	var openDeadline time.Time
+	_, err := NewRunOnceRunner(Options{
+		Source: workerAppConfigSource(config.MapSource{"AFSCP_WORKER_RUN_ONCE_TIMEOUT": "123ms"}),
+		StoreFactory: func(ctx context.Context, _ string) (StoreHandle, error) {
+			if deadline, ok := ctx.Deadline(); ok {
+				openDeadline = deadline
+			}
+			return StoreHandle{Store: store}, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_namespace" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+	if openDeadline.IsZero() {
+		t.Fatal("store factory saw no context deadline")
+	}
+	remaining := time.Until(openDeadline)
+	if remaining <= 0 || remaining > time.Second {
+		t.Fatalf("open deadline remaining = %v, want bounded startup timeout", remaining)
+	}
+}
 
-	_, err := runner.RunOnce(context.Background())
+func TestRunOnceDoesNotApplyConfiguredTimeoutToLeasedOperationExecution(t *testing.T) {
+	now := workerAppNow()
+	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
+	store := newWorkerAppStore(repoRecord)
+	store.renewCh = make(chan workerAppRenewCall, 1)
+	jvs := &workerAppFakeJVSRunner{
+		initSummary:   jvsrunner.InitSummary{RepoID: "jvs_repo_alpha", Workspace: "main"},
+		doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
+		beforeInit: func(ctx context.Context) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-store.renewCh:
+				return nil
+			case <-time.After(2 * time.Second):
+				return errors.New("timed out waiting for operation lease renewal")
+			}
+		},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoConfigSource(config.MapSource{
+			"AFSCP_OPERATION_RECOVERY_LEASE_DURATION": "30ms",
+			"AFSCP_WORKER_RUN_ONCE_TIMEOUT":           "1ms",
+		}),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_repo" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if store.listDeadline.IsZero() {
-		t.Fatal("store ListOperationsForRecovery saw no context deadline")
+	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Claimed != 1 || summary.Manual != 0 || summary.Failed != 0 {
+		t.Fatalf("summary = %#v, want repo_create claimed without timeout failure", summary)
 	}
-	remaining := time.Until(store.listDeadline)
-	if remaining <= 0 || remaining > time.Second {
-		t.Fatalf("deadline remaining = %v, want bounded timeout", remaining)
+	if deadline := store.listDeadline; !deadline.IsZero() {
+		t.Fatalf("operation recovery context deadline = %v, want parent context without run-once timeout", deadline)
+	}
+	if len(store.renewCalls) == 0 {
+		t.Fatal("operation lease was not renewed during long run-once operation")
+	}
+	if call := store.renewCalls[0]; call.operationID != "op_repo" || call.request.Owner != "worker-a" || call.request.Duration != 30*time.Millisecond {
+		t.Fatalf("renew call = %#v, want same operation owner and configured lease duration", call)
 	}
 }
 
@@ -2755,6 +2869,9 @@ type fakeWorkerAppStore struct {
 	closeCalls                           int
 	acquireIDs                           []string
 	acquirePolicies                      map[string]operations.LeaseCancelPolicy
+	renewCalls                           []workerAppRenewCall
+	renewCh                              chan workerAppRenewCall
+	renewErr                             error
 	recoveredAudit                       []audit.OutboxRecord
 	claimedAudit                         []audit.OutboxRecord
 	auditCallOrder                       []string
@@ -2790,6 +2907,11 @@ type fakeWorkerAppStore struct {
 type workerAppAuditFailedCall struct {
 	eventID string
 	failure audit.DeliveryFailure
+}
+
+type workerAppRenewCall struct {
+	operationID string
+	request     operations.LeaseRequest
 }
 
 func newWorkerAppStore(records ...operations.OperationRecord) *fakeWorkerAppStore {
@@ -3581,6 +3703,31 @@ func workerAppCommittedOperation(record operations.SanitizedOperationRecord) ope
 	return operation
 }
 
+func (store *fakeWorkerAppStore) RenewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	call := workerAppRenewCall{operationID: operationID, request: request}
+	store.renewCalls = append(store.renewCalls, call)
+	if store.renewCh != nil {
+		select {
+		case store.renewCh <- call:
+		case <-ctx.Done():
+			return operations.OperationRecord{}, ctx.Err()
+		}
+	}
+	if store.renewErr != nil {
+		return operations.OperationRecord{}, store.renewErr
+	}
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	decision := operations.RenewLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
 func (store *fakeWorkerAppStore) UpdateOperationWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
 	store.genericUpdateCalls++
 	operation := record.Record()
@@ -4123,6 +4270,7 @@ func (store *fakeWorkerAppAuditStore) MarkAuditOutboxDeliveryFailed(context.Cont
 
 type workerAppFakeJVSRunner struct {
 	calls                   []string
+	beforeInit              func(context.Context) error
 	initSummary             jvsrunner.InitSummary
 	doctorSummary           jvsrunner.DoctorSummary
 	saveSummary             jvsrunner.SaveSummary
@@ -4130,6 +4278,7 @@ type workerAppFakeJVSRunner struct {
 	recoveryStatusSummary   jvsrunner.RecoveryStatusSummary
 	recoveryStatusSummaries []jvsrunner.RecoveryStatusSummary
 	restorePreviewSummary   jvsrunner.RestorePreviewSummary
+	restorePreviewErr       error
 	restoreRunSummary       jvsrunner.RestoreRunSummary
 	restoreDiscardSummary   jvsrunner.RestoreDiscardSummary
 	repoCloneSummary        jvsrunner.RepoCloneSummary
@@ -4150,14 +4299,24 @@ func (purger *workerAppFakeStoragePurger) PurgeRepoStorage(context.Context, repo
 	return nil
 }
 
-func (runner *workerAppFakeJVSRunner) Init(context.Context, string, string) (jvsrunner.InitSummary, error) {
+func (runner *workerAppFakeJVSRunner) Init(ctx context.Context, _, _ string) (jvsrunner.InitSummary, error) {
 	runner.calls = append(runner.calls, "init")
+	if runner.beforeInit != nil {
+		if err := runner.beforeInit(ctx); err != nil {
+			return jvsrunner.InitSummary{}, err
+		}
+	}
 	return runner.initSummary, nil
 }
 
 func (runner *workerAppFakeJVSRunner) DoctorStrict(context.Context, string) (jvsrunner.DoctorSummary, error) {
 	runner.calls = append(runner.calls, "doctor")
 	return runner.doctorSummary, nil
+}
+
+func (runner *workerAppFakeJVSRunner) DoctorRepairRuntime(context.Context, string) (jvsrunner.DoctorRepairRuntimeSummary, error) {
+	runner.calls = append(runner.calls, "doctor_repair")
+	return jvsrunner.DoctorRepairRuntimeSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main", CleanLocks: jvsrunner.RepairActionSummary{Action: "clean_locks", Success: true}}, nil
 }
 
 func (runner *workerAppFakeJVSRunner) Save(context.Context, string, string) (jvsrunner.SaveSummary, error) {
@@ -4193,6 +4352,9 @@ func (runner *workerAppFakeJVSRunner) RecoveryStatus(context.Context, string) (j
 
 func (runner *workerAppFakeJVSRunner) RestorePreview(context.Context, string, string) (jvsrunner.RestorePreviewSummary, error) {
 	runner.calls = append(runner.calls, "restore_preview")
+	if runner.restorePreviewErr != nil {
+		return jvsrunner.RestorePreviewSummary{}, runner.restorePreviewErr
+	}
 	return runner.restorePreviewSummary, nil
 }
 

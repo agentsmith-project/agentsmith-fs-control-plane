@@ -90,6 +90,19 @@ type DoctorSummary struct {
 	Workspace string
 }
 
+type RepairActionSummary struct {
+	Action  string
+	Success bool
+	Cleaned int
+}
+
+type DoctorRepairRuntimeSummary struct {
+	RepoID     string
+	Healthy    bool
+	Workspace  string
+	CleanLocks RepairActionSummary
+}
+
 type SaveSummary struct {
 	SavePointID       string
 	NewestSavePointID string
@@ -221,7 +234,7 @@ func (runner *Runner) Init(ctx context.Context, payloadRoot, controlRoot string)
 		Dir: runner.cwd,
 	})
 	if err != nil {
-		return InitSummary{}, fmt.Errorf("%w: init", ErrCommandFailed)
+		return InitSummary{}, commandFailedError("init", err)
 	}
 	result = runner.capResult(result)
 	if result.ExitCode != 0 {
@@ -269,7 +282,7 @@ func (runner *Runner) DoctorStrict(ctx context.Context, controlRoot string) (Doc
 		Dir: runner.cwd,
 	})
 	if err != nil {
-		return DoctorSummary{}, fmt.Errorf("%w: doctor", ErrCommandFailed)
+		return DoctorSummary{}, commandFailedError("doctor", err)
 	}
 	result = runner.capResult(result)
 	if result.ExitCode != 0 {
@@ -294,6 +307,57 @@ func (runner *Runner) DoctorStrict(ctx context.Context, controlRoot string) (Doc
 	}
 
 	return DoctorSummary{RepoID: repoID, Healthy: true, Workspace: workspace}, nil
+}
+
+func (runner *Runner) DoctorRepairRuntime(ctx context.Context, controlRoot string) (DoctorRepairRuntimeSummary, error) {
+	if runner == nil {
+		return DoctorRepairRuntimeSummary{}, ErrInvalidConfig
+	}
+	if err := validateCleanAbsolute(controlRoot, true); err != nil {
+		return DoctorRepairRuntimeSummary{}, fmt.Errorf("%w: control root", ErrInvalidArgument)
+	}
+
+	result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{
+		Path: runner.binaryPath,
+		Args: []string{
+			"--control-root",
+			controlRoot,
+			"--workspace",
+			workspaceMain,
+			"doctor",
+			"--strict",
+			"--repair-runtime",
+			"--json",
+		},
+		Dir: runner.cwd,
+	})
+	if err != nil {
+		return DoctorRepairRuntimeSummary{}, commandFailedError("doctor", err)
+	}
+	result = runner.capResult(result)
+	if result.ExitCode != 0 {
+		if commandErr, ok := commandErrorFromResult("doctor", controlRoot, result); ok {
+			return DoctorRepairRuntimeSummary{}, commandErr
+		}
+		return DoctorRepairRuntimeSummary{}, fmt.Errorf("%w: doctor", ErrCommandFailed)
+	}
+
+	envelope, err := decodeEnvelope(result.Stdout)
+	if err != nil {
+		return DoctorRepairRuntimeSummary{}, fmt.Errorf("%w: doctor", ErrInvalidEnvelope)
+	}
+	if commandErr, ok := commandErrorFromEnvelope("doctor", controlRoot, 0, envelope); ok {
+		return DoctorRepairRuntimeSummary{}, commandErr
+	}
+	healthy, healthyOK := envelope.Data["healthy"].(bool)
+	repoID, _ := envelope.Data["repo_id"].(string)
+	workspace, _ := envelope.Data["workspace"].(string)
+	cleanLocks, cleanLocksOK := repairActionSummary(envelope.Data["repairs"], "clean_locks")
+	if !envelope.validFor("doctor", controlRoot) || !healthyOK || !healthy || !safeOpaqueID(repoID) || workspace != workspaceMain || !cleanLocksOK || !cleanLocks.Success {
+		return DoctorRepairRuntimeSummary{}, fmt.Errorf("%w: doctor", ErrInvalidEnvelope)
+	}
+
+	return DoctorRepairRuntimeSummary{RepoID: repoID, Healthy: true, Workspace: workspace, CleanLocks: cleanLocks}, nil
 }
 
 func (runner *Runner) Save(ctx context.Context, controlRoot, message string) (SaveSummary, error) {
@@ -534,7 +598,7 @@ func (runner *Runner) runControlJSONExpectRoot(ctx context.Context, command, sel
 	args = append(args, commandArgs...)
 	result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{Path: runner.binaryPath, Args: args, Dir: runner.cwd})
 	if err != nil {
-		return envelope{}, fmt.Errorf("%w: %s", ErrCommandFailed, command)
+		return envelope{}, commandFailedError(command, err)
 	}
 	result = runner.capResult(result)
 	if result.ExitCode != 0 {
@@ -692,6 +756,37 @@ func intData(value any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func repairActionSummary(raw any, action string) (RepairActionSummary, bool) {
+	items, ok := raw.([]any)
+	if !ok {
+		return RepairActionSummary{}, false
+	}
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			return RepairActionSummary{}, false
+		}
+		itemAction, _ := item["action"].(string)
+		if itemAction != action {
+			continue
+		}
+		success, successOK := item["success"].(bool)
+		if !successOK {
+			return RepairActionSummary{}, false
+		}
+		cleaned := 0
+		if rawCleaned, exists := item["cleaned"]; exists {
+			var cleanedOK bool
+			cleaned, cleanedOK = intData(rawCleaned)
+			if !cleanedOK || cleaned < 0 {
+				return RepairActionSummary{}, false
+			}
+		}
+		return RepairActionSummary{Action: itemAction, Success: success, Cleaned: cleaned}, true
+	}
+	return RepairActionSummary{}, false
 }
 
 func parseRestorePreviewManagedFiles(raw any) (RestorePreviewManagedFilesSummary, bool) {
@@ -1008,11 +1103,32 @@ func capBytes(value []byte, limit int) []byte {
 	return value[:limit]
 }
 
+func commandContextError(err error) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return context.DeadlineExceeded
+	case errors.Is(err, context.Canceled):
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func commandFailedError(command string, err error) error {
+	if contextErr := commandContextError(err); contextErr != nil {
+		return fmt.Errorf("%w: %s: %w", ErrCommandFailed, command, contextErr)
+	}
+	return fmt.Errorf("%w: %s", ErrCommandFailed, command)
+}
+
 type osCommandRunner struct {
 	maxOutputBytes int
 }
 
 func (runner osCommandRunner) RunJVSCommand(ctx context.Context, spec CommandSpec) (CommandResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cmd := exec.CommandContext(ctx, spec.Path, spec.Args...)
 	cmd.Dir = spec.Dir
 
@@ -1025,6 +1141,9 @@ func (runner osCommandRunner) RunJVSCommand(ctx context.Context, spec CommandSpe
 	result := CommandResult{
 		Stdout: stdout.Bytes(),
 		Stderr: stderr.Bytes(),
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return result, ctxErr
 	}
 	if err == nil {
 		return result, nil

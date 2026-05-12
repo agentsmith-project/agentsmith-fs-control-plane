@@ -1661,7 +1661,7 @@ func TestVerifyCoreProductDocsCatchesProductSpecificTerms(t *testing.T) {
 	writeFile(t, researchPath, "workspace storage and file library research copied from /home/percy/works/mbos-v1/improve-agentsmith-fs.\n")
 	writeFile(t, localDevPath, "sandbox manager local handoff for /home/percy/works/mbos-v1/mbos-sandbox-v1.\n")
 	writeFile(t, filepath.Join(root, "docs", "adr", "0001-create-afscp.md"), "GitHub org path github.com/agentsmith-project/agentsmith-fs-control-plane is allowed.\n")
-	writeFile(t, filepath.Join(root, "docs", "JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md"), "Release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8\n")
+	writeFile(t, filepath.Join(root, "docs", "JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md"), "Release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.9\n")
 
 	findings := verifyCoreProductDocs(root)
 

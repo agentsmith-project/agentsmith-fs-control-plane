@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -91,6 +92,47 @@ func TestDoctorStrictUsesFixedCommandAndParsesEnvelope(t *testing.T) {
 		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
 	}
 	assertNoForbiddenJVSFlags(t, commandRunner.calls[0].Args)
+	assertSummaryDoesNotLeakPaths(t, summary)
+}
+
+func TestDoctorRepairRuntimeUsesExternalControlCommandAndParsesRepairs(t *testing.T) {
+	t.Parallel()
+
+	commandRunner := &fakeCommandRunner{
+		result: CommandResult{
+			Stdout: doctorRepairRuntimeSuccessStdout(t),
+		},
+	}
+	runner := newTestRunner(t, commandRunner)
+
+	summary, err := runner.DoctorRepairRuntime(context.Background(), testControlRoot)
+	if err != nil {
+		t.Fatalf("DoctorRepairRuntime returned error: %v", err)
+	}
+	if !summary.Healthy || summary.RepoID != "jvs_repo_alpha" || summary.Workspace != "main" {
+		t.Fatalf("summary = %#v, want healthy main repo summary", summary)
+	}
+	if !summary.CleanLocks.Success || summary.CleanLocks.Cleaned != 1 {
+		t.Fatalf("clean_locks summary = %#v, want successful stale lock cleanup", summary.CleanLocks)
+	}
+
+	want := CommandSpec{
+		Path: "/opt/afscp/bin/jvs",
+		Args: []string{
+			"--control-root",
+			testControlRoot,
+			"--workspace",
+			"main",
+			"doctor",
+			"--strict",
+			"--repair-runtime",
+			"--json",
+		},
+		Dir: "/var/lib/afscp/jvs-cwd",
+	}
+	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
+		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
+	}
 	assertSummaryDoesNotLeakPaths(t, summary)
 }
 
@@ -572,6 +614,19 @@ func TestDoctorStrictCommandErrorEnvelopeFromNonZeroStderr(t *testing.T) {
 	assertJVSCommandError(t, err, "doctor", 23, "E_RECOVERY_BLOCKING")
 }
 
+func TestDoctorRepairRuntimeCommandErrorEnvelopeFromNonZeroStdout(t *testing.T) {
+	t.Parallel()
+
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
+		ExitCode: 24,
+		Stdout:   jvsErrorStdout(t, "doctor", testControlRoot, "E_ACTIVE_OPERATION_BLOCKING"),
+		Stderr:   []byte("control_root=/srv/afscp/secret"),
+	}})
+
+	_, err := runner.DoctorRepairRuntime(context.Background(), testControlRoot)
+	assertJVSCommandError(t, err, "doctor", 24, "E_ACTIVE_OPERATION_BLOCKING")
+}
+
 func TestCommandErrorEnvelopeFromExitZeroOKFalse(t *testing.T) {
 	t.Parallel()
 
@@ -581,6 +636,35 @@ func TestCommandErrorEnvelopeFromExitZeroOKFalse(t *testing.T) {
 
 	_, err := runner.Save(context.Background(), testControlRoot, "checkpoint")
 	assertJVSCommandError(t, err, "save", 0, "E_SOURCE_DIRTY")
+}
+
+func TestRunControlJSONPropagatesContextDeadlineWithoutLeakingRunnerError(t *testing.T) {
+	t.Parallel()
+
+	runner := newTestRunner(t, &fakeCommandRunner{err: errors.Join(context.DeadlineExceeded, errors.New("token=secret /srv/afscp/raw"))})
+
+	_, err := runner.RecoveryStatus(context.Background(), testControlRoot)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RecoveryStatus error = %v, want context deadline", err)
+	}
+	if !errors.Is(err, ErrCommandFailed) {
+		t.Fatalf("RecoveryStatus error = %v, want command failed wrapper", err)
+	}
+	assertErrorDoesNotLeak(t, err)
+}
+
+func TestOSCommandRunnerPropagatesContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	result, err := (osCommandRunner{maxOutputBytes: 1024}).RunJVSCommand(ctx, CommandSpec{
+		Path: "/bin/sh",
+		Args: []string{"-c", "sleep 1"},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunJVSCommand error = %v result=%#v, want context deadline", err, result)
+	}
 }
 
 func TestNewRejectsUnsafeConfig(t *testing.T) {
@@ -637,7 +721,7 @@ func TestInitFailsClosedForInvalidEnvelope(t *testing.T) {
 			return initStdoutWith(t, func(env map[string]any) { env["schema_version"] = 2 })
 		}},
 		{name: "string schema version", stdout: func(t *testing.T) []byte {
-			return initStdoutWith(t, func(env map[string]any) { env["schema_version"] = "jvs/v0.4.8" })
+			return initStdoutWith(t, func(env map[string]any) { env["schema_version"] = "jvs/current" })
 		}},
 		{name: "missing repo id", stdout: func(t *testing.T) []byte {
 			return initStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "repo_id") })
@@ -775,7 +859,7 @@ func TestDoctorStrictFailsClosedForInvalidEnvelope(t *testing.T) {
 			return doctorStdoutWith(t, func(env map[string]any) { env["schema_version"] = 2 })
 		}},
 		{name: "string schema version", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["schema_version"] = "jvs/v0.4.8" })
+			return doctorStdoutWith(t, func(env map[string]any) { env["schema_version"] = "jvs/current" })
 		}},
 		{name: "unhealthy", stdout: func(t *testing.T) []byte {
 			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["healthy"] = false })
@@ -845,6 +929,57 @@ func TestDoctorStrictFailsClosedForInvalidEnvelope(t *testing.T) {
 	}
 }
 
+func TestDoctorRepairRuntimeFailsClosedForInvalidEnvelope(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		stdout func(t *testing.T) []byte
+		result CommandResult
+	}{
+		{name: "nonzero", result: CommandResult{ExitCode: 1, Stderr: []byte("credential_ref=secret /srv/afscp/raw")}},
+		{name: "malformed json", result: CommandResult{Stdout: []byte(`{"ok":`)}},
+		{name: "healthy false", stdout: func(t *testing.T) []byte {
+			return doctorRepairRuntimeStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["healthy"] = false })
+		}},
+		{name: "missing repairs", stdout: func(t *testing.T) []byte {
+			return doctorRepairRuntimeStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "repairs") })
+		}},
+		{name: "missing clean locks", stdout: func(t *testing.T) []byte {
+			return doctorRepairRuntimeStdoutWith(t, func(env map[string]any) {
+				env["data"].(map[string]any)["repairs"] = []map[string]any{{"action": "clean_runtime_tmp", "success": true}}
+			})
+		}},
+		{name: "failed clean locks", stdout: func(t *testing.T) []byte {
+			return doctorRepairRuntimeStdoutWith(t, func(env map[string]any) {
+				env["data"].(map[string]any)["repairs"] = []map[string]any{{"action": "clean_locks", "success": false, "cleaned": 0}}
+			})
+		}},
+		{name: "unsafe cleaned count", stdout: func(t *testing.T) []byte {
+			return doctorRepairRuntimeStdoutWith(t, func(env map[string]any) {
+				env["data"].(map[string]any)["repairs"] = []map[string]any{{"action": "clean_locks", "success": true, "cleaned": -1}}
+			})
+		}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.stdout != nil {
+				tt.result.Stdout = tt.stdout(t)
+			}
+			runner := newTestRunner(t, &fakeCommandRunner{result: tt.result})
+			_, err := runner.DoctorRepairRuntime(context.Background(), testControlRoot)
+			if err == nil {
+				t.Fatal("DoctorRepairRuntime succeeded, want error")
+			}
+			assertErrorDoesNotLeak(t, err)
+		})
+	}
+}
+
 func TestRunnerRejectsRawPathArguments(t *testing.T) {
 	t.Parallel()
 
@@ -875,6 +1010,10 @@ func TestRunnerRejectsRawPathArguments(t *testing.T) {
 		}},
 		{name: "doctor relative control", call: func() error {
 			_, err := runner.DoctorStrict(context.Background(), "control")
+			return err
+		}},
+		{name: "doctor repair runtime relative control", call: func() error {
+			_, err := runner.DoctorRepairRuntime(context.Background(), "control")
 			return err
 		}},
 		{name: "save empty message", call: func() error {
@@ -1262,6 +1401,28 @@ func doctorStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	data["repo_id"] = "jvs_repo_alpha"
 	data["healthy"] = true
 	data["checks"] = []map[string]any{{"name": "control_root", "path": testControlRoot}}
+	if mutate != nil {
+		mutate(env)
+	}
+	return mustJSON(t, env)
+}
+
+func doctorRepairRuntimeSuccessStdout(t *testing.T) []byte {
+	t.Helper()
+	return doctorRepairRuntimeStdoutWith(t, nil)
+}
+
+func doctorRepairRuntimeStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
+	t.Helper()
+	env := baseEnvelope("doctor")
+	data := env["data"].(map[string]any)
+	data["repo_id"] = "jvs_repo_alpha"
+	data["healthy"] = true
+	data["findings"] = []map[string]any{}
+	data["repairs"] = []map[string]any{
+		{"action": "clean_locks", "success": true, "cleaned": 1, "message": "cleaned 1 stale repository lock"},
+		{"action": "clean_runtime_tmp", "success": true, "cleaned": 0, "message": "cleaned 0 tmp files/directories"},
+	}
 	if mutate != nil {
 		mutate(env)
 	}
