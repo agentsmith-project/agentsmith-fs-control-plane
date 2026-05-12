@@ -208,6 +208,60 @@ func TestOperationCoordinatorRenewsLeaseDuringLongExecution(t *testing.T) {
 	}
 }
 
+func TestOperationCoordinatorUsesFreshClockForAcquireAndUnsupportedCommitAfterLongOperation(t *testing.T) {
+	now := recoveryTestNow()
+	later := now.Add(45 * time.Minute)
+	current := now
+	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
+		recoveryOperationRecord("op_long", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
+		recoveryOperationRecord("op_unsupported", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
+	}}
+	store := &fakeOperationLeaseStore{}
+	executor := &fakeOperationExecutor{
+		unsupported: map[string]string{"op_unsupported": "not implemented"},
+		execute: func(_ context.Context, record operations.OperationRecord, _ RecoveryPlan) error {
+			if record.ID == "op_long" {
+				current = later
+			}
+			return nil
+		},
+	}
+	coordinator := NewOperationCoordinator(OperationConfig{
+		Reader:        reader,
+		LeaseStore:    store,
+		CommitStore:   store,
+		Executor:      executor,
+		Owner:         "recovery-worker",
+		LeaseDuration: 5 * time.Minute,
+		Limit:         10,
+		Clock:         func() time.Time { return current },
+		AuditEventID:  fakeOperationAuditEventID,
+	})
+
+	result, err := coordinator.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.Claimed != 1 || result.Unsupported != 1 {
+		t.Fatalf("result = %#v, want one claimed operation and one unsupported commit", result)
+	}
+	if len(store.acquireCalls) != 2 {
+		t.Fatalf("acquire calls = %#v, want two acquires", store.acquireCalls)
+	}
+	if !store.acquireCalls[0].request.Now.Equal(now) {
+		t.Fatalf("first acquire now = %v, want initial time %v", store.acquireCalls[0].request.Now, now)
+	}
+	if !store.acquireCalls[1].request.Now.Equal(later) {
+		t.Fatalf("second acquire now = %v, want fresh time %v", store.acquireCalls[1].request.Now, later)
+	}
+	if len(store.commitCalls) != 1 {
+		t.Fatalf("commit calls = %#v, want unsupported commit", store.commitCalls)
+	}
+	if !store.commitCalls[0].now.Equal(later) || !store.commitCalls[0].event.Time.Equal(later) {
+		t.Fatalf("unsupported commit time = %v event %v, want fresh time %v", store.commitCalls[0].now, store.commitCalls[0].event.Time, later)
+	}
+}
+
 func TestOperationCoordinatorCancelsExecutionWhenLeaseRenewalFails(t *testing.T) {
 	now := recoveryTestNow()
 	renewErr := errors.New("postgres renew failed")
@@ -252,6 +306,72 @@ func TestOperationCoordinatorCancelsExecutionWhenLeaseRenewalFails(t *testing.T)
 	}
 	if len(result.Results) != 1 || result.Results[0].Outcome != OperationOutcomeFailed || !errors.Is(result.Results[0].Error, ErrOperationLeaseRenewalFailed) {
 		t.Fatalf("result item = %#v, want failed renewal diagnostic", result.Results)
+	}
+}
+
+func TestOperationCoordinatorTreatsTerminalCommitAsTruthWhenLeaseRenewalLosesRunningRace(t *testing.T) {
+	now := recoveryTestNow()
+	renewStarted := make(chan struct{}, 1)
+	terminalCommitted := false
+	terminal := recoveryOperationRecord("op_terminal", operations.OperationStateSucceeded, operations.OperationPhaseRepoCreateCommitted, now)
+	terminal.FinishedAt = &now
+	reader := &fakeOperationRecoveryReader{records: []operations.OperationRecord{
+		recoveryOperationRecord("op_terminal", operations.OperationStateQueued, operations.OperationPhaseRepoCreateValidate, now),
+	}}
+	store := &fakeOperationLeaseStore{renewErr: operations.ErrLeaseUnavailable, readRecords: map[string]operations.OperationRecord{}}
+	store.renewBeforeErr = func(_ context.Context, operationID string, _ operations.LeaseRequest) {
+		if operationID == "op_terminal" {
+			select {
+			case renewStarted <- struct{}{}:
+			default:
+			}
+		}
+	}
+	executor := &fakeOperationExecutor{
+		execute: func(ctx context.Context, _ operations.OperationRecord, _ RecoveryPlan) error {
+			select {
+			case <-renewStarted:
+				terminalCommitted = true
+				store.readRecords["op_terminal"] = terminal
+			case <-time.After(2 * time.Second):
+				return errors.New("renewal did not run before executor terminal commit")
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(2 * time.Second):
+				return errors.New("renewal failure did not cancel executor after terminal commit")
+			}
+		},
+	}
+	coordinator := NewOperationCoordinator(OperationConfig{
+		Reader:        reader,
+		LeaseStore:    store,
+		CommitStore:   store,
+		Executor:      executor,
+		Owner:         "recovery-worker",
+		LeaseDuration: 2 * time.Millisecond,
+		Limit:         1,
+		Now:           now,
+		Clock:         func() time.Time { return now },
+		AuditEventID:  fakeOperationAuditEventID,
+	})
+
+	result, err := coordinator.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.Claimed != 1 || result.Failed != 0 {
+		t.Fatalf("result = %#v, want terminal commit to count as claimed without renewal failure", result)
+	}
+	if !terminalCommitted {
+		t.Fatal("executor did not reach terminal commit path")
+	}
+	if len(result.Results) != 1 || result.Results[0].Outcome != OperationOutcomeClaimed || result.Results[0].Error != nil {
+		t.Fatalf("result items = %#v, want claimed outcome without renewal error", result.Results)
+	}
+	if len(store.renewCalls) == 0 {
+		t.Fatalf("renew calls = %#v, want renewal race to be exercised", store.renewCalls)
 	}
 }
 
@@ -742,9 +862,11 @@ type fakeOperationLeaseStore struct {
 	renewErr       error
 	renewErrors    map[string]error
 	renewRecords   map[string]operations.OperationRecord
+	renewBeforeErr func(context.Context, string, operations.LeaseRequest)
 	renewCh        chan operationRenewCall
 	updateCalls    []operationUpdateCall
 	commitCalls    []operationCommitCall
+	readRecords    map[string]operations.OperationRecord
 }
 
 type operationAcquireCall struct {
@@ -794,6 +916,9 @@ func (store *fakeOperationLeaseStore) RenewOperationLease(ctx context.Context, o
 			return operations.OperationRecord{}, ctx.Err()
 		}
 	}
+	if store.renewBeforeErr != nil {
+		store.renewBeforeErr(ctx, operationID, request)
+	}
 	if err := store.renewErrors[operationID]; err != nil {
 		return operations.OperationRecord{}, err
 	}
@@ -824,6 +949,13 @@ func (store *fakeOperationLeaseStore) CommitOperationWithLease(_ context.Context
 	operation.LeaseOwner = ""
 	operation.LeaseExpiresAt = nil
 	return operation, nil
+}
+
+func (store *fakeOperationLeaseStore) GetOperation(_ context.Context, operationID string) (operations.OperationRecord, error) {
+	if record, ok := store.readRecords[operationID]; ok {
+		return record, nil
+	}
+	return operations.OperationRecord{}, errors.New("operation not found")
 }
 
 func (store *fakeOperationLeaseStore) acquireOperationIDs() []string {

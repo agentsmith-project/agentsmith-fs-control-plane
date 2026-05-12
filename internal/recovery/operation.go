@@ -237,11 +237,8 @@ func (coordinator OperationCoordinator) validatedConfig() (OperationConfig, time
 		return OperationConfig{}, time.Time{}, errors.New("operation recovery limit must be positive")
 	}
 
-	now := config.Now
-	if now.IsZero() && config.Clock != nil {
-		now = config.Clock()
-	}
-	if now.IsZero() {
+	now, err := operationDecisionNow(config)
+	if err != nil {
 		return OperationConfig{}, time.Time{}, errors.New("operation recovery time must be set")
 	}
 	config.Now = now
@@ -249,10 +246,14 @@ func (coordinator OperationCoordinator) validatedConfig() (OperationConfig, time
 }
 
 func acquireOperation(ctx context.Context, config OperationConfig, operationID string, cancelPolicy operations.LeaseCancelPolicy) (operations.OperationRecord, error) {
+	now, err := operationDecisionNow(config)
+	if err != nil {
+		return operations.OperationRecord{}, fmt.Errorf("operation recovery lease decision time: %w", err)
+	}
 	return config.LeaseStore.AcquireOperationLease(ctx, operationID, operations.LeaseRequest{
 		Owner:        config.Owner,
 		Duration:     config.LeaseDuration,
-		Now:          config.Now,
+		Now:          now,
 		CancelPolicy: cancelPolicy,
 	})
 }
@@ -275,14 +276,21 @@ func operationSupported(ctx context.Context, config OperationConfig, record oper
 
 	evidence := unsupportedOperationEvidence(updated, plan)
 	operation := unsupportedOperationUpdate(updated, item.Reason, evidence)
-	event, err := unsupportedOperationAuditEvent(config, updated, item.Reason, evidence)
+	commitNow, err := operationDecisionNow(config)
 	if err != nil {
 		if fatal := recordUnsupportedCommitError(result, item, err); fatal != nil {
 			return false, fatal
 		}
 		return false, nil
 	}
-	if _, err := config.CommitStore.CommitOperationWithLease(ctx, operation.SanitizedForPersistence(), config.Owner, config.Now, event); err != nil {
+	event, err := unsupportedOperationAuditEvent(config, updated, item.Reason, evidence, commitNow)
+	if err != nil {
+		if fatal := recordUnsupportedCommitError(result, item, err); fatal != nil {
+			return false, fatal
+		}
+		return false, nil
+	}
+	if _, err := config.CommitStore.CommitOperationWithLease(ctx, operation.SanitizedForPersistence(), config.Owner, commitNow, event); err != nil {
 		if fatal := recordUnsupportedCommitError(result, item, err); fatal != nil {
 			return false, fatal
 		}
@@ -322,7 +330,7 @@ func unsupportedOperationUpdate(record operations.OperationRecord, reason string
 	return operation
 }
 
-func unsupportedOperationAuditEvent(config OperationConfig, record operations.OperationRecord, reason string, evidence map[string]any) (audit.Event, error) {
+func unsupportedOperationAuditEvent(config OperationConfig, record operations.OperationRecord, reason string, evidence map[string]any, now time.Time) (audit.Event, error) {
 	eventID := strings.TrimSpace(config.AuditEventID())
 	if eventID == "" {
 		return audit.Event{}, errors.New("operation recovery audit event id must be set")
@@ -334,7 +342,7 @@ func unsupportedOperationAuditEvent(config OperationConfig, record operations.Op
 	return audit.NewEvent(audit.Event{
 		EventID:       eventID,
 		Type:          eventType,
-		Time:          config.Now,
+		Time:          now,
 		CallerService: record.CallerService,
 		AuthorizedActor: audit.Actor{
 			Type: record.AuthorizedActor.Type,
@@ -366,9 +374,30 @@ func unsupportedOperationEvidence(record operations.OperationRecord, plan Recove
 }
 
 func executeOperation(ctx context.Context, config OperationConfig, record operations.OperationRecord, plan RecoveryPlan, result *OperationBatchResult, item OperationResult) (bool, error) {
-	execCtx, stopRenewal := startOperationLeaseRenewal(ctx, config, record.ID)
-	err := config.Executor.ExecuteOperationRecovery(execCtx, record, plan)
-	renewErr := stopRenewal()
+	renewal := startOperationLeaseRenewal(ctx, config, record.ID)
+	execDone := make(chan error, 1)
+	go func() {
+		execDone <- config.Executor.ExecuteOperationRecovery(renewal.Context(), record, plan)
+	}()
+
+	var err error
+	var renewErr error
+	select {
+	case err = <-execDone:
+		renewErr = renewal.Stop()
+	case renewErr = <-renewal.Errors():
+		renewal.Cancel()
+		err = <-execDone
+		_ = renewal.Stop()
+	}
+	if renewErr != nil {
+		committed, commitReadErr := operationCommittedOutcomeVisible(ctx, config, item.OperationID, err)
+		if committed {
+			renewErr = nil
+		} else if commitReadErr != nil {
+			renewErr = errors.Join(renewErr, fmt.Errorf("operation recovery terminal state read %q: %w", item.OperationID, commitReadErr))
+		}
+	}
 	if renewErr != nil {
 		err = errors.Join(err, renewErr)
 		item.Outcome = OperationOutcomeFailed
@@ -394,14 +423,64 @@ func executeOperation(ctx context.Context, config OperationConfig, record operat
 	return true, nil
 }
 
-func startOperationLeaseRenewal(ctx context.Context, config OperationConfig, operationID string) (context.Context, func() error) {
+func operationCommittedOutcomeVisible(ctx context.Context, config OperationConfig, operationID string, execErr error) (bool, error) {
+	if execErr != nil && !errors.Is(execErr, ErrOperationManualIntervention) {
+		return false, nil
+	}
+	reader, ok := operationReader(config)
+	if !ok {
+		return false, nil
+	}
+	record, err := reader.GetOperation(ctx, operationID)
+	if err != nil {
+		return false, err
+	}
+	if record.State.IsTerminal() {
+		return true, nil
+	}
+	if errors.Is(execErr, ErrOperationManualIntervention) && record.State == operations.OperationStateOperatorInterventionRequired {
+		return true, nil
+	}
+	return false, nil
+}
+
+func operationReader(config OperationConfig) (store.OperationReader, bool) {
+	if reader, ok := config.LeaseStore.(store.OperationReader); ok {
+		return reader, true
+	}
+	if reader, ok := config.CommitStore.(store.OperationReader); ok {
+		return reader, true
+	}
+	if reader, ok := config.Reader.(store.OperationReader); ok {
+		return reader, true
+	}
+	return nil, false
+}
+
+type operationLeaseRenewal struct {
+	execCtx context.Context
+	cancel  context.CancelFunc
+	stop    chan struct{}
+	done    chan error
+	errs    chan error
+}
+
+func startOperationLeaseRenewal(ctx context.Context, config OperationConfig, operationID string) *operationLeaseRenewal {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	execCtx, cancel := context.WithCancel(ctx)
 	stop := make(chan struct{})
 	done := make(chan error, 1)
+	errs := make(chan error, 1)
 	interval := operationLeaseRenewalInterval(config.LeaseDuration)
+	renewal := &operationLeaseRenewal{
+		execCtx: execCtx,
+		cancel:  cancel,
+		stop:    stop,
+		done:    done,
+		errs:    errs,
+	}
 
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -425,8 +504,9 @@ func startOperationLeaseRenewal(ctx context.Context, config OperationConfig, ope
 						return
 					default:
 					}
-					cancel()
-					done <- fmt.Errorf("%w: %s: %w", ErrOperationLeaseRenewalFailed, operationID, err)
+					wrapped := fmt.Errorf("%w: %s: %w", ErrOperationLeaseRenewalFailed, operationID, err)
+					errs <- wrapped
+					done <- wrapped
 					return
 				}
 			case <-stop:
@@ -439,11 +519,25 @@ func startOperationLeaseRenewal(ctx context.Context, config OperationConfig, ope
 		}
 	}()
 
-	return execCtx, func() error {
-		close(stop)
-		cancel()
-		return <-done
-	}
+	return renewal
+}
+
+func (renewal *operationLeaseRenewal) Context() context.Context {
+	return renewal.execCtx
+}
+
+func (renewal *operationLeaseRenewal) Errors() <-chan error {
+	return renewal.errs
+}
+
+func (renewal *operationLeaseRenewal) Cancel() {
+	renewal.cancel()
+}
+
+func (renewal *operationLeaseRenewal) Stop() error {
+	close(renewal.stop)
+	renewal.cancel()
+	return <-renewal.done
 }
 
 func operationLeaseRenewalInterval(leaseDuration time.Duration) time.Duration {
@@ -462,6 +556,20 @@ func operationLeaseRenewalInterval(leaseDuration time.Duration) time.Duration {
 		return time.Millisecond
 	}
 	return interval
+}
+
+func operationDecisionNow(config OperationConfig) (time.Time, error) {
+	if config.Clock != nil {
+		now := config.Clock()
+		if now.IsZero() {
+			return time.Time{}, errors.New("operation recovery time must be set")
+		}
+		return now, nil
+	}
+	if config.Now.IsZero() {
+		return time.Time{}, errors.New("operation recovery time must be set")
+	}
+	return config.Now, nil
 }
 
 func operationLeaseRenewalNow(config OperationConfig) time.Time {
