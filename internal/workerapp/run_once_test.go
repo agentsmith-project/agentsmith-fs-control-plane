@@ -526,6 +526,36 @@ func TestRunOnceClaimsQueuedNamespaceUpsertAndBindingPutThroughDefaultRunner(t *
 	}
 }
 
+func TestRunOnceClaimsBindingPutMissingDefaultVolumeAsFailedTerminalOperation(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppBindingOperationRecord("op_binding", now)
+	store := newWorkerAppStore(record)
+	store.volumeReadErr = sql.ErrNoRows
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want claimed terminal failure without recovery error", summary)
+	}
+	got := store.records[record.ID]
+	if got.State != operations.OperationStateFailed || got.Phase != operations.OperationPhaseNamespaceVolumeBindingPutValidate || got.Error == nil || got.Error.Code != "NAMESPACE_VOLUME_BINDING_VOLUME_NOT_ACTIVE" {
+		t.Fatalf("binding operation = %#v, want typed failed missing default volume", got)
+	}
+	if got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("binding operation lease = %q/%v, want cleared", got.LeaseOwner, got.LeaseExpiresAt)
+	}
+	if store.binding.NamespaceID != "" {
+		t.Fatalf("binding side effect = %#v, want no namespace_volume_bindings write", store.binding)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Outcome != audit.OutcomeFailed || store.auditEvents[0].Reason != "namespace_volume_binding_put_failed" {
+		t.Fatalf("audit events = %#v, want failed binding audit", store.auditEvents)
+	}
+}
+
 func TestRunOnceClaimsQueuedVolumeEnsureThroughDefaultRunner(t *testing.T) {
 	now := workerAppNow()
 	volumeRecord := workerAppVolumeOperationRecord("op_volume", now)
@@ -2902,6 +2932,7 @@ type fakeWorkerAppStore struct {
 	restoreReconciliationCompletedRunID  string
 	restoreReconciliationMismatchCommits []restorereconcile.MismatchCommit
 	genericUpdateCalls                   int
+	volumeReadErr                        error
 }
 
 type workerAppAuditFailedCall struct {
@@ -3800,6 +3831,16 @@ func (store *fakeWorkerAppStore) CommitNamespaceVolumeBindingPutWithLease(_ cont
 	return binding, operation, nil
 }
 
+func (store *fakeWorkerAppStore) CommitNamespaceVolumeBindingPutFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
+}
+
 func (store *fakeWorkerAppStore) CommitWorkloadMountBindingCreateWithLease(_ context.Context, binding workloadmount.Binding, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
 	operation := workerAppCommittedOperation(record)
 	store.records[operation.ID] = operation
@@ -4192,6 +4233,9 @@ func (store *fakeWorkerAppStore) GetNamespaceVolumeBinding(context.Context, stri
 }
 
 func (store *fakeWorkerAppStore) GetVolume(context.Context, string) (resources.Volume, error) {
+	if store.volumeReadErr != nil {
+		return resources.Volume{}, store.volumeReadErr
+	}
 	return resources.Volume{ID: "vol_123", Backend: resources.VolumeBackendJuiceFS, IsolationClass: resources.VolumeIsolationShared, Status: resources.VolumeStatusActive, Capabilities: map[string]any{"webdav_export": true, "workload_mount": true, "jvs_external_control_root": true, "directory_quota": false}, CreatedAt: workerAppNow().Add(-time.Hour), UpdatedAt: workerAppNow()}, nil
 }
 

@@ -953,6 +953,83 @@ func TestInternalRuntimeReadinessAdminBootstrapGatesOnStoragePingWithoutLeakingE
 	}
 }
 
+func TestInternalRuntimeReadinessFailsClosedWithoutAPIVolumeRootsWhenStorageAvailable(t *testing.T) {
+	source := readyTestRuntimeSource()
+	delete(source, "AFSCP_API_VOLUME_ROOTS")
+	source["AFSCP_JVS_ENABLED"] = "false"
+	source["AFSCP_JVS_READY"] = "false"
+	runtime := newTestRuntimeWithSource(t, source, func(context.Context) error { return nil })
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	if body.Ready {
+		t.Fatalf("readiness = ready, want not ready without configured API volume roots")
+	}
+	volume := body.Capabilities[api.CapabilityVolumePreflight]
+	if !volume.Enabled || volume.Ready || !volume.Gated || volume.Reason != "volume_preflight_volume_roots_missing" {
+		t.Fatalf("volume preflight gate = %#v, want missing API volume roots", volume)
+	}
+	admin := body.Capabilities[api.CapabilityAdminBootstrap]
+	if !admin.Enabled || admin.Ready || !admin.Gated || admin.Reason != "admin_bootstrap_dependency_not_ready" {
+		t.Fatalf("admin bootstrap gate = %#v, want fixed aggregate failure", admin)
+	}
+}
+
+func TestInternalRuntimeReadinessAdminBootstrapGatesOnMissingConfiguredVolumeRecord(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	source := readyTestRuntimeSource()
+	runtime, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(_ context.Context, dsn string) (StoreHandle, error) {
+			if dsn != "postgres://api:secret@db/afscp" {
+				t.Fatalf("dsn = %q", dsn)
+			}
+			store := &fakeRuntimeStore{binding: testBinding()}
+			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+		},
+		SavePointHistoryRunnerFactory: testSavePointHistoryRunnerFactory(),
+		Clock:                         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	var body api.ReadinessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("readiness did not decode: %v: %s", err, rec.Body.String())
+	}
+	volume := body.Capabilities[api.CapabilityVolumePreflight]
+	if !volume.Enabled || volume.Ready || !volume.Gated || volume.Reason != "volume_preflight_configured_volume_missing" {
+		t.Fatalf("volume preflight gate = %#v, want configured volume missing", volume)
+	}
+	admin := body.Capabilities[api.CapabilityAdminBootstrap]
+	if !admin.Enabled || admin.Ready || !admin.Gated || admin.Reason != "admin_bootstrap_dependency_not_ready" {
+		t.Fatalf("admin bootstrap gate = %#v, want fixed aggregate failure", admin)
+	}
+	rendered := rec.Body.String()
+	for _, leaked := range []string{"postgres://api", "secret", "/srv/afscp", "vol_main"} {
+		if strings.Contains(rendered, leaked) {
+			t.Fatalf("readiness response leaked %q in %s", leaked, rendered)
+		}
+	}
+}
+
 func TestInternalRuntimeReadinessAdminBootstrapRequiresUsableCallerPolicyRoles(t *testing.T) {
 	runtime := newTestRuntimeWithSourceOverrides(t, config.MapSource{
 		"AFSCP_API_SERVICE_TOKENS":                    "svc_api=secret-token",
@@ -1700,7 +1777,8 @@ func newTestRuntimeWithSource(t *testing.T, source config.MapSource, ping func(c
 			if dsn != "postgres://api:secret@db/afscp" {
 				t.Fatalf("dsn = %q", dsn)
 			}
-			store := &fakeRuntimeStore{binding: testBinding()}
+			now := time.Unix(100, 0).UTC()
+			store := &fakeRuntimeStore{binding: testBinding(), volume: activeRuntimeVolume(now)}
 			return StoreHandle{Store: store, Close: store.Close, Ping: ping}, nil
 		},
 		SavePointHistoryRunnerFactory: testSavePointHistoryRunnerFactory(),

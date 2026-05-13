@@ -60,6 +60,10 @@ type auditAppendStore interface {
 	AppendAuditEvent(context.Context, audit.Event) error
 }
 
+type volumeReadinessReader interface {
+	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
+}
+
 type StoreFactory func(context.Context, string) (StoreHandle, error)
 
 type SavePointHistoryRunnerFactory func(config.WorkerRepoCreateRecoveryConfig) (api.JVSHistoryRunner, error)
@@ -221,7 +225,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		GenerateOperationID:            operationID,
 		Now:                            func() time.Time { return now().UTC() },
 		WebDAVExportPublicBaseURL:      webDAVExportPublicBaseURL,
-		ReadinessProvider:              internalReadinessProvider(cfg, handle.Ping),
+		ReadinessProvider:              internalReadinessProvider(cfg, handle.Ping, handle.Store),
 		WebDAVExportAdmissionDisabled:  apiAdmissionCapabilityDisabled(disabledAdmission, capability.WebDAVExport),
 		WorkloadMountAdmissionDisabled: apiAdmissionCapabilityDisabled(disabledAdmission, capability.WorkloadMountBinding),
 		RepoTemplateAdmissionDisabled:  apiAdmissionCapabilityDisabled(disabledAdmission, capability.RepoTemplate),
@@ -593,7 +597,7 @@ func internalCapabilityMatrix(cfg config.Config) capability.Matrix {
 	)
 }
 
-func internalReadinessProvider(cfg config.Config, ping func(context.Context) error) func(context.Context) api.ReadinessResponse {
+func internalReadinessProvider(cfg config.Config, ping func(context.Context) error, volumeReader volumeReadinessReader) func(context.Context) api.ReadinessResponse {
 	return func(ctx context.Context) api.ReadinessResponse {
 		readiness := internalReadiness(cfg)
 		if !cfg.Capabilities.Storage.Available() {
@@ -609,9 +613,39 @@ func internalReadinessProvider(cfg config.Config, ping func(context.Context) err
 			readiness.Capabilities[api.CapabilityStorage] = storageReadinessOverride(readiness, "storage_not_ready")
 			readiness.Capabilities[api.CapabilityVolumePreflight] = volumePreflightReadinessOverride(readiness, "volume_preflight_storage_not_ready")
 			readiness.Capabilities[api.CapabilityAdminBootstrap] = adminBootstrapGateFromReadiness(readiness)
+			return readiness
+		}
+		if reason := configuredVolumeReadinessReason(ctx, cfg.API.VolumeRoots, volumeReader); reason != "" {
+			readiness.Capabilities[api.CapabilityVolumePreflight] = volumePreflightReadinessOverride(readiness, reason)
+			readiness.Capabilities[api.CapabilityAdminBootstrap] = adminBootstrapGateFromReadiness(readiness)
 		}
 		return readiness
 	}
+}
+
+func configuredVolumeReadinessReason(ctx context.Context, roots map[string]string, reader volumeReadinessReader) string {
+	if len(roots) == 0 {
+		return "volume_preflight_volume_roots_missing"
+	}
+	if reader == nil {
+		return "volume_preflight_metadata_reader_missing"
+	}
+	for volumeID := range roots {
+		volume, err := reader.GetVolume(ctx, volumeID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return "volume_preflight_configured_volume_missing"
+			}
+			return "volume_preflight_metadata_unavailable"
+		}
+		if volume.ID != volumeID || volume.Status != resources.VolumeStatusActive {
+			return "volume_preflight_configured_volume_not_active"
+		}
+		if err := volume.Validate(); err != nil {
+			return "volume_preflight_configured_volume_invalid"
+		}
+	}
+	return ""
 }
 
 func storageReadinessOverride(readiness api.ReadinessResponse, reason string) api.CapabilityGate {

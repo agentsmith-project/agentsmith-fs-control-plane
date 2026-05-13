@@ -58,6 +58,26 @@ The repo now has neutral Go command entrypoints:
   using Basic auth, export session credential/admission checks, mode/method
   policy, source and `Destination` path policy, payload no-follow filesystem
   access, and durable runtime observation.
+- `afscp-migrate`: bounded PostgreSQL schema bootstrap entrypoint. `--apply`
+  applies the repo-owned embedded SQL migrations and records them in the AFSCP
+  schema ledger; `--check` verifies that every embedded migration is recorded
+  and that required runtime tables exist. It reads the database URL from
+  `AFSCP_MIGRATION_POSTGRES_DSN`, then `AFSCP_POSTGRES_DSN`, then
+  `AFSCP_DATABASE_URL`, and emits a redacted JSON readiness summary.
+- `afscp-volume-bootstrap`: bounded PostgreSQL default volume bootstrap
+  entrypoint for deployment Jobs. `--ensure` creates or reuses a
+  volume-global `volume_ensure` operation, claims it with the standard lease,
+  commits the active volume through the repo-owned volume ensure commit/audit
+  boundary, then checks the durable volume truth. `--check` is read-only and
+  verifies the configured volume exists, matches the explicit spec, and is
+  active. The command reads the database URL from
+  `AFSCP_VOLUME_BOOTSTRAP_POSTGRES_DSN`, then `AFSCP_POSTGRES_DSN`, then
+  `AFSCP_DATABASE_URL`. The volume truth must be explicit through
+  `AFSCP_VOLUME_BOOTSTRAP_SPEC` (or `AFSCP_DEFAULT_VOLUME_SPEC`) JSON, or the
+  matching discrete env/flag fields: volume id, backend, isolation class,
+  active status, and capabilities JSON. `AFSCP_VOLUME_ROOTS` is intentionally
+  not used as volume metadata truth. Output is a redacted JSON summary and a
+  failure exits nonzero.
 - `afscp-contract-verify`: verifies selected OpenAPI, schema, docs, and Go DTO
   contract guardrails.
 

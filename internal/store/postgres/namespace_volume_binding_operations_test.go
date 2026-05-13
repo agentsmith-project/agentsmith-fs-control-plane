@@ -211,6 +211,76 @@ func TestCommitNamespaceVolumeBindingPutWithLeaseActiveNamespaceAndVolumeAreUpda
 	}
 }
 
+func TestCommitNamespaceVolumeBindingPutFailedWithLeaseAtomicallyUpdatesOperationAndAppendsAudit(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := operationFixture(now.Add(-time.Hour))
+	record.ID = "op-binding"
+	record.Type = operations.OperationNamespaceVolumeBindingPut
+	record.State = operations.OperationStateFailed
+	record.Phase = operations.OperationPhaseNamespaceVolumeBindingPutValidate
+	record.NamespaceID = "ns_alpha01"
+	record.Resource = operations.ResourceRef{Type: "namespace_volume_binding", ID: "ns_alpha01"}
+	record.Error = &operations.OperationError{
+		Code:          "NAMESPACE_VOLUME_BINDING_VOLUME_NOT_ACTIVE",
+		Message:       "namespace volume binding default volume is not active",
+		Retryable:     false,
+		CorrelationID: record.CorrelationID,
+		OperationID:   record.ID,
+		Details:       map[string]any{"namespace_id": record.NamespaceID, "default_volume_id": "vol_missing"},
+	}
+	record.FinishedAt = &now
+
+	updated := record.SanitizedForPersistence().Record()
+	updated.LeaseOwner = ""
+	updated.LeaseExpiresAt = nil
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(updated)}}
+	st := &Store{exec: exec}
+
+	gotOperation, err := st.CommitNamespaceVolumeBindingPutFailedWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, namespaceVolumeBindingPutFailureAuditEvent("audit-binding", "op-binding", record.NamespaceID, now))
+	if err != nil {
+		t.Fatalf("CommitNamespaceVolumeBindingPutFailedWithLease: %v", err)
+	}
+	if gotOperation.ID != "op-binding" || gotOperation.State != operations.OperationStateFailed || gotOperation.LeaseOwner != "" {
+		t.Fatalf("operation = %#v, want failed with cleared lease", gotOperation)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"WITH eligible_operation AS (",
+		"SELECT operation_id FROM operations",
+		"operation_id = $12",
+		"operation_state = 'running'",
+		"lease_owner = $13",
+		"operation_type = 'namespace_volume_binding_put'",
+		"phase = 'validate_namespace_volume_binding_put'",
+		"namespace_id = $14",
+		"resource_type = 'namespace_volume_binding'",
+		"resource_id = $14",
+		"caller_service = $15",
+		"correlation_id = $16",
+		"authorized_actor_type = $17",
+		"authorized_actor_id = $18",
+		"FOR UPDATE",
+		"), updated_operation AS (",
+		"UPDATE operations SET",
+		"FROM eligible_operation",
+		"RETURNING",
+		"), inserted_audit AS (",
+		"INSERT INTO audit_outbox",
+		"SELECT $19",
+		"FROM updated_operation",
+		") SELECT",
+		"FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)",
+	)
+	for _, forbidden := range []string{"active_volume", "active_namespace", "INSERT INTO namespace_volume_bindings"} {
+		if strings.Contains(exec.query, forbidden) {
+			t.Fatalf("failure commit query contains success prerequisite %q: %s", forbidden, exec.query)
+		}
+	}
+	wantArgs := len(operationLeaseFencedUpdateArgsForTest(t, record, "worker-a", now)) + len(namespaceVolumeBindingPutStoredPredicateArgs(record)) + len(auditOutboxColumns)
+	if len(exec.args) != wantArgs {
+		t.Fatalf("arg count = %d, want %d", len(exec.args), wantArgs)
+	}
+}
+
 func namespaceVolumeBindingPutAuditEvent(eventID, operationID, namespaceID string, now time.Time) audit.Event {
 	return audit.NewEvent(audit.Event{
 		EventID:         eventID,
@@ -224,6 +294,22 @@ func namespaceVolumeBindingPutAuditEvent(eventID, operationID, namespaceID strin
 		Outcome:         audit.OutcomeSucceeded,
 		Reason:          "namespace_volume_binding_put_committed",
 		Details:         map[string]any{"namespace_id": namespaceID},
+	})
+}
+
+func namespaceVolumeBindingPutFailureAuditEvent(eventID, operationID, namespaceID string, now time.Time) audit.Event {
+	return audit.NewEvent(audit.Event{
+		EventID:         eventID,
+		Type:            audit.EventTypeNamespaceVolumeBindingPut,
+		Time:            now,
+		CallerService:   "afscp-api",
+		AuthorizedActor: audit.Actor{Type: "system", ID: "svc-alpha"},
+		CorrelationID:   "corr-alpha",
+		OperationID:     operationID,
+		Resource:        audit.Resource{Type: "namespace_volume_binding", ID: namespaceID, NamespaceID: namespaceID},
+		Outcome:         audit.OutcomeFailed,
+		Reason:          "namespace_volume_binding_put_failed",
+		Details:         map[string]any{"namespace_id": namespaceID, "default_volume_id": "vol_missing"},
 	})
 }
 

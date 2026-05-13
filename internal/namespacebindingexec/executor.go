@@ -2,6 +2,7 @@ package namespacebindingexec
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,9 @@ const (
 	unsupportedOperationReason = "unsupported_namespace_volume_binding_put_operation"
 	unsupportedPhaseReason     = "unsupported_namespace_volume_binding_put_phase"
 	unsupportedActionReason    = "unsupported_namespace_volume_binding_put_recovery_action"
+
+	namespaceNotActiveErrorCode = "NAMESPACE_VOLUME_BINDING_NAMESPACE_NOT_ACTIVE"
+	volumeNotActiveErrorCode    = "NAMESPACE_VOLUME_BINDING_VOLUME_NOT_ACTIVE"
 )
 
 var (
@@ -111,7 +115,17 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 		return errors.New("namespace volume binding put recovery time must be set")
 	}
 
-	binding, operation, event, err := executor.commitRequest(record, now)
+	binding, err := bindingFromInputSummary(record.InputSummary, record.NamespaceID, record.CreatedAt, now)
+	if err != nil {
+		return err
+	}
+	if failure, err := executor.activeDependencyFailure(ctx, record, binding); err != nil {
+		return err
+	} else if failure != nil {
+		return executor.commitFailed(ctx, record, now, failure)
+	}
+
+	operation, event, err := executor.successCommitRequest(record, binding, now)
 	if err != nil {
 		return err
 	}
@@ -169,12 +183,7 @@ func validateLeasedRunningRecord(record operations.OperationRecord, owner string
 	return nil
 }
 
-func (executor *Executor) commitRequest(record operations.OperationRecord, now time.Time) (resources.NamespaceVolumeBinding, operations.OperationRecord, audit.Event, error) {
-	binding, err := bindingFromInputSummary(record.InputSummary, record.NamespaceID, record.CreatedAt, now)
-	if err != nil {
-		return resources.NamespaceVolumeBinding{}, operations.OperationRecord{}, audit.Event{}, err
-	}
-
+func (executor *Executor) successCommitRequest(record operations.OperationRecord, binding resources.NamespaceVolumeBinding, now time.Time) (operations.OperationRecord, audit.Event, error) {
 	operation := record
 	operation.State = operations.OperationStateSucceeded
 	operation.Phase = operations.OperationPhaseNamespaceVolumeBindingPutCommitted
@@ -183,7 +192,7 @@ func (executor *Executor) commitRequest(record operations.OperationRecord, now t
 
 	eventID := strings.TrimSpace(executor.auditEventID())
 	if eventID == "" {
-		return resources.NamespaceVolumeBinding{}, operations.OperationRecord{}, audit.Event{}, errors.New("namespace volume binding put recovery audit event id must be set")
+		return operations.OperationRecord{}, audit.Event{}, errors.New("namespace volume binding put recovery audit event id must be set")
 	}
 	event := audit.NewEvent(audit.Event{
 		EventID:         eventID,
@@ -202,7 +211,108 @@ func (executor *Executor) commitRequest(record operations.OperationRecord, now t
 		Reason:  "namespace_volume_binding_put_committed",
 		Details: map[string]any{"namespace_id": operation.NamespaceID, "default_volume_id": binding.DefaultVolumeID},
 	})
-	return binding, operation, event, nil
+	return operation, event, nil
+}
+
+type dependencyFailure struct {
+	code    string
+	message string
+	details map[string]any
+}
+
+func (executor *Executor) activeDependencyFailure(ctx context.Context, record operations.OperationRecord, binding resources.NamespaceVolumeBinding) (*dependencyFailure, error) {
+	namespace, err := executor.commitStore.GetNamespace(ctx, record.NamespaceID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return namespaceDependencyFailure(record.NamespaceID, binding.DefaultVolumeID, ""), nil
+		}
+		return nil, err
+	}
+	if namespace.ID != record.NamespaceID || namespace.Status != resources.NamespaceStatusActive {
+		return namespaceDependencyFailure(record.NamespaceID, binding.DefaultVolumeID, string(namespace.Status)), nil
+	}
+
+	volume, err := executor.commitStore.GetVolume(ctx, binding.DefaultVolumeID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return volumeDependencyFailure(record.NamespaceID, binding.DefaultVolumeID, ""), nil
+		}
+		return nil, err
+	}
+	if volume.ID != binding.DefaultVolumeID || volume.Status != resources.VolumeStatusActive {
+		return volumeDependencyFailure(record.NamespaceID, binding.DefaultVolumeID, string(volume.Status)), nil
+	}
+	return nil, nil
+}
+
+func namespaceDependencyFailure(namespaceID, defaultVolumeID, status string) *dependencyFailure {
+	details := dependencyFailureDetails(namespaceID, defaultVolumeID)
+	if strings.TrimSpace(status) != "" {
+		details["namespace_status"] = status
+	}
+	return &dependencyFailure{
+		code:    namespaceNotActiveErrorCode,
+		message: "namespace volume binding namespace is not active",
+		details: details,
+	}
+}
+
+func volumeDependencyFailure(namespaceID, defaultVolumeID, status string) *dependencyFailure {
+	details := dependencyFailureDetails(namespaceID, defaultVolumeID)
+	if strings.TrimSpace(status) != "" {
+		details["volume_status"] = status
+	}
+	return &dependencyFailure{
+		code:    volumeNotActiveErrorCode,
+		message: "namespace volume binding default volume is not active",
+		details: details,
+	}
+}
+
+func dependencyFailureDetails(namespaceID, defaultVolumeID string) map[string]any {
+	return map[string]any{"namespace_id": namespaceID, "default_volume_id": defaultVolumeID}
+}
+
+func (executor *Executor) commitFailed(ctx context.Context, record operations.OperationRecord, now time.Time, failure *dependencyFailure) error {
+	if failure == nil {
+		return errors.New("namespace volume binding put failure metadata is required")
+	}
+	operation := record
+	operation.State = operations.OperationStateFailed
+	operation.Phase = operations.OperationPhaseNamespaceVolumeBindingPutValidate
+	operation.Error = &operations.OperationError{
+		Code:          failure.code,
+		Message:       failure.message,
+		Retryable:     false,
+		CorrelationID: record.CorrelationID,
+		OperationID:   record.ID,
+		Details:       failure.details,
+	}
+	operation.FinishedAt = &now
+
+	eventID := strings.TrimSpace(executor.auditEventID())
+	if eventID == "" {
+		return errors.New("namespace volume binding put recovery audit event id must be set")
+	}
+	event := audit.NewEvent(audit.Event{
+		EventID:         eventID,
+		Type:            audit.EventTypeNamespaceVolumeBindingPut,
+		Time:            now,
+		CallerService:   operation.CallerService,
+		AuthorizedActor: audit.Actor{Type: operation.AuthorizedActor.Type, ID: operation.AuthorizedActor.ID},
+		CorrelationID:   operation.CorrelationID,
+		OperationID:     operation.ID,
+		Resource: audit.Resource{
+			Type:        "namespace_volume_binding",
+			ID:          operation.NamespaceID,
+			NamespaceID: operation.NamespaceID,
+		},
+		Outcome: audit.OutcomeFailed,
+		Reason:  "namespace_volume_binding_put_failed",
+		Details: failure.details,
+	})
+	_, err := executor.commitStore.CommitNamespaceVolumeBindingPutFailedWithLease(ctx, operation.SanitizedForPersistence(), executor.owner, now, event)
+	return err
 }
 
 type bindingSummary struct {

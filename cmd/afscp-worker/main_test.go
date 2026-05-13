@@ -609,6 +609,10 @@ func (store *cmdWorkerAppStore) CommitNamespaceVolumeBindingPutWithLease(context
 	return resources.NamespaceVolumeBinding{}, operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
+func (store *cmdWorkerAppStore) CommitNamespaceVolumeBindingPutFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
 func (store *cmdWorkerAppStore) CommitWorkloadMountBindingCreateWithLease(context.Context, workloadmount.Binding, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
 	return workloadmount.Binding{}, operations.OperationRecord{}, errors.New("unexpected commit")
 }

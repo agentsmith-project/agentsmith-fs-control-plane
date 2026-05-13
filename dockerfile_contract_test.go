@@ -37,3 +37,44 @@ func TestDockerfilePackagesPinnedJVSLinuxAMD64Binary(t *testing.T) {
 		t.Fatalf("final image stage does not package pinned JVS binary: %s", finalStage)
 	}
 }
+
+func TestDockerfileFinalImageSupportsPinnedDynamicJVSBinary(t *testing.T) {
+	data, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	dockerfile := string(data)
+
+	finalFrom := finalFromInstruction(t, dockerfile)
+	if strings.Contains(finalFrom, "static-debian12") {
+		t.Fatalf("final image uses %q; pinned JVS is dynamically linked and requires a glibc runtime loader", finalFrom)
+	}
+
+	knownDynamicLoaderBases := map[string]bool{
+		"gcr.io/distroless/base-debian12:nonroot": true,
+		"gcr.io/distroless/cc-debian12:nonroot":   true,
+	}
+	if !knownDynamicLoaderBases[finalFrom] {
+		t.Fatalf("final image base = %q, want a known nonroot distroless base with glibc dynamic loader support", finalFrom)
+	}
+}
+
+func finalFromInstruction(t *testing.T, dockerfile string) string {
+	t.Helper()
+
+	lines := strings.Split(dockerfile, "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := strings.TrimSpace(lines[index])
+		if !strings.HasPrefix(line, "FROM ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			t.Fatalf("malformed final FROM instruction %q", line)
+		}
+		return fields[1]
+	}
+
+	t.Fatal("Dockerfile has no final FROM stage")
+	return ""
+}

@@ -148,6 +148,9 @@ type NamespaceDisableOperationRecoveryStore interface {
 // namespace_volume_binding_put for the same namespace resource.
 type NamespaceVolumeBindingOperationCommitStore interface {
 	CommitNamespaceVolumeBindingPutWithLease(ctx context.Context, binding resources.NamespaceVolumeBinding, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error)
+	CommitNamespaceVolumeBindingPutFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
+	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
 }
 
 // NamespaceVolumeBindingOperationRecoveryStore owns the durable recovery

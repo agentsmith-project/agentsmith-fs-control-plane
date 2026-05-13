@@ -67,6 +67,36 @@ func (store *Store) CommitNamespaceVolumeBindingPutWithLease(ctx context.Context
 	return gotBinding, gotOperation, nil
 }
 
+func (store *Store) CommitNamespaceVolumeBindingPutFailedWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	record := sanitized.Record()
+	if err := validateNamespaceVolumeBindingPutFailureRecord(record); err != nil {
+		return operations.OperationRecord{}, err
+	}
+	if err := validateNamespaceVolumeBindingPutFailureAuditEvent(record, event); err != nil {
+		return operations.OperationRecord{}, err
+	}
+	operationArgs, err := operationLeaseFencedUpdateArgs(record, owner, now)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	outboxRecord, err := audit.NewOutboxRecord(event, now)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+
+	args := append(operationArgs, namespaceVolumeBindingPutStoredPredicateArgs(record)...)
+	args = append(args, auditOutboxInsertArgs(outboxRecord)...)
+	row := store.exec.QueryRowContext(ctx, namespaceVolumeBindingPutFailureCommitWithLeaseSQL(), args...)
+	got, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("namespace volume binding put failure commit", record.ID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return got, nil
+}
+
 func validateNamespaceVolumeBindingPutOperationRecord(binding resources.NamespaceVolumeBinding, record operations.OperationRecord) error {
 	if record.Type != operations.OperationNamespaceVolumeBindingPut {
 		return operationLeaseInvalidRequest("operation_type", "operation record must be namespace_volume_binding_put")
@@ -89,6 +119,34 @@ func validateNamespaceVolumeBindingPutOperationRecord(binding resources.Namespac
 	return nil
 }
 
+func validateNamespaceVolumeBindingPutFailureRecord(record operations.OperationRecord) error {
+	if record.Type != operations.OperationNamespaceVolumeBindingPut {
+		return operationLeaseInvalidRequest("operation_type", "operation record must be namespace_volume_binding_put")
+	}
+	if record.State != operations.OperationStateFailed {
+		return operationLeaseInvalidRequest("operation_state", "namespace volume binding put failure requires failed operation update")
+	}
+	if strings.TrimSpace(record.Phase) != operations.OperationPhaseNamespaceVolumeBindingPutValidate {
+		return operationLeaseInvalidRequest("phase", "namespace volume binding put failure stays in validate phase")
+	}
+	if strings.TrimSpace(record.NamespaceID) == "" {
+		return operationLeaseInvalidRequest("namespace_id", "namespace volume binding put failure requires namespace id")
+	}
+	if record.Resource.Type != "namespace_volume_binding" {
+		return operationLeaseInvalidRequest("resource_type", "operation resource must be namespace_volume_binding")
+	}
+	if strings.TrimSpace(record.Resource.ID) == "" || record.Resource.ID != record.NamespaceID {
+		return operationLeaseInvalidRequest("resource_id", "operation resource id must match namespace id")
+	}
+	if strings.TrimSpace(record.CallerService) == "" || strings.TrimSpace(record.CorrelationID) == "" || strings.TrimSpace(record.AuthorizedActor.Type) == "" || strings.TrimSpace(record.AuthorizedActor.ID) == "" {
+		return operationLeaseInvalidRequest("caller", "namespace volume binding put failure requires caller context")
+	}
+	if record.Error == nil {
+		return operationLeaseInvalidRequest("error", "namespace volume binding put failure requires operation error")
+	}
+	return nil
+}
+
 func validateNamespaceVolumeBindingPutAuditEvent(binding resources.NamespaceVolumeBinding, record operations.OperationRecord, event audit.Event) error {
 	if event.Outcome != audit.OutcomeSucceeded {
 		return auditOutboxInvalidRequest("outcome", "namespace volume binding put audit outcome must be succeeded")
@@ -101,6 +159,34 @@ func validateNamespaceVolumeBindingPutAuditEvent(binding resources.NamespaceVolu
 	}
 	if strings.TrimSpace(event.Resource.NamespaceID) == "" || event.Resource.NamespaceID != binding.NamespaceID {
 		return auditOutboxInvalidRequest("resource_namespace_id", "namespace volume binding put audit resource namespace must match binding metadata")
+	}
+	if event.CallerService != record.CallerService {
+		return auditOutboxInvalidRequest("caller_service", "audit caller service must match operation")
+	}
+	if event.CorrelationID != record.CorrelationID {
+		return auditOutboxInvalidRequest("correlation_id", "audit correlation id must match operation")
+	}
+	if event.AuthorizedActor.Type != record.AuthorizedActor.Type || event.AuthorizedActor.ID != record.AuthorizedActor.ID {
+		return auditOutboxInvalidRequest("authorized_actor", "audit actor must match operation")
+	}
+	return nil
+}
+
+func validateNamespaceVolumeBindingPutFailureAuditEvent(record operations.OperationRecord, event audit.Event) error {
+	if event.OperationID != record.ID {
+		return auditOutboxInvalidRequest("operation_id", "audit operation id must match operation update")
+	}
+	if event.Type != audit.EventTypeNamespaceVolumeBindingPut || event.Outcome != audit.OutcomeFailed {
+		return auditOutboxInvalidRequest("event_type", "namespace volume binding put failure audit event must match operation outcome")
+	}
+	if event.Resource.Type != "namespace_volume_binding" {
+		return auditOutboxInvalidRequest("resource_type", "namespace volume binding put audit resource must be namespace_volume_binding")
+	}
+	if strings.TrimSpace(event.Resource.ID) == "" || event.Resource.ID != record.NamespaceID {
+		return auditOutboxInvalidRequest("resource_id", "namespace volume binding put audit resource id must match operation namespace")
+	}
+	if strings.TrimSpace(event.Resource.NamespaceID) == "" || event.Resource.NamespaceID != record.NamespaceID {
+		return auditOutboxInvalidRequest("resource_namespace_id", "namespace volume binding put audit resource namespace must match operation namespace")
 	}
 	if event.CallerService != record.CallerService {
 		return auditOutboxInvalidRequest("caller_service", "audit caller service must match operation")
@@ -142,6 +228,36 @@ func namespaceVolumeBindingPutOperationCommitWithLeaseSQL() string {
 		"RETURNING audit_event_id" +
 		") SELECT " + prefixedColumns("upserted_binding", namespaceVolumeBindingColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) +
 		" FROM upserted_binding, updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
+}
+
+func namespaceVolumeBindingPutFailureCommitWithLeaseSQL() string {
+	return "WITH eligible_operation AS (" +
+		"SELECT operation_id FROM operations " +
+		"WHERE operation_id = $12 " +
+		"AND operation_state = 'running' " +
+		"AND lease_owner = $13 " +
+		"AND lease_expires_at IS NOT NULL " +
+		"AND lease_expires_at > $11 " +
+		"AND operation_type = 'namespace_volume_binding_put' " +
+		"AND phase = 'validate_namespace_volume_binding_put' " +
+		"AND namespace_id = $14 " +
+		"AND resource_type = 'namespace_volume_binding' " +
+		"AND resource_id = $14 " +
+		"AND caller_service = $15 " +
+		"AND correlation_id = $16 " +
+		"AND authorized_actor_type = $17 " +
+		"AND authorized_actor_id = $18 " +
+		"FOR UPDATE" +
+		"), updated_operation AS (" +
+		operationLeaseFencedUpdateSetSQL() +
+		"FROM eligible_operation " +
+		"WHERE operations.operation_id = eligible_operation.operation_id " +
+		"RETURNING " + operationReturningColumnsSQL() +
+		"), inserted_audit AS (" +
+		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") " +
+		"SELECT " + placeholders(19, len(auditOutboxColumns)) + " FROM updated_operation " +
+		"RETURNING audit_event_id" +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
 }
 
 func namespaceVolumeBindingPutOperationLeaseFencedUpdateBaseSQL() string {

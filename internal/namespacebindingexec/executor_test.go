@@ -2,6 +2,7 @@ package namespacebindingexec
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -98,6 +99,52 @@ func TestExecutorClaimRetryReclaimCommitBindingOperationAndAuditAtomically(t *te
 				t.Fatalf("event caller/correlation = %q/%q", event.CallerService, event.CorrelationID)
 			}
 		})
+	}
+}
+
+func TestExecutorCommitsFailedOperationWhenDefaultVolumeIsMissing(t *testing.T) {
+	now := bindingExecNow()
+	store := &fakeCommitStore{volumeErr: sql.ErrNoRows}
+	executor := newTestExecutor(t, store, now, func() string { return "evt_binding_failed" })
+	record := bindingExecRecord("op_binding_missing_volume")
+	record.State = operations.OperationStateRunning
+	expiresAt := now.Add(5 * time.Minute)
+	record.LeaseOwner = "worker-a"
+	record.LeaseExpiresAt = &expiresAt
+	record.Attempt = 2
+
+	err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if store.commitCalls != 0 {
+		t.Fatalf("success commit calls = %d, want 0", store.commitCalls)
+	}
+	if store.failedCalls != 1 {
+		t.Fatalf("failure commit calls = %d, want 1", store.failedCalls)
+	}
+	call := store.lastFailedCall
+	if call.owner != "worker-a" || !call.now.Equal(now) {
+		t.Fatalf("failure owner/now = %q/%v, want worker-a/%v", call.owner, call.now, now)
+	}
+	operation := call.record.Record()
+	if operation.ID != record.ID || operation.State != operations.OperationStateFailed || operation.Phase != operations.OperationPhaseNamespaceVolumeBindingPutValidate {
+		t.Fatalf("failed operation = %#v, want failed validate operation", operation)
+	}
+	if operation.Error == nil || operation.Error.Code != "NAMESPACE_VOLUME_BINDING_VOLUME_NOT_ACTIVE" || operation.Error.Retryable {
+		t.Fatalf("operation error = %#v, want non-retryable missing volume error", operation.Error)
+	}
+	if operation.Error.Details["default_volume_id"] != "vol_123" || operation.Error.Details["namespace_id"] != record.NamespaceID {
+		t.Fatalf("operation error details = %#v, want namespace/default volume ids", operation.Error.Details)
+	}
+	if operation.FinishedAt == nil || !operation.FinishedAt.Equal(now) {
+		t.Fatalf("finished_at = %v, want %v", operation.FinishedAt, now)
+	}
+	if call.event.Type != audit.EventTypeNamespaceVolumeBindingPut || call.event.Outcome != audit.OutcomeFailed || call.event.Reason != "namespace_volume_binding_put_failed" {
+		t.Fatalf("failure audit = %#v, want failed namespace binding audit", call.event)
+	}
+	if call.event.OperationID != record.ID || call.event.Resource.ID != record.NamespaceID || call.event.Details["default_volume_id"] != "vol_123" {
+		t.Fatalf("failure audit linkage/details = %#v/%#v, want operation and default volume", call.event.Resource, call.event.Details)
 	}
 }
 
@@ -237,9 +284,16 @@ func bindingExecNow() time.Time {
 }
 
 type fakeCommitStore struct {
-	commitCalls int
-	lastCall    bindingCommitCall
-	err         error
+	commitCalls    int
+	lastCall       bindingCommitCall
+	err            error
+	namespace      resources.Namespace
+	namespaceErr   error
+	volume         resources.Volume
+	volumeErr      error
+	failedCalls    int
+	lastFailedCall bindingFailureCall
+	failedErr      error
 }
 
 type bindingCommitCall struct {
@@ -250,6 +304,41 @@ type bindingCommitCall struct {
 	event   audit.Event
 }
 
+type bindingFailureCall struct {
+	record operations.SanitizedOperationRecord
+	owner  string
+	now    time.Time
+	event  audit.Event
+}
+
+func (store *fakeCommitStore) GetNamespace(_ context.Context, namespaceID string) (resources.Namespace, error) {
+	if store.namespaceErr != nil {
+		return resources.Namespace{}, store.namespaceErr
+	}
+	namespace := store.namespace
+	if namespace.ID == "" {
+		namespace = activeNamespaceForBindingTest(namespaceID)
+	}
+	if namespace.ID != namespaceID {
+		return resources.Namespace{}, sql.ErrNoRows
+	}
+	return namespace, nil
+}
+
+func (store *fakeCommitStore) GetVolume(_ context.Context, volumeID string) (resources.Volume, error) {
+	if store.volumeErr != nil {
+		return resources.Volume{}, store.volumeErr
+	}
+	volume := store.volume
+	if volume.ID == "" {
+		volume = activeVolumeForBindingTest(volumeID)
+	}
+	if volume.ID != volumeID {
+		return resources.Volume{}, sql.ErrNoRows
+	}
+	return volume, nil
+}
+
 func (store *fakeCommitStore) CommitNamespaceVolumeBindingPutWithLease(_ context.Context, binding resources.NamespaceVolumeBinding, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.NamespaceVolumeBinding, operations.OperationRecord, error) {
 	store.commitCalls++
 	store.lastCall = bindingCommitCall{binding: binding, record: record, owner: owner, now: now, event: event}
@@ -257,4 +346,31 @@ func (store *fakeCommitStore) CommitNamespaceVolumeBindingPutWithLease(_ context
 		return resources.NamespaceVolumeBinding{}, operations.OperationRecord{}, store.err
 	}
 	return binding, record.Record(), nil
+}
+
+func (store *fakeCommitStore) CommitNamespaceVolumeBindingPutFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	store.failedCalls++
+	store.lastFailedCall = bindingFailureCall{record: record, owner: owner, now: now, event: event}
+	if store.failedErr != nil {
+		return operations.OperationRecord{}, store.failedErr
+	}
+	return record.Record(), nil
+}
+
+func activeNamespaceForBindingTest(namespaceID string) resources.Namespace {
+	now := bindingExecNow()
+	return resources.Namespace{ID: namespaceID, Status: resources.NamespaceStatusActive, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}
+}
+
+func activeVolumeForBindingTest(volumeID string) resources.Volume {
+	now := bindingExecNow()
+	return resources.Volume{
+		ID:             volumeID,
+		Backend:        resources.VolumeBackendJuiceFS,
+		IsolationClass: resources.VolumeIsolationShared,
+		Status:         resources.VolumeStatusActive,
+		Capabilities:   map[string]any{"webdav_export": true, "workload_mount": true, "jvs_external_control_root": true, "directory_quota": false},
+		CreatedAt:      now.Add(-time.Hour),
+		UpdatedAt:      now,
+	}
 }

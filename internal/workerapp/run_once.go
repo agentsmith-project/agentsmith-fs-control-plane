@@ -1039,6 +1039,10 @@ func (scoped operationRecoveryStore) CommitNamespaceVolumeBindingPutWithLease(ct
 	return scoped.store.CommitNamespaceVolumeBindingPutWithLease(ctx, binding, record, owner, now, event)
 }
 
+func (scoped operationRecoveryStore) CommitNamespaceVolumeBindingPutFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	return scoped.store.CommitNamespaceVolumeBindingPutFailedWithLease(ctx, record, owner, now, event)
+}
+
 func (scoped operationRecoveryStore) CommitWorkloadMountBindingCreateWithLease(ctx context.Context, binding workloadmount.Binding, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (workloadmount.Binding, operations.OperationRecord, error) {
 	return scoped.store.CommitWorkloadMountBindingCreateWithLease(ctx, binding, record, owner, now, event)
 }

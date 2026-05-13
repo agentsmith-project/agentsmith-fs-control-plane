@@ -14,7 +14,9 @@ COPY . .
 RUN export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" && \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/afscp-api ./cmd/afscp-api && \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/afscp-worker ./cmd/afscp-worker && \
-    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/afscp-export-gateway ./cmd/afscp-export-gateway
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/afscp-export-gateway ./cmd/afscp-export-gateway && \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/afscp-migrate ./cmd/afscp-migrate && \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/afscp-volume-bootstrap ./cmd/afscp-volume-bootstrap
 
 FROM scratch AS jvs
 
@@ -24,7 +26,8 @@ ARG JVS_SHA256=0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944
 
 ADD --checksum=sha256:0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944 https://github.com/agentsmith-project/jvs/releases/download/v0.4.9/jvs-linux-amd64 /jvs
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# Pinned JVS is dynamically linked and needs the glibc loader in the final image.
+FROM gcr.io/distroless/base-debian12:nonroot
 
 ARG VERSION=dev
 ARG REVISION=unknown
@@ -44,6 +47,8 @@ ENV AFSCP_JVS_BINARY_PATH="/usr/local/bin/jvs" \
 COPY --from=build /out/afscp-api /usr/local/bin/afscp-api
 COPY --from=build /out/afscp-worker /usr/local/bin/afscp-worker
 COPY --from=build /out/afscp-export-gateway /usr/local/bin/afscp-export-gateway
+COPY --from=build /out/afscp-migrate /usr/local/bin/afscp-migrate
+COPY --from=build /out/afscp-volume-bootstrap /usr/local/bin/afscp-volume-bootstrap
 COPY --from=jvs --chmod=0755 /jvs /usr/local/bin/jvs
 
 USER nonroot:nonroot
