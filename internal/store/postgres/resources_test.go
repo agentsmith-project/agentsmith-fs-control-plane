@@ -284,7 +284,7 @@ func TestNamespaceVolumeBindingRejectsInvalidPolicySchemaBeforeSQL(t *testing.T)
 			delete(binding.LifecyclePolicy, "purge_requires_lifecycle_admin")
 		}},
 		{name: "mount missing external control root requirement", edit: func(binding *resources.NamespaceVolumeBinding) {
-			delete(binding.MountPolicy, "workload_mount_requires_jvs_external_control_root")
+			delete(binding.MountPolicy, "workload_mount_requires_external_control_root")
 		}},
 		{name: "template wrong cross namespace type", edit: func(binding *resources.NamespaceVolumeBinding) {
 			binding.TemplatePolicy["cross_namespace_clone_enabled"] = "false"
@@ -584,7 +584,7 @@ func bindingFixture() resources.NamespaceVolumeBinding {
 		QuotaBytesDefault: 4096,
 		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
 		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
-		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false},
+		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_external_control_root": true, "allow_privileged_workload": false},
 		TemplatePolicy:    map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false},
 		Status:            resources.NamespaceStatusActive,
 		CreatedAt:         now,

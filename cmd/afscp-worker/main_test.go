@@ -188,6 +188,144 @@ func TestCommandRunOnceOperationRecoveryCountErrorOutputsSummaryAndExitsOne(t *t
 	}
 }
 
+func TestCommandLoopRunsUntilContextCancelledAndContinuesAfterFailure(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := &fakeRunOnceRunner{
+		onRun: func(call int, _ context.Context) (worker.Result, error) {
+			switch call {
+			case 1:
+				return worker.Result{AuditDelivery: auditdelivery.BatchResult{Claimed: 1, Failed: 1}}, errors.New("delivery failed token=secret-token")
+			case 2:
+				cancel()
+				return worker.Result{OperationRecovery: recovery.OperationBatchResult{Scanned: 2}}, nil
+			default:
+				t.Fatalf("unexpected loop call %d", call)
+				return worker.Result{}, nil
+			}
+		},
+	}
+	factoryCalls := 0
+	cmd := newCommand(&stdout, &stderr)
+	cmd.newRunner = func() (runOnceRunner, error) {
+		factoryCalls++
+		return runner, nil
+	}
+
+	code := cmd.runContext(ctx, []string{"--loop", "--interval=1ns"})
+	if code != 0 {
+		t.Fatalf("run returned %d, want 0; stderr %q", code, stderr.String())
+	}
+	if factoryCalls != 2 || runner.calls != 2 {
+		t.Fatalf("factory/runner calls = %d/%d, want 2/2", factoryCalls, runner.calls)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("stdout lines = %d, want 2: %q", len(lines), stdout.String())
+	}
+	var first worker.Summary
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("first loop summary is not JSON: %q: %v", lines[0], err)
+	}
+	if first.AuditDelivery.Claimed != 1 || first.AuditDelivery.Failed != 1 {
+		t.Fatalf("first summary = %#v, want audit failure counts", first)
+	}
+	var second worker.Summary
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatalf("second loop summary is not JSON: %q: %v", lines[1], err)
+	}
+	if second.Operation.Scanned != 2 {
+		t.Fatalf("second summary = %#v, want operation scanned count", second)
+	}
+	if !strings.Contains(stderr.String(), "loop failed") || strings.Contains(stderr.String(), "secret-token") {
+		t.Fatalf("stderr = %q, want redacted loop failure", stderr.String())
+	}
+}
+
+func TestCommandLoopContinuesAfterFactoryError(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := &fakeRunOnceRunner{
+		onRun: func(int, context.Context) (worker.Result, error) {
+			cancel()
+			return worker.Result{OperationRecovery: recovery.OperationBatchResult{Scanned: 1}}, nil
+		},
+	}
+	factoryCalls := 0
+	cmd := newCommand(&stdout, &stderr)
+	cmd.newRunner = func() (runOnceRunner, error) {
+		factoryCalls++
+		if factoryCalls == 1 {
+			return nil, errors.New("open postgres://worker:password=secret-password@db/afscp failed")
+		}
+		return runner, nil
+	}
+
+	code := cmd.runContext(ctx, []string{"--loop", "--interval=1ns"})
+	if code != 0 {
+		t.Fatalf("run returned %d, want 0; stderr %q", code, stderr.String())
+	}
+	if factoryCalls != 2 || runner.calls != 1 {
+		t.Fatalf("factory/runner calls = %d/%d, want 2/1", factoryCalls, runner.calls)
+	}
+	var summary worker.Summary
+	if err := json.Unmarshal(stdout.Bytes(), &summary); err != nil {
+		t.Fatalf("stdout is not JSON summary: %q: %v", stdout.String(), err)
+	}
+	if summary.Operation.Scanned != 1 {
+		t.Fatalf("summary = %#v, want operation scanned count", summary)
+	}
+	for _, leaked := range []string{"postgres://worker", "secret-password"} {
+		if strings.Contains(stderr.String(), leaked) {
+			t.Fatalf("stderr = %q leaked %q", stderr.String(), leaked)
+		}
+	}
+	if !strings.Contains(stderr.String(), "invalid worker config") {
+		t.Fatalf("stderr = %q, want config error", stderr.String())
+	}
+}
+
+func TestCommandLoopFlagContract(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "conflicting modes", args: []string{"--loop", "--run-once"}, want: "--loop cannot be combined with --run-once"},
+		{name: "interval without loop", args: []string{"--interval=1s"}, want: "--interval requires --loop"},
+		{name: "non-positive interval", args: []string{"--loop", "--interval=0s"}, want: "--interval must be positive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			factoryCalls := 0
+			cmd := newCommand(&stdout, &stderr)
+			cmd.newRunner = func() (runOnceRunner, error) {
+				factoryCalls++
+				return &fakeRunOnceRunner{}, nil
+			}
+
+			code := cmd.run(tc.args)
+			if code != 2 {
+				t.Fatalf("run returned %d, want 2", code)
+			}
+			if factoryCalls != 0 {
+				t.Fatalf("factory calls = %d, want 0", factoryCalls)
+			}
+			if stdout.String() != "" {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Fatalf("stderr = %q, want %q", stderr.String(), tc.want)
+			}
+		})
+	}
+}
+
 func TestCommandRunOnceFactoryErrorExitsTwoWithoutSummary(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -334,6 +472,7 @@ type fakeRunOnceRunner struct {
 	ctx    context.Context
 	result worker.Result
 	err    error
+	onRun  func(int, context.Context) (worker.Result, error)
 }
 
 type cmdWorkerAppStore struct{}
@@ -448,6 +587,10 @@ func (store *cmdWorkerAppStore) AcquireRestorePreviewDiscardOperationLease(conte
 
 func (store *cmdWorkerAppStore) AcquireRestoreRunOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) RenewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected renew")
 }
 
 func (store *cmdWorkerAppStore) CommitNamespaceUpsertWithLease(context.Context, resources.Namespace, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (resources.Namespace, operations.OperationRecord, error) {
@@ -661,6 +804,9 @@ func (store *cmdWorkerAppStore) MarkAuditOutboxDeliveryFailed(context.Context, s
 func (runner *fakeRunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error) {
 	runner.calls++
 	runner.ctx = ctx
+	if runner.onRun != nil {
+		return runner.onRun(runner.calls, ctx)
+	}
 	return runner.result, runner.err
 }
 

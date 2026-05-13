@@ -680,7 +680,7 @@ func workloadMountBindingResponseFromBinding(binding workloadmount.Binding) work
 }
 
 func mountPolicyEnabled(binding resources.NamespaceVolumeBinding) bool {
-	return boolPolicy(binding.MountPolicy, "workload_mount_enabled") && boolPolicy(binding.MountPolicy, "workload_mount_requires_jvs_external_control_root")
+	return boolPolicy(binding.MountPolicy, "workload_mount_enabled") && boolPolicy(binding.MountPolicy, "workload_mount_requires_external_control_root")
 }
 
 func volumeWorkloadMountCapable(volume resources.Volume) bool {

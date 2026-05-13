@@ -573,12 +573,12 @@
           "additionalProperties": false,
           "required": [
             "workload_mount_enabled",
-            "workload_mount_requires_jvs_external_control_root",
+            "workload_mount_requires_external_control_root",
             "allow_privileged_workload"
           ],
           "properties": {
             "workload_mount_enabled": { "type": "boolean" },
-            "workload_mount_requires_jvs_external_control_root": { "type": "boolean" },
+            "workload_mount_requires_external_control_root": { "type": "boolean" },
             "allow_privileged_workload": { "type": "boolean" }
           }
         },

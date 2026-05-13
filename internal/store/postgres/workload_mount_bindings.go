@@ -357,7 +357,7 @@ func workloadMountPlanSelectSQL() string {
 		"SELECT nvb.namespace_id, nvb.mount_policy FROM namespace_volume_bindings nvb, candidate_binding b " +
 		"WHERE nvb.namespace_id = b.namespace_id AND b.status IN ('issued','pending','active') AND nvb.status = 'active' " +
 		"AND COALESCE((nvb.mount_policy->>'workload_mount_enabled')::boolean, false) = true " +
-		"AND COALESCE((nvb.mount_policy->>'workload_mount_requires_jvs_external_control_root')::boolean, false) = true" +
+		"AND COALESCE((nvb.mount_policy->>'workload_mount_requires_external_control_root')::boolean, false) = true" +
 		"), active_repo AS (" +
 		"SELECT r.repo_id, r.volume_id, r.payload_volume_subdir FROM repos r, candidate_binding b " +
 		"WHERE r.namespace_id = b.namespace_id AND r.repo_id = b.repo_id AND r.volume_id = b.volume_id " +
@@ -390,7 +390,7 @@ func workloadMountBindingCreateCommitSQL() string {
 		"), active_binding AS (" +
 		"SELECT namespace_id FROM namespace_volume_bindings WHERE namespace_id = $15 AND status = 'active' " +
 		"AND COALESCE((mount_policy->>'workload_mount_enabled')::boolean, false) = true " +
-		"AND COALESCE((mount_policy->>'workload_mount_requires_jvs_external_control_root')::boolean, false) = true FOR SHARE" +
+		"AND COALESCE((mount_policy->>'workload_mount_requires_external_control_root')::boolean, false) = true FOR SHARE" +
 		"), active_repo AS (" +
 		"SELECT repo_id FROM repos WHERE namespace_id = $15 AND repo_id = $16 AND volume_id = $17 AND repo_kind = 'repo' AND status = 'active' AND lifecycle_status = 'active' FOR UPDATE" +
 		"), active_volume AS (" +

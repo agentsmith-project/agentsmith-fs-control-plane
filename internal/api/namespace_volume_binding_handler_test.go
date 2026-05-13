@@ -210,7 +210,7 @@ func TestNamespaceVolumeBindingHandlerReturnsBindingDTO(t *testing.T) {
 		QuotaBytesDefault: 4096,
 		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600), "credential_ref": "secret-ref"},
 		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
-		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false},
+		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_external_control_root": true, "allow_privileged_workload": false},
 		TemplatePolicy:    map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false},
 		Status:            resources.NamespaceStatusActive,
 		CreatedAt:         now,
@@ -598,5 +598,5 @@ func namespaceBindingHandlerTestNow() time.Time {
 }
 
 func namespaceBindingRequestBody(namespaceID string) string {
-	return `{"namespace_id":"` + namespaceID + `","default_volume_id":"vol_123","allowed_callers":[{"caller_service":"product-caller","roles":["repo_admin","operation_inspector"]}],"quota_bytes_default":4096,"export_policy":{"webdav_enabled":true,"max_session_seconds":3600},"lifecycle_policy":{"tombstone_retention_seconds":604800,"purge_requires_lifecycle_admin":true,"break_glass_purge_enabled":false},"mount_policy":{"workload_mount_enabled":true,"workload_mount_requires_jvs_external_control_root":true,"allow_privileged_workload":false},"template_policy":{"namespace_templates_enabled":true,"cross_namespace_clone_enabled":false},"status":"active"}`
+	return `{"namespace_id":"` + namespaceID + `","default_volume_id":"vol_123","allowed_callers":[{"caller_service":"product-caller","roles":["repo_admin","operation_inspector"]}],"quota_bytes_default":4096,"export_policy":{"webdav_enabled":true,"max_session_seconds":3600},"lifecycle_policy":{"tombstone_retention_seconds":604800,"purge_requires_lifecycle_admin":true,"break_glass_purge_enabled":false},"mount_policy":{"workload_mount_enabled":true,"workload_mount_requires_external_control_root":true,"allow_privileged_workload":false},"template_policy":{"namespace_templates_enabled":true,"cross_namespace_clone_enabled":false},"status":"active"}`
 }

@@ -109,7 +109,7 @@ func TestNamespaceVolumeBindingResponseJSONShapeAllowedCallersAndPolicyCopies(t 
 		QuotaBytesDefault: 4096,
 		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600), "quota_enforced": true, "credential_ref": "secret-export-ref"},
 		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false, "secret_path": "/secret/lifecycle"},
-		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false, "credential_ref": "secret-mount-ref"},
+		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_external_control_root": true, "allow_privileged_workload": false, "credential_ref": "secret-mount-ref"},
 		TemplatePolicy:    map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false, "secret_path": "/secret/template"},
 		Status:            resources.NamespaceStatusActive,
 		CreatedAt:         now,
@@ -150,7 +150,7 @@ func TestNamespaceVolumeBindingResponseJSONShapeAllowedCallersAndPolicyCopies(t 
 	templatePolicy := got["template_policy"].(map[string]any)
 	assertMapHasKeys(t, exportPolicy, "webdav_enabled", "max_session_seconds")
 	assertMapHasKeys(t, lifecyclePolicy, "tombstone_retention_seconds", "purge_requires_lifecycle_admin", "break_glass_purge_enabled")
-	assertMapHasKeys(t, mountPolicy, "workload_mount_enabled", "workload_mount_requires_jvs_external_control_root", "allow_privileged_workload")
+	assertMapHasKeys(t, mountPolicy, "workload_mount_enabled", "workload_mount_requires_external_control_root", "allow_privileged_workload")
 	assertMapHasKeys(t, templatePolicy, "namespace_templates_enabled", "cross_namespace_clone_enabled")
 	assertMapLacksKeys(t, exportPolicy, "credential_ref")
 	assertMapLacksKeys(t, lifecyclePolicy, "secret_path")

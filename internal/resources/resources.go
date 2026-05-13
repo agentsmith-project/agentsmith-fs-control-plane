@@ -598,14 +598,14 @@ func validateLifecyclePolicy(policy map[string]any) error {
 
 func validateMountPolicy(policy map[string]any) error {
 	allowed := map[string]bool{
-		"workload_mount_enabled":                            true,
-		"workload_mount_requires_jvs_external_control_root": true,
-		"allow_privileged_workload":                         true,
+		"workload_mount_enabled":                        true,
+		"workload_mount_requires_external_control_root": true,
+		"allow_privileged_workload":                     true,
 	}
 	if err := rejectUnknownKeys("mount_policy", policy, allowed); err != nil {
 		return err
 	}
-	for _, key := range []string{"workload_mount_enabled", "workload_mount_requires_jvs_external_control_root", "allow_privileged_workload"} {
+	for _, key := range []string{"workload_mount_enabled", "workload_mount_requires_external_control_root", "allow_privileged_workload"} {
 		if err := requireBool("mount_policy", policy, key); err != nil {
 			return err
 		}

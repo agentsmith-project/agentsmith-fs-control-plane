@@ -176,7 +176,7 @@ var (
 	}
 	exportPolicyKeys    = []string{"webdav_enabled", "max_session_seconds"}
 	lifecyclePolicyKeys = []string{"tombstone_retention_seconds", "purge_requires_lifecycle_admin", "break_glass_purge_enabled"}
-	mountPolicyKeys     = []string{"workload_mount_enabled", "workload_mount_requires_jvs_external_control_root", "allow_privileged_workload"}
+	mountPolicyKeys     = []string{"workload_mount_enabled", "workload_mount_requires_external_control_root", "allow_privileged_workload"}
 	templatePolicyKeys  = []string{"namespace_templates_enabled", "cross_namespace_clone_enabled"}
 )
 

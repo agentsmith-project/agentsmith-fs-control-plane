@@ -2840,7 +2840,7 @@ func workerAppBindingInputSummary(namespaceID string) map[string]any {
 		"quota_bytes_default": float64(4096),
 		"export_policy":       map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
 		"lifecycle_policy":    map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
-		"mount_policy":        map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false},
+		"mount_policy":        map[string]any{"workload_mount_enabled": true, "workload_mount_requires_external_control_root": true, "allow_privileged_workload": false},
 		"template_policy":     map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false},
 		"status":              "active",
 	}
@@ -4183,7 +4183,7 @@ func (store *fakeWorkerAppStore) GetNamespaceVolumeBinding(context.Context, stri
 		QuotaBytesDefault: 4096,
 		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
 		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
-		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false},
+		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_external_control_root": true, "allow_privileged_workload": false},
 		TemplatePolicy:    map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false},
 		Status:            resources.NamespaceStatusActive,
 		CreatedAt:         workerAppNow().Add(-time.Hour),

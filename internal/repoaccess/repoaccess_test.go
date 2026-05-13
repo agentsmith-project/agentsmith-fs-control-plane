@@ -403,7 +403,7 @@ func bindingFixture(status resources.NamespaceStatus) resources.NamespaceVolumeB
 		QuotaBytesDefault: 4096,
 		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
 		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
-		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_jvs_external_control_root": true, "allow_privileged_workload": false},
+		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_external_control_root": true, "allow_privileged_workload": false},
 		TemplatePolicy:    map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false},
 		Status:            status,
 		CreatedAt:         now,

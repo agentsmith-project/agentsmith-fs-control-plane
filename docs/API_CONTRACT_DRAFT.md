@@ -218,7 +218,7 @@ Credential references, secrets, metadata URLs, and raw/root storage paths are de
   },
   "mount_policy": {
     "workload_mount_enabled": true,
-    "workload_mount_requires_jvs_external_control_root": true,
+    "workload_mount_requires_external_control_root": true,
     "allow_privileged_workload": false
   },
   "template_policy": {
@@ -233,7 +233,7 @@ Credential references, secrets, metadata URLs, and raw/root storage paths are de
 
 Calling products must not provide authoritative raw filesystem paths. AFSCP computes canonical namespace roots from `namespace_id`, `volume_id`, and its own volume configuration.
 
-`mount_policy.workload_mount_enabled=true` is a namespace permission, not proof that the selected volume/runtime can mount JVS repos safely. AFSCP must also check `Volume.capabilities.workload_mount`, require JVS external control roots for new repos, and issue only payload-root mount plans.
+`mount_policy.workload_mount_enabled=true` is a namespace permission, not proof that the selected volume/runtime can mount workload repos safely. AFSCP must also check `Volume.capabilities.workload_mount`, require external control roots for new repos, and issue only payload-root mount plans.
 
 ### Repo
 
