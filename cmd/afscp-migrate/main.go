@@ -113,8 +113,10 @@ func (cmd command) runContext(ctx context.Context, args []string) int {
 	}()
 
 	var result schemamigration.Result
+	var applyResult schemamigration.Result
 	if *apply {
-		result, err = runner.Apply(runCtx)
+		applyResult, err = runner.Apply(runCtx)
+		result = applyResult
 		if err != nil {
 			encodeResult(cmd.stdout, result)
 			fmt.Fprintf(cmd.stderr, "%s: apply schema migrations: %s\n", commandName, safeError(err))
@@ -122,7 +124,12 @@ func (cmd command) runContext(ctx context.Context, args []string) int {
 		}
 	}
 	if *check {
-		result, err = runner.Check(runCtx)
+		checkResult, checkErr := runner.Check(runCtx)
+		result = checkResult
+		if *apply {
+			result = mergeApplyThenCheckResult(applyResult, checkResult)
+		}
+		err = checkErr
 		if err != nil {
 			encodeResult(cmd.stdout, result)
 			fmt.Fprintf(cmd.stderr, "%s: check schema readiness: %s\n", commandName, safeError(err))
@@ -138,6 +145,13 @@ func (cmd command) runContext(ctx context.Context, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func mergeApplyThenCheckResult(applyResult schemamigration.Result, checkResult schemamigration.Result) schemamigration.Result {
+	result := checkResult
+	result.AppliedMigrations = append([]string(nil), applyResult.AppliedMigrations...)
+	result.SkippedMigrations = append([]string(nil), applyResult.SkippedMigrations...)
+	return result
 }
 
 func (cmd command) postgresDSN() string {

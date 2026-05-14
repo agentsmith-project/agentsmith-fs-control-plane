@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -69,7 +72,7 @@ func TestRunCheckRequiresPostgresDSN(t *testing.T) {
 	}
 }
 
-func TestRunApplyThenCheckOutputsReadyResult(t *testing.T) {
+func TestRunApplyThenCheckReadyKeepsApplyEvidence(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	runner := &fakeMigrationRunner{
@@ -77,11 +80,58 @@ func TestRunApplyThenCheckOutputsReadyResult(t *testing.T) {
 			SchemaVersion:     schemamigration.ResultSchemaVersion,
 			Status:            "ready",
 			AppliedMigrations: []string{"0001.sql"},
+			SkippedMigrations: []string{"0000.sql"},
 		},
 		checkResult: schemamigration.Result{
 			SchemaVersion:     schemamigration.ResultSchemaVersion,
 			Status:            "ready",
-			SkippedMigrations: []string{"0001.sql"},
+			SkippedMigrations: []string{"0000.sql", "0001.sql"},
+		},
+	}
+	cmd := newCommand(&stdout, &stderr)
+	cmd.lookupEnv = func(string) (string, bool) { return "postgres://user:secret@db/afscp", true }
+	cmd.newRunner = func(context.Context, string) (migrationRunner, error) {
+		return runner, nil
+	}
+
+	code := cmd.run([]string{"--apply", "--check"})
+	if code != 0 {
+		t.Fatalf("run returned %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if runner.applyCalls != 1 || runner.checkCalls != 1 || runner.closeCalls != 1 {
+		t.Fatalf("runner calls apply/check/close = %d/%d/%d, want 1/1/1", runner.applyCalls, runner.checkCalls, runner.closeCalls)
+	}
+	result := decodeSingleResult(t, stdout.String())
+	if result.Status != "ready" {
+		t.Fatalf("status = %q, want ready", result.Status)
+	}
+	if !reflect.DeepEqual(result.AppliedMigrations, []string{"0001.sql"}) {
+		t.Fatalf("applied_migrations = %#v, want apply evidence", result.AppliedMigrations)
+	}
+	if !reflect.DeepEqual(result.SkippedMigrations, []string{"0000.sql"}) {
+		t.Fatalf("skipped_migrations = %#v, want apply semantics", result.SkippedMigrations)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunApplyThenCheckOutputsApplyEvidenceAndFinalReadiness(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &fakeMigrationRunner{
+		applyResult: schemamigration.Result{
+			SchemaVersion:     schemamigration.ResultSchemaVersion,
+			Status:            "ready",
+			AppliedMigrations: []string{"0001.sql"},
+			SkippedMigrations: []string{"0000.sql"},
+		},
+		checkResult: schemamigration.Result{
+			SchemaVersion:         schemamigration.ResultSchemaVersion,
+			Status:                "not_ready",
+			SkippedMigrations:     []string{"0000.sql", "0001.sql"},
+			PendingMigrations:     []string{"0002.sql"},
+			MissingRequiredTables: []string{"export_runtime_requests"},
 		},
 	}
 	cmd := newCommand(&stdout, &stderr)
@@ -99,14 +149,74 @@ func TestRunApplyThenCheckOutputsReadyResult(t *testing.T) {
 	}
 
 	code := cmd.run([]string{"--apply", "--check"})
-	if code != 0 {
-		t.Fatalf("run returned %d, want 0; stderr=%q", code, stderr.String())
+	if code != 1 {
+		t.Fatalf("run returned %d, want 1; stderr=%q", code, stderr.String())
 	}
 	if runner.applyCalls != 1 || runner.checkCalls != 1 || runner.closeCalls != 1 {
 		t.Fatalf("runner calls apply/check/close = %d/%d/%d, want 1/1/1", runner.applyCalls, runner.checkCalls, runner.closeCalls)
 	}
-	if !strings.Contains(stdout.String(), `"status":"ready"`) {
-		t.Fatalf("stdout = %q, want ready JSON", stdout.String())
+	result := decodeSingleResult(t, stdout.String())
+	if result.Status != "not_ready" {
+		t.Fatalf("status = %q, want final check status", result.Status)
+	}
+	if !reflect.DeepEqual(result.AppliedMigrations, []string{"0001.sql"}) {
+		t.Fatalf("applied_migrations = %#v, want apply evidence", result.AppliedMigrations)
+	}
+	if !reflect.DeepEqual(result.SkippedMigrations, []string{"0000.sql"}) {
+		t.Fatalf("skipped_migrations = %#v, want apply semantics", result.SkippedMigrations)
+	}
+	if !reflect.DeepEqual(result.PendingMigrations, []string{"0002.sql"}) {
+		t.Fatalf("pending_migrations = %#v, want final check readiness", result.PendingMigrations)
+	}
+	if !reflect.DeepEqual(result.MissingRequiredTables, []string{"export_runtime_requests"}) {
+		t.Fatalf("missing_required_tables = %#v, want final check readiness", result.MissingRequiredTables)
+	}
+}
+
+func TestRunApplyThenCheckErrorOutputsMergedApplyEvidence(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &fakeMigrationRunner{
+		applyResult: schemamigration.Result{
+			SchemaVersion:     schemamigration.ResultSchemaVersion,
+			Status:            "ready",
+			AppliedMigrations: []string{"0001.sql"},
+			SkippedMigrations: []string{"0000.sql"},
+		},
+		checkResult: schemamigration.Result{
+			SchemaVersion:         schemamigration.ResultSchemaVersion,
+			Status:                "not_ready",
+			SkippedMigrations:     []string{"0000.sql", "0001.sql"},
+			PendingMigrations:     []string{"0002.sql"},
+			MissingRequiredTables: []string{"export_runtime_requests"},
+		},
+		checkErr: errors.New("read schema readiness failed"),
+	}
+	cmd := newCommand(&stdout, &stderr)
+	cmd.lookupEnv = func(string) (string, bool) { return "postgres://user:secret@db/afscp", true }
+	cmd.newRunner = func(context.Context, string) (migrationRunner, error) {
+		return runner, nil
+	}
+
+	code := cmd.run([]string{"--apply", "--check"})
+	if code != 1 {
+		t.Fatalf("run returned %d, want 1", code)
+	}
+	result := decodeSingleResult(t, stdout.String())
+	if !reflect.DeepEqual(result.AppliedMigrations, []string{"0001.sql"}) {
+		t.Fatalf("applied_migrations = %#v, want apply evidence", result.AppliedMigrations)
+	}
+	if !reflect.DeepEqual(result.SkippedMigrations, []string{"0000.sql"}) {
+		t.Fatalf("skipped_migrations = %#v, want apply semantics", result.SkippedMigrations)
+	}
+	if !reflect.DeepEqual(result.PendingMigrations, []string{"0002.sql"}) {
+		t.Fatalf("pending_migrations = %#v, want final check readiness", result.PendingMigrations)
+	}
+	if !reflect.DeepEqual(result.MissingRequiredTables, []string{"export_runtime_requests"}) {
+		t.Fatalf("missing_required_tables = %#v, want final check readiness", result.MissingRequiredTables)
+	}
+	if !strings.Contains(stderr.String(), "check schema readiness") {
+		t.Fatalf("stderr = %q, want check diagnostic", stderr.String())
 	}
 }
 
@@ -180,4 +290,18 @@ func (runner *fakeMigrationRunner) Check(context.Context) (schemamigration.Resul
 func (runner *fakeMigrationRunner) Close() error {
 	runner.closeCalls += 1
 	return runner.closeErr
+}
+
+func decodeSingleResult(t *testing.T, output string) schemamigration.Result {
+	t.Helper()
+	decoder := json.NewDecoder(strings.NewReader(output))
+	var result schemamigration.Result
+	if err := decoder.Decode(&result); err != nil {
+		t.Fatalf("decode result: %v; output=%q", err, output)
+	}
+	var extra schemamigration.Result
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		t.Fatalf("decode extra result err = %v, want EOF; output=%q", err, output)
+	}
+	return result
 }
