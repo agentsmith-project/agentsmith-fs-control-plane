@@ -109,6 +109,49 @@ func TestSavePointExecutorPersistsPreSaveMarkerThenSavesAndCommits(t *testing.T)
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
+func TestSavePointExecutorUsesFreshTerminalTimestampAfterSlowJVSSave(t *testing.T) {
+	started := repoExecNow()
+	terminal := started.Add(118 * time.Second)
+	clockNow := started
+	store := newFakeStore()
+	store.repo = activeRepoResource(started)
+	runner := &fakeJVSRunner{
+		historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
+		saveSummary:    jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:01:58Z"},
+		afterSave: func() {
+			clockNow = terminal
+		},
+	}
+	executor, err := NewSavePointExecutor(SavePointConfig{
+		Store:        store,
+		JVSRunner:    runner,
+		Owner:        "worker-a",
+		Clock:        func() time.Time { return clockNow },
+		AuditEventID: func() string { return "audit_savepoint" },
+		VolumeRoots:  store.volumeRoots,
+	})
+	if err != nil {
+		t.Fatalf("NewSavePointExecutor: %v", err)
+	}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(started, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if store.operation.FinishedAt == nil || !store.operation.FinishedAt.Equal(terminal) {
+		t.Fatalf("finished_at = %v, want terminal time %v", store.operation.FinishedAt, terminal)
+	}
+	if len(store.auditEvents) != 1 || !store.auditEvents[0].Time.Equal(terminal) {
+		t.Fatalf("audit time = %#v, want terminal time %v", store.auditEvents, terminal)
+	}
+	if !store.savePointSuccessCommitAt.Equal(terminal) {
+		t.Fatalf("success commit time = %v, want terminal time %v", store.savePointSuccessCommitAt, terminal)
+	}
+	if store.operation.FinishedAt.Equal(started) || store.auditEvents[0].Time.Equal(started) || store.savePointSuccessCommitAt.Equal(started) {
+		t.Fatalf("terminal timestamps reused started time %v: operation=%#v audit=%#v commit=%v", started, store.operation, store.auditEvents, store.savePointSuccessCommitAt)
+	}
+}
+
 func TestSavePointExecutorRepoBusyFailsTerminallyWithoutManualIntervention(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
@@ -654,6 +697,48 @@ func TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate(t *testin
 	}
 }
 
+func TestTemplateCreateExecutorUsesFreshTerminalTimestampAfterSlowJVSSaveAndClone(t *testing.T) {
+	started := repoExecNow()
+	afterSave := started.Add(85 * time.Second)
+	terminal := started.Add(118 * time.Second)
+	clockNow := started
+	store := newFakeStore()
+	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
+	store.repo = activeRepoResource(started)
+	runner := &fakeJVSRunner{
+		saveSummary:      jvsrunner.SaveSummary{SavePointID: "sp_template01", NewestSavePointID: "sp_template01", Workspace: "main", CreatedAt: "2026-05-05T12:01:25Z"},
+		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_template_alpha", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_template_alpha", Healthy: true, Workspace: "main"},
+		afterSave: func() {
+			clockNow = afterSave
+		},
+		afterRepoClone: func() {
+			clockNow = terminal
+		},
+	}
+	executor, err := NewTemplateCreateExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return clockNow }, AuditEventID: func() string { return "audit_template_create" }, VolumeRoots: store.volumeRoots})
+	if err != nil {
+		t.Fatalf("NewTemplateCreateExecutor: %v", err)
+	}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(started), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if store.operation.FinishedAt == nil || !store.operation.FinishedAt.Equal(terminal) {
+		t.Fatalf("finished_at = %v, want terminal time %v", store.operation.FinishedAt, terminal)
+	}
+	if len(store.auditEvents) != 1 || !store.auditEvents[0].Time.Equal(terminal) {
+		t.Fatalf("audit time = %#v, want terminal time %v", store.auditEvents, terminal)
+	}
+	if !store.templateCreateSuccessCommitAt.Equal(terminal) {
+		t.Fatalf("success commit time = %v, want terminal time %v", store.templateCreateSuccessCommitAt, terminal)
+	}
+	if store.repo.UpdatedAt.Equal(started) || store.operation.FinishedAt.Equal(started) || store.auditEvents[0].Time.Equal(started) || store.templateCreateSuccessCommitAt.Equal(started) {
+		t.Fatalf("terminal timestamps reused started time %v: repo=%#v operation=%#v audit=%#v commit=%v", started, store.repo, store.operation, store.auditEvents, store.templateCreateSuccessCommitAt)
+	}
+}
+
 func TestTemplateCreateExecutorPreparesCloneParentWithoutOccupyingTargetRoots(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
@@ -877,6 +962,43 @@ func TestTemplateCloneExecutorClonesTemplateToRepoWithoutSave(t *testing.T) {
 	}
 }
 
+func TestTemplateCloneExecutorUsesFreshTerminalTimestampAfterSlowJVSClone(t *testing.T) {
+	started := repoExecNow()
+	terminal := started.Add(95 * time.Second)
+	clockNow := started
+	store := newFakeStore()
+	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
+	store.repo = templateResource(started)
+	runner := &fakeJVSRunner{
+		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_template_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_repo_clone", Healthy: true, Workspace: "main"},
+		afterRepoClone: func() {
+			clockNow = terminal
+		},
+	}
+	executor, err := NewTemplateCloneExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return clockNow }, AuditEventID: func() string { return "audit_template_clone" }, VolumeRoots: store.volumeRoots})
+	if err != nil {
+		t.Fatalf("NewTemplateCloneExecutor: %v", err)
+	}
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), templateCloneLeasedRecord(started), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if store.operation.FinishedAt == nil || !store.operation.FinishedAt.Equal(terminal) {
+		t.Fatalf("finished_at = %v, want terminal time %v", store.operation.FinishedAt, terminal)
+	}
+	if len(store.auditEvents) != 1 || !store.auditEvents[0].Time.Equal(terminal) {
+		t.Fatalf("audit time = %#v, want terminal time %v", store.auditEvents, terminal)
+	}
+	if !store.templateCloneSuccessCommitAt.Equal(terminal) {
+		t.Fatalf("success commit time = %v, want terminal time %v", store.templateCloneSuccessCommitAt, terminal)
+	}
+	if store.repo.UpdatedAt.Equal(started) || store.operation.FinishedAt.Equal(started) || store.auditEvents[0].Time.Equal(started) || store.templateCloneSuccessCommitAt.Equal(started) {
+		t.Fatalf("terminal timestamps reused started time %v: repo=%#v operation=%#v audit=%#v commit=%v", started, store.repo, store.operation, store.auditEvents, store.templateCloneSuccessCommitAt)
+	}
+}
+
 func TestTemplateCloneExecutorSuccessCommitFailurePreservesCause(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
@@ -1088,6 +1210,9 @@ type fakeRepoCreateStore struct {
 	restorePreviewSuccessErr             error
 	failOnCanceledCommitContext          bool
 	blockingLifecycle                    []operations.OperationRecord
+	savePointSuccessCommitAt             time.Time
+	templateCreateSuccessCommitAt        time.Time
+	templateCloneSuccessCommitAt         time.Time
 	beforeListSessions                   func()
 }
 
@@ -1189,8 +1314,9 @@ func (store *fakeRepoCreateStore) UpdateSavePointCreateProgressWithLease(_ conte
 	return store.operation, nil
 }
 
-func (store *fakeRepoCreateStore) CommitSavePointCreateSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
+func (store *fakeRepoCreateStore) CommitSavePointCreateSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	store.operation = record.Record()
+	store.savePointSuccessCommitAt = now
 	store.auditEvents = append(store.auditEvents, event)
 	return store.operation, nil
 }
@@ -1204,6 +1330,7 @@ func (store *fakeRepoCreateStore) CommitSavePointCreateFailedWithLease(_ context
 func (store *fakeRepoCreateStore) CommitTemplateCreateSucceededWithLease(_ context.Context, template resources.Repo, _ string, _ string, _ string, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {
 	store.repo = template
 	store.operation = record.Record()
+	store.templateCreateSuccessCommitAt = now
 	store.releaseWriterFence(store.operation.SessionFenceID, now)
 	store.auditEvents = append(store.auditEvents, event)
 	return template, store.operation, nil
@@ -1230,9 +1357,10 @@ func (store *fakeRepoCreateStore) CommitTemplateCreateFailedWithLease(_ context.
 	return store.operation, nil
 }
 
-func (store *fakeRepoCreateStore) CommitTemplateCloneSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {
+func (store *fakeRepoCreateStore) CommitTemplateCloneSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {
 	store.repo = repo
 	store.operation = record.Record()
+	store.templateCloneSuccessCommitAt = now
 	store.auditEvents = append(store.auditEvents, event)
 	if store.templateCloneSuccessErr != nil {
 		return resources.Repo{}, operations.OperationRecord{}, store.templateCloneSuccessErr
@@ -1417,6 +1545,8 @@ type fakeJVSRunner struct {
 	restoreDiscardSummary               jvsrunner.RestoreDiscardSummary
 	repoCloneSummary                    jvsrunner.RepoCloneSummary
 	beforeRepoClone                     func(sourceControlRoot, targetPayloadRoot, targetControlRoot string)
+	afterSave                           func()
+	afterRepoClone                      func()
 	beforeRestorePreview                func()
 	beforeRestoreRun                    func()
 	beforeRestoreDiscard                func()
@@ -1460,6 +1590,9 @@ func (runner *fakeJVSRunner) Save(_ context.Context, controlRoot, message string
 	runner.calls = append(runner.calls, "save")
 	runner.controlRoot = controlRoot
 	runner.saveMessage = message
+	if runner.afterSave != nil {
+		defer runner.afterSave()
+	}
 	if len(runner.saveErrs) > 0 {
 		err := runner.saveErrs[0]
 		runner.saveErrs = runner.saveErrs[1:]
@@ -1483,6 +1616,9 @@ func (runner *fakeJVSRunner) RepoClone(_ context.Context, sourceControlRoot, tar
 	}
 	if runner.repoCloneSummary.SourceRepoID == "" {
 		runner.repoCloneSummary.SourceRepoID = "jvs_repo_alpha"
+	}
+	if runner.afterRepoClone != nil {
+		runner.afterRepoClone()
 	}
 	_ = sourceControlRoot
 	return runner.repoCloneSummary, runner.repoCloneErr

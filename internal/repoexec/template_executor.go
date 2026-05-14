@@ -128,24 +128,24 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 	if err := validateTemplateLeasedRecord(record, executor.owner, operations.OperationTemplateCreate, operations.OperationPhaseTemplateCreateValidate); err != nil {
 		return err
 	}
-	now := executor.currentTime()
-	if now.IsZero() {
-		return errors.New("template create recovery time must be set")
+	now, err := executor.requireCurrentTime("template create")
+	if err != nil {
+		return err
 	}
 	source, binding, err := executor.validateSourceRepo(ctx, record)
 	if err != nil {
-		return executor.commitTemplateCreateFailed(ctx, record, now, "TEMPLATE_CREATE_VALIDATION_FAILED", "template create validation failed")
+		return executor.commitTemplateCreateFailed(ctx, record, "TEMPLATE_CREATE_VALIDATION_FAILED", "template create validation failed")
 	}
 	sourceControlRoot, err := executor.controlRoot(source)
 	if err != nil {
-		return executor.commitTemplateCreateFailed(ctx, record, now, "TEMPLATE_CREATE_VALIDATION_FAILED", "template create validation failed")
+		return executor.commitTemplateCreateFailed(ctx, record, "TEMPLATE_CREATE_VALIDATION_FAILED", "template create validation failed")
 	}
 	paths, err := templateRootPaths(executor.volumeRoots[binding.DefaultVolumeID], record.NamespaceID, record.TemplateID)
 	if err != nil {
-		return executor.commitTemplateCreateFailed(ctx, record, now, "TEMPLATE_CREATE_VALIDATION_FAILED", "template create validation failed")
+		return executor.commitTemplateCreateFailed(ctx, record, "TEMPLATE_CREATE_VALIDATION_FAILED", "template create validation failed")
 	}
 	working := record
-	if blocked, err := executor.commitTemplateCreateRestoreBlockedIfPresent(ctx, working, now); err != nil || blocked {
+	if blocked, err := executor.commitTemplateCreateRestoreBlockedIfPresent(ctx, working); err != nil || blocked {
 		return err
 	}
 	if record.Phase == operations.OperationPhaseTemplateCreateValidate {
@@ -153,7 +153,7 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 		working = withTemplateCreateWriterFencedMarker(record, fence.ID)
 		updatedFence, updatedOperation, err := executor.store.MarkTemplateCreateWriterFencedWithLease(ctx, fence, working.SanitizedForPersistence(), executor.owner, now)
 		if err != nil {
-			if blocked, blockErr := executor.commitTemplateCreateRestoreBlockedIfPresent(ctx, record, now); blockErr != nil || blocked {
+			if blocked, blockErr := executor.commitTemplateCreateRestoreBlockedIfPresent(ctx, record); blockErr != nil || blocked {
 				return blockErr
 			}
 			return fmt.Errorf("template create writer fence mark failed: %w", err)
@@ -161,36 +161,40 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 		working = updatedOperation
 		working.SessionFenceID = updatedFence.ID
 	}
-	if blocked, err := executor.commitTemplateCreateRestoreBlockedIfPresent(ctx, working, now); err != nil || blocked {
+	if blocked, err := executor.commitTemplateCreateRestoreBlockedIfPresent(ctx, working); err != nil || blocked {
 		return err
 	}
 	if err := executor.checkTemplateCreateWriterSessions(ctx, working, now); err != nil {
-		return executor.commitTemplateCreateFailed(ctx, working, now, "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE", "source repo has active or stale writer sessions after template writer fence")
+		return executor.commitTemplateCreateFailed(ctx, working, "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE", "source repo has active or stale writer sessions after template writer fence")
 	}
 	if err := prepareRepoCloneTargetParents(paths); err != nil {
-		return executor.commitTemplateCreateFailed(ctx, working, now, "TEMPLATE_CREATE_TARGET_PREPARE_FAILED", "template create target preparation failed")
+		return executor.commitTemplateCreateFailed(ctx, working, "TEMPLATE_CREATE_TARGET_PREPARE_FAILED", "template create target preparation failed")
 	}
 	save, err := executor.jvs.Save(ctx, sourceControlRoot, "template "+record.TemplateID)
 	if err != nil {
 		if isJVSRecoveryBlockingError(err) {
-			return executor.commitTemplateCreateBlocked(ctx, working, now, map[string]any{
+			return executor.commitTemplateCreateBlocked(ctx, working, map[string]any{
 				"active_restore_plan_present": true,
 				"jvs_recovery_blocking":       true,
 				"restore_blocker_source":      "jvs_recovery_state",
 			})
 		}
-		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs save failed", withJVSErrorDetails(nil, err))
+		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs save failed", withJVSErrorDetails(nil, err))
 	}
 	clone, err := executor.jvs.RepoClone(ctx, sourceControlRoot, paths.PayloadRootPath, paths.ControlRootPath)
 	if err != nil {
-		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs repo clone failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
+		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs repo clone failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
 	}
 	doctor, err := executor.jvs.DoctorStrict(ctx, paths.ControlRootPath)
 	if err != nil {
-		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
+		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
 	}
 	if clone.SavePointsMode != "main" || clone.RuntimeStateCopied || clone.SourceRepoID != source.JVSRepoID || clone.TargetRepoID != doctor.RepoID {
-		return executor.commitTemplateCreateIntervention(ctx, working, now, "JVS_REPO_ID_MISMATCH", "jvs repo identity mismatch", map[string]any{"source_save_point_id": save.SavePointID})
+		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_REPO_ID_MISMATCH", "jvs repo identity mismatch", map[string]any{"source_save_point_id": save.SavePointID})
+	}
+	terminalNow, err := executor.requireCurrentTime("template create")
+	if err != nil {
+		return err
 	}
 	template := resources.Repo{
 		ID:                  record.TemplateID,
@@ -202,8 +206,8 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 		ControlVolumeSubdir: paths.ControlVolumeSubdir,
 		PayloadVolumeSubdir: paths.PayloadVolumeSubdir,
 		Lifecycle:           resources.RepoLifecycle{Status: resources.RepoStatusActive},
-		CreatedAt:           createdAt(record, now),
-		UpdatedAt:           now,
+		CreatedAt:           createdAt(record, terminalNow),
+		UpdatedAt:           terminalNow,
 	}
 	operation := working
 	operation.State = operations.OperationStateSucceeded
@@ -212,12 +216,12 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 	operation.JVSJSONOutput = map[string]any{"source_repo_id": clone.SourceRepoID, "target_repo_id": clone.TargetRepoID, "save_points_mode": clone.SavePointsMode, "save_points_copied_count": clone.SavePointsCopiedCount, "runtime_state_copied": clone.RuntimeStateCopied, "workspace": clone.Workspace}
 	operation.VerificationResult = map[string]any{"source_repo_id": record.RepoID, "template_id": record.TemplateID, "source_save_point_id": save.SavePointID, "clone_history_mode": "main", "healthy": true}
 	operation.Error = nil
-	operation.FinishedAt = &now
-	event, err := executor.auditEvent(operation, now, audit.EventTypeTemplateCreate, audit.OutcomeSucceeded, "template_create_committed", map[string]any{"source_repo_id": record.RepoID, "template_id": record.TemplateID, "source_save_point_id": save.SavePointID})
+	operation.FinishedAt = &terminalNow
+	event, err := executor.auditEvent(operation, terminalNow, audit.EventTypeTemplateCreate, audit.OutcomeSucceeded, "template_create_committed", map[string]any{"source_repo_id": record.RepoID, "template_id": record.TemplateID, "source_save_point_id": save.SavePointID})
 	if err != nil {
 		return err
 	}
-	if _, _, err := executor.store.CommitTemplateCreateSucceededWithLease(ctx, template, record.RepoID, save.SavePointID, "main", operation.SanitizedForPersistence(), executor.owner, now, event); err != nil {
+	if _, _, err := executor.store.CommitTemplateCreateSucceededWithLease(ctx, template, record.RepoID, save.SavePointID, "main", operation.SanitizedForPersistence(), executor.owner, terminalNow, event); err != nil {
 		return fmt.Errorf("template create success commit failed: %w", err)
 	}
 	return nil
@@ -249,35 +253,38 @@ func (executor *TemplateCloneExecutor) ExecuteOperationRecovery(ctx context.Cont
 	if err := validateTemplateLeasedRecord(record, base.owner, operations.OperationTemplateClone, operations.OperationPhaseTemplateCloneValidate); err != nil {
 		return err
 	}
-	now := base.currentTime()
-	if now.IsZero() {
-		return errors.New("template clone recovery time must be set")
+	if _, err := base.requireCurrentTime("template clone"); err != nil {
+		return err
 	}
 	template, binding, err := base.validateTemplateSource(ctx, record)
 	if err != nil {
-		return base.commitTemplateCloneFailed(ctx, record, now, "TEMPLATE_CLONE_VALIDATION_FAILED", "template clone validation failed")
+		return base.commitTemplateCloneFailed(ctx, record, "TEMPLATE_CLONE_VALIDATION_FAILED", "template clone validation failed")
 	}
 	sourceControlRoot, err := base.controlRoot(template)
 	if err != nil {
-		return base.commitTemplateCloneFailed(ctx, record, now, "TEMPLATE_CLONE_VALIDATION_FAILED", "template clone validation failed")
+		return base.commitTemplateCloneFailed(ctx, record, "TEMPLATE_CLONE_VALIDATION_FAILED", "template clone validation failed")
 	}
 	paths, err := pathresolver.ResolveRepoRootPaths(base.volumeRoots[binding.DefaultVolumeID], record.NamespaceID, record.RepoID)
 	if err != nil {
-		return base.commitTemplateCloneFailed(ctx, record, now, "TEMPLATE_CLONE_VALIDATION_FAILED", "template clone validation failed")
+		return base.commitTemplateCloneFailed(ctx, record, "TEMPLATE_CLONE_VALIDATION_FAILED", "template clone validation failed")
 	}
 	if err := prepareRepoCloneTargetParents(paths); err != nil {
-		return base.commitTemplateCloneFailed(ctx, record, now, "TEMPLATE_CLONE_TARGET_PREPARE_FAILED", "template clone target preparation failed")
+		return base.commitTemplateCloneFailed(ctx, record, "TEMPLATE_CLONE_TARGET_PREPARE_FAILED", "template clone target preparation failed")
 	}
 	clone, err := base.jvs.RepoClone(ctx, sourceControlRoot, paths.PayloadRootPath, paths.ControlRootPath)
 	if err != nil {
-		return base.commitTemplateCloneIntervention(ctx, record, now, "JVS_COMMAND_FAILED", "jvs repo clone failed", withJVSErrorDetails(nil, err))
+		return base.commitTemplateCloneIntervention(ctx, record, "JVS_COMMAND_FAILED", "jvs repo clone failed", withJVSErrorDetails(nil, err))
 	}
 	doctor, err := base.jvs.DoctorStrict(ctx, paths.ControlRootPath)
 	if err != nil {
-		return base.commitTemplateCloneIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(nil, err))
+		return base.commitTemplateCloneIntervention(ctx, record, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(nil, err))
 	}
 	if clone.SavePointsMode != "main" || clone.RuntimeStateCopied || clone.SourceRepoID != template.JVSRepoID || clone.TargetRepoID != doctor.RepoID {
-		return base.commitTemplateCloneIntervention(ctx, record, now, "JVS_REPO_ID_MISMATCH", "jvs repo identity mismatch", nil)
+		return base.commitTemplateCloneIntervention(ctx, record, "JVS_REPO_ID_MISMATCH", "jvs repo identity mismatch", nil)
+	}
+	terminalNow, err := base.requireCurrentTime("template clone")
+	if err != nil {
+		return err
 	}
 	repo := resources.Repo{
 		ID:                  record.RepoID,
@@ -289,8 +296,8 @@ func (executor *TemplateCloneExecutor) ExecuteOperationRecovery(ctx context.Cont
 		ControlVolumeSubdir: paths.ControlVolumeSubdir,
 		PayloadVolumeSubdir: paths.PayloadVolumeSubdir,
 		Lifecycle:           resources.RepoLifecycle{Status: resources.RepoStatusActive, LastLifecycleOperationID: record.ID},
-		CreatedAt:           createdAt(record, now),
-		UpdatedAt:           now,
+		CreatedAt:           createdAt(record, terminalNow),
+		UpdatedAt:           terminalNow,
 	}
 	operation := record
 	operation.State = operations.OperationStateSucceeded
@@ -299,12 +306,12 @@ func (executor *TemplateCloneExecutor) ExecuteOperationRecovery(ctx context.Cont
 	operation.JVSJSONOutput = map[string]any{"source_repo_id": clone.SourceRepoID, "target_repo_id": clone.TargetRepoID, "save_points_mode": clone.SavePointsMode, "save_points_copied_count": clone.SavePointsCopiedCount, "runtime_state_copied": clone.RuntimeStateCopied, "workspace": clone.Workspace}
 	operation.VerificationResult = map[string]any{"template_id": record.TemplateID, "repo_id": record.RepoID, "clone_history_mode": "main", "healthy": true}
 	operation.Error = nil
-	operation.FinishedAt = &now
-	event, err := base.auditEvent(operation, now, audit.EventTypeTemplateClone, audit.OutcomeSucceeded, "template_clone_committed", map[string]any{"template_id": record.TemplateID, "repo_id": record.RepoID})
+	operation.FinishedAt = &terminalNow
+	event, err := base.auditEvent(operation, terminalNow, audit.EventTypeTemplateClone, audit.OutcomeSucceeded, "template_clone_committed", map[string]any{"template_id": record.TemplateID, "repo_id": record.RepoID})
 	if err != nil {
 		return err
 	}
-	if _, _, err := base.store.CommitTemplateCloneSucceededWithLease(ctx, repo, operation.SanitizedForPersistence(), base.owner, now, event); err != nil {
+	if _, _, err := base.store.CommitTemplateCloneSucceededWithLease(ctx, repo, operation.SanitizedForPersistence(), base.owner, terminalNow, event); err != nil {
 		return fmt.Errorf("template clone success commit failed: %w", err)
 	}
 	return nil
@@ -316,6 +323,14 @@ func (executor *TemplateCreateExecutor) currentTime() time.Time {
 		now = executor.clock()
 	}
 	return now
+}
+
+func (executor *TemplateCreateExecutor) requireCurrentTime(label string) (time.Time, error) {
+	now := executor.currentTime()
+	if now.IsZero() {
+		return time.Time{}, errors.New(label + " recovery time must be set")
+	}
+	return now, nil
 }
 
 func (executor *TemplateCreateExecutor) validateSourceRepo(ctx context.Context, record operations.OperationRecord) (resources.Repo, resources.NamespaceVolumeBinding, error) {
@@ -445,7 +460,11 @@ func validateTemplateLeasedRecord(record operations.OperationRecord, owner strin
 	return nil
 }
 
-func (executor *TemplateCreateExecutor) commitTemplateCreateFailed(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string) error {
+func (executor *TemplateCreateExecutor) commitTemplateCreateFailed(ctx context.Context, record operations.OperationRecord, code, message string) error {
+	now, err := executor.requireCurrentTime("template create")
+	if err != nil {
+		return err
+	}
 	phase := operations.OperationPhaseTemplateCreateValidate
 	if record.Phase == operations.OperationPhaseTemplateCreateWriterFenced {
 		phase = operations.OperationPhaseTemplateCreateWriterFenced
@@ -461,7 +480,7 @@ func (executor *TemplateCreateExecutor) commitTemplateCreateFailed(ctx context.C
 	return nil
 }
 
-func (executor *TemplateCreateExecutor) commitTemplateCreateRestoreBlockedIfPresent(ctx context.Context, record operations.OperationRecord, now time.Time) (bool, error) {
+func (executor *TemplateCreateExecutor) commitTemplateCreateRestoreBlockedIfPresent(ctx context.Context, record operations.OperationRecord) (bool, error) {
 	plan, err := executor.store.GetActiveRestorePlanByRepo(ctx, record.RepoID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -472,13 +491,17 @@ func (executor *TemplateCreateExecutor) commitTemplateCreateRestoreBlockedIfPres
 	if strings.TrimSpace(plan.ID) == "" || !plan.Active() {
 		return false, nil
 	}
-	return true, executor.commitTemplateCreateBlocked(ctx, record, now, map[string]any{
+	return true, executor.commitTemplateCreateBlocked(ctx, record, map[string]any{
 		"active_restore_plan_present": true,
 		"restore_plan_status":         plan.Status.String(),
 	})
 }
 
-func (executor *TemplateCreateExecutor) commitTemplateCreateBlocked(ctx context.Context, record operations.OperationRecord, now time.Time, details map[string]any) error {
+func (executor *TemplateCreateExecutor) commitTemplateCreateBlocked(ctx context.Context, record operations.OperationRecord, details map[string]any) error {
+	now, err := executor.requireCurrentTime("template create")
+	if err != nil {
+		return err
+	}
 	phase := operations.OperationPhaseTemplateCreateValidate
 	if record.Phase == operations.OperationPhaseTemplateCreateWriterFenced {
 		phase = operations.OperationPhaseTemplateCreateWriterFenced
@@ -498,7 +521,11 @@ func (executor *TemplateCreateExecutor) commitTemplateCreateBlocked(ctx context.
 	return nil
 }
 
-func (executor *TemplateCreateExecutor) commitTemplateCreateIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
+func (executor *TemplateCreateExecutor) commitTemplateCreateIntervention(ctx context.Context, record operations.OperationRecord, code, message string, details map[string]any) error {
+	now, err := executor.requireCurrentTime("template create")
+	if err != nil {
+		return err
+	}
 	phase := operations.OperationPhaseTemplateCreateValidate
 	if record.Phase == operations.OperationPhaseTemplateCreateWriterFenced {
 		phase = operations.OperationPhaseTemplateCreateWriterFenced
@@ -547,7 +574,11 @@ func (executor *TemplateCreateExecutor) checkTemplateCreateWriterSessions(ctx co
 	return errors.New(decision.ErrorFamily.String())
 }
 
-func (executor *TemplateCreateExecutor) commitTemplateCloneFailed(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string) error {
+func (executor *TemplateCreateExecutor) commitTemplateCloneFailed(ctx context.Context, record operations.OperationRecord, code, message string) error {
+	now, err := executor.requireCurrentTime("template clone")
+	if err != nil {
+		return err
+	}
 	operation := templateFailedOperation(record, now, operations.OperationStateFailed, operations.OperationPhaseTemplateCloneValidate, code, message)
 	event, err := executor.auditEvent(operation, now, audit.EventTypeTemplateClone, audit.OutcomeFailed, "template_clone_failed", map[string]any{"template_id": record.TemplateID, "repo_id": record.RepoID})
 	if err != nil {
@@ -559,7 +590,11 @@ func (executor *TemplateCreateExecutor) commitTemplateCloneFailed(ctx context.Co
 	return nil
 }
 
-func (executor *TemplateCreateExecutor) commitTemplateCloneIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
+func (executor *TemplateCreateExecutor) commitTemplateCloneIntervention(ctx context.Context, record operations.OperationRecord, code, message string, details map[string]any) error {
+	now, err := executor.requireCurrentTime("template clone")
+	if err != nil {
+		return err
+	}
 	operation := templateFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, operations.OperationPhaseTemplateCloneValidate, code, message)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
 	attachJVSErrorDetails(&operation, details)

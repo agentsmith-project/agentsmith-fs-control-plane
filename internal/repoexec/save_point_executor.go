@@ -106,24 +106,21 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	now := executor.now
-	if executor.clock != nil {
-		now = executor.clock()
-	}
-	if now.IsZero() {
-		return errors.New("save point recovery time must be set")
+	now, err := executor.requireCurrentTime()
+	if err != nil {
+		return err
 	}
 
 	repo, err := executor.store.GetRepoInNamespace(ctx, record.NamespaceID, record.RepoID)
 	if err != nil {
-		return executor.commitSavePointFailed(ctx, record, now, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed")
+		return executor.commitSavePointFailed(ctx, record, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed")
 	}
 	if err := executor.validateMetadata(ctx, record, repo); err != nil {
-		return executor.commitSavePointFailed(ctx, record, now, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed")
+		return executor.commitSavePointFailed(ctx, record, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed")
 	}
 	controlRoot, err := executor.controlRoot(repo)
 	if err != nil {
-		return executor.commitSavePointIntervention(ctx, record, now, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed", nil)
+		return executor.commitSavePointIntervention(ctx, record, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed", nil)
 	}
 
 	working := record
@@ -132,7 +129,7 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	if !hasMarker {
 		history, err = executor.jvs.History(ctx, controlRoot)
 		if err != nil {
-			return executor.commitSavePointIntervention(ctx, record, now, "JVS_HISTORY_FAILED", "jvs history failed", withJVSErrorDetails(nil, err))
+			return executor.commitSavePointIntervention(ctx, record, "JVS_HISTORY_FAILED", "jvs history failed", withJVSErrorDetails(nil, err))
 		}
 		preSavePointer = history.NewestSavePointID
 		working = withPreSavePointer(working, preSavePointer)
@@ -146,14 +143,14 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	} else {
 		history, err = executor.jvs.History(ctx, controlRoot)
 		if err != nil {
-			return executor.commitSavePointIntervention(ctx, working, now, "JVS_HISTORY_FAILED", "jvs history failed", withJVSErrorDetails(nil, err))
+			return executor.commitSavePointIntervention(ctx, working, "JVS_HISTORY_FAILED", "jvs history failed", withJVSErrorDetails(nil, err))
 		}
 	}
 
 	if adopted, ok, ambiguous := savePointCreatedAfter(history, preSavePointer); ambiguous {
-		return executor.commitSavePointIntervention(ctx, working, now, "SAVE_POINT_HISTORY_AMBIGUOUS", "save point history is ambiguous", map[string]any{"pre_save_newest_save_point_id": preSavePointer})
+		return executor.commitSavePointIntervention(ctx, working, "SAVE_POINT_HISTORY_AMBIGUOUS", "save point history is ambiguous", map[string]any{"pre_save_newest_save_point_id": preSavePointer})
 	} else if ok {
-		return executor.commitSavePointSuccess(ctx, working, now, adopted, message, false, false, true)
+		return executor.commitSavePointSuccess(ctx, working, adopted, message, false, false, true)
 	}
 
 	attempt := executor.saveWithRepoBusyRepairRetry(ctx, controlRoot, message)
@@ -161,12 +158,12 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 		details := withJVSErrorDetails(map[string]any{"pre_save_newest_save_point_id": preSavePointer}, attempt.err)
 		details = withJVSRepairDetails(details, attempt.repair, attempt.repairErr)
 		if isJVSRepoBusyError(attempt.err) {
-			return executor.commitSavePointFailedWithDetails(ctx, working, now, "JVS_COMMAND_FAILED", "jvs save blocked by active repo access", true, details)
+			return executor.commitSavePointFailedWithDetails(ctx, working, "JVS_COMMAND_FAILED", "jvs save blocked by active repo access", true, details)
 		}
-		return executor.commitSavePointIntervention(ctx, working, now, "JVS_COMMAND_FAILED", "jvs save failed", details)
+		return executor.commitSavePointIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs save failed", details)
 	}
 	working = withJVSRepairVerification(working, attempt.repair)
-	return executor.commitSavePointSuccess(ctx, working, now, savePointFromSaveSummary(attempt.saved, message), message, attempt.saved.UnsavedChanges, true, false)
+	return executor.commitSavePointSuccess(ctx, working, savePointFromSaveSummary(attempt.saved, message), message, attempt.saved.UnsavedChanges, true, false)
 }
 
 type savePointSaveAttempt struct {
@@ -259,7 +256,27 @@ func (executor *SavePointExecutor) controlRoot(repo resources.Repo) (string, err
 	return controlRoot, nil
 }
 
-func (executor *SavePointExecutor) commitSavePointSuccess(ctx context.Context, record operations.OperationRecord, now time.Time, savePoint jvsrunner.SavePointSummary, message string, unsavedChanges, unsavedChangesKnown, adopted bool) error {
+func (executor *SavePointExecutor) currentTime() time.Time {
+	now := executor.now
+	if executor.clock != nil {
+		now = executor.clock()
+	}
+	return now
+}
+
+func (executor *SavePointExecutor) requireCurrentTime() (time.Time, error) {
+	now := executor.currentTime()
+	if now.IsZero() {
+		return time.Time{}, errors.New("save point recovery time must be set")
+	}
+	return now, nil
+}
+
+func (executor *SavePointExecutor) commitSavePointSuccess(ctx context.Context, record operations.OperationRecord, savePoint jvsrunner.SavePointSummary, message string, unsavedChanges, unsavedChangesKnown, adopted bool) error {
+	now, err := executor.requireCurrentTime()
+	if err != nil {
+		return err
+	}
 	operation := record
 	operation.State = operations.OperationStateSucceeded
 	operation.Phase = operations.OperationPhaseSavePointCreateCommitted
@@ -286,11 +303,15 @@ func (executor *SavePointExecutor) commitSavePointSuccess(ctx context.Context, r
 	return nil
 }
 
-func (executor *SavePointExecutor) commitSavePointFailed(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string) error {
-	return executor.commitSavePointFailedWithDetails(ctx, record, now, code, message, false, nil)
+func (executor *SavePointExecutor) commitSavePointFailed(ctx context.Context, record operations.OperationRecord, code, message string) error {
+	return executor.commitSavePointFailedWithDetails(ctx, record, code, message, false, nil)
 }
 
-func (executor *SavePointExecutor) commitSavePointFailedWithDetails(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, retryable bool, details map[string]any) error {
+func (executor *SavePointExecutor) commitSavePointFailedWithDetails(ctx context.Context, record operations.OperationRecord, code, message string, retryable bool, details map[string]any) error {
+	now, err := executor.requireCurrentTime()
+	if err != nil {
+		return err
+	}
 	operation := savePointFailedOperation(record, now, operations.OperationStateFailed, code, message, retryable)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
 	attachJVSErrorDetails(&operation, details)
@@ -305,7 +326,11 @@ func (executor *SavePointExecutor) commitSavePointFailedWithDetails(ctx context.
 	return nil
 }
 
-func (executor *SavePointExecutor) commitSavePointIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message string, details map[string]any) error {
+func (executor *SavePointExecutor) commitSavePointIntervention(ctx context.Context, record operations.OperationRecord, code, message string, details map[string]any) error {
+	now, err := executor.requireCurrentTime()
+	if err != nil {
+		return err
+	}
 	operation := savePointFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message, false)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
 	attachJVSErrorDetails(&operation, details)
