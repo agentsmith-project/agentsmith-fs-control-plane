@@ -50,7 +50,7 @@ AFSCP must reject and audit:
 - repo create/get/list
 - repo archive, restore-archived, delete, restore-tombstoned, and purge
 - save point create/list
-- restore preview/run/discard
+- direct restore and legacy restore preview/run/discard
 - repo template create/clone
 - export create/get/revoke
 - workload mount binding create/get
@@ -70,10 +70,11 @@ held-fence aggregation APIs, or audit outbox lag aggregation APIs. Those
 operator inspection workflows are implemented through runbooks, read-only
 database queries, observability dashboards, or deployment-side operator tooling.
 
-Restore preview discard is part of the current GA restore slice. The
-machine-readable API contract exposes the endpoint, operation type
-`restore_preview_discard`, request/response schemas, route, and OpenAPI
-contract fixtures for handlers and generated clients.
+Direct restore is the primary product restore API. The machine-readable API
+contract exposes `POST /internal/v1/repos/{repoId}/restore`, operation type
+`restore`, request/response schemas, route, and OpenAPI contract fixtures for
+handlers and generated clients. Restore preview discard remains part of the
+current restore slice for existing internal recovery flows.
 
 See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft payloads.
 
@@ -93,6 +94,12 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
   volume metadata uses `VOLUME_NOT_FOUND`.
 - Cross-namespace template clone is rejected by default.
 - Cross-volume template clone is rejected with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
+- Direct restore requires `discard_unsaved_changes_confirmed: true`; otherwise
+  the API returns `RESTORE_CONFIRMATION_REQUIRED` and does not create or mutate
+  an operation.
+- Direct restore must not create a restore preview, restore plan, restore-run
+  request, or safety save point. It creates only a durable `restore` operation
+  and the worker calls JVS direct restore.
 - Restore-run and restore-preview discard references to preview operations must
   stay inside the same namespace, repo, and resource boundary; cross-namespace
   references return `OPERATION_NOT_FOUND` or the existing non-leaking
@@ -164,7 +171,7 @@ or actor-specific discovery output tests.
 | `namespace_admin` | namespace create/disable and volume binding update |
 | `repo_admin` | repo create/get/list, save point create/list, history |
 | `repo_lifecycle_admin` | repo archive, restore-archived, delete, restore-tombstoned, purge when policy permits |
-| `restore_admin` | restore preview/run/discard |
+| `restore_admin` | direct restore and restore preview/run/discard |
 | `template_admin` | repo template create/clone |
 | `export_admin` | export create/get/revoke |
 | `mount_admin` | workload mount binding create/get/revoke |
@@ -187,6 +194,22 @@ expiry/revoke, mount terminal state, repo lifecycle invalid state, lifecycle
 session drain failure, missing purge
 confirmation, purge retention denial, operation recovery required, durable
 metadata/store unavailability, and unclassified internal service bugs.
+
+Direct restore is a mutating restore operation and the fastest product path:
+`POST /internal/v1/repos/{repoId}/restore` with body
+`{"save_point_id":"sp_...","discard_unsaved_changes_confirmed":true}` returns
+an `OperationEnvelope` for a durable `restore` operation. The operation enters
+the normal queued/running/succeeded/failed chain and can be inspected through
+`GET /internal/v1/operations/{operationId}`. Repeating the same
+`Idempotency-Key` with the same body reuses the same operation; changing the
+body returns `IDEMPOTENCY_CONFLICT`.
+
+The direct restore worker invokes JVS as
+`jvs --json --control-root <controlRoot> --workspace main restore <save_point_id> --direct --discard-unsaved`.
+It validates the direct JSON result (`mode=direct_restore`,
+`source_save_point`, `restored_save_point`, `workspace`, `files_changed`,
+`history_changed=false`, `unsaved_changes=false`) and must not expect or persist
+`plan_id` or `run_command`.
 
 Restore preview creates a durable pending JVS restore plan and is authorized as
 a mutating restore operation. Restore preview discard is the caller-triggerable

@@ -83,6 +83,8 @@ components:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/PurgeRepoRequest
     CreateSavePointRequest:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateSavePointRequest
+    RestoreRequest:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestoreRequest
     RestorePreviewRequest:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestorePreviewRequest
     RestorePreviewDiscardRequest:
@@ -607,6 +609,40 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/SavePoint"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}/restore:
+    post:
+      operationId: restore
+      summary: Directly restore a repo to a save point.
+      description: Creates a durable direct restore operation. This endpoint does not create a restore preview, restore plan, or safety save point.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestoreRequest"
+      responses:
+        "400":
+          $ref: "#/components/responses/Error"
+        "202":
+          description: Direct restore operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /internal/v1/repos/{repoId}/restore-preview:

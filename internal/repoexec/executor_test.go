@@ -1200,6 +1200,7 @@ type fakeRepoCreateStore struct {
 	progressUpdates                      int
 	restorePreviewProgressUpdates        int
 	restorePreviewDiscardProgressUpdates int
+	restoreWriterFenceMarks              int
 	restoreRunWriterFenceMarks           int
 	restoreRunConsumingMarks             int
 	templateCreateWriterFenceMarks       int
@@ -1460,6 +1461,34 @@ func (store *fakeRepoCreateStore) CommitRestorePreviewDiscardFailedWithLease(_ c
 	return store.operation, nil
 }
 
+func (store *fakeRepoCreateStore) MarkRestoreWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
+	store.restoreWriterFenceMarks++
+	store.operation = record.Record()
+	for _, existing := range store.fences {
+		if existing.ID == fence.ID && existing.Kind == fences.KindWriterSession && existing.HolderOperationID == store.operation.ID && existing.Status == fences.StatusActive && existing.ReleasedAt == nil && existing.RecoveredAt == nil {
+			return existing, store.operation, nil
+		}
+	}
+	store.fences = append(store.fences, fence)
+	return fence, store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitRestoreSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	store.releaseWriterFence(store.operation.SessionFenceID, now)
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+
+func (store *fakeRepoCreateStore) CommitRestoreFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	if store.operation.Phase == operations.OperationPhaseRestoreWriterFenced {
+		store.releaseWriterFence(store.operation.SessionFenceID, now)
+	}
+	store.auditEvents = append(store.auditEvents, event)
+	return store.operation, nil
+}
+
 func (store *fakeRepoCreateStore) MarkRestoreRunWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
 	store.restoreRunWriterFenceMarks++
 	store.operation = record.Record()
@@ -1541,6 +1570,7 @@ type fakeJVSRunner struct {
 	recoveryStatusSummary               jvsrunner.RecoveryStatusSummary
 	recoveryStatusSummaries             []jvsrunner.RecoveryStatusSummary
 	restorePreviewSummary               jvsrunner.RestorePreviewSummary
+	restoreSummary                      jvsrunner.RestoreSummary
 	restoreRunSummary                   jvsrunner.RestoreRunSummary
 	restoreDiscardSummary               jvsrunner.RestoreDiscardSummary
 	repoCloneSummary                    jvsrunner.RepoCloneSummary
@@ -1548,6 +1578,7 @@ type fakeJVSRunner struct {
 	afterSave                           func()
 	afterRepoClone                      func()
 	beforeRestorePreview                func()
+	beforeRestore                       func()
 	beforeRestoreRun                    func()
 	beforeRestoreDiscard                func()
 	initErr                             error
@@ -1557,9 +1588,11 @@ type fakeJVSRunner struct {
 	historyErr                          error
 	recoveryStatusErr                   error
 	restorePreviewErr                   error
+	restoreErr                          error
 	restoreRunErr                       error
 	restoreDiscardErr                   error
 	repoCloneErr                        error
+	restoreSavePointID                  string
 	afterDoctor                         func(context.Context)
 	failRecoveryStatusOnCanceledContext bool
 	failRestoreDiscardOnCanceledContext bool
@@ -1647,6 +1680,16 @@ func (runner *fakeJVSRunner) RestorePreview(_ context.Context, controlRoot, save
 		runner.beforeRestorePreview()
 	}
 	return runner.restorePreviewSummary, runner.restorePreviewErr
+}
+
+func (runner *fakeJVSRunner) Restore(_ context.Context, controlRoot, savePointID string) (jvsrunner.RestoreSummary, error) {
+	runner.calls = append(runner.calls, "restore")
+	runner.controlRoot = controlRoot
+	runner.restoreSavePointID = savePointID
+	if runner.beforeRestore != nil {
+		runner.beforeRestore()
+	}
+	return runner.restoreSummary, runner.restoreErr
 }
 
 func (runner *fakeJVSRunner) RestoreRun(_ context.Context, controlRoot, planID string) (jvsrunner.RestoreRunSummary, error) {

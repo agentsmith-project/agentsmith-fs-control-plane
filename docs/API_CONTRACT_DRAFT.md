@@ -599,10 +599,40 @@ an approved break-glass policy; otherwise AFSCP rejects it with
 ```http
 POST /internal/v1/repos/{repoId}/save-points
 GET  /internal/v1/repos/{repoId}/save-points
+POST /internal/v1/repos/{repoId}/restore
 POST /internal/v1/repos/{repoId}/restore-preview
 POST /internal/v1/repos/{repoId}/restore-run
 POST /internal/v1/repos/{repoId}/restore-preview:discard
 ```
+
+`restore` is the direct product restore API. It requires `Idempotency-Key`,
+namespace/auth headers, and body:
+
+```json
+{
+  "save_point_id": "sp_001",
+  "discard_unsaved_changes_confirmed": true
+}
+```
+
+If `discard_unsaved_changes_confirmed` is not exactly `true`, AFSCP returns
+400 `RESTORE_CONFIRMATION_REQUIRED` before mutable gates or operation intake.
+Successful intake returns the normal operation envelope for operation type
+`restore`; callers poll `GET /internal/v1/operations/{operationId}`. Repeated
+requests with the same idempotency key and body reuse the same operation; a
+different body conflicts through the existing idempotency semantics.
+
+Direct restore does not create a restore preview, restore plan, restore-run
+request, or safety save point. Worker execution calls:
+
+```bash
+jvs --json --control-root <controlRoot> --workspace main restore <save_point_id> --direct --discard-unsaved
+```
+
+The worker expects `data.mode == "direct_restore"`, `source_save_point`,
+`restored_save_point`, `workspace`, `files_changed`,
+`history_changed:false`, and `unsaved_changes:false`. It must not parse or
+expect `plan_id` or `run_command`.
 
 `restore-preview:discard` is exposed in the current GA restore slice. The
 machine-readable OpenAPI/schema contract includes the route, operation type
@@ -852,6 +882,7 @@ Minimum GA operation matrix:
 | repo_restore_tombstoned | repo lifecycle exclusive | reject after purge or retention denial | inspect tombstone status, retention policy, and repo health |
 | repo_purge | repo lifecycle exclusive plus session drain | require no active or uncertain sessions | inspect purge marker and absence of retained storage |
 | save_point_create | repo JVS exclusive | allow ordinary IO | retry only from recorded phase |
+| restore | repo JVS exclusive direct restore mutation | block other same-repo JVS mutations and active writer sessions; no preview/plan/safety save point | recover from operation phase, writer fence, and direct JVS/doctor evidence |
 | restore_preview | repo JVS exclusive restore-plan mutation | allow ordinary IO; block other same-repo JVS mutations while the plan is active except matching restore-run or discard | recover from durable plan lifecycle and JVS recovery status |
 | restore_preview_discard | repo JVS exclusive matching active plan | allow ordinary IO; block unrelated same-repo JVS mutations until discarded or intervention | inspect durable plan and JVS discard status |
 | restore_run | repo JVS exclusive matching active plan plus writer-session fence | block new read-write sessions, then reject existing active or uncertain read-write sessions | validate preview plan, inspect JVS recovery status, run doctor, verify idle |

@@ -26,6 +26,10 @@ type RestorePreviewOperationIntakeStore interface {
 	CreateOrReuseRestorePreviewOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
+type RestoreOperationIntakeStore interface {
+	CreateOrReuseRestoreOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+}
+
 type RestorePreviewDiscardOperationIntakeStore interface {
 	CreateOrReuseRestorePreviewDiscardOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
@@ -117,6 +121,27 @@ func CreateOrReuseRestorePreviewOperationIntake(ctx context.Context, store Resto
 	return operationEnvelopeFromRecord(resolution.Operation), nil
 }
 
+func CreateOrReuseRestoreOperationIntake(ctx context.Context, store RestoreOperationIntakeStore, request OperationIntakeRequest) (OperationEnvelope, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if isNilOperationIntakeValue(store) {
+		return OperationEnvelope{}, internalOperationIntakeError()
+	}
+	spec, err := operationIntakeSpec(request)
+	if err != nil {
+		return OperationEnvelope{}, err
+	}
+	if err := checkRestoreReconciliationIntakeGate(ctx, store, nil, request); err != nil {
+		return OperationEnvelope{}, err
+	}
+	resolution, err := store.CreateOrReuseRestoreOperation(ctx, spec)
+	if err != nil {
+		return OperationEnvelope{}, mapOperationIntakeError(err)
+	}
+	return operationEnvelopeFromRecord(resolution.Operation), nil
+}
+
 func CreateOrReuseRestorePreviewDiscardOperationIntake(ctx context.Context, store RestorePreviewDiscardOperationIntakeStore, request OperationIntakeRequest) (OperationEnvelope, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -190,6 +215,7 @@ func restoreReconciliationDangerousRoute(operationID string) bool {
 		"restoreTombstonedRepo",
 		"purgeRepo",
 		"createSavePoint",
+		"restore",
 		"restorePreview",
 		"restorePreviewDiscard",
 		"restoreRun",

@@ -3052,6 +3052,7 @@ const validSchema = `
         "repo_restore_tombstoned",
         "repo_purge",
         "save_point_create",
+        "restore",
         "restore_preview",
         "restore_preview_discard",
         "restore_run",
@@ -3123,6 +3124,7 @@ const validSchema = `
         "WRITER_SESSION_FENCE_HELD",
         "STALE_WRITER_SESSION_UNCERTAIN",
         "RESTORE_DIRTY_STATE",
+        "RESTORE_CONFIRMATION_REQUIRED",
         "JVS_COMMAND_FAILED",
         "JVS_DOCTOR_FAILED",
         "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE",
@@ -3212,7 +3214,7 @@ The durable ` + "`OperationRecord`" + ` is stored internally and returned only b
 | ` + "`namespace_admin`" + ` | namespace create/disable and volume binding update |
 | ` + "`repo_admin`" + ` | repo create/get/list |
 | ` + "`repo_lifecycle_admin`" + ` | repo lifecycle |
-| ` + "`restore_admin`" + ` | restore preview/run |
+| ` + "`restore_admin`" + ` | direct restore and restore preview/run |
 | ` + "`template_admin`" + ` | repo template create/clone |
 | ` + "`export_admin`" + ` | export create/get/revoke |
 | ` + "`mount_admin`" + ` | workload mount binding create/get/revoke |

@@ -38,6 +38,7 @@ const (
 	CodeStaleWriterSessionUncertain ErrorCode = "STALE_WRITER_SESSION_UNCERTAIN"
 	CodeRestoreDirtyState           ErrorCode = "RESTORE_DIRTY_STATE"
 	CodeRestorePreviewStale         ErrorCode = "RESTORE_PREVIEW_STALE"
+	CodeRestoreConfirmationRequired ErrorCode = "RESTORE_CONFIRMATION_REQUIRED"
 
 	CodeJVSCommandFailed              ErrorCode = "JVS_COMMAND_FAILED"
 	CodeJVSDoctorFailed               ErrorCode = "JVS_DOCTOR_FAILED"
@@ -83,6 +84,7 @@ var allErrorCodes = []ErrorCode{
 	CodeStaleWriterSessionUncertain,
 	CodeRestoreDirtyState,
 	CodeRestorePreviewStale,
+	CodeRestoreConfirmationRequired,
 	CodeJVSCommandFailed,
 	CodeJVSDoctorFailed,
 	CodeSourceDirtyAfterTemplateSave,

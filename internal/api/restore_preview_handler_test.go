@@ -220,6 +220,7 @@ type fakeRestoreHTTPStore struct {
 	createErr          error
 	createCalls        int
 	genericCreateCalls int
+	restoreIntakeCalls int
 	previewIntakeCalls int
 	discardIntakeCalls int
 	runIntakeCalls     int
@@ -351,6 +352,11 @@ func (store *fakeRestoreHTTPStore) CreateOrReuseOperation(_ context.Context, spe
 
 func (store *fakeRestoreHTTPStore) CreateOrReuseRestorePreviewOperation(_ context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
 	store.previewIntakeCalls++
+	return store.createOrReuseOperation(spec)
+}
+
+func (store *fakeRestoreHTTPStore) CreateOrReuseRestoreOperation(_ context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+	store.restoreIntakeCalls++
 	return store.createOrReuseOperation(spec)
 }
 

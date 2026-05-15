@@ -136,17 +136,20 @@ type WorkerOperationRecoveryConfig struct {
 	SavePoint             WorkerRepoCreateRecoveryConfig
 	TemplateCreate        WorkerRepoCreateRecoveryConfig
 	TemplateClone         WorkerRepoCreateRecoveryConfig
+	Restore               WorkerRepoCreateRecoveryConfig
 	RestorePreview        WorkerRepoCreateRecoveryConfig
 	RestorePreviewDiscard WorkerRepoCreateRecoveryConfig
 	RestoreRun            WorkerRepoCreateRecoveryConfig
 }
 
 type WorkerRepoCreateRecoveryConfig struct {
-	Enabled         bool
-	JVSBinaryPath   string
-	JVSBinarySHA256 string
-	JVSCWD          string
-	VolumeRoots     map[string]string
+	Enabled                   bool
+	JVSBinaryPath             string
+	JVSBinarySHA256           string
+	JVSCWD                    string
+	JVSDirectRestoreRequired  bool
+	JVSDirectRestoreSourceRef string
+	VolumeRoots               map[string]string
 }
 
 type WorkerExportSessionReconcileConfig struct {
@@ -352,6 +355,11 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.OperationRecovery.TemplateClone = templateClone
+	restore, err := loadRestoreRecoveryConfig(source)
+	if err != nil {
+		return WorkerConfig{}, err
+	}
+	worker.OperationRecovery.Restore = restore
 	restorePreview, err := loadRestorePreviewRecoveryConfig(source)
 	if err != nil {
 		return WorkerConfig{}, err
@@ -906,6 +914,10 @@ func loadTemplateCloneRecoveryConfig(source Source) (WorkerRepoCreateRecoveryCon
 	return loadJVSOperationRecoveryConfig(source, "AFSCP_TEMPLATE_CLONE_RECOVERY_ENABLED")
 }
 
+func loadRestoreRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
+	return loadJVSDirectRestoreOperationRecoveryConfig(source, "AFSCP_RESTORE_RECOVERY_ENABLED")
+}
+
 func loadRestorePreviewRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
 	return loadJVSOperationRecoveryConfig(source, "AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED")
 }
@@ -919,6 +931,14 @@ func loadRestoreRunRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig
 }
 
 func loadJVSOperationRecoveryConfig(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {
+	return loadJVSOperationRecoveryConfigWithPin(source, gateKey, false)
+}
+
+func loadJVSDirectRestoreOperationRecoveryConfig(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {
+	return loadJVSOperationRecoveryConfigWithPin(source, gateKey, true)
+}
+
+func loadJVSOperationRecoveryConfigWithPin(source Source, gateKey string, directRestoreRequired bool) (WorkerRepoCreateRecoveryConfig, error) {
 	enabled, err := boolValue(source, gateKey)
 	if err != nil {
 		return WorkerRepoCreateRecoveryConfig{}, err
@@ -932,8 +952,17 @@ func loadJVSOperationRecoveryConfig(source Source, gateKey string) (WorkerRepoCr
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	cfg.JVSBinarySHA256 = strings.ToLower(valueOrDefault(source, "AFSCP_JVS_BINARY_SHA256", ""))
-	if err := validatePinnedJVSBinarySHA256(cfg.JVSBinarySHA256); err != nil {
-		return WorkerRepoCreateRecoveryConfig{}, err
+	if directRestoreRequired {
+		sourceRef, err := validateDirectRestoreJVSBinarySHA256(source, cfg.JVSBinarySHA256)
+		if err != nil {
+			return WorkerRepoCreateRecoveryConfig{}, err
+		}
+		cfg.JVSDirectRestoreRequired = true
+		cfg.JVSDirectRestoreSourceRef = sourceRef
+	} else {
+		if err := validatePinnedJVSBinarySHA256(cfg.JVSBinarySHA256); err != nil {
+			return WorkerRepoCreateRecoveryConfig{}, err
+		}
 	}
 	cfg.JVSCWD = valueOrDefault(source, "AFSCP_JVS_CWD", "")
 	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_CWD", cfg.JVSCWD, gateKey); err != nil {
@@ -966,6 +995,39 @@ func validatePinnedJVSBinarySHA256(value string) error {
 		return fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must match pinned JVS %s %s SHA-256", JVSAcceptedReleaseVersion, JVSAcceptedLinuxAMD64AssetName)
 	}
 	return nil
+}
+
+func validateDirectRestoreJVSBinarySHA256(source Source, value string) (string, error) {
+	if !validSHA256Hex(value) {
+		return "", fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must be a sha256 hex digest")
+	}
+	if value == JVSAcceptedLinuxAMD64SHA256 {
+		return "", fmt.Errorf("AFSCP_RESTORE_RECOVERY_ENABLED requires JVS restore --direct capability; pinned JVS %s %s does not declare restore --direct support", JVSAcceptedReleaseVersion, JVSAcceptedLinuxAMD64AssetName)
+	}
+	directSHA := strings.ToLower(valueOrDefault(source, "AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256", ""))
+	if !validSHA256Hex(directSHA) {
+		return "", fmt.Errorf("AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256 must be a sha256 hex digest when AFSCP_RESTORE_RECOVERY_ENABLED is true")
+	}
+	if directSHA != value {
+		return "", fmt.Errorf("AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256 must match AFSCP_JVS_BINARY_SHA256 when AFSCP_RESTORE_RECOVERY_ENABLED is true")
+	}
+	sourceRef := valueOrDefault(source, "AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF", "")
+	if !validDirectRestoreSourceRef(sourceRef) {
+		return "", fmt.Errorf("AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF is required when AFSCP_RESTORE_RECOVERY_ENABLED is true")
+	}
+	return sourceRef, nil
+}
+
+func validDirectRestoreSourceRef(value string) bool {
+	if value == "" || len(value) > 200 {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func validSHA256Hex(value string) bool {

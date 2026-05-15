@@ -31,7 +31,12 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
-const acceptedJVSBinarySHA256 = "0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944"
+const (
+	acceptedJVSBinarySHA256           = "0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944"
+	directRestoreLocalJVSBinaryPath   = "/home/percy/works/mbos-v1/jvs/bin/jvs-direct-restore"
+	directRestoreLocalJVSBinarySHA256 = "c88553bb18bdd70e1399bf562fcb853bd200798498bd24bc25458196fb568902"
+	directRestoreLocalJVSSourceRef    = "/home/percy/works/mbos-v1/jvs@agentsmith-direct-restore-operation:c65b418f58d6e39e91199c1d55783e2ec91be9a1"
+)
 
 func TestNewRunOnceRunnerDisabledFailsBeforeOpeningStore(t *testing.T) {
 	factoryCalls := 0
@@ -162,6 +167,7 @@ func TestWorkerCapabilityMatrixUnsupportedTerminalizationRegistryIncludesDisable
 		operations.OperationRepoPurge,
 		operations.OperationTemplateCreate,
 		operations.OperationTemplateClone,
+		operations.OperationRestore,
 		operations.OperationRestorePreview,
 		operations.OperationRestorePreviewDiscard,
 		operations.OperationRestoreRun,
@@ -1373,6 +1379,79 @@ func TestRunOnceTemplateCloneDisabledScansAndPersistsUnsupportedIntervention(t *
 	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeTemplateClone)
 }
 
+func TestRunOnceRestoreDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppRestoreOperationRecord("op_restore", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
+	}
+	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || store.restoreListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
+		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want disabled restore audited unsupported intervention", summary, store.restoreListCalls, store.acquireIDs)
+	}
+	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeRestore)
+}
+
+func TestRunOnceRestoreEnabledClaimsThroughDirectRestoreExecutor(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppRestoreOperationRecord("op_restore", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	jvs := &workerAppFakeJVSRunner{
+		restoreSummary: jvsrunner.RestoreSummary{
+			SourceSavePointID:   "sp_001",
+			RestoredSavePointID: "sp_001",
+			Workspace:           "main",
+			FilesChanged:        true,
+			HistoryChanged:      false,
+			UnsavedChanges:      false,
+		},
+		doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRestoreConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_restore" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want restore claimed", summary)
+	}
+	if store.restoreListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_restore" {
+		t.Fatalf("list/acquire = %d/%#v, want restore listed and acquired", store.restoreListCalls, store.acquireIDs)
+	}
+	if strings.Join(jvs.calls, ",") != "restore,doctor" {
+		t.Fatalf("jvs calls = %#v, want direct restore,doctor only", jvs.calls)
+	}
+	if store.operation.Type != operations.OperationRestore || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestoreCommitted {
+		t.Fatalf("operation = %#v, want succeeded direct restore", store.operation)
+	}
+	if store.restorePlan.ID != "" {
+		t.Fatalf("restore plan = %#v, want direct restore not to create or consume a plan", store.restorePlan)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestore || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
+		t.Fatalf("audit events = %#v, want direct restore success", store.auditEvents)
+	}
+}
+
 func TestRunOnceRestorePreviewDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
 	now := workerAppNow()
 	record := workerAppRestorePreviewOperationRecord("op_preview", now)
@@ -1951,6 +2030,56 @@ func TestNewJVSRunnerFromConfigVerifiesFileAgainstAcceptedPin(t *testing.T) {
 	}
 }
 
+func TestNewJVSRunnerFromConfigDirectRestorePreflightsCLIHelp(t *testing.T) {
+	path, sha := writeWorkerAppJVSHelpFixture(t, "Usage:\n  jvs restore <save>\nFlags:\n      --direct\n      --discard-unsaved\n")
+
+	_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
+		Enabled:                   true,
+		JVSBinaryPath:             path,
+		JVSBinarySHA256:           sha,
+		JVSCWD:                    filepath.Dir(path),
+		JVSDirectRestoreRequired:  true,
+		JVSDirectRestoreSourceRef: directRestoreLocalJVSSourceRef,
+		VolumeRoots:               map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+	})
+	if err != nil {
+		t.Fatalf("NewJVSRunnerFromConfig returned error for direct-capable local artifact: %v", err)
+	}
+}
+
+func TestNewJVSRunnerFromConfigDirectRestoreRejectsMissingCLIFlag(t *testing.T) {
+	path, sha := writeWorkerAppJVSHelpFixture(t, "Usage:\n  jvs restore <save>\nFlags:\n      --discard-unsaved\n")
+
+	_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
+		Enabled:                   true,
+		JVSBinaryPath:             path,
+		JVSBinarySHA256:           sha,
+		JVSCWD:                    filepath.Dir(path),
+		JVSDirectRestoreRequired:  true,
+		JVSDirectRestoreSourceRef: directRestoreLocalJVSSourceRef,
+		VolumeRoots:               map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+	})
+	if err == nil {
+		t.Fatal("NewJVSRunnerFromConfig succeeded without --direct help, want fail-closed preflight error")
+	}
+	if !errors.Is(err, ErrJVSRuntimeUnavailable) || !strings.Contains(err.Error(), "restore --direct preflight") {
+		t.Fatalf("error = %v, want runtime-unavailable direct restore preflight failure", err)
+	}
+}
+
+func writeWorkerAppJVSHelpFixture(t *testing.T, help string) (string, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "jvs")
+	content := []byte("#!/bin/sh\nif [ \"$1\" = \"restore\" ] && [ \"$2\" = \"--help\" ]; then\n  cat <<'EOF'\n" + help + "EOF\n  exit 0\nfi\nexit 7\n")
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatalf("write fake jvs binary: %v", err)
+	}
+	sum := sha256.Sum256(content)
+	return path, hex.EncodeToString(sum[:])
+}
+
 func TestRunOnceReturnsErrorForNonSuccessfulOperationRecoveryCounts(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -2412,6 +2541,22 @@ func workerAppRestorePreviewConfigSource(overrides config.MapSource) config.MapS
 	return source
 }
 
+func workerAppRestoreConfigSource(overrides config.MapSource) config.MapSource {
+	source := workerAppConfigSource(config.MapSource{
+		"AFSCP_RESTORE_RECOVERY_ENABLED":         "true",
+		"AFSCP_JVS_BINARY_PATH":                  directRestoreLocalJVSBinaryPath,
+		"AFSCP_JVS_BINARY_SHA256":                directRestoreLocalJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256": directRestoreLocalJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":    directRestoreLocalJVSSourceRef,
+		"AFSCP_JVS_CWD":                          "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                     "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	for key, value := range overrides {
+		source[key] = value
+	}
+	return source
+}
+
 func workerAppRestorePreviewDiscardConfigSource(overrides config.MapSource) config.MapSource {
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED": "true",
@@ -2618,6 +2763,17 @@ func workerAppRestorePreviewOperationRecord(operationID string, now time.Time) o
 		InputSummary:     map[string]any{"save_point_id": "sp_001"},
 		CreatedAt:        now.Add(-time.Hour),
 	}
+}
+
+func workerAppRestoreOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+	record := workerAppRestorePreviewOperationRecord(operationID, now)
+	record.Type = operations.OperationRestore
+	record.Phase = operations.OperationPhaseRestoreValidate
+	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestore, "idem_restore").String()
+	record.IdempotencyKey = "idem_restore"
+	record.RequestHash = operations.RequestHash("sha256:restore")
+	record.InputSummary = map[string]any{"save_point_id": "sp_001", "discard_unsaved_changes_confirmed": true}
+	return record
 }
 
 func workerAppRestorePreviewDiscardOperationRecord(operationID string, now time.Time) operations.OperationRecord {
@@ -2912,6 +3068,7 @@ type fakeWorkerAppStore struct {
 	savePointListCalls                   int
 	templateCreateListCalls              int
 	templateCloneListCalls               int
+	restoreListCalls                     int
 	restorePreviewListCalls              int
 	restorePreviewDiscardListCalls       int
 	restoreRunListCalls                  int
@@ -3470,6 +3627,33 @@ func (store *fakeWorkerAppStore) ListRestorePreviewOperationsForRecovery(ctx con
 	return out, nil
 }
 
+func (store *fakeWorkerAppStore) ListRestoreOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
+	store.restoreListCalls++
+	var out []operations.OperationRecord
+	for _, operationID := range store.order {
+		record := store.records[operationID]
+		if len(out) >= limit {
+			break
+		}
+		if record.Type != operations.OperationRestore || (record.Phase != operations.OperationPhaseRestoreValidate && record.Phase != operations.OperationPhaseRestoreWriterFenced) {
+			continue
+		}
+		switch record.State {
+		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
+			out = append(out, record)
+		case operations.OperationStateRunning:
+			if namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		case operations.OperationStateCancelRequested:
+			if record.Phase == operations.OperationPhaseRestoreValidate && namespaceRecoveryLeaseDue(record, now) {
+				out = append(out, record)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (store *fakeWorkerAppStore) ListRestorePreviewDiscardOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
 	store.restorePreviewDiscardListCalls++
 	var out []operations.OperationRecord
@@ -3655,6 +3839,27 @@ func (store *fakeWorkerAppStore) AcquireRestorePreviewOperationLease(_ context.C
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	if request.CancelPolicy == operations.LeaseCancelPolicyFinalize && record.Phase != operations.OperationPhaseRestorePreviewValidate {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	store.acquireIDs = append(store.acquireIDs, operationID)
+	store.acquirePolicies[operationID] = request.CancelPolicy
+	decision := operations.AcquireLease(record, request)
+	if !decision.Allowed {
+		return operations.OperationRecord{}, decision.Error
+	}
+	store.records[operationID] = decision.Record
+	return decision.Record, nil
+}
+
+func (store *fakeWorkerAppStore) AcquireRestoreOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
+	record, ok := store.records[operationID]
+	if !ok {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if record.Type != operations.OperationRestore || (record.Phase != operations.OperationPhaseRestoreValidate && record.Phase != operations.OperationPhaseRestoreWriterFenced) {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	if request.CancelPolicy == operations.LeaseCancelPolicyFinalize && record.Phase != operations.OperationPhaseRestoreValidate {
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	store.acquireIDs = append(store.acquireIDs, operationID)
@@ -4092,6 +4297,43 @@ func (store *fakeWorkerAppStore) CommitRestorePreviewDiscardFailedWithLease(_ co
 	return operation, nil
 }
 
+func (store *fakeWorkerAppStore) MarkRestoreWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
+	operation := record.Record()
+	store.records[operation.ID] = operation
+	store.operation = operation
+	for _, existing := range store.fences {
+		if existing.ID == fence.ID && existing.Kind == fences.KindWriterSession && existing.HolderOperationID == operation.ID && existing.Status == fences.StatusActive && existing.ReleasedAt == nil && existing.RecoveredAt == nil {
+			return existing, operation, nil
+		}
+	}
+	store.fences = append(store.fences, fence)
+	return fence, operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitRestoreSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	store.releaseWorkerAppWriterFence(operation.SessionFenceID, now)
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) CommitRestoreFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseOwner = ""
+	operation.LeaseExpiresAt = nil
+	store.records[operation.ID] = operation
+	if operation.Phase == operations.OperationPhaseRestoreWriterFenced {
+		store.releaseWorkerAppWriterFence(operation.SessionFenceID, now)
+	}
+	store.operation = operation
+	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
+}
+
 func (store *fakeWorkerAppStore) MarkRestoreRunWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
 	operation := record.Record()
 	store.records[operation.ID] = operation
@@ -4323,6 +4565,8 @@ type workerAppFakeJVSRunner struct {
 	recoveryStatusSummaries []jvsrunner.RecoveryStatusSummary
 	restorePreviewSummary   jvsrunner.RestorePreviewSummary
 	restorePreviewErr       error
+	restoreSummary          jvsrunner.RestoreSummary
+	restoreErr              error
 	restoreRunSummary       jvsrunner.RestoreRunSummary
 	restoreDiscardSummary   jvsrunner.RestoreDiscardSummary
 	repoCloneSummary        jvsrunner.RepoCloneSummary
@@ -4400,6 +4644,14 @@ func (runner *workerAppFakeJVSRunner) RestorePreview(context.Context, string, st
 		return jvsrunner.RestorePreviewSummary{}, runner.restorePreviewErr
 	}
 	return runner.restorePreviewSummary, nil
+}
+
+func (runner *workerAppFakeJVSRunner) Restore(context.Context, string, string) (jvsrunner.RestoreSummary, error) {
+	runner.calls = append(runner.calls, "restore")
+	if runner.restoreErr != nil {
+		return jvsrunner.RestoreSummary{}, runner.restoreErr
+	}
+	return runner.restoreSummary, nil
 }
 
 func (runner *workerAppFakeJVSRunner) RestoreRun(context.Context, string, string) (jvsrunner.RestoreRunSummary, error) {

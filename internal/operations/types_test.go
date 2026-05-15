@@ -20,6 +20,7 @@ func TestOperationTypesAreStableAndComplete(t *testing.T) {
 		"repo_restore_tombstoned",
 		"repo_purge",
 		"save_point_create",
+		"restore",
 		"restore_preview",
 		"restore_preview_discard",
 		"restore_run",
@@ -82,6 +83,18 @@ func TestRepoLifecyclePhasesAreStable(t *testing.T) {
 	}
 	if OperationPhaseRepoLifecycleCommitted != "repo_lifecycle_committed" {
 		t.Fatalf("committed phase = %q, want repo_lifecycle_committed", OperationPhaseRepoLifecycleCommitted)
+	}
+}
+
+func TestRestorePhasesAreStable(t *testing.T) {
+	if OperationPhaseRestoreValidate != "validate_restore" {
+		t.Fatalf("validate phase = %q, want validate_restore", OperationPhaseRestoreValidate)
+	}
+	if OperationPhaseRestoreWriterFenced != "restore_writer_fenced" {
+		t.Fatalf("writer-fenced phase = %q, want restore_writer_fenced", OperationPhaseRestoreWriterFenced)
+	}
+	if OperationPhaseRestoreCommitted != "restore_committed" {
+		t.Fatalf("committed phase = %q, want restore_committed", OperationPhaseRestoreCommitted)
 	}
 }
 

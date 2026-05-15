@@ -19,6 +19,7 @@ const (
 	OperationRepoRestoreTombstoned     OperationType = "repo_restore_tombstoned"
 	OperationRepoPurge                 OperationType = "repo_purge"
 	OperationSavePointCreate           OperationType = "save_point_create"
+	OperationRestore                   OperationType = "restore"
 	OperationRestorePreview            OperationType = "restore_preview"
 	OperationRestorePreviewDiscard     OperationType = "restore_preview_discard"
 	OperationRestoreRun                OperationType = "restore_run"
@@ -57,6 +58,10 @@ const (
 	OperationPhaseSavePointCreateValidate  = "validate_save_point_create"
 	OperationPhaseSavePointCreatePrepared  = "save_point_create_prepared"
 	OperationPhaseSavePointCreateCommitted = "save_point_create_committed"
+
+	OperationPhaseRestoreValidate     = "validate_restore"
+	OperationPhaseRestoreWriterFenced = "restore_writer_fenced"
+	OperationPhaseRestoreCommitted    = "restore_committed"
 
 	OperationPhaseRestorePreviewValidate      = "validate_restore_preview"
 	OperationPhaseRestorePreviewPreflightIdle = "restore_preview_preflight_idle"
@@ -105,6 +110,7 @@ var operationTypes = []OperationType{
 	OperationRepoRestoreTombstoned,
 	OperationRepoPurge,
 	OperationSavePointCreate,
+	OperationRestore,
 	OperationRestorePreview,
 	OperationRestorePreviewDiscard,
 	OperationRestoreRun,
@@ -133,6 +139,7 @@ var routeOperationTypes = map[string]OperationType{
 	"restoreTombstonedRepo":            OperationRepoRestoreTombstoned,
 	"purgeRepo":                        OperationRepoPurge,
 	"createSavePoint":                  OperationSavePointCreate,
+	"restore":                          OperationRestore,
 	"restorePreview":                   OperationRestorePreview,
 	"restorePreviewDiscard":            OperationRestorePreviewDiscard,
 	"restoreRun":                       OperationRestoreRun,

@@ -182,6 +182,13 @@ type RestorePreviewOperationIntakeStore interface {
 	CreateOrReuseRestorePreviewOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
+// RestoreOperationIntakeStore owns direct restore HTTP intake. It resolves
+// idempotency before rejecting active same-repo JVS mutations or restore plans,
+// then inserts only a durable direct restore operation.
+type RestoreOperationIntakeStore interface {
+	CreateOrReuseRestoreOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
+}
+
 // RestorePreviewDiscardOperationIntakeStore owns the durable HTTP intake
 // boundary for restore_preview_discard. Implementations must resolve
 // idempotency first, and only for brand-new requests atomically lock and verify
@@ -388,6 +395,24 @@ type RestorePreviewOperationRecoveryStore interface {
 	AcquireRestorePreviewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
 	RestorePreviewOperationCommitStore
 	RestorePreviewOperationMetadataReader
+}
+
+type RestoreOperationCommitStore interface {
+	MarkRestoreWriterFencedWithLease(ctx context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error)
+	CommitRestoreSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+	CommitRestoreFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+}
+
+type RestoreOperationMetadataReader interface {
+	RestorePreviewOperationMetadataReader
+	RepoSessionStateReader
+}
+
+type RestoreOperationRecoveryStore interface {
+	ListRestoreOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
+	AcquireRestoreOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
+	RestoreOperationCommitStore
+	RestoreOperationMetadataReader
 }
 
 type RestorePreviewDiscardOperationCommitStore interface {

@@ -183,6 +183,10 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	if typed, ok := config.OperationIntakeStore.(RestorePreviewOperationIntakeStore); ok {
 		restorePreviewIntakeStore = typed
 	}
+	var restoreIntakeStore RestoreOperationIntakeStore
+	if typed, ok := config.OperationIntakeStore.(RestoreOperationIntakeStore); ok {
+		restoreIntakeStore = typed
+	}
 	var restorePreviewDiscardIntakeStore RestorePreviewDiscardOperationIntakeStore
 	if typed, ok := config.OperationIntakeStore.(RestorePreviewDiscardOperationIntakeStore); ok {
 		restorePreviewDiscardIntakeStore = typed
@@ -262,6 +266,27 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	})
 	createSavePointHandler := requestLogHandler(savePointHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/save-points", "createSavePoint")
 	listSavePointsHandler := requestLogHandler(savePointHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/save-points", "listSavePoints")
+
+	restoreHandler := RestoreHandler(RestoreHandlerConfig{
+		RepoReader:        config.RepoReader,
+		NamespaceReader:   config.NamespaceReader,
+		BindingReader:     config.NamespaceBindingReader,
+		FenceReader:       config.RepoFenceReader,
+		MutationGate:      savePointMutationGate,
+		RestorePlanReader: restorePreviewPlanReader,
+		IntakeStore:       restoreIntakeStore,
+		IntakeLookupStore: operationLookupStore,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		OperationID: config.GenerateOperationID,
+		Now:         config.Now,
+		AuditSink:   config.AuditSink,
+	})
+	restoreHandler = requestLogHandler(restoreHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/restore", "restore")
 
 	restorePreviewHandler := RestorePreviewHandler(RestorePreviewHandlerConfig{
 		RepoReader:        config.RepoReader,
@@ -482,6 +507,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"getWorkloadMountBinding":   getWorkloadMountHandler,
 		"listRepos":                 listReposHandler,
 		"purgeRepo":                 purgeRepoHandler,
+		"restore":                   restoreHandler,
 		"restorePreview":            restorePreviewHandler,
 		"restorePreviewDiscard":     restorePreviewDiscardHandler,
 		"restoreRun":                restoreRunHandler,

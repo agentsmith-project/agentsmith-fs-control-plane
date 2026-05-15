@@ -93,11 +93,12 @@ func TestCapabilityMatrixV1SplitsJVSAndWebDAVProjectionFacets(t *testing.T) {
 	jvsDurable := rows[JVSSaveRestore]
 	if !operationTypeSlicesEqual(jvsDurable.AdmissionOperationTypes, []operations.OperationType{
 		operations.OperationSavePointCreate,
+		operations.OperationRestore,
 		operations.OperationRestorePreview,
 		operations.OperationRestorePreviewDiscard,
 		operations.OperationRestoreRun,
 	}) {
-		t.Fatalf("%s AdmissionOperationTypes = %#v, want save point create, restore preview, restore preview discard, and restore run", JVSSaveRestore, jvsDurable.AdmissionOperationTypes)
+		t.Fatalf("%s AdmissionOperationTypes = %#v, want save point create, direct restore, restore preview, restore preview discard, and restore run", JVSSaveRestore, jvsDurable.AdmissionOperationTypes)
 	}
 	jvsProjection := rows[JVSProjection]
 	if jvsProjection.SurfaceType != SurfaceReadProjection || len(jvsProjection.AdmissionOperationTypes) != 0 {
@@ -435,13 +436,23 @@ func TestCapabilityMatrixV1CoversEveryRouteMutationOperation(t *testing.T) {
 	}
 }
 
-func TestCapabilityMatrixV1IncludesRestorePreviewAsDurableJVSMutation(t *testing.T) {
+func TestCapabilityMatrixV1IncludesDirectRestoreAndPreviewAsDurableJVSMutations(t *testing.T) {
 	row, ok := CapabilityMatrixV1Row(JVSSaveRestore)
 	if !ok {
 		t.Fatalf("CapabilityMatrixV1Rows missing %s", JVSSaveRestore)
 	}
+	if !operationTypeSliceContains(row.AdmissionOperationTypes, operations.OperationRestore) {
+		t.Fatalf("%s AdmissionOperationTypes = %#v, want restore direct mutation", JVSSaveRestore, row.AdmissionOperationTypes)
+	}
 	if !operationTypeSliceContains(row.AdmissionOperationTypes, operations.OperationRestorePreview) {
 		t.Fatalf("%s AdmissionOperationTypes = %#v, want restore_preview durable plan mutation", JVSSaveRestore, row.AdmissionOperationTypes)
+	}
+	directGot, ok := AdmissionCapabilityForOperationType(operations.OperationRestore)
+	if !ok {
+		t.Fatalf("AdmissionCapabilityForOperationType(%s) missing", operations.OperationRestore)
+	}
+	if directGot != JVSSaveRestore {
+		t.Fatalf("AdmissionCapabilityForOperationType(%s) = %s, want %s", operations.OperationRestore, directGot, JVSSaveRestore)
 	}
 	got, ok := AdmissionCapabilityForOperationType(operations.OperationRestorePreview)
 	if !ok {
@@ -504,6 +515,7 @@ func TestAdmissionCapabilityForOperationTypeIsStable(t *testing.T) {
 		{operationType: operations.OperationVolumeEnsure, want: VolumePreflight},
 		{operationType: operations.OperationRepoCreate, want: RepoCreate},
 		{operationType: operations.OperationSavePointCreate, want: JVSSaveRestore},
+		{operationType: operations.OperationRestore, want: JVSSaveRestore},
 		{operationType: operations.OperationRestorePreview, want: JVSSaveRestore},
 		{operationType: operations.OperationRestorePreviewDiscard, want: JVSSaveRestore},
 		{operationType: operations.OperationRestoreRun, want: JVSSaveRestore},
@@ -591,7 +603,7 @@ func TestCapabilityAdmissionOperationCoverageContract(t *testing.T) {
 		{
 			capabilityID:     JVSSaveRestore,
 			wantDefaultGA:    true,
-			wantAdmissionOps: []operations.OperationType{operations.OperationSavePointCreate, operations.OperationRestorePreview, operations.OperationRestorePreviewDiscard, operations.OperationRestoreRun},
+			wantAdmissionOps: []operations.OperationType{operations.OperationSavePointCreate, operations.OperationRestore, operations.OperationRestorePreview, operations.OperationRestorePreviewDiscard, operations.OperationRestoreRun},
 		},
 		{
 			capabilityID:     WebDAVExport,

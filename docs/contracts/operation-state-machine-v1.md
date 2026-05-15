@@ -82,9 +82,10 @@ them.
 ## Recovery Rules
 
 Each operation type must define deterministic recovery by `phase`.
-Rows in the current GA restore slice, including `restore_preview_discard`, are
-represented in the machine-readable OpenAPI/schema, operation-type fixtures,
-routes, and generated contracts used by implementation.
+Rows in the current GA restore slice, including direct `restore` and
+`restore_preview_discard`, are represented in the machine-readable
+OpenAPI/schema, operation-type fixtures, routes, and generated contracts used by
+implementation.
 
 ## Operation Type Inventory
 
@@ -101,6 +102,7 @@ routes, and generated contracts used by implementation.
 | `repo_restore_tombstoned` | yes | yes | yes | `repo_lifecycle_retained` | default positive |
 | `repo_purge` | optional-gated | optional-gated | yes | `repo_purge` | default denied; optional positive only by selector |
 | `save_point_create` | yes | yes | yes | `jvs_save_restore` | default positive |
+| `restore` | yes | yes | yes | `jvs_save_restore` | default positive direct restore mutation |
 | `restore_preview` | yes | yes | yes | `jvs_save_restore` | default positive durable restore-plan mutation |
 | `restore_preview_discard` | yes | yes | yes | `jvs_save_restore` | default positive cleanup mutation |
 | `restore_run` | yes | yes | yes | `jvs_save_restore` | default positive |
@@ -131,6 +133,7 @@ routes, and generated contracts used by implementation.
 | `repo_restore_tombstoned` | tombstone restore state plus retention predicate | same request returns restore terminal result |
 | `repo_purge` | irreversible purge marker and retained storage absence | same request returns original purge terminal result; disabled default denies before side effects |
 | `save_point_create` | JVS save point plus operation/audit boundary | same request returns original save point metadata |
+| `restore` | writer-session fence, JVS direct restore, doctor, operation, and audit boundary | same request returns original direct restore operation/result without creating a preview plan |
 | `restore_preview` | durable restore plan, preflight idle marker, operation, and audit boundary | same request returns original preview plan metadata without creating a second plan |
 | `restore_preview_discard` | matching restore plan discard state, operation, and audit boundary | same request returns discarded plan result |
 | `restore_run` | matching plan consume state, writer fence, JVS run, doctor, operation, and audit boundary | same request returns original restore-run terminal result |
@@ -161,6 +164,7 @@ routes, and generated contracts used by implementation.
 | `repo_restore_tombstoned` | stable retention/lifecycle denial before mutation | ambiguous_external_state or uncertain tombstone restore transition |
 | `repo_purge` | capability_disabled_or_unsupported or approval/retention denial before side effects | ambiguous_external_state after possible irreversible deletion |
 | `save_point_create` | validation/JVS preflight denial before save side effects | ambiguous_external_state or uncertain JVS save state |
+| `restore` | confirmation, writer-session, or JVS direct restore denial before confirmed mutation | ambiguous_external_state, direct restore result mismatch, or doctor failure after restore |
 | `restore_preview` | stable dirty-state or active-plan denial before preview side effects | ambiguous_external_state, mismatched pending plan, or uncertain JVS recovery state |
 | `restore_preview_discard` | missing/mismatched pending plan before discard side effects | ambiguous_external_state or uncertain discard state |
 | `restore_run` | stable writer-session/fence denial before JVS run | ambiguous_external_state, doctor failure after run, or uncertain recovery state |
@@ -191,6 +195,7 @@ Minimum GA matrix:
 | repo_restore_tombstoned | repo lifecycle exclusive | inspect tombstone status, retention policy, and repo health |
 | repo_purge | repo lifecycle exclusive plus session drain | inspect purge marker and absence of retained storage |
 | save_point_create | repo JVS exclusive | inspect JVS output/save point existence before retry |
+| restore | repo JVS exclusive direct restore mutation plus writer-session fence | validate direct restore evidence, gate writer sessions, run doctor, and release or retain fence based on terminal outcome |
 | restore_preview | repo JVS exclusive restore-plan mutation | inspect durable restore plan, preview preflight idle marker, and JVS recovery status before retry or intervention |
 | restore_preview_discard | repo JVS exclusive matching active plan | inspect durable restore plan and JVS discard state before retry or intervention |
 | restore_run | repo JVS exclusive matching active plan plus writer-session fence | validate preview plan, preflight matching pending JVS plan, gate writer sessions, run doctor, verify recovery idle, and retain fence on ambiguity |

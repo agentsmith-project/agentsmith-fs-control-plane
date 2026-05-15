@@ -8,6 +8,11 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 )
 
+const (
+	directRestoreLocalJVSBinarySHA256 = "c88553bb18bdd70e1399bf562fcb853bd200798498bd24bc25458196fb568902"
+	directRestoreJVSSourceRef         = "jvs@c65b418f58d6e39e91199c1d55783e2ec91be9a1"
+)
+
 func TestDockerfilePackagesPinnedJVSLinuxAMD64Binary(t *testing.T) {
 	data, err := os.ReadFile("Dockerfile")
 	if err != nil {
@@ -56,6 +61,32 @@ func TestDockerfileFinalImageSupportsPinnedDynamicJVSBinary(t *testing.T) {
 	}
 	if !knownDynamicLoaderBases[finalFrom] {
 		t.Fatalf("final image base = %q, want a known nonroot distroless base with glibc dynamic loader support", finalFrom)
+	}
+}
+
+func TestJVSPinEvidenceDeclaresDirectRestoreGapAndOverride(t *testing.T) {
+	path := "docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	doc := string(data)
+	for _, want := range []string{
+		"restore --direct",
+		"does not declare",
+		"AFSCP_JVS_BINARY_PATH=<absolute path to direct-capable local JVS artifact>",
+		"AFSCP_JVS_BINARY_SHA256=" + directRestoreLocalJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256=" + directRestoreLocalJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF=" + directRestoreJVSSourceRef,
+		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256",
+		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF",
+		"vcs.revision=c65b418f58d6e39e91199c1d55783e2ec91be9a1",
+		"vcs.modified=false",
+		"--discard-unsaved",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("%s missing direct restore pin evidence marker %q", path, want)
+		}
 	}
 }
 

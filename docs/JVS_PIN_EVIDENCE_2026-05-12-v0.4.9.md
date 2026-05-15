@@ -42,6 +42,52 @@ repair, and retry save only after the repair command succeeds. If repair cannot
 prove safe cleanup, the save point operation remains terminal `failed` and
 retryable. AFSCP must not delete JVS lock files directly.
 
+## Direct Restore Capability Gap
+
+JVS v0.4.9 does not declare the AFSCP direct restore command shape:
+
+```bash
+jvs restore <save_point_id> --direct --discard-unsaved
+```
+
+AFSCP must not treat this release pin as direct-restore-capable. Until a formal
+JVS release is cut with `restore --direct` support and a new release checksum is
+recorded here, the AFSCP direct restore worker is a pre-GA local-artifact
+consumer. Enabling `AFSCP_RESTORE_RECOVERY_ENABLED=true` requires all of:
+
+- `AFSCP_JVS_BINARY_PATH` set to a deployment-owned absolute path for the
+  direct-capable local JVS artifact.
+- `AFSCP_JVS_BINARY_SHA256` set to the direct-capable local JVS artifact digest.
+- `AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256` set to the same digest.
+- `AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF` set to the JVS source ref or commit used
+  to build that artifact.
+
+At worker construction time AFSCP verifies the configured binary checksum and
+preflights `jvs restore --help`; the worker fails closed unless the help surface
+contains both `--direct` and `--discard-unsaved`.
+
+### Pre-GA Direct Restore Local Artifact
+
+Current direct restore local artifact contract:
+
+```bash
+AFSCP_JVS_BINARY_PATH=<absolute path to direct-capable local JVS artifact>
+AFSCP_JVS_BINARY_SHA256=c88553bb18bdd70e1399bf562fcb853bd200798498bd24bc25458196fb568902
+AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256=c88553bb18bdd70e1399bf562fcb853bd200798498bd24bc25458196fb568902
+AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF=jvs@c65b418f58d6e39e91199c1d55783e2ec91be9a1
+```
+
+Observed build metadata for that artifact:
+
+```text
+vcs.revision=c65b418f58d6e39e91199c1d55783e2ec91be9a1
+vcs.modified=false
+```
+
+Observed preflight: `jvs restore --help` lists both `--direct` and
+`--discard-unsaved`. The Dockerfile default release pin remains JVS v0.4.9; do
+not enable direct restore against that default binary.
+
 ## AFSCP Repair Path Closure
 
 Focused fake-runner coverage closes the AFSCP side of the v0.4.9 repair

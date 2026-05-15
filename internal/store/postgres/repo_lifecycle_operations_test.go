@@ -52,7 +52,7 @@ func TestAcquireRepoLifecycleOperationLeaseScopesBeforeMutation(t *testing.T) {
 		"phase = 'validate_repo_lifecycle'",
 		"earlier_jvs_mutation AS",
 		"o.operation_id <> e.operation_id",
-		"o.operation_type IN ('save_point_create', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
+		"o.operation_type IN ('save_point_create', 'restore', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
 		"o.operation_state NOT IN ('succeeded','failed','cancelled')",
 		"active_restore_plan AS",
 		"FROM restore_plans p, eligible_operation e",

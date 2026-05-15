@@ -153,6 +153,15 @@ type RestoreRunSummary struct {
 	Workspace           string
 }
 
+type RestoreSummary struct {
+	SourceSavePointID   string
+	RestoredSavePointID string
+	Workspace           string
+	FilesChanged        bool
+	HistoryChanged      bool
+	UnsavedChanges      bool
+}
+
 type RestoreDiscardSummary struct {
 	PlanID        string
 	PlanDiscarded bool
@@ -465,6 +474,95 @@ func (runner *Runner) RestorePreview(ctx context.Context, controlRoot, savePoint
 		Workspace:         workspace,
 		RunCommandPresent: true,
 	}, nil
+}
+
+func (runner *Runner) Restore(ctx context.Context, controlRoot, savePointID string) (RestoreSummary, error) {
+	savePointID = strings.TrimSpace(savePointID)
+	if !safeOpaqueID(savePointID) {
+		return RestoreSummary{}, fmt.Errorf("%w: save point id", ErrInvalidArgument)
+	}
+	if runner == nil {
+		return RestoreSummary{}, ErrInvalidConfig
+	}
+	if err := validateCleanAbsolute(controlRoot, true); err != nil {
+		return RestoreSummary{}, fmt.Errorf("%w: control root", ErrInvalidArgument)
+	}
+
+	result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{
+		Path: runner.binaryPath,
+		Args: []string{
+			"--json",
+			"--control-root",
+			controlRoot,
+			"--workspace",
+			workspaceMain,
+			"restore",
+			savePointID,
+			"--direct",
+			"--discard-unsaved",
+		},
+		Dir: runner.cwd,
+	})
+	if err != nil {
+		return RestoreSummary{}, commandFailedError("restore", err)
+	}
+	result = runner.capResult(result)
+	if result.ExitCode != 0 {
+		if commandErr, ok := commandErrorFromResult("restore", controlRoot, result); ok {
+			return RestoreSummary{}, commandErr
+		}
+		return RestoreSummary{}, fmt.Errorf("%w: restore", ErrCommandFailed)
+	}
+	envelope, err := decodeEnvelope(result.Stdout)
+	if err != nil {
+		return RestoreSummary{}, fmt.Errorf("%w: restore", ErrInvalidEnvelope)
+	}
+	if commandErr, ok := commandErrorFromEnvelope("restore", controlRoot, 0, envelope); ok {
+		return RestoreSummary{}, commandErr
+	}
+	source, okSource := dataSafeID(envelope, "source_save_point")
+	restored, okRestored := dataSafeID(envelope, "restored_save_point")
+	workspace, _ := envelope.Data["workspace"].(string)
+	filesChanged, filesOK := envelope.Data["files_changed"].(bool)
+	historyChanged, historyOK := envelope.Data["history_changed"].(bool)
+	unsavedChanges, unsavedOK := envelope.Data["unsaved_changes"].(bool)
+	if !envelope.validFor("restore", controlRoot) ||
+		envelope.Data["mode"] != "direct_restore" ||
+		workspace != workspaceMain ||
+		!okSource ||
+		source != savePointID ||
+		!okRestored ||
+		!filesOK ||
+		!historyOK ||
+		historyChanged ||
+		!unsavedOK ||
+		unsavedChanges {
+		return RestoreSummary{}, fmt.Errorf("%w: restore", ErrInvalidEnvelope)
+	}
+	return RestoreSummary{SourceSavePointID: source, RestoredSavePointID: restored, Workspace: workspace, FilesChanged: filesChanged, HistoryChanged: historyChanged, UnsavedChanges: unsavedChanges}, nil
+}
+
+func (runner *Runner) VerifyRestoreDirectCapability(ctx context.Context) error {
+	if runner == nil {
+		return ErrInvalidConfig
+	}
+	result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{
+		Path: runner.binaryPath,
+		Args: []string{"restore", "--help"},
+		Dir:  runner.cwd,
+	})
+	if err != nil {
+		return commandFailedError("restore --help", err)
+	}
+	result = runner.capResult(result)
+	if result.ExitCode != 0 {
+		return fmt.Errorf("%w: restore --help", ErrCommandFailed)
+	}
+	help := string(result.Stdout) + "\n" + string(result.Stderr)
+	if !strings.Contains(help, "--direct") || !strings.Contains(help, "--discard-unsaved") {
+		return fmt.Errorf("%w: restore --direct capability", ErrCommandFailed)
+	}
+	return nil
 }
 
 func (runner *Runner) RestoreRun(ctx context.Context, controlRoot, planID string) (RestoreRunSummary, error) {

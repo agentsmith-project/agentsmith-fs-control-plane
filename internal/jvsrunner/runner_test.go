@@ -425,6 +425,51 @@ func TestRestorePreviewRunDiscardAndRecoveryStatusUseFixedCommandsAndParseEnvelo
 	}
 }
 
+func TestRestoreUsesDirectDiscardCommandAndParsesEnvelope(t *testing.T) {
+	t.Parallel()
+
+	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: restoreSuccessStdout(t)}}
+	runner := newTestRunner(t, commandRunner)
+
+	summary, err := runner.Restore(context.Background(), testControlRoot, "sp_001")
+	if err != nil {
+		t.Fatalf("Restore returned error: %v", err)
+	}
+	if summary.SourceSavePointID != "sp_001" || summary.RestoredSavePointID != "sp_001" || summary.Workspace != "main" || !summary.FilesChanged || summary.HistoryChanged || summary.UnsavedChanges {
+		t.Fatalf("summary = %#v, want direct restore summary", summary)
+	}
+	want := CommandSpec{
+		Path: "/opt/afscp/bin/jvs",
+		Args: []string{"--json", "--control-root", testControlRoot, "--workspace", "main", "restore", "sp_001", "--direct", "--discard-unsaved"},
+		Dir:  "/var/lib/afscp/jvs-cwd",
+	}
+	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
+		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
+	}
+	assertNoForbiddenJVSFlags(t, commandRunner.calls[0].Args)
+	assertSummaryDoesNotLeakPaths(t, summary)
+}
+
+func TestVerifyRestoreDirectCapabilityUsesHelpAndRequiresDirectFlags(t *testing.T) {
+	t.Parallel()
+
+	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: []byte("Usage:\n  jvs restore <save>\nFlags:\n      --direct\n      --discard-unsaved\n")}}
+	runner := newTestRunner(t, commandRunner)
+
+	if err := runner.VerifyRestoreDirectCapability(context.Background()); err != nil {
+		t.Fatalf("VerifyRestoreDirectCapability returned error: %v", err)
+	}
+	want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: []string{"restore", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"}
+	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
+		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
+	}
+
+	missingDirect := &fakeCommandRunner{result: CommandResult{Stdout: []byte("Usage:\n  jvs restore <save>\nFlags:\n      --discard-unsaved\n")}}
+	if err := newTestRunner(t, missingDirect).VerifyRestoreDirectCapability(context.Background()); err == nil {
+		t.Fatal("VerifyRestoreDirectCapability succeeded without --direct, want fail-closed error")
+	}
+}
+
 func TestRestorePreviewParsesRealJVSZeroCountBucketsWithoutSamples(t *testing.T) {
 	t.Parallel()
 
@@ -1508,6 +1553,28 @@ func restorePreviewStdoutWith(t *testing.T, mutate func(map[string]any)) []byte 
 func restoreRunSuccessStdout(t *testing.T) []byte {
 	t.Helper()
 	return restoreRunStdoutWith(t, nil)
+}
+
+func restoreSuccessStdout(t *testing.T) []byte {
+	t.Helper()
+	return restoreStdoutWith(t, nil)
+}
+
+func restoreStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
+	t.Helper()
+	env := baseEnvelope("restore")
+	data := env["data"].(map[string]any)
+	data["workspace"] = "main"
+	data["mode"] = "direct_restore"
+	data["source_save_point"] = "sp_001"
+	data["restored_save_point"] = "sp_001"
+	data["files_changed"] = true
+	data["history_changed"] = false
+	data["unsaved_changes"] = false
+	if mutate != nil {
+		mutate(env)
+	}
+	return mustJSON(t, env)
 }
 
 func restoreRunStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
