@@ -68,6 +68,7 @@ type InternalAPIShellConfig struct {
 	WorkloadMountAdmissionDisabled bool
 	RepoTemplateAdmissionDisabled  bool
 	RepoPurgeAdmissionDisabled     bool
+	DirectRestoreAdmissionDisabled bool
 }
 
 func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
@@ -287,6 +288,25 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		AuditSink:   config.AuditSink,
 	})
 	restoreHandler = requestLogHandler(restoreHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/restore", "restore")
+
+	restoreAdmitHandler := RestoreAdmitHandler(RestoreAdmitHandlerConfig{
+		RepoReader:        config.RepoReader,
+		NamespaceReader:   config.NamespaceReader,
+		BindingReader:     config.NamespaceBindingReader,
+		FenceReader:       config.RepoFenceReader,
+		MutationGate:      savePointMutationGate,
+		RestorePlanReader: restorePreviewPlanReader,
+		HistoryReader:     savePointHistoryReader,
+		PrincipalResolver: config.PrincipalResolver,
+		AllowedCallers: RouteAwareAllowedCallerPolicy{
+			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
+			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
+			NamespaceBinding:    NamespaceVolumeBindingAllowedCallerPolicy{Reader: config.NamespaceBindingReader},
+		},
+		AdmissionDisabled: config.DirectRestoreAdmissionDisabled,
+		AuditSink:         config.AuditSink,
+	})
+	restoreAdmitHandler = requestLogHandler(restoreAdmitHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/restore:admit", "restoreAdmit")
 
 	restorePreviewHandler := RestorePreviewHandler(RestorePreviewHandlerConfig{
 		RepoReader:        config.RepoReader,
@@ -508,6 +528,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		"listRepos":                 listReposHandler,
 		"purgeRepo":                 purgeRepoHandler,
 		"restore":                   restoreHandler,
+		"restoreAdmit":              restoreAdmitHandler,
 		"restorePreview":            restorePreviewHandler,
 		"restorePreviewDiscard":     restorePreviewDiscardHandler,
 		"restoreRun":                restoreRunHandler,

@@ -708,6 +708,17 @@
         "discard_unsaved_changes_confirmed": { "type": "boolean", "const": true }
       }
     },
+    "RestoreAdmitResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admitted", "repo_id", "save_point_id", "operation_type"],
+      "properties": {
+        "admitted": { "type": "boolean", "const": true },
+        "repo_id": { "$ref": "#/$defs/RepoId" },
+        "save_point_id": { "$ref": "#/$defs/SavePointId" },
+        "operation_type": { "const": "restore" }
+      }
+    },
     "RestoreRunRequest": {
       "type": "object",
       "additionalProperties": false,

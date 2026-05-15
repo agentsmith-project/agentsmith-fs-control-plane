@@ -34,6 +34,7 @@ var internalV1RouteMetadata = []RouteMetadata{
 	{Method: http.MethodPost, Path: "/internal/v1/repos/{repoId}/save-points", OperationID: "createSavePoint", Class: auth.RouteClassNamespaceBound, Mutating: true, RequiredRole: auth.RoleRepoAdmin},
 	{Method: http.MethodGet, Path: "/internal/v1/repos/{repoId}/save-points", OperationID: "listSavePoints", Class: auth.RouteClassNamespaceBound, Mutating: false, RequiredRole: auth.RoleRepoAdmin},
 	{Method: http.MethodPost, Path: "/internal/v1/repos/{repoId}/restore", OperationID: "restore", Class: auth.RouteClassNamespaceBound, Mutating: true, RequiredRole: auth.RoleRestoreAdmin},
+	{Method: http.MethodPost, Path: "/internal/v1/repos/{repoId}/restore:admit", OperationID: "restoreAdmit", Class: auth.RouteClassNamespaceBound, Mutating: false, RequiredRole: auth.RoleRestoreAdmin},
 	{Method: http.MethodPost, Path: "/internal/v1/repos/{repoId}/restore-preview", OperationID: "restorePreview", Class: auth.RouteClassNamespaceBound, Mutating: true, RequiredRole: auth.RoleRestoreAdmin},
 	{Method: http.MethodPost, Path: "/internal/v1/repos/{repoId}/restore-preview:discard", OperationID: "restorePreviewDiscard", Class: auth.RouteClassNamespaceBound, Mutating: true, RequiredRole: auth.RoleRestoreAdmin},
 	{Method: http.MethodPost, Path: "/internal/v1/repos/{repoId}/restore-run", OperationID: "restoreRun", Class: auth.RouteClassNamespaceBound, Mutating: true, RequiredRole: auth.RoleRestoreAdmin},

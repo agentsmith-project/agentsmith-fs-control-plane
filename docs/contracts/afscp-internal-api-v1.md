@@ -73,8 +73,12 @@ database queries, observability dashboards, or deployment-side operator tooling.
 Direct restore is the primary product restore API. The machine-readable API
 contract exposes `POST /internal/v1/repos/{repoId}/restore`, operation type
 `restore`, request/response schemas, route, and OpenAPI contract fixtures for
-handlers and generated clients. Restore preview discard remains part of the
-current restore slice for existing internal recovery flows.
+handlers and generated clients. `POST
+/internal/v1/repos/{repoId}/restore:admit` exposes restore-specific admission
+without creating a durable operation so callers can distinguish unsupported
+direct restore runtime/config from save point history availability. Restore
+preview discard remains part of the current restore slice for existing internal
+recovery flows.
 
 See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft payloads.
 
@@ -100,6 +104,11 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
 - Direct restore must not create a restore preview, restore plan, restore-run
   request, or safety save point. It creates only a durable `restore` operation
   and the worker calls JVS direct restore.
+- Restore admit must reuse direct restore request/auth/namespace/caller/header
+  admission and the same repo/fence/JVS-mutation/active-plan/save-point checks,
+  then check direct restore runtime capability/config readiness. It must not
+  create an operation, enqueue work, call JVS restore, create a preview, or
+  write a restore plan.
 - Restore-run and restore-preview discard references to preview operations must
   stay inside the same namespace, repo, and resource boundary; cross-namespace
   references return `OPERATION_NOT_FOUND` or the existing non-leaking
@@ -203,6 +212,14 @@ the normal queued/running/succeeded/failed chain and can be inspected through
 `GET /internal/v1/operations/{operationId}`. Repeating the same
 `Idempotency-Key` with the same body reuses the same operation; changing the
 body returns `IDEMPOTENCY_CONFLICT`.
+
+Restore admit is the non-durable preflight counterpart:
+`POST /internal/v1/repos/{repoId}/restore:admit` with the same body returns a
+small admission response only after the save point is available in the repo
+namespace and direct restore runtime/config is ready. If
+`AFSCP_RESTORE_RECOVERY_ENABLED` is not enabled or the explicit direct-capable
+JVS artifact/SHA/source ref readiness is absent, it returns
+`CAPABILITY_DENIED` and does not create a durable restore operation.
 
 The direct restore worker invokes JVS as
 `jvs --json --control-root <controlRoot> --workspace main restore <save_point_id> --direct --discard-unsaved`.

@@ -600,6 +600,7 @@ an approved break-glass policy; otherwise AFSCP rejects it with
 POST /internal/v1/repos/{repoId}/save-points
 GET  /internal/v1/repos/{repoId}/save-points
 POST /internal/v1/repos/{repoId}/restore
+POST /internal/v1/repos/{repoId}/restore:admit
 POST /internal/v1/repos/{repoId}/restore-preview
 POST /internal/v1/repos/{repoId}/restore-run
 POST /internal/v1/repos/{repoId}/restore-preview:discard
@@ -621,6 +622,18 @@ Successful intake returns the normal operation envelope for operation type
 `restore`; callers poll `GET /internal/v1/operations/{operationId}`. Repeated
 requests with the same idempotency key and body reuse the same operation; a
 different body conflicts through the existing idempotency semantics.
+
+`restore:admit` is the restore-specific preflight/admission API for direct
+restore. It uses the same request body, auth, namespace, caller role,
+idempotency header, actor header, repo admission, repo fence, same-repo JVS
+mutation, active restore-plan, and save point availability checks as direct
+restore intake, then checks direct restore runtime capability/config readiness.
+It does not create an operation, enqueue work, invoke JVS restore, create a
+restore preview, or write a restore plan. If direct restore recovery is not
+enabled with an explicit direct-capable JVS artifact/SHA/source ref and ready
+config, the endpoint returns `CAPABILITY_DENIED` instead of allowing callers to
+discover the gap only after a durable restore operation reaches worker
+intervention.
 
 Direct restore does not create a restore preview, restore plan, restore-run
 request, or safety save point. Worker execution calls:

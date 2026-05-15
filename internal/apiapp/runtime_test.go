@@ -1358,6 +1358,33 @@ func TestInternalRuntimeAdmissionDisabledFlagsMatchCapabilityMatrix(t *testing.T
 	}
 }
 
+func TestInternalRuntimeDirectRestoreAdmissionDisabledFollowsRestoreRecoveryReadiness(t *testing.T) {
+	base := config.Config{}
+	if !directRestoreAdmissionDisabled(base) {
+		t.Fatal("direct restore admission disabled = false, want disabled when AFSCP_RESTORE_RECOVERY_ENABLED is not configured")
+	}
+
+	base.Worker.OperationRecovery.Restore = config.WorkerRepoCreateRecoveryConfig{
+		Enabled:                   true,
+		JVSBinarySHA256:           config.JVSAcceptedLinuxAMD64SHA256,
+		JVSDirectRestoreRequired:  true,
+		JVSDirectRestoreSourceRef: "jvs@direct-restore-test",
+	}
+	if !directRestoreAdmissionDisabled(base) {
+		t.Fatal("direct restore admission disabled = false, want disabled for default pinned JVS without direct restore artifact")
+	}
+
+	base.Worker.OperationRecovery.Restore = config.WorkerRepoCreateRecoveryConfig{
+		Enabled:                   true,
+		JVSBinarySHA256:           strings.Repeat("c", 64),
+		JVSDirectRestoreRequired:  true,
+		JVSDirectRestoreSourceRef: "jvs@direct-restore-test",
+	}
+	if directRestoreAdmissionDisabled(base) {
+		t.Fatal("direct restore admission disabled = true, want enabled with explicit direct artifact readiness")
+	}
+}
+
 func TestInternalRuntimeWiresRepoTemplateAndPurgeCapabilitiesToAdmission(t *testing.T) {
 	source := readyTestRuntimeSource()
 	source["AFSCP_REPO_TEMPLATE_ENABLED"] = "false"

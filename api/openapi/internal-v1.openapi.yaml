@@ -85,6 +85,8 @@ components:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateSavePointRequest
     RestoreRequest:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestoreRequest
+    RestoreAdmitResponse:
+      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestoreAdmitResponse
     RestorePreviewRequest:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestorePreviewRequest
     RestorePreviewDiscardRequest:
@@ -643,6 +645,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OperationEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /internal/v1/repos/{repoId}/restore:admit:
+    post:
+      operationId: restoreAdmit
+      summary: Admit a direct restore request without creating an operation.
+      description: Runs restore-specific API admission and save point availability checks, including direct restore runtime capability readiness. This endpoint does not create a durable restore operation, enqueue work, invoke JVS restore, create a restore preview, or create a restore plan.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CallerService"
+        - $ref: "#/components/parameters/NamespaceId"
+        - $ref: "#/components/parameters/ActorType"
+        - $ref: "#/components/parameters/ActorId"
+        - name: repoId
+          in: path
+          required: true
+          schema:
+            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestoreRequest"
+      responses:
+        "400":
+          $ref: "#/components/responses/Error"
+        "200":
+          description: Restore request admitted without creating a durable operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreAdmitResponse"
         default:
           $ref: "#/components/responses/Error"
   /internal/v1/repos/{repoId}/restore-preview:
