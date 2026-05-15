@@ -525,6 +525,10 @@ func (store *cmdWorkerAppStore) ListRestorePreviewOperationsForRecovery(context.
 	return nil, nil
 }
 
+func (store *cmdWorkerAppStore) ListRestoreOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
+	return nil, nil
+}
+
 func (store *cmdWorkerAppStore) ListRestorePreviewDiscardOperationsForRecovery(context.Context, time.Time, int) ([]operations.OperationRecord, error) {
 	return nil, nil
 }
@@ -578,6 +582,10 @@ func (store *cmdWorkerAppStore) AcquireTemplateCloneOperationLease(context.Conte
 }
 
 func (store *cmdWorkerAppStore) AcquireRestorePreviewOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected acquire")
+}
+
+func (store *cmdWorkerAppStore) AcquireRestoreOperationLease(context.Context, string, operations.LeaseRequest) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected acquire")
 }
 
@@ -698,6 +706,18 @@ func (store *cmdWorkerAppStore) CommitRestorePreviewSucceededWithLease(context.C
 }
 
 func (store *cmdWorkerAppStore) CommitRestorePreviewFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) MarkRestoreWriterFencedWithLease(context.Context, fences.Fence, operations.SanitizedOperationRecord, string, time.Time) (fences.Fence, operations.OperationRecord, error) {
+	return fences.Fence{}, operations.OperationRecord{}, errors.New("unexpected progress update")
+}
+
+func (store *cmdWorkerAppStore) CommitRestoreSucceededWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected commit")
+}
+
+func (store *cmdWorkerAppStore) CommitRestoreFailedWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }
 

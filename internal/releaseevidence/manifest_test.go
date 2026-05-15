@@ -738,7 +738,7 @@ func TestCurrentRepoManifestContainsP2aOperationTerminalizationContractEvidence(
 	for _, testName := range []string{
 		"TestCapabilityMatrixV1DecisionRowsCoverP2aSurfaceContract",
 		"TestCapabilityMatrixV1CoversEveryRouteMutationOperation",
-		"TestCapabilityMatrixV1IncludesRestorePreviewAsDurableJVSMutation",
+		"TestCapabilityMatrixV1IncludesDirectRestoreAndPreviewAsDurableJVSMutations",
 		"TestCapabilityMatrixV1ClassifiesVolumeEnsureAdmission",
 		"TestOperationStateMachineContractCoversEveryOperationType",
 		"TestOperationTerminalizationContractRequiresSideEffectReplayAndTerminalDecision",

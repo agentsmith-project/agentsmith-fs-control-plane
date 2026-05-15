@@ -212,6 +212,28 @@ func TestNewRuntimeFromConfigSavePointHistoryVerifiesJVSBinaryAgainstAcceptedPin
 	}
 }
 
+func TestNewSavePointHistoryJVSRunnerFromConfigAllowsDeclaredDirectRestoreArtifact(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jvs-direct-restore")
+	content := []byte("direct-capable jvs artifact")
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatalf("write fake jvs binary: %v", err)
+	}
+	sum := sha256.Sum256(content)
+
+	_, err := NewSavePointHistoryJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
+		Enabled:                   true,
+		JVSBinaryPath:             path,
+		JVSBinarySHA256:           hex.EncodeToString(sum[:]),
+		JVSCWD:                    t.TempDir(),
+		JVSDirectRestoreRequired:  true,
+		JVSDirectRestoreSourceRef: "jvs@test-direct-restore",
+		VolumeRoots:               map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+	})
+	if err != nil {
+		t.Fatalf("NewSavePointHistoryJVSRunnerFromConfig returned error for declared direct artifact: %v", err)
+	}
+}
+
 func TestNewRuntimeFailsBeforeStoreWhenJVSReadyWithoutSavePointHistoryConfig(t *testing.T) {
 	source := readyTestRuntimeSource()
 	delete(source, "AFSCP_JVS_BINARY_PATH")

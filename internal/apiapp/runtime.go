@@ -324,18 +324,35 @@ func verifyFileSHA256(path, want string) error {
 	return nil
 }
 
-func NewSavePointHistoryJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (api.JVSHistoryRunner, error) {
-	if err := verifyFileSHA256(cfg.JVSBinaryPath, config.JVSAcceptedLinuxAMD64SHA256); err != nil {
-		return nil, err
-	}
-	return jvsrunner.New(jvsrunner.Config{BinaryPath: cfg.JVSBinaryPath, CWD: cfg.JVSCWD})
-}
-
 func (runtime *Runtime) Close() error {
 	if runtime == nil || runtime.close == nil {
 		return nil
 	}
 	return runtime.close()
+}
+
+func NewSavePointHistoryJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (api.JVSHistoryRunner, error) {
+	wantSHA256, err := expectedJVSBinarySHA256(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyFileSHA256(cfg.JVSBinaryPath, wantSHA256); err != nil {
+		return nil, err
+	}
+	return jvsrunner.New(jvsrunner.Config{BinaryPath: cfg.JVSBinaryPath, CWD: cfg.JVSCWD})
+}
+
+func expectedJVSBinarySHA256(cfg config.WorkerRepoCreateRecoveryConfig) (string, error) {
+	if cfg.JVSDirectRestoreRequired {
+		if strings.TrimSpace(cfg.JVSDirectRestoreSourceRef) == "" || cfg.JVSBinarySHA256 == config.JVSAcceptedLinuxAMD64SHA256 {
+			return "", errors.New("jvs direct restore artifact declaration is required")
+		}
+		return cfg.JVSBinarySHA256, nil
+	}
+	if cfg.JVSBinarySHA256 != config.JVSAcceptedLinuxAMD64SHA256 {
+		return "", errors.New("jvs binary checksum mismatch")
+	}
+	return config.JVSAcceptedLinuxAMD64SHA256, nil
 }
 
 func OpenPostgresStore(ctx context.Context, dsn string, opts ...postgres.Option) (StoreHandle, error) {

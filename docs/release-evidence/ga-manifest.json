@@ -582,7 +582,7 @@
         "./internal/api",
         "./internal/apiapp",
         "-run",
-        "^Test(CapabilityMatrixV1(RowsMatchHandoffVocabulary|DecisionRowsCoverP2aSurfaceContract|CoversEveryRouteMutationOperation|IncludesRestorePreviewAsDurableJVSMutation|ClassifiesVolumeEnsureAdmission|ExcludesLegacyCoarseCapabilities|SplitsJVSAndWebDAVProjectionFacets|SplitsWorkloadBindingDiscoveryAndTeardownPlanFacets|WebDAVExportAdmissionIncludesCreateAndRevoke|TeardownOnlyPlanDoesNotBypassNewMutationDenial)|AdmissionCapabilityForOperationTypeCoversEveryMatrixAdmissionOperation|NeutralReadinessHandlerReportsNotReadyAndDisabledGates|ReadinessFromCapabilityMatrixSerializesWorkloadMountSplitCapabilities|NeutralShellFallbackReportsSplitWorkloadCapabilities|InternalRuntimeReadinessIsNotNeutralAndDoesNotAdvertiseUnimplementedHandlersReady|InternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated|InternalRuntimeReadinessRuntimeProfileRequiresOptedInWorkloadMountFacets)$"
+        "^Test(CapabilityMatrixV1(RowsMatchHandoffVocabulary|DecisionRowsCoverP2aSurfaceContract|CoversEveryRouteMutationOperation|IncludesDirectRestoreAndPreviewAsDurableJVSMutations|ClassifiesVolumeEnsureAdmission|ExcludesLegacyCoarseCapabilities|SplitsJVSAndWebDAVProjectionFacets|SplitsWorkloadBindingDiscoveryAndTeardownPlanFacets|WebDAVExportAdmissionIncludesCreateAndRevoke|TeardownOnlyPlanDoesNotBypassNewMutationDenial)|AdmissionCapabilityForOperationTypeCoversEveryMatrixAdmissionOperation|NeutralReadinessHandlerReportsNotReadyAndDisabledGates|ReadinessFromCapabilityMatrixSerializesWorkloadMountSplitCapabilities|NeutralShellFallbackReportsSplitWorkloadCapabilities|InternalRuntimeReadinessIsNotNeutralAndDoesNotAdvertiseUnimplementedHandlersReady|InternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated|InternalRuntimeReadinessRuntimeProfileRequiresOptedInWorkloadMountFacets)$"
       ],
       "anchors": [
         "internal/capability/matrix.go",
@@ -679,7 +679,7 @@
         "./internal/capability",
         "./internal/contractcheck",
         "-run",
-        "^Test(CapabilityMatrixV1(DecisionRowsCoverP2aSurfaceContract|CoversEveryRouteMutationOperation|IncludesRestorePreviewAsDurableJVSMutation|ClassifiesVolumeEnsureAdmission)|Operation(StateMachineContractCoversEveryOperationType|TerminalizationContractRequiresSideEffectReplayAndTerminalDecision))$"
+        "^Test(CapabilityMatrixV1(DecisionRowsCoverP2aSurfaceContract|CoversEveryRouteMutationOperation|IncludesDirectRestoreAndPreviewAsDurableJVSMutations|ClassifiesVolumeEnsureAdmission)|Operation(StateMachineContractCoversEveryOperationType|TerminalizationContractRequiresSideEffectReplayAndTerminalDecision))$"
       ],
       "anchors": [
         "internal/capability/matrix.go",

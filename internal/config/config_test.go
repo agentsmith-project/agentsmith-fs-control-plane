@@ -458,6 +458,30 @@ func TestLoadAPIJVSReadyWiresSavePointHistoryWithoutExtraGate(t *testing.T) {
 	}
 }
 
+func TestLoadAPIJVSReadyAllowsDeclaredDirectRestoreArtifactForSavePointHistory(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_API_MODE":                              "internal",
+		"AFSCP_API_POSTGRES_DSN":                      "postgres://api:secret@db/afscp",
+		"AFSCP_API_SERVICE_TOKENS":                    "svc_api=token-api",
+		"AFSCP_API_DEPLOYMENT_GLOBAL_ALLOWED_CALLERS": "svc_api:product:operation_inspector",
+		"AFSCP_JVS_ENABLED":                           "true",
+		"AFSCP_JVS_READY":                             "true",
+		"AFSCP_JVS_BINARY_PATH":                       directRestoreLocalJVSBinaryPath,
+		"AFSCP_JVS_BINARY_SHA256":                     directRestoreLocalJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256":      directRestoreLocalJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":         directRestoreLocalJVSSourceRef,
+		"AFSCP_JVS_CWD":                               "/var/lib/afscp/jvs-cwd",
+		"AFSCP_API_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	history := cfg.API.SavePointHistory
+	if !history.Enabled || history.JVSBinarySHA256 != directRestoreLocalJVSBinarySHA256 || !history.JVSDirectRestoreRequired || history.JVSDirectRestoreSourceRef != directRestoreLocalJVSSourceRef {
+		t.Fatalf("API save point history direct JVS config = %#v", history)
+	}
+}
+
 func TestLoadAPIJVSReadyRequiresSavePointHistoryRuntimeConfig(t *testing.T) {
 	base := MapSource{
 		"AFSCP_API_MODE":                              "internal",
@@ -798,6 +822,41 @@ func TestLoadRestoreRecoveryParsesIndependentExplicitGate(t *testing.T) {
 	}
 	if cfg.Worker.OperationRecovery.RestorePreview.Enabled || cfg.Worker.OperationRecovery.RestorePreviewDiscard.Enabled || cfg.Worker.OperationRecovery.RestoreRun.Enabled || cfg.Worker.OperationRecovery.SavePoint.Enabled || cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
 		t.Fatalf("restore gate should not enable other JVS workers: %#v", cfg.Worker.OperationRecovery)
+	}
+}
+
+func TestLoadSharedJVSRecoveryGatesAllowDeclaredDirectRestoreArtifact(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED":        "true",
+		"AFSCP_POSTGRES_DSN":                             "postgres://user:password@db/afscp",
+		"AFSCP_WORKER_OWNER":                             "worker-a",
+		"AFSCP_SAVE_POINT_RECOVERY_ENABLED":              "true",
+		"AFSCP_TEMPLATE_CREATE_RECOVERY_ENABLED":         "true",
+		"AFSCP_RESTORE_RECOVERY_ENABLED":                 "true",
+		"AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED":         "true",
+		"AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED": "true",
+		"AFSCP_RESTORE_RUN_RECOVERY_ENABLED":             "true",
+		"AFSCP_JVS_BINARY_PATH":                          directRestoreLocalJVSBinaryPath,
+		"AFSCP_JVS_BINARY_SHA256":                        directRestoreLocalJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256":         directRestoreLocalJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":            directRestoreLocalJVSSourceRef,
+		"AFSCP_JVS_CWD":                                  "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                             "vol_123=/srv/afscp/volumes/vol_123",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for name, worker := range map[string]WorkerRepoCreateRecoveryConfig{
+		"save point":              cfg.Worker.OperationRecovery.SavePoint,
+		"template create":         cfg.Worker.OperationRecovery.TemplateCreate,
+		"restore":                 cfg.Worker.OperationRecovery.Restore,
+		"restore preview":         cfg.Worker.OperationRecovery.RestorePreview,
+		"restore preview discard": cfg.Worker.OperationRecovery.RestorePreviewDiscard,
+		"restore run":             cfg.Worker.OperationRecovery.RestoreRun,
+	} {
+		if !worker.Enabled || worker.JVSBinarySHA256 != directRestoreLocalJVSBinarySHA256 || !worker.JVSDirectRestoreRequired || worker.JVSDirectRestoreSourceRef != directRestoreLocalJVSSourceRef {
+			t.Fatalf("%s worker direct JVS config = %#v", name, worker)
+		}
 	}
 }
 

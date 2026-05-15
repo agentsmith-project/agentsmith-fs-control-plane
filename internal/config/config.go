@@ -626,8 +626,13 @@ func loadAPIJVSHistoryConfig(source Source, api APIConfig, capabilities Capabili
 		return WorkerRepoCreateRecoveryConfig{}, err
 	}
 	cfg.JVSBinarySHA256 = strings.ToLower(valueOrDefault(source, "AFSCP_JVS_BINARY_SHA256", ""))
-	if err := validatePinnedJVSBinarySHA256(cfg.JVSBinarySHA256); err != nil {
+	directRestoreCapable, sourceRef, err := validatePinnedOrDirectRestoreJVSBinarySHA256(source, cfg.JVSBinarySHA256)
+	if err != nil {
 		return WorkerRepoCreateRecoveryConfig{}, err
+	}
+	if directRestoreCapable {
+		cfg.JVSDirectRestoreRequired = true
+		cfg.JVSDirectRestoreSourceRef = sourceRef
 	}
 	cfg.JVSCWD = valueOrDefault(source, "AFSCP_JVS_CWD", "")
 	if err := validateCleanAbsoluteConfigPath("AFSCP_JVS_CWD", cfg.JVSCWD, "AFSCP_JVS_READY"); err != nil {
@@ -960,8 +965,13 @@ func loadJVSOperationRecoveryConfigWithPin(source Source, gateKey string, direct
 		cfg.JVSDirectRestoreRequired = true
 		cfg.JVSDirectRestoreSourceRef = sourceRef
 	} else {
-		if err := validatePinnedJVSBinarySHA256(cfg.JVSBinarySHA256); err != nil {
+		directRestoreCapable, sourceRef, err := validatePinnedOrDirectRestoreJVSBinarySHA256(source, cfg.JVSBinarySHA256)
+		if err != nil {
 			return WorkerRepoCreateRecoveryConfig{}, err
+		}
+		if directRestoreCapable {
+			cfg.JVSDirectRestoreRequired = true
+			cfg.JVSDirectRestoreSourceRef = sourceRef
 		}
 	}
 	cfg.JVSCWD = valueOrDefault(source, "AFSCP_JVS_CWD", "")
@@ -995,6 +1005,20 @@ func validatePinnedJVSBinarySHA256(value string) error {
 		return fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must match pinned JVS %s %s SHA-256", JVSAcceptedReleaseVersion, JVSAcceptedLinuxAMD64AssetName)
 	}
 	return nil
+}
+
+func validatePinnedOrDirectRestoreJVSBinarySHA256(source Source, value string) (bool, string, error) {
+	if !validSHA256Hex(value) {
+		return false, "", fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must be a sha256 hex digest")
+	}
+	if value == JVSAcceptedLinuxAMD64SHA256 {
+		return false, "", nil
+	}
+	sourceRef, err := validateDirectRestoreJVSBinarySHA256(source, value)
+	if err != nil {
+		return false, "", fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must match pinned JVS %s %s SHA-256 or a declared direct restore artifact: %w", JVSAcceptedReleaseVersion, JVSAcceptedLinuxAMD64AssetName, err)
+	}
+	return true, sourceRef, nil
 }
 
 func validateDirectRestoreJVSBinarySHA256(source Source, value string) (string, error) {
