@@ -1983,6 +1983,10 @@ func (*fakeRuntimeStore) RepoHasNonTerminalJVSMutation(context.Context, string) 
 	return false, nil
 }
 
+func (*fakeRuntimeStore) GetRepoJVSMutationGateStatus(context.Context, string) (api.RepoJVSMutationGateStatus, error) {
+	return api.RepoJVSMutationGateStatus{}, nil
+}
+
 func (*fakeRuntimeStore) GetOperation(context.Context, string) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, sql.ErrNoRows
 }

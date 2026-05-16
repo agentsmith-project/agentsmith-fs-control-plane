@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/projectionguard"
@@ -123,6 +124,21 @@ type DirectSaveSummary struct {
 	HistoryHeadID string
 	Message       string
 	CreatedAt     string
+	CloneEvidence []CloneEvidence
+}
+
+type CloneEvidence struct {
+	Operation  string `json:"operation"`
+	Phase      string `json:"phase"`
+	Engine     string `json:"engine"`
+	Status     string `json:"status"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
+	DurationMs int64  `json:"duration_ms"`
+}
+
+func (evidence CloneEvidence) String() string {
+	return fmt.Sprintf("{operation:%s engine:%s status:%s duration_ms:%d}", evidence.Operation, evidence.Engine, evidence.Status, evidence.DurationMs)
 }
 
 type DirectSavePointSummary struct {
@@ -141,6 +157,7 @@ type DirectRestoreSummary struct {
 	RestoredSavePointID string
 	PreviousHeadID      string
 	NewHeadID           string
+	CloneEvidence       []CloneEvidence
 }
 
 type DirectCloneSummary struct {
@@ -151,6 +168,7 @@ type DirectCloneSummary struct {
 	SavePointsCopiedCount int
 	RuntimeStateCopied    bool
 	Workspace             string
+	CloneEvidence         []CloneEvidence
 }
 
 type DirectStatusSummary struct {
@@ -305,7 +323,8 @@ func (runner *Runner) DirectSave(ctx context.Context, target DirectTarget, messa
 	historyHead, okHistoryHead := directRequiredID(envelope.Data, "history_head")
 	createdAt, okCreatedAt := stringFromMap(envelope.Data, "created_at")
 	outMessage, okMessage := stringFromMap(envelope.Data, "message")
-	if !okSavePoint || !okHistoryHead || historyHead != savePointID || !okCreatedAt || strings.TrimSpace(createdAt) == "" || !okMessage {
+	cloneEvidence, okCloneEvidence := cloneEvidenceFromDirectData(envelope.Data, "save")
+	if !okSavePoint || !okHistoryHead || historyHead != savePointID || !okCreatedAt || strings.TrimSpace(createdAt) == "" || !okMessage || !okCloneEvidence {
 		return DirectSaveSummary{}, fmt.Errorf("%w: afscp save", ErrInvalidEnvelope)
 	}
 	return DirectSaveSummary{
@@ -313,6 +332,7 @@ func (runner *Runner) DirectSave(ctx context.Context, target DirectTarget, messa
 		HistoryHeadID: historyHead,
 		Message:       safeHistoryMessageText(outMessage),
 		CreatedAt:     safeSummaryText(createdAt),
+		CloneEvidence: cloneEvidence,
 	}, nil
 }
 
@@ -364,13 +384,15 @@ func (runner *Runner) DirectRestore(ctx context.Context, target DirectTarget, sa
 	restored, okRestored := directRequiredID(envelope.Data, "restored_save_point_id")
 	previousHead, okPreviousHead, _ := optionalIDPresenceFromMap(envelope.Data, "previous_head")
 	newHead, okNewHead := directRequiredID(envelope.Data, "new_head")
-	if !okRestored || restored != savePointID || !okPreviousHead || !okNewHead || newHead != restored {
+	cloneEvidence, okCloneEvidence := cloneEvidenceFromDirectData(envelope.Data, "restore")
+	if !okRestored || restored != savePointID || !okPreviousHead || !okNewHead || newHead != restored || !okCloneEvidence {
 		return DirectRestoreSummary{}, fmt.Errorf("%w: afscp restore", ErrInvalidEnvelope)
 	}
 	return DirectRestoreSummary{
 		RestoredSavePointID: restored,
 		PreviousHeadID:      previousHead,
 		NewHeadID:           newHead,
+		CloneEvidence:       cloneEvidence,
 	}, nil
 }
 
@@ -400,7 +422,8 @@ func (runner *Runner) DirectClone(ctx context.Context, source DirectTarget, targ
 	targetRepoID, okTarget := directRequiredID(envelope.Data, "target_repo_id")
 	clonedSavePointID, okSavePoint := directRequiredID(envelope.Data, "save_point_id")
 	copiedCount, countOK := intData(envelope.Data["save_points_copied_count"])
-	if !okSource || !okTarget || !okSavePoint || (savePointID != "" && clonedSavePointID != savePointID) || !countOK || copiedCount != 1 {
+	cloneEvidence, okCloneEvidence := cloneEvidenceFromDirectData(envelope.Data, "clone")
+	if !okSource || !okTarget || !okSavePoint || (savePointID != "" && clonedSavePointID != savePointID) || !countOK || copiedCount != 1 || !okCloneEvidence {
 		return DirectCloneSummary{}, fmt.Errorf("%w: afscp clone", ErrInvalidEnvelope)
 	}
 	return DirectCloneSummary{
@@ -411,6 +434,7 @@ func (runner *Runner) DirectClone(ctx context.Context, source DirectTarget, targ
 		SavePointsCopiedCount: copiedCount,
 		RuntimeStateCopied:    false,
 		Workspace:             workspaceMain,
+		CloneEvidence:         cloneEvidence,
 	}, nil
 }
 
@@ -866,6 +890,129 @@ func intData(value any) (int, bool) {
 			return 0, false
 		}
 		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+func cloneEvidenceFromDirectData(data map[string]any, operation string) ([]CloneEvidence, bool) {
+	raw, ok := data["clone_evidence"]
+	if !ok {
+		return nil, false
+	}
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 {
+		return nil, false
+	}
+	out := make([]CloneEvidence, 0, len(items))
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		evidence, ok := cloneEvidenceFromMap(item, operation)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, evidence)
+	}
+	return out, true
+}
+
+func cloneEvidenceFromMap(item map[string]any, expectedOperation string) (CloneEvidence, bool) {
+	allowed := map[string]bool{
+		"operation":   true,
+		"phase":       true,
+		"engine":      true,
+		"status":      true,
+		"started_at":  true,
+		"finished_at": true,
+		"duration_ms": true,
+	}
+	for key := range item {
+		if !allowed[key] {
+			return CloneEvidence{}, false
+		}
+	}
+	operation, okOperation := requiredCloneEvidenceToken(item, "operation")
+	phase, okPhase := requiredCloneEvidenceToken(item, "phase")
+	engine, okEngine := requiredCloneEvidenceToken(item, "engine")
+	status, okStatus := requiredCloneEvidenceToken(item, "status")
+	startedAt, startedTime, okStartedAt := requiredCloneEvidenceTimestamp(item, "started_at")
+	finishedAt, finishedTime, okFinishedAt := requiredCloneEvidenceTimestamp(item, "finished_at")
+	durationMs, okDuration := int64Data(item["duration_ms"])
+	if !okOperation || operation != expectedOperation || !okPhase || !okEngine || !okStatus || status != "succeeded" || !okStartedAt || !okFinishedAt || finishedTime.Before(startedTime) || !okDuration || durationMs < 0 {
+		return CloneEvidence{}, false
+	}
+	return CloneEvidence{
+		Operation:  operation,
+		Phase:      phase,
+		Engine:     engine,
+		Status:     status,
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+		DurationMs: durationMs,
+	}, true
+}
+
+func requiredCloneEvidenceToken(item map[string]any, key string) (string, bool) {
+	value, ok := item[key]
+	if !ok {
+		return "", false
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	return safeCloneEvidenceToken(text)
+}
+
+func requiredCloneEvidenceTimestamp(item map[string]any, key string) (string, time.Time, bool) {
+	value, ok := item[key]
+	if !ok {
+		return "", time.Time{}, false
+	}
+	text, ok := value.(string)
+	if !ok || strings.TrimSpace(text) != text || text == "" || projectionguard.ContainsForbiddenJVSInternalText(text) || containsSensitiveSummaryText(text) {
+		return "", time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	return text, parsed, true
+}
+
+func safeCloneEvidenceToken(value string) (string, bool) {
+	if projectionguard.ContainsForbiddenJVSInternalText(value) || containsSensitiveSummaryText(value) || containsAbsolutePath(value) || containsShellFragment(strings.ToLower(value)) {
+		return "", false
+	}
+	text := safeSummaryText(value)
+	return text, text != "" && text != "redacted"
+}
+
+func containsSensitiveSummaryText(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{"password", "passwd", "secret", "token", "credential", "authorization", "raw_argv", "rawargv"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func int64Data(value any) (int64, bool) {
+	const maxInt64Float = float64(1<<63 - 1)
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		if v < 0 || v > maxInt64Float || v != float64(int64(v)) {
+			return 0, false
+		}
+		return int64(v), true
 	default:
 		return 0, false
 	}

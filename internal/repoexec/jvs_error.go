@@ -42,3 +42,8 @@ func isJVSRecoveryBlockingError(err error) bool {
 	var commandErr *jvsrunner.CommandError
 	return errors.As(err, &commandErr) && commandErr.Code == "E_RECOVERY_BLOCKING"
 }
+
+func isJVSRecoveryRequiredError(err error) bool {
+	var commandErr *jvsrunner.CommandError
+	return errors.As(err, &commandErr) && commandErr.Code == "JVS_JOURNAL_RECOVERY_REQUIRED"
+}

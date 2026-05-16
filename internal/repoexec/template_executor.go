@@ -24,7 +24,6 @@ import (
 type TemplateJVSRunner interface {
 	DirectSave(ctx context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error)
 	DirectClone(ctx context.Context, source jvsrunner.DirectTarget, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectCloneSummary, error)
-	DirectDoctor(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectDoctorSummary, error)
 }
 
 type TemplateConfig struct {
@@ -175,17 +174,14 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 	if err != nil {
 		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs direct clone failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
 	}
-	doctor, err := executor.jvs.DirectDoctor(ctx, target)
-	if err != nil {
-		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
-	}
-	if clone.SavePointsMode != "main" || clone.RuntimeStateCopied || clone.SourceRepoID != source.JVSRepoID || clone.TargetRepoID != doctor.RepoID {
+	if clone.SavePointsMode != "main" || clone.RuntimeStateCopied || clone.SourceRepoID != source.JVSRepoID || strings.TrimSpace(clone.TargetRepoID) == "" {
 		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_REPO_ID_MISMATCH", "jvs repo identity mismatch", map[string]any{"source_save_point_id": save.SavePointID})
 	}
 	terminalNow, err := executor.requireCurrentTime("template create")
 	if err != nil {
 		return err
 	}
+	cloneEvidence := mergeCloneEvidence(save.CloneEvidence, clone.CloneEvidence)
 	template := resources.Repo{
 		ID:                  record.TemplateID,
 		NamespaceID:         record.NamespaceID,
@@ -203,11 +199,11 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 	operation.State = operations.OperationStateSucceeded
 	operation.Phase = operations.OperationPhaseTemplateCreateCommitted
 	operation.ExternalResourceIDs = map[string]string{"source_save_point_id": save.SavePointID, "jvs_repo_id": clone.TargetRepoID}
-	operation.JVSJSONOutput = map[string]any{"source_repo_id": clone.SourceRepoID, "target_repo_id": clone.TargetRepoID, "save_points_mode": clone.SavePointsMode, "save_points_copied_count": clone.SavePointsCopiedCount, "runtime_state_copied": clone.RuntimeStateCopied, "workspace": clone.Workspace}
-	operation.VerificationResult = map[string]any{"source_repo_id": record.RepoID, "template_id": record.TemplateID, "source_save_point_id": save.SavePointID, "clone_history_mode": "main", "healthy": true}
+	operation.JVSJSONOutput = withCloneEvidenceProjection(map[string]any{"source_repo_id": clone.SourceRepoID, "target_repo_id": clone.TargetRepoID, "save_points_mode": clone.SavePointsMode, "save_points_copied_count": clone.SavePointsCopiedCount, "runtime_state_copied": clone.RuntimeStateCopied, "workspace": clone.Workspace}, cloneEvidence)
+	operation.VerificationResult = withCloneEvidenceProjection(map[string]any{"source_repo_id": record.RepoID, "template_id": record.TemplateID, "source_save_point_id": save.SavePointID, "clone_history_mode": "main", "direct_clone": true}, cloneEvidence)
 	operation.Error = nil
 	operation.FinishedAt = &terminalNow
-	event, err := executor.auditEvent(operation, terminalNow, audit.EventTypeTemplateCreate, audit.OutcomeSucceeded, "template_create_committed", map[string]any{"source_repo_id": record.RepoID, "template_id": record.TemplateID, "source_save_point_id": save.SavePointID})
+	event, err := executor.auditEvent(operation, terminalNow, audit.EventTypeTemplateCreate, audit.OutcomeSucceeded, "template_create_committed", withCloneEvidenceProjection(map[string]any{"source_repo_id": record.RepoID, "template_id": record.TemplateID, "source_save_point_id": save.SavePointID}, cloneEvidence))
 	if err != nil {
 		return err
 	}
@@ -266,11 +262,7 @@ func (executor *TemplateCloneExecutor) ExecuteOperationRecovery(ctx context.Cont
 	if err != nil {
 		return base.commitTemplateCloneIntervention(ctx, record, "JVS_COMMAND_FAILED", "jvs direct clone failed", withJVSErrorDetails(nil, err))
 	}
-	doctor, err := base.jvs.DirectDoctor(ctx, target)
-	if err != nil {
-		return base.commitTemplateCloneIntervention(ctx, record, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(nil, err))
-	}
-	if clone.SavePointsMode != "main" || clone.RuntimeStateCopied || clone.SourceRepoID != template.JVSRepoID || clone.TargetRepoID != doctor.RepoID {
+	if clone.SavePointsMode != "main" || clone.RuntimeStateCopied || clone.SourceRepoID != template.JVSRepoID || strings.TrimSpace(clone.TargetRepoID) == "" {
 		return base.commitTemplateCloneIntervention(ctx, record, "JVS_REPO_ID_MISMATCH", "jvs repo identity mismatch", nil)
 	}
 	terminalNow, err := base.requireCurrentTime("template clone")
@@ -294,11 +286,11 @@ func (executor *TemplateCloneExecutor) ExecuteOperationRecovery(ctx context.Cont
 	operation.State = operations.OperationStateSucceeded
 	operation.Phase = operations.OperationPhaseTemplateCloneCommitted
 	operation.ExternalResourceIDs = map[string]string{"jvs_repo_id": clone.TargetRepoID}
-	operation.JVSJSONOutput = map[string]any{"source_repo_id": clone.SourceRepoID, "target_repo_id": clone.TargetRepoID, "save_points_mode": clone.SavePointsMode, "save_points_copied_count": clone.SavePointsCopiedCount, "runtime_state_copied": clone.RuntimeStateCopied, "workspace": clone.Workspace}
-	operation.VerificationResult = map[string]any{"template_id": record.TemplateID, "repo_id": record.RepoID, "clone_history_mode": "main", "healthy": true}
+	operation.JVSJSONOutput = withCloneEvidenceProjection(map[string]any{"source_repo_id": clone.SourceRepoID, "target_repo_id": clone.TargetRepoID, "save_points_mode": clone.SavePointsMode, "save_points_copied_count": clone.SavePointsCopiedCount, "runtime_state_copied": clone.RuntimeStateCopied, "workspace": clone.Workspace}, clone.CloneEvidence)
+	operation.VerificationResult = withCloneEvidenceProjection(map[string]any{"template_id": record.TemplateID, "repo_id": record.RepoID, "clone_history_mode": "main", "direct_clone": true}, clone.CloneEvidence)
 	operation.Error = nil
 	operation.FinishedAt = &terminalNow
-	event, err := base.auditEvent(operation, terminalNow, audit.EventTypeTemplateClone, audit.OutcomeSucceeded, "template_clone_committed", map[string]any{"template_id": record.TemplateID, "repo_id": record.RepoID})
+	event, err := base.auditEvent(operation, terminalNow, audit.EventTypeTemplateClone, audit.OutcomeSucceeded, "template_clone_committed", withCloneEvidenceProjection(map[string]any{"template_id": record.TemplateID, "repo_id": record.RepoID}, clone.CloneEvidence))
 	if err != nil {
 		return err
 	}

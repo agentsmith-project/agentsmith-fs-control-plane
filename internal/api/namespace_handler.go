@@ -247,6 +247,6 @@ func writeOperationIntakeHTTPError(w http.ResponseWriter, r *http.Request, err e
 	if !errors.As(err, &intakeErr) || intakeErr == nil {
 		intakeErr = internalOperationIntakeError()
 	}
-	envelope := NewErrorEnvelope(intakeErr.Code, intakeErr.Message, intakeErr.Retryable, CorrelationIDFromRequest(r), nil, nil)
+	envelope := NewErrorEnvelope(intakeErr.Code, intakeErr.Message, intakeErr.Retryable, CorrelationIDFromRequest(r), nil, intakeErr.Details)
 	_ = WriteErrorEnvelope(w, intakeErr.Status, envelope)
 }

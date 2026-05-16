@@ -640,10 +640,6 @@ func (store *cmdWorkerAppStore) CommitRepoPurgeFailedWithLease(context.Context, 
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
-func (store *cmdWorkerAppStore) UpdateSavePointCreateProgressWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
-	return operations.OperationRecord{}, errors.New("unexpected progress update")
-}
-
 func (store *cmdWorkerAppStore) CommitSavePointCreateSucceededWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }

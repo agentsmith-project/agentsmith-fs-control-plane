@@ -290,6 +290,21 @@ func (store *Store) RepoHasNonTerminalJVSMutation(ctx context.Context, repoID st
 	return exists, nil
 }
 
+func (store *Store) GetRepoJVSMutationGateStatus(ctx context.Context, repoID string) (operations.RepoJVSMutationGateStatus, error) {
+	if err := pathresolver.ValidateID(pathresolver.RepoID, strings.TrimSpace(repoID)); err != nil {
+		return operations.RepoJVSMutationGateStatus{}, err
+	}
+	var operationID, operationType, operationState string
+	row := store.exec.QueryRowContext(ctx, repoJVSMutationGateStatusSQL(), repoID)
+	if err := row.Scan(&operationID, &operationType, &operationState); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.RepoJVSMutationGateStatus{}, nil
+		}
+		return operations.RepoJVSMutationGateStatus{}, err
+	}
+	return operations.NewRepoJVSMutationGateStatus(operationID, operations.OperationType(operationType), operations.OperationState(operationState)), nil
+}
+
 func (store *Store) AcquireOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	args, err := operationLeaseRequestArgs(operationID, request)
 	if err != nil {
@@ -1467,22 +1482,35 @@ func restoreOperationAcquireLeaseSQL() string {
 
 func templateCreateOperationAcquireLeaseSQL() string {
 	cancelFinalizableLease := "((lease_owner IS NULL AND lease_expires_at IS NULL) OR (lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4))"
-	return "UPDATE operations SET " +
-		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
-		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
-		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
-		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
-		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
-		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
-		"updated_at = $4 " +
-		"WHERE operation_id = $1 " +
+	return "WITH eligible_operation AS (" +
+		"SELECT operation_id, repo_id, created_at, phase FROM operations WHERE operation_id = $1 " +
 		"AND operation_type = 'template_create' " +
 		"AND phase IN ('validate_template_create','template_create_writer_fenced') " +
 		"AND (" +
 		"(operation_state = 'queued' AND phase = 'validate_template_create' AND $5 = '' AND lease_owner IS NULL AND lease_expires_at IS NULL) OR " +
 		"(operation_state = 'running' AND $5 = '' AND lease_owner IS NOT NULL AND btrim(lease_owner) <> '' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $4) OR " +
 		"(operation_state = 'cancel_requested' AND phase = 'validate_template_create' AND $5 = 'finalize_cancellation' AND " + cancelFinalizableLease + ")" +
-		") RETURNING " + operationReturningColumnsSQL()
+		") FOR UPDATE" +
+		"), earlier_jvs_mutation AS (" +
+		"SELECT 1 FROM operations o, eligible_operation e WHERE o.repo_id = e.repo_id AND o.operation_id <> e.operation_id " +
+		"AND (o.created_at < e.created_at OR (o.created_at = e.created_at AND o.operation_id < e.operation_id)) " +
+		"AND o.operation_type IN (" + repoJVSMutationOperationTypeSQLList() + ") AND o.operation_state NOT IN ('succeeded','failed','cancelled') LIMIT 1" +
+		"), earlier_repo_lifecycle AS (" +
+		"SELECT 1 FROM operations o, eligible_operation e WHERE o.repo_id = e.repo_id AND o.operation_id <> e.operation_id " +
+		"AND (o.created_at < e.created_at OR (o.created_at = e.created_at AND o.operation_id < e.operation_id)) " +
+		"AND o.operation_type IN (" + repoLifecycleAndPurgeOperationTypeSQLList() + ") AND o.operation_state NOT IN ('succeeded','failed','cancelled') LIMIT 1" +
+		"), updated_operation AS (" +
+		"UPDATE operations SET " +
+		"operation_state = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN 'cancelled' ELSE 'running' END, " +
+		"attempt = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN attempt ELSE attempt + 1 END, " +
+		"lease_owner = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL ELSE $2 END, " +
+		"lease_expires_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN NULL::timestamptz ELSE $3::timestamptz END, " +
+		"started_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN started_at ELSE COALESCE(started_at, $4) END, " +
+		"finished_at = CASE WHEN operation_state = 'cancel_requested' AND $5 = 'finalize_cancellation' THEN COALESCE(finished_at, $4) ELSE finished_at END, " +
+		"updated_at = $4 FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id " +
+		"AND ($5 <> 'finalize_cancellation' OR eligible_operation.phase = 'validate_template_create') " +
+		"AND ($5 = 'finalize_cancellation' OR (NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation) AND NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle))) RETURNING " + operationReturningColumnsSQL() +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
 func templateCloneOperationAcquireLeaseSQL() string {
@@ -1515,6 +1543,13 @@ func repoJVSMutationOperationTypeSQLList() string {
 
 func repoHasNonTerminalJVSMutationSQL() string {
 	return "SELECT EXISTS (SELECT 1 FROM operations WHERE repo_id = $1 AND operation_type IN (" + repoJVSMutationOperationTypeSQLList() + ") AND operation_state NOT IN ('succeeded','failed','cancelled'))"
+}
+
+func repoJVSMutationGateStatusSQL() string {
+	return "SELECT operation_id, operation_type, operation_state FROM operations " +
+		"WHERE repo_id = $1 AND operation_type IN (" + repoJVSMutationOperationTypeSQLList() + ") " +
+		"AND operation_state NOT IN ('succeeded','failed','cancelled') " +
+		"ORDER BY CASE WHEN operation_state = 'operator_intervention_required' THEN 0 ELSE 1 END, created_at, operation_id LIMIT 1"
 }
 
 func repoLifecycleAndPurgeOperationTypeSQLList() string {

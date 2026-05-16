@@ -140,25 +140,35 @@ func TestCommitRestoreFailedWithLeaseAllowsValidateOrWriterFenced(t *testing.T) 
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name      string
+		state     operations.OperationState
 		phase     string
 		sessionID string
 		wantParts []string
 	}{
 		{
 			name:      "validate terminates operation only",
+			state:     operations.OperationStateFailed,
 			phase:     operations.OperationPhaseRestoreValidate,
 			wantParts: []string{"phase IN ('validate_restore','restore_writer_fenced')", "phase = 'validate_restore' AND $21 = ''", "INSERT INTO audit_outbox"},
 		},
 		{
 			name:      "writer fenced releases fence",
+			state:     operations.OperationStateFailed,
 			phase:     operations.OperationPhaseRestoreWriterFenced,
 			sessionID: "fence_restore01",
-			wantParts: []string{"phase = 'restore_writer_fenced' AND session_fence_id = $21", "held_writer_fence AS", "released_writer_fence AS", "UPDATE repo_fences SET status = 'released'", "EXISTS (SELECT 1 FROM released_writer_fence)", "INSERT INTO audit_outbox"},
+			wantParts: []string{"phase = 'restore_writer_fenced' AND session_fence_id = $21", "held_writer_fence AS", "$1 = 'failed'", "released_writer_fence AS", "UPDATE repo_fences SET status = 'released'", "EXISTS (SELECT 1 FROM released_writer_fence)", "INSERT INTO audit_outbox"},
+		},
+		{
+			name:      "writer fenced operator intervention retains fence",
+			state:     operations.OperationStateOperatorInterventionRequired,
+			phase:     operations.OperationPhaseRestoreWriterFenced,
+			sessionID: "fence_restore01",
+			wantParts: []string{"phase = 'restore_writer_fenced' AND session_fence_id = $21", "held_writer_fence AS", "$1 = 'failed'", "released_writer_fence AS", "$1 = 'operator_intervention_required'", "INSERT INTO audit_outbox"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			record := restoreOperationRecord(now, operations.OperationStateFailed, tt.phase)
+			record := restoreOperationRecord(now, tt.state, tt.phase)
 			record.SessionFenceID = tt.sessionID
 			record.Error = &operations.OperationError{Code: "RESTORE_FAILED", Message: "restore failed", CorrelationID: record.CorrelationID, OperationID: record.ID}
 			record.FinishedAt = &now

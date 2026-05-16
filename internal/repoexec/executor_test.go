@@ -78,44 +78,39 @@ func TestExecutorSuccessCommitSurvivesCallerContextCancellationAfterJVS(t *testi
 	}
 }
 
-func TestSavePointExecutorPersistsPreSaveMarkerThenSavesAndCommits(t *testing.T) {
+func TestSavePointExecutorSavesWithoutPreSaveHistoryList(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
-		historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
-		saveSummary:    jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
+		saveSummary: jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
 	}
 	executor := newTestSavePointExecutor(t, store, runner, now)
 
 	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
-		t.Fatalf("JVS calls = %#v, want direct_list then direct_save", runner.calls)
-	}
-	if store.progressUpdates != 1 {
-		t.Fatalf("progress updates = %d, want pre-save marker persisted", store.progressUpdates)
+	if strings.Join(runner.calls, ",") != "direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct_save only", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseSavePointCreateCommitted {
 		t.Fatalf("operation = %#v, want succeeded committed", store.operation)
 	}
 	result := store.operation.VerificationResult.(map[string]any)
-	if result["pre_save_newest_save_point_id"] != "sp_before" || result["save_point_id"] != "sp_after" || result["unsaved_changes_known"] != false {
-		t.Fatalf("verification = %#v, want pre marker and save result", result)
+	if _, exists := result["pre_save_newest_save_point_id"]; exists {
+		t.Fatalf("verification = %#v, want no pre-save marker", result)
+	}
+	if result["save_point_id"] != "sp_after" || result["unsaved_changes_known"] != false {
+		t.Fatalf("verification = %#v, want save result", result)
 	}
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
-func TestSavePointExecutorUsesDirectListAndDirectSaveTarget(t *testing.T) {
+func TestSavePointExecutorUsesDirectSaveTarget(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
-		directListSummary: jvsrunner.DirectListSummary{
-			HistoryHeadID: "sp_before",
-			SavePoints:    []jvsrunner.DirectSavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z", HistoryHead: true}},
-		},
 		directSaveSummary: jvsrunner.DirectSaveSummary{SavePointID: "sp_after", HistoryHeadID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
 	}
 	executor := newTestSavePointExecutor(t, store, runner, now)
@@ -123,8 +118,8 @@ func TestSavePointExecutorUsesDirectListAndDirectSaveTarget(t *testing.T) {
 	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
-		t.Fatalf("JVS calls = %#v, want direct_list,direct_save", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct_save only", runner.calls)
 	}
 	if !strings.HasSuffix(runner.directTarget.ControlRoot, "/afscp/namespaces/ns_alpha01/repos/repo_alpha01/control") ||
 		!strings.HasSuffix(runner.directTarget.Home, "/afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload") {
@@ -134,8 +129,14 @@ func TestSavePointExecutorUsesDirectListAndDirectSaveTarget(t *testing.T) {
 		t.Fatalf("direct save message = %q, want durable normalized message", runner.saveMessage)
 	}
 	verification := store.operation.VerificationResult.(map[string]any)
-	if verification["pre_save_newest_save_point_id"] != "sp_before" || verification["save_point_id"] != "sp_after" {
-		t.Fatalf("verification = %#v, want direct pre marker and save result", verification)
+	if verification["save_point_id"] != "sp_after" {
+		t.Fatalf("verification = %#v, want direct save result", verification)
+	}
+	assertCloneEvidenceProjection(t, store.operation.JVSJSONOutput, "save")
+	assertCloneEvidenceProjection(t, store.operation.VerificationResult, "save")
+	assertCloneEvidenceProjection(t, store.auditEvents[0].Details, "save")
+	if _, exists := verification["pre_save_history_captured"]; exists {
+		t.Fatalf("verification = %#v, want no pre-save history marker", verification)
 	}
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
@@ -156,8 +157,8 @@ func TestSavePointExecutorDirectSaveRepoBusyFailsWithoutLegacyRepair(t *testing.
 	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
-		t.Fatalf("JVS calls = %#v, want direct list/save without doctor repair runtime", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct save without list or doctor repair runtime", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "JVS_COMMAND_FAILED" || !store.operation.Error.Retryable {
 		t.Fatalf("operation = %#v, want retryable failed JVS_COMMAND_FAILED", store.operation)
@@ -224,8 +225,8 @@ func TestSavePointExecutorRepoBusyFailsTerminallyWithoutManualIntervention(t *te
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
 
-	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
-		t.Fatalf("JVS calls = %#v, want direct list/save without repair runtime", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct save without list or repair runtime", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateFailed {
 		t.Fatalf("operation state = %s, want failed terminal state", store.operation.State)
@@ -266,8 +267,8 @@ func TestSavePointExecutorDoesNotRepairRetryTransientRepoBusySave(t *testing.T) 
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
 
-	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
-		t.Fatalf("JVS calls = %#v, want direct list/save without repair retry", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct save without list or repair retry", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "JVS_COMMAND_FAILED" {
 		t.Fatalf("operation = %#v, want failed JVS_COMMAND_FAILED without repair retry", store.operation)
@@ -332,49 +333,11 @@ func TestSavePointExecutorRejectsSecretShapedMessageBeforeJVS(t *testing.T) {
 	}
 }
 
-func TestSavePointExecutorAdoptsCrashAfterSaveWithoutCallingSaveAgain(t *testing.T) {
+func TestSavePointExecutorPreparedRecoveryRequiresManualInterventionWithoutJVS(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = activeRepoResource(now)
-	runner := &fakeJVSRunner{historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_after", SavePoints: []jvsrunner.SavePointSummary{
-		{SavePointID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
-		{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"},
-	}}}
-	executor := newTestSavePointExecutor(t, store, runner, now)
-	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreatePrepared)
-	record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": "sp_before"}
-
-	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
-		t.Fatalf("ExecuteOperationRecovery: %v", err)
-	}
-	if strings.Join(runner.calls, ",") != "direct_list" {
-		t.Fatalf("JVS calls = %#v, want direct list only adoption", runner.calls)
-	}
-	verification := store.operation.VerificationResult.(map[string]any)
-	if verification["adopted"] != true || verification["unsaved_changes_known"] != false {
-		t.Fatalf("verification = %#v, want adopted", store.operation.VerificationResult)
-	}
-	if _, ok := verification["unsaved_changes"]; ok {
-		t.Fatalf("verification = %#v, adopted save must not claim unsaved_changes", verification)
-	}
-	jvsOutput := store.operation.JVSJSONOutput.(map[string]any)
-	if jvsOutput["unsaved_changes_known"] != false {
-		t.Fatalf("jvs output = %#v, want unknown unsaved_changes", jvsOutput)
-	}
-	if _, ok := jvsOutput["unsaved_changes"]; ok {
-		t.Fatalf("jvs output = %#v, adopted save must not claim unsaved_changes", jvsOutput)
-	}
-}
-
-func TestSavePointExecutorAmbiguousHistoryRequiresOperatorIntervention(t *testing.T) {
-	now := repoExecNow()
-	store := newFakeStore()
-	store.repo = activeRepoResource(now)
-	runner := &fakeJVSRunner{historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_two", SavePoints: []jvsrunner.SavePointSummary{
-		{SavePointID: "sp_two", Message: "two", CreatedAt: "2026-05-05T12:01:00Z"},
-		{SavePointID: "sp_one", Message: "one", CreatedAt: "2026-05-05T12:00:00Z"},
-		{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"},
-	}}}
+	runner := &fakeJVSRunner{}
 	executor := newTestSavePointExecutor(t, store, runner, now)
 	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreatePrepared)
 	record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": "sp_before"}
@@ -383,80 +346,8 @@ func TestSavePointExecutorAmbiguousHistoryRequiresOperatorIntervention(t *testin
 	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
 		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
 	}
-	if store.operation.State != operations.OperationStateOperatorInterventionRequired {
-		t.Fatalf("operation state = %s, want operator intervention", store.operation.State)
-	}
-	if strings.Contains(strings.Join(runner.calls, ","), "save") {
-		t.Fatalf("JVS calls = %#v, want no save on ambiguity", runner.calls)
-	}
-}
-
-func TestSavePointExecutorPreparedRetryWithNoNewerSavePointRunsSave(t *testing.T) {
-	now := repoExecNow()
-	store := newFakeStore()
-	store.repo = activeRepoResource(now)
-	runner := &fakeJVSRunner{
-		historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
-		saveSummary:    jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z", UnsavedChanges: true},
-	}
-	executor := newTestSavePointExecutor(t, store, runner, now)
-	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreatePrepared)
-	record.InputSummary["message"] = "rotate token docs"
-	record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": "sp_before"}
-
-	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
-		t.Fatalf("ExecuteOperationRecovery: %v", err)
-	}
-	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
-		t.Fatalf("JVS calls = %#v, want direct list then save", runner.calls)
-	}
-	if runner.saveMessage != "rotate token docs" {
-		t.Fatalf("jvs save message = %q, want durable natural-language message", runner.saveMessage)
-	}
-	verification := store.operation.VerificationResult.(map[string]any)
-	if verification["save_point_id"] != "sp_after" || verification["unsaved_changes_known"] != false {
-		t.Fatalf("verification = %#v, want fresh direct save with unknown unsaved_changes", verification)
-	}
-}
-
-func TestSavePointExecutorAdoptsWhenPreSaveHistoryWasEmpty(t *testing.T) {
-	now := repoExecNow()
-	store := newFakeStore()
-	store.repo = activeRepoResource(now)
-	runner := &fakeJVSRunner{historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_after", SavePoints: []jvsrunner.SavePointSummary{
-		{SavePointID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
-	}}}
-	executor := newTestSavePointExecutor(t, store, runner, now)
-	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreatePrepared)
-	record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": ""}
-
-	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
-		t.Fatalf("ExecuteOperationRecovery: %v", err)
-	}
-	if strings.Join(runner.calls, ",") != "direct_list" {
-		t.Fatalf("JVS calls = %#v, want direct list only adoption", runner.calls)
-	}
-	verification := store.operation.VerificationResult.(map[string]any)
-	if verification["save_point_id"] != "sp_after" || verification["adopted"] != true || verification["unsaved_changes_known"] != false {
-		t.Fatalf("verification = %#v, want adopted save with unknown unsaved_changes", verification)
-	}
-}
-
-func TestSavePointExecutorMissingPreSavePointerRequiresOperatorIntervention(t *testing.T) {
-	now := repoExecNow()
-	store := newFakeStore()
-	store.repo = activeRepoResource(now)
-	runner := &fakeJVSRunner{historySummary: jvsrunner.HistorySummary{Workspace: "main", SavePoints: []jvsrunner.SavePointSummary{}}}
-	executor := newTestSavePointExecutor(t, store, runner, now)
-	record := savePointLeasedRecord(now, operations.OperationPhaseSavePointCreatePrepared)
-	record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": "sp_missing"}
-
-	err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim})
-	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
-		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
-	}
-	if strings.Contains(strings.Join(runner.calls, ","), "save") {
-		t.Fatalf("JVS calls = %#v, want no save when marker is missing", runner.calls)
+	if len(runner.calls) != 0 {
+		t.Fatalf("JVS calls = %#v, want no save/list for obsolete prepared recovery", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateOperatorInterventionRequired {
 		t.Fatalf("operation state = %s, want operator intervention", store.operation.State)
@@ -737,8 +628,8 @@ func TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate(t *testin
 	if store.templateCreateWriterFenceMarks != 1 {
 		t.Fatalf("writer fence marks = %d, want 1 before JVS", store.templateCreateWriterFenceMarks)
 	}
-	if got := strings.Join(runner.calls, ","); got != "direct_save,direct_clone,direct_doctor" {
-		t.Fatalf("jvs calls = %s, want direct_save,direct_clone,direct_doctor", got)
+	if got := strings.Join(runner.calls, ","); got != "direct_save,direct_clone" {
+		t.Fatalf("jvs calls = %s, want direct_save,direct_clone", got)
 	}
 	if runner.cloneSavePointID != "sp_template01" {
 		t.Fatalf("direct clone save point = %q, want fresh template source save point", runner.cloneSavePointID)
@@ -747,6 +638,9 @@ func TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate(t *testin
 	if store.repo.ID != "tmpl_base01" || store.repo.Kind != resources.RepoKindTemplate || verification["source_save_point_id"] != "sp_template01" {
 		t.Fatalf("committed template/operation = %#v %#v", store.repo, store.operation)
 	}
+	assertCloneEvidenceProjection(t, store.operation.JVSJSONOutput, "save", "clone")
+	assertCloneEvidenceProjection(t, store.operation.VerificationResult, "save", "clone")
+	assertCloneEvidenceProjection(t, store.auditEvents[0].Details, "save", "clone")
 	if store.releasedFenceID != "fence_op_template_create" || activeWriterFenceCount(store.fences, "op_template_create") != 0 {
 		t.Fatalf("released/active writer fence = %q/%#v, want released source writer fence", store.releasedFenceID, store.fences)
 	}
@@ -826,8 +720,8 @@ func TestTemplateCreateExecutorPreparesDirectCloneParentWithoutOccupyingTargetRo
 	if err := executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "direct_save,direct_clone,direct_doctor" {
-		t.Fatalf("jvs calls = %#v, want direct_save,direct_clone,direct_doctor", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save,direct_clone" {
+		t.Fatalf("jvs calls = %#v, want direct_save,direct_clone", runner.calls)
 	}
 }
 
@@ -975,12 +869,15 @@ func TestTemplateCloneExecutorClonesTemplateToRepoWithoutSave(t *testing.T) {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
 
-	if got := strings.Join(runner.calls, ","); got != "direct_clone,direct_doctor" {
-		t.Fatalf("jvs calls = %s, want direct_clone,direct_doctor", got)
+	if got := strings.Join(runner.calls, ","); got != "direct_clone" {
+		t.Fatalf("jvs calls = %s, want direct_clone", got)
 	}
 	if store.repo.ID != "repo_clone01" || store.repo.Kind != resources.RepoKindRepo || store.operation.Phase != operations.OperationPhaseTemplateCloneCommitted {
 		t.Fatalf("committed repo/operation = %#v %#v", store.repo, store.operation)
 	}
+	assertCloneEvidenceProjection(t, store.operation.JVSJSONOutput, "clone")
+	assertCloneEvidenceProjection(t, store.operation.VerificationResult, "clone")
+	assertCloneEvidenceProjection(t, store.auditEvents[0].Details, "clone")
 }
 
 func TestTemplateCloneExecutorUsesFreshTerminalTimestampAfterSlowJVSClone(t *testing.T) {
@@ -1043,8 +940,8 @@ func TestTemplateCloneExecutorSuccessCommitFailurePreservesCause(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "template clone success commit failed") {
 		t.Fatalf("ExecuteOperationRecovery error = %v, want commit failure context", err)
 	}
-	if strings.Join(runner.calls, ",") != "direct_clone,direct_doctor" {
-		t.Fatalf("jvs calls = %#v, want direct_clone,direct_doctor before durable commit failure", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_clone" {
+		t.Fatalf("jvs calls = %#v, want direct_clone before durable commit failure", runner.calls)
 	}
 }
 
@@ -1199,7 +1096,6 @@ type fakeRepoCreateStore struct {
 	exports                        []sessionstate.ExportSession
 	mounts                         []sessionstate.WorkloadMountBinding
 	createFenceCalls               int
-	progressUpdates                int
 	restoreWriterFenceMarks        int
 	templateCreateWriterFenceMarks int
 	releasedFenceID                string
@@ -1306,12 +1202,6 @@ func (store *fakeRepoCreateStore) CommitRepoPurgeFailedWithLease(_ context.Conte
 	return store.operation, nil
 }
 
-func (store *fakeRepoCreateStore) UpdateSavePointCreateProgressWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time) (operations.OperationRecord, error) {
-	store.progressUpdates++
-	store.operation = record.Record()
-	return store.operation, nil
-}
-
 func (store *fakeRepoCreateStore) CommitSavePointCreateSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	store.operation = record.Record()
 	store.savePointSuccessCommitAt = now
@@ -1393,7 +1283,7 @@ func (store *fakeRepoCreateStore) CommitRestoreSucceededWithLease(_ context.Cont
 
 func (store *fakeRepoCreateStore) CommitRestoreFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	store.operation = record.Record()
-	if store.operation.Phase == operations.OperationPhaseRestoreWriterFenced {
+	if store.operation.Phase == operations.OperationPhaseRestoreWriterFenced && store.operation.State == operations.OperationStateFailed {
 		store.releaseWriterFence(store.operation.SessionFenceID, now)
 	}
 	store.auditEvents = append(store.auditEvents, event)
@@ -1477,6 +1367,9 @@ func (runner *fakeJVSRunner) DirectSave(_ context.Context, target jvsrunner.Dire
 	if runner.directSaveSummary.SavePointID == "" && runner.saveSummary.SavePointID != "" {
 		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, CreatedAt: runner.saveSummary.CreatedAt}
 	}
+	if runner.directSaveSummary.SavePointID != "" && len(runner.directSaveSummary.CloneEvidence) == 0 {
+		runner.directSaveSummary.CloneEvidence = fakeCloneEvidence("save", "save_point_payload", 42)
+	}
 	if len(runner.saveErrs) > 0 {
 		err := runner.saveErrs[0]
 		runner.saveErrs = runner.saveErrs[1:]
@@ -1514,6 +1407,9 @@ func (runner *fakeJVSRunner) DirectRestore(_ context.Context, target jvsrunner.D
 	runner.restoreSavePointID = savePointID
 	if runner.beforeRestore != nil {
 		runner.beforeRestore()
+	}
+	if runner.directRestoreSummary.RestoredSavePointID != "" && len(runner.directRestoreSummary.CloneEvidence) == 0 {
+		runner.directRestoreSummary.CloneEvidence = fakeCloneEvidence("restore", "restore_staging", 17)
 	}
 	if runner.directRestoreErr != nil {
 		return runner.directRestoreSummary, runner.directRestoreErr
@@ -1568,12 +1464,60 @@ func (runner *fakeJVSRunner) DirectClone(_ context.Context, source jvsrunner.Dir
 	if runner.directCloneSummary.SourceRepoID == "" {
 		runner.directCloneSummary.SourceRepoID = "jvs_repo_alpha"
 	}
+	if len(runner.directCloneSummary.CloneEvidence) == 0 {
+		runner.directCloneSummary.CloneEvidence = fakeCloneEvidence("clone", "clone_target_home", 23)
+	}
 	if runner.afterDirectClone != nil {
 		runner.afterDirectClone()
 	}
 	summary := runner.directCloneSummary
 	summary.SavePointID = savePointID
 	return summary, runner.repoCloneErr
+}
+
+func fakeCloneEvidence(operation, phase string, durationMs int64) []jvsrunner.CloneEvidence {
+	return []jvsrunner.CloneEvidence{{
+		Operation:  operation,
+		Phase:      phase,
+		Engine:     "juicefs_clone",
+		Status:     "succeeded",
+		StartedAt:  "2026-05-05T12:00:00Z",
+		FinishedAt: "2026-05-05T12:00:01Z",
+		DurationMs: durationMs,
+	}}
+}
+
+func assertCloneEvidenceProjection(t *testing.T, container any, operations ...string) {
+	t.Helper()
+	values, ok := container.(map[string]any)
+	if !ok {
+		t.Fatalf("clone evidence container = %#v, want map", container)
+	}
+	raw, ok := values[cloneEvidenceOutputField]
+	if !ok {
+		t.Fatalf("clone evidence missing from %#v", values)
+	}
+	items, ok := raw.([]map[string]any)
+	if !ok {
+		t.Fatalf("clone evidence = %#v, want []map[string]any", raw)
+	}
+	if len(items) != len(operations) {
+		t.Fatalf("clone evidence count = %d, want %d: %#v", len(items), len(operations), items)
+	}
+	for idx, item := range items {
+		if item["operation"] != operations[idx] || item["engine"] != "juicefs_clone" || item["status"] != "succeeded" {
+			t.Fatalf("clone evidence[%d] = %#v, want safe %s evidence", idx, item, operations[idx])
+		}
+		if _, ok := item["duration_ms"].(int64); !ok {
+			t.Fatalf("clone evidence[%d] duration = %#v, want int64 duration", idx, item["duration_ms"])
+		}
+	}
+	rendered := strings.ToLower(fmt.Sprint(items))
+	for _, leaked := range []string{"/srv/afscp", "secret", "password", "raw_argv", "raw_command", "internal_path"} {
+		if strings.Contains(rendered, leaked) {
+			t.Fatalf("clone evidence leaked %q: %#v", leaked, items)
+		}
+	}
 }
 
 func repoCreateFence(now time.Time, fenceID, operationID string) fences.Fence {

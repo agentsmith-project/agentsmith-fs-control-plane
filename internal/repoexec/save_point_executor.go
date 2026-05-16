@@ -35,7 +35,6 @@ type savePointCreateStore interface {
 
 type SavePointJVSRunner interface {
 	DirectSave(ctx context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error)
-	DirectList(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error)
 }
 
 type SavePointExecutor struct {
@@ -110,7 +109,13 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	now, err := executor.requireCurrentTime()
+	if record.Phase != operations.OperationPhaseSavePointCreateValidate || plan.Action != recovery.RecoveryActionClaimable {
+		return executor.commitSavePointIntervention(ctx, record, "SAVE_POINT_RECOVERY_UNCERTAIN", "save point recovery requires operator intervention", map[string]any{
+			"recovery_action": string(plan.Action),
+			"phase":           record.Phase,
+		})
+	}
+	_, err = executor.requireCurrentTime()
 	if err != nil {
 		return err
 	}
@@ -127,45 +132,15 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 		return executor.commitSavePointIntervention(ctx, record, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed", nil)
 	}
 
-	working := record
-	preSavePointer, hasMarker := preSavePointer(working)
-	var history jvsrunner.HistorySummary
-	if !hasMarker {
-		history, err = executor.directHistory(ctx, target)
-		if err != nil {
-			return executor.commitSavePointIntervention(ctx, record, "JVS_HISTORY_FAILED", "jvs direct list failed", withJVSErrorDetails(nil, err))
-		}
-		preSavePointer = history.NewestSavePointID
-		working = withPreSavePointer(working, preSavePointer)
-		working.State = operations.OperationStateRunning
-		working.Phase = operations.OperationPhaseSavePointCreatePrepared
-		updated, err := executor.store.UpdateSavePointCreateProgressWithLease(ctx, working.SanitizedForPersistence(), executor.owner, now)
-		if err != nil {
-			return errors.New("save point progress update failed")
-		}
-		working = updated
-	} else {
-		history, err = executor.directHistory(ctx, target)
-		if err != nil {
-			return executor.commitSavePointIntervention(ctx, working, "JVS_HISTORY_FAILED", "jvs direct list failed", withJVSErrorDetails(nil, err))
-		}
-	}
-
-	if adopted, ok, ambiguous := savePointCreatedAfter(history, preSavePointer); ambiguous {
-		return executor.commitSavePointIntervention(ctx, working, "SAVE_POINT_HISTORY_AMBIGUOUS", "save point history is ambiguous", map[string]any{"pre_save_newest_save_point_id": preSavePointer})
-	} else if ok {
-		return executor.commitSavePointSuccess(ctx, working, adopted, message, false, false, true)
-	}
-
 	saved, err := executor.jvs.DirectSave(ctx, target, message)
 	if err != nil {
-		details := withJVSErrorDetails(map[string]any{"pre_save_newest_save_point_id": preSavePointer}, err)
+		details := withJVSErrorDetails(nil, err)
 		if isJVSRepoBusyError(err) {
-			return executor.commitSavePointFailedWithDetails(ctx, working, "JVS_COMMAND_FAILED", "jvs direct save blocked by active repo access", true, details)
+			return executor.commitSavePointFailedWithDetails(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save blocked by active repo access", true, details)
 		}
-		return executor.commitSavePointIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs direct save failed", details)
+		return executor.commitSavePointIntervention(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save failed", details)
 	}
-	return executor.commitSavePointSuccess(ctx, working, savePointFromDirectSaveSummary(saved, message), message, false, false, false)
+	return executor.commitSavePointSuccess(ctx, record, savePointFromDirectSaveSummary(saved, message), message, false, false, false, saved.CloneEvidence)
 }
 
 func (executor *SavePointExecutor) validateMetadata(ctx context.Context, record operations.OperationRecord, repo resources.Repo) error {
@@ -204,14 +179,6 @@ func (executor *SavePointExecutor) directTarget(repo resources.Repo) (jvsrunner.
 	return jvsrunner.DirectTarget{ControlRoot: roots.ControlRootPath, Home: roots.PayloadRootPath}, nil
 }
 
-func (executor *SavePointExecutor) directHistory(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.HistorySummary, error) {
-	direct, err := executor.jvs.DirectList(ctx, target)
-	if err != nil {
-		return jvsrunner.HistorySummary{}, err
-	}
-	return historySummaryFromDirectList(direct), nil
-}
-
 func (executor *SavePointExecutor) currentTime() time.Time {
 	now := executor.now
 	if executor.clock != nil {
@@ -228,7 +195,7 @@ func (executor *SavePointExecutor) requireCurrentTime() (time.Time, error) {
 	return now, nil
 }
 
-func (executor *SavePointExecutor) commitSavePointSuccess(ctx context.Context, record operations.OperationRecord, savePoint jvsrunner.SavePointSummary, message string, unsavedChanges, unsavedChangesKnown, adopted bool) error {
+func (executor *SavePointExecutor) commitSavePointSuccess(ctx context.Context, record operations.OperationRecord, savePoint jvsrunner.SavePointSummary, message string, unsavedChanges, unsavedChangesKnown, adopted bool, cloneEvidence []jvsrunner.CloneEvidence) error {
 	now, err := executor.requireCurrentTime()
 	if err != nil {
 		return err
@@ -245,11 +212,11 @@ func (executor *SavePointExecutor) commitSavePointSuccess(ctx context.Context, r
 		verification["unsaved_changes"] = unsavedChanges
 		auditDetails["unsaved_changes"] = unsavedChanges
 	}
-	operation.JVSJSONOutput = jvsOutput
-	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), verification)
+	operation.JVSJSONOutput = withCloneEvidenceProjection(jvsOutput, cloneEvidence)
+	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), withCloneEvidenceProjection(verification, cloneEvidence))
 	operation.Error = nil
 	operation.FinishedAt = &now
-	event, err := executor.auditEvent(operation, now, audit.OutcomeSucceeded, "save_point_create_committed", auditDetails)
+	event, err := executor.auditEvent(operation, now, audit.OutcomeSucceeded, "save_point_create_committed", withCloneEvidenceProjection(auditDetails, cloneEvidence))
 	if err != nil {
 		return err
 	}
@@ -348,60 +315,12 @@ func savePointMessage(record operations.OperationRecord) (string, error) {
 	return message, nil
 }
 
-func preSavePointer(record operations.OperationRecord) (string, bool) {
-	verification := asStringAnyMap(record.VerificationResult)
-	captured, _ := verification["pre_save_history_captured"].(bool)
-	if !captured {
-		return "", false
-	}
-	value, _ := verification["pre_save_newest_save_point_id"].(string)
-	return strings.TrimSpace(value), true
-}
-
-func withPreSavePointer(record operations.OperationRecord, pointer string) operations.OperationRecord {
-	verification := asStringAnyMap(record.VerificationResult)
-	verification["pre_save_history_captured"] = true
-	verification["pre_save_newest_save_point_id"] = strings.TrimSpace(pointer)
-	record.VerificationResult = verification
-	return record
-}
-
-func savePointCreatedAfter(history jvsrunner.HistorySummary, preSavePointer string) (jvsrunner.SavePointSummary, bool, bool) {
-	if preSavePointer != "" {
-		for idx, savePoint := range history.SavePoints {
-			if savePoint.SavePointID == preSavePointer {
-				return exactlyOneSavePoint(history.SavePoints[:idx])
-			}
-		}
-		return jvsrunner.SavePointSummary{}, false, true
-	}
-	return exactlyOneSavePoint(history.SavePoints)
-}
-
-func exactlyOneSavePoint(created []jvsrunner.SavePointSummary) (jvsrunner.SavePointSummary, bool, bool) {
-	if len(created) == 0 {
-		return jvsrunner.SavePointSummary{}, false, false
-	}
-	if len(created) > 1 {
-		return jvsrunner.SavePointSummary{}, false, true
-	}
-	return created[0], true, false
-}
-
 func savePointFromDirectSaveSummary(summary jvsrunner.DirectSaveSummary, fallbackMessage string) jvsrunner.SavePointSummary {
 	message := summary.Message
 	if strings.TrimSpace(message) == "" {
 		message = fallbackMessage
 	}
 	return jvsrunner.SavePointSummary{SavePointID: summary.SavePointID, Message: message, CreatedAt: summary.CreatedAt}
-}
-
-func historySummaryFromDirectList(summary jvsrunner.DirectListSummary) jvsrunner.HistorySummary {
-	savePoints := make([]jvsrunner.SavePointSummary, 0, len(summary.SavePoints))
-	for _, savePoint := range summary.SavePoints {
-		savePoints = append(savePoints, jvsrunner.SavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, CreatedAt: savePoint.CreatedAt})
-	}
-	return jvsrunner.HistorySummary{NewestSavePointID: summary.HistoryHeadID, SavePoints: savePoints}
 }
 
 func savePointRepoAccessFencesFromStore(existing []fences.Fence) []repoaccess.Fence {

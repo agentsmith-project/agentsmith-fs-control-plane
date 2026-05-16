@@ -45,14 +45,12 @@ func TestAcquireSavePointCreateOperationLeaseSerializesEarlierLifecycleAndJVSMut
 	}
 }
 
-func TestCommitSavePointCreateSucceededRequiresPreparedStoredMarkerBoundary(t *testing.T) {
+func TestCommitSavePointCreateSucceededAllowsValidatePhaseWithoutPreSaveMarker(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	record := savePointOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseSavePointCreateCommitted)
 	record.VerificationResult = map[string]any{
-		"pre_save_history_captured":     true,
-		"pre_save_newest_save_point_id": "",
-		"save_point_id":                 "sp_001",
-		"created_at":                    "2026-05-05T12:00:00Z",
+		"save_point_id": "sp_001",
+		"created_at":    "2026-05-05T12:00:00Z",
 	}
 	record.ExternalResourceIDs = map[string]string{"save_point_id": "sp_001"}
 	record.JVSJSONOutput = map[string]any{"save_point_id": "sp_001"}
@@ -69,38 +67,21 @@ func TestCommitSavePointCreateSucceededRequiresPreparedStoredMarkerBoundary(t *t
 		"WITH eligible_operation AS",
 		"operation_state = 'running'",
 		"operation_type = 'save_point_create'",
-		"phase = 'save_point_create_prepared'",
-		"verification_result->>'pre_save_history_captured' = 'true'",
+		"phase = 'validate_save_point_create'",
 		"FOR UPDATE",
 		"updated_operation AS",
 		"INSERT INTO audit_outbox",
 	)
-	if strings.Contains(exec.query, "phase IN ('validate_save_point_create','save_point_create_prepared')") {
-		t.Fatalf("success commit SQL allows validate phase: %s", exec.query)
+	if strings.Contains(exec.query, "pre_save_history_captured") || strings.Contains(exec.query, "save_point_create_prepared") {
+		t.Fatalf("success commit SQL still depends on pre-save marker/prepared phase: %s", exec.query)
 	}
 }
 
-func TestSavePointCreateSuccessValidatorRequiresSafePreSaveMarker(t *testing.T) {
+func TestSavePointCreateSuccessValidatorDoesNotRequirePreSaveMarker(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	valid := savePointOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseSavePointCreateCommitted)
-	valid.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": ""}
 	if err := validateSavePointCreateSuccessRecord(valid); err != nil {
-		t.Fatalf("validateSavePointCreateSuccessRecord with captured empty pre-save pointer: %v", err)
-	}
-
-	for _, verification := range []any{
-		nil,
-		map[string]any{},
-		map[string]any{"pre_save_history_captured": false},
-		map[string]any{"pre_save_history_captured": "true"},
-	} {
-		t.Run("missing_marker", func(t *testing.T) {
-			record := valid
-			record.VerificationResult = verification
-			if err := validateSavePointCreateSuccessRecord(record); err == nil {
-				t.Fatalf("validateSavePointCreateSuccessRecord accepted verification %#v", verification)
-			}
-		})
+		t.Fatalf("validateSavePointCreateSuccessRecord without pre-save pointer: %v", err)
 	}
 }
 
@@ -127,9 +108,9 @@ func TestCommitSavePointCreateFailedAllowsValidateOrPreparedStoredPhase(t *testi
 	}
 }
 
-func TestCommitSavePointCreateSucceededRejectsMissingMarkerBeforeSQL(t *testing.T) {
+func TestCommitSavePointCreateSucceededRejectsWrongStateBeforeSQL(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
-	record := savePointOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseSavePointCreateCommitted)
+	record := savePointOperationRecord(now, operations.OperationStateRunning, operations.OperationPhaseSavePointCreateCommitted)
 	exec := &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}
 	st := &Store{exec: exec}
 

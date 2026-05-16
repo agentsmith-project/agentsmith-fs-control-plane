@@ -2,6 +2,7 @@ package repoexec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -32,8 +33,8 @@ func TestRestoreExecutorFencesWriterCallsDirectRestoreAndCommitsSucceeded(t *tes
 	if err := executor.ExecuteOperationRecovery(context.Background(), restoreLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "direct_restore" {
-		t.Fatalf("JVS calls = %#v, want direct restore only", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_restore,direct_status" {
+		t.Fatalf("JVS calls = %#v, want direct restore then status", runner.calls)
 	}
 	if runner.restoreSavePointID != "sp_001" {
 		t.Fatalf("restore save point id = %q, want sp_001", runner.restoreSavePointID)
@@ -51,6 +52,9 @@ func TestRestoreExecutorFencesWriterCallsDirectRestoreAndCommitsSucceeded(t *tes
 	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestore || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
 		t.Fatalf("audit events = %#v, want restore success", store.auditEvents)
 	}
+	assertCloneEvidenceProjection(t, store.operation.JVSJSONOutput, "restore")
+	assertCloneEvidenceProjection(t, store.operation.VerificationResult, "restore")
+	assertCloneEvidenceProjection(t, store.auditEvents[0].Details, "restore")
 	assertNoRestoreRunCommandLeak(t, store.operation, store.auditEvents)
 }
 
@@ -110,6 +114,90 @@ func TestRestoreExecutorJVSFailureCommitsFailedWithoutPreviewOrRun(t *testing.T)
 	}
 }
 
+func TestRestoreExecutorJVSRecoveryRequiredCommitsOperatorIntervention(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{directRestoreErr: &jvsrunner.CommandError{Command: "afscp restore", ExitCode: 3, Code: "JVS_JOURNAL_RECOVERY_REQUIRED"}}
+	executor := newTestRestoreExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), restoreLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+	}
+	if strings.Join(runner.calls, ",") != "direct_restore" {
+		t.Fatalf("JVS calls = %#v, want direct restore only", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.operation.Error == nil || store.operation.Error.Code != "JVS_RESTORE_RECOVERY_REQUIRED" {
+		t.Fatalf("operation = %#v, want operator intervention JVS_RESTORE_RECOVERY_REQUIRED", store.operation)
+	}
+	if store.releasedFenceID != "" || activeWriterFenceCount(store.fences, "op_restore") != 1 {
+		t.Fatalf("released/active writer fence = %q/%#v, want retained fence for recovery required", store.releasedFenceID, store.fences)
+	}
+}
+
+func TestRestoreExecutorStatusAllowsNonBlockingCleanupEvidence(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		directRestoreSummary: jvsrunner.DirectRestoreSummary{RestoredSavePointID: "sp_001", PreviousHeadID: "sp_002", NewHeadID: "sp_001"},
+		directStatusSummary:  jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "cleanup_pending", Recovery: "none"},
+	}
+	executor := newTestRestoreExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), restoreLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "direct_restore,direct_status" {
+		t.Fatalf("JVS calls = %#v, want direct restore then status", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestoreCommitted {
+		t.Fatalf("operation = %#v, want succeeded restore_committed", store.operation)
+	}
+	verification := asStringAnyMap(store.operation.VerificationResult)
+	if verification["cleanup_pending"] != true || verification["recovery_required"] != false {
+		t.Fatalf("verification = %#v, want non-blocking cleanup evidence", verification)
+	}
+}
+
+func TestRestoreExecutorStatusRecoveryRetainsWriterFence(t *testing.T) {
+	now := repoExecNow()
+	for _, tt := range []struct {
+		name   string
+		status jvsrunner.DirectStatusSummary
+	}{
+		{name: "journal recovery", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "none", Recovery: "journal_recovery_required"}},
+		{name: "operator intervention", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "none", Recovery: "operator_intervention_required"}},
+		{name: "blocking cleanup", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "cleanup_blocking", Recovery: "none"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.repo = activeRepoResource(now)
+			runner := &fakeJVSRunner{
+				directRestoreSummary: jvsrunner.DirectRestoreSummary{RestoredSavePointID: "sp_001", PreviousHeadID: "sp_002", NewHeadID: "sp_001"},
+				directStatusSummary:  tt.status,
+			}
+			executor := newTestRestoreExecutor(t, store, runner, now)
+
+			err := executor.ExecuteOperationRecovery(context.Background(), restoreLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+			if !errors.Is(err, recovery.ErrOperationManualIntervention) {
+				t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+			}
+			if strings.Join(runner.calls, ",") != "direct_restore,direct_status" {
+				t.Fatalf("JVS calls = %#v, want direct restore then status", runner.calls)
+			}
+			if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.operation.Error == nil || store.operation.Error.Code != "JVS_RESTORE_RECOVERY_REQUIRED" {
+				t.Fatalf("operation = %#v, want recovery-required intervention", store.operation)
+			}
+			if store.releasedFenceID != "" || activeWriterFenceCount(store.fences, "op_restore") != 1 {
+				t.Fatalf("released/active writer fence = %q/%#v, want retained writer fence", store.releasedFenceID, store.fences)
+			}
+			assertNoRestoreRunCommandLeak(t, store.operation, store.auditEvents)
+		})
+	}
+}
+
 func TestRestoreExecutorSourceDoesNotCallPreviewRunOrPlanExecutors(t *testing.T) {
 	body, err := os.ReadFile("restore_executor.go")
 	if err != nil {
@@ -123,7 +211,6 @@ func TestRestoreExecutorSourceDoesNotCallPreviewRunOrPlanExecutors(t *testing.T)
 		"restoreplan.",
 		"GetRestorePlanByPreviewOperation",
 		"MarkRestoreRunConsumingWithLease",
-		"DirectStatus(",
 		"DirectDoctor(",
 		"validateDirectRestoreStatus",
 		"validateDirectRestoreDoctor",

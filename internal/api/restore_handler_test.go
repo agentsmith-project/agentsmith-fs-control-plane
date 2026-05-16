@@ -88,7 +88,7 @@ func TestRestoreHandlerMapsAtomicIntakeGateFailures(t *testing.T) {
 		err      error
 		wantCode ErrorCode
 	}{
-		{name: "same repo jvs mutation", err: operations.ErrRepoJVSMutationInProgress, wantCode: CodeRepoJVSMutationInProgress},
+		{name: "same repo jvs mutation", err: operations.ErrRepoJVSMutationInProgress, wantCode: CodeFileLibraryOperationPending},
 		{name: "different idempotency body", err: operations.ErrIdempotencyConflict, wantCode: CodeIdempotencyConflict},
 	}
 	for _, tt := range tests {
@@ -107,10 +107,44 @@ func TestRestoreHandlerMapsAtomicIntakeGateFailures(t *testing.T) {
 			if env.Error.Code != tt.wantCode {
 				t.Fatalf("error = %#v, want %s", env.Error, tt.wantCode)
 			}
+			if tt.err == operations.ErrRepoJVSMutationInProgress {
+				assertBlockingOperationErrorProductSafe(t, rec.Body.String(), env, false)
+			}
 			if store.restoreIntakeCalls != 1 || store.genericCreateCalls != 0 {
 				t.Fatalf("intake calls restore/generic = %d/%d, want restore-only intake", store.restoreIntakeCalls, store.genericCreateCalls)
 			}
 		})
+	}
+}
+
+func TestRestoreHandlerMapsOperatorInterventionGateToRecoveryRequired(t *testing.T) {
+	now := namespaceBindingHandlerTestNow()
+	store := newFakeRestoreHTTPStore(now)
+	store.jvsMutationStatus = &RepoJVSMutationGateStatus{
+		InProgress:       true,
+		OperationID:      "op_manual",
+		OperationType:    operations.OperationRestore,
+		OperationState:   operations.OperationStateOperatorInterventionRequired,
+		RecoveryRequired: true,
+	}
+	handler := restoreHandlerForTest(store, func() string { return "op_restore" }, func() time.Time { return now })
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001"}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeFileLibraryOperationRequiresRecovery || env.Error.Retryable {
+		t.Fatalf("error = %#v, want non-retryable FILE_LIBRARY_OPERATION_REQUIRES_RECOVERY", env.Error)
+	}
+	if env.Error.OperationID == nil || *env.Error.OperationID != "op_manual" {
+		t.Fatalf("error operation id = %#v, want blocking operation id", env.Error.OperationID)
+	}
+	assertBlockingOperationErrorProductSafe(t, rec.Body.String(), env, true)
+	if store.restoreIntakeCalls != 0 || store.createCalls != 0 {
+		t.Fatalf("intake calls restore/create = %d/%d, want typed gate failure before operation create", store.restoreIntakeCalls, store.createCalls)
 	}
 }
 

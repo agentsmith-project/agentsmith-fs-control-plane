@@ -28,7 +28,7 @@ type RepoTemplateHandlerConfig struct {
 	NamespaceReader   NamespaceReader
 	BindingReader     NamespaceVolumeBindingReader
 	FenceReader       RepoFenceReader
-	MutationGate      RepoJVSMutationGateReader
+	MutationGate      RepoJVSMutationGateStatusReader
 	IntakeStore       TemplateOperationIntakeStore
 	IntakeLookupStore OperationIdempotencyLookupStore
 	PrincipalResolver PrincipalResolver
@@ -78,7 +78,7 @@ func RepoTemplateHandler(config RepoTemplateHandlerConfig) http.Handler {
 	}
 	mutationGate := config.MutationGate
 	if mutationGate == nil {
-		if typed, ok := config.IntakeStore.(RepoJVSMutationGateReader); ok {
+		if typed, ok := config.IntakeStore.(RepoJVSMutationGateStatusReader); ok {
 			mutationGate = typed
 		}
 	}
@@ -127,7 +127,7 @@ type repoTemplateLeafHandler struct {
 	namespaceReader   NamespaceReader
 	bindingReader     NamespaceVolumeBindingReader
 	fenceReader       RepoFenceReader
-	mutationGate      RepoJVSMutationGateReader
+	mutationGate      RepoJVSMutationGateStatusReader
 	intakeStore       TemplateOperationIntakeStore
 	lookupStore       OperationIdempotencyLookupStore
 	operationID       OperationIDGenerator
@@ -469,13 +469,13 @@ func (handler repoTemplateLeafHandler) loadNamespaceBinding(w http.ResponseWrite
 }
 
 func (handler repoTemplateLeafHandler) checkJVSMutationGate(w http.ResponseWriter, r *http.Request, repoID string) bool {
-	inProgress, err := handler.mutationGate.RepoHasNonTerminalJVSMutation(r.Context(), repoID)
+	status, err := readRepoJVSMutationGateStatus(r.Context(), handler.mutationGate, repoID)
 	if err != nil {
 		writeRepoTemplateError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
 		return false
 	}
-	if inProgress {
-		writeRepoTemplateError(w, r, http.StatusConflict, CodeRepoJVSMutationInProgress, "repo JVS mutation is in progress", true)
+	if status.InProgress {
+		writeRepoJVSMutationGateError(w, r, status)
 		return false
 	}
 	return true

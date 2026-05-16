@@ -22,8 +22,10 @@ type SavePointHistoryReader interface {
 	ListSavePoints(ctx context.Context, namespaceID, repoID string) (SavePointHistory, error)
 }
 
-type RepoJVSMutationGateReader interface {
-	RepoHasNonTerminalJVSMutation(ctx context.Context, repoID string) (bool, error)
+type RepoJVSMutationGateStatus = operations.RepoJVSMutationGateStatus
+
+type RepoJVSMutationGateStatusReader interface {
+	GetRepoJVSMutationGateStatus(ctx context.Context, repoID string) (RepoJVSMutationGateStatus, error)
 }
 
 type SavePointHistory struct {
@@ -47,7 +49,7 @@ type SavePointHandlerConfig struct {
 	BindingReader     NamespaceVolumeBindingReader
 	FenceReader       RepoFenceReader
 	HistoryReader     SavePointHistoryReader
-	MutationGate      RepoJVSMutationGateReader
+	MutationGate      RepoJVSMutationGateStatusReader
 	IntakeStore       OperationIntakeStore
 	IntakeLookupStore OperationIdempotencyLookupStore
 	PrincipalResolver PrincipalResolver
@@ -77,7 +79,7 @@ func SavePointHandler(config SavePointHandlerConfig) http.Handler {
 	}
 	mutationGate := config.MutationGate
 	if mutationGate == nil {
-		if typed, ok := config.IntakeStore.(RepoJVSMutationGateReader); ok {
+		if typed, ok := config.IntakeStore.(RepoJVSMutationGateStatusReader); ok {
 			mutationGate = typed
 		}
 	}
@@ -127,7 +129,7 @@ type savePointLeafHandler struct {
 	bindingReader   NamespaceVolumeBindingReader
 	fenceReader     RepoFenceReader
 	historyReader   SavePointHistoryReader
-	mutationGate    RepoJVSMutationGateReader
+	mutationGate    RepoJVSMutationGateStatusReader
 	intakeStore     OperationIntakeStore
 	lookupStore     OperationIdempotencyLookupStore
 	operationID     OperationIDGenerator
@@ -271,16 +273,48 @@ func (handler savePointLeafHandler) serveList(w http.ResponseWriter, r *http.Req
 }
 
 func (handler savePointLeafHandler) checkHistoryReadGate(w http.ResponseWriter, r *http.Request, repoID string) bool {
-	inProgress, err := handler.mutationGate.RepoHasNonTerminalJVSMutation(r.Context(), repoID)
+	status, err := readRepoJVSMutationGateStatus(r.Context(), handler.mutationGate, repoID)
 	if err != nil {
 		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
 		return false
 	}
-	if inProgress {
-		writeSavePointError(w, r, http.StatusConflict, CodeRepoJVSMutationInProgress, "repo JVS mutation is in progress", true)
+	if status.InProgress {
+		writeRepoJVSMutationGateError(w, r, status)
 		return false
 	}
 	return true
+}
+
+func readRepoJVSMutationGateStatus(ctx context.Context, reader RepoJVSMutationGateStatusReader, repoID string) (RepoJVSMutationGateStatus, error) {
+	if reader == nil {
+		return RepoJVSMutationGateStatus{}, errors.New("file library operation gate is not configured")
+	}
+	return reader.GetRepoJVSMutationGateStatus(ctx, repoID)
+}
+
+func writeRepoJVSMutationGateError(w http.ResponseWriter, r *http.Request, status RepoJVSMutationGateStatus) {
+	recoveryRequired := status.RecoveryRequired || status.OperationState == operations.OperationStateOperatorInterventionRequired
+	code, message, retryable, details := fileLibraryBlockingOperationError(recoveryRequired)
+	var operationID *string
+	if strings.TrimSpace(status.OperationID) != "" {
+		id := status.OperationID
+		operationID = &id
+	}
+	envelope := NewErrorEnvelope(code, message, retryable, CorrelationIDFromRequest(r), operationID, details)
+	_ = WriteErrorEnvelope(w, http.StatusConflict, envelope)
+}
+
+func fileLibraryBlockingOperationError(recoveryRequired bool) (ErrorCode, string, bool, map[string]any) {
+	if recoveryRequired {
+		return CodeFileLibraryOperationRequiresRecovery,
+			"file library operation requires recovery",
+			false,
+			map[string]any{"blocking_status": "requires_recovery", "reason": string(CodeFileLibraryOperationRequiresRecovery), "recovery_required": true, "retryable": false}
+	}
+	return CodeFileLibraryOperationPending,
+		"file library operation is in progress",
+		true,
+		map[string]any{"blocking_status": "in_progress", "reason": string(CodeFileLibraryOperationPending), "recovery_required": false, "retryable": true}
 }
 
 func (handler savePointLeafHandler) writeExistingIdempotentOperation(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, namespaceID string, canonical any) bool {

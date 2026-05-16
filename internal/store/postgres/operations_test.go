@@ -30,6 +30,7 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.SavePointCreateOperationRecoveryStore = (*Store)(nil)
 	var _ store.RestoreOperationRecoveryStore = (*Store)(nil)
 	var _ store.RepoJVSMutationGateReader = (*Store)(nil)
+	var _ store.RepoJVSMutationGateStatusReader = (*Store)(nil)
 	var _ store.VolumeEnsureOperationCommitStore = (*Store)(nil)
 	var _ store.VolumeEnsureOperationRecoveryStore = (*Store)(nil)
 	var _ store.NamespaceUpsertOperationCommitStore = (*Store)(nil)
@@ -81,6 +82,40 @@ func TestRepoHasNonTerminalJVSMutationDoesNotInspectRestorePlans(t *testing.T) {
 	)
 	if strings.Contains(query, "restore_plans") {
 		t.Fatalf("save point history gate must not inspect durable restore plans: %s", query)
+	}
+}
+
+func TestRepoJVSMutationGateStatusReturnsBlockingOperation(t *testing.T) {
+	exec := &fakeExecutor{row: fakeRow{values: []any{"op_manual", string(operations.OperationRestore), string(operations.OperationStateOperatorInterventionRequired)}}}
+	st := &Store{exec: exec}
+
+	got, err := st.GetRepoJVSMutationGateStatus(context.Background(), "repo_alpha")
+	if err != nil {
+		t.Fatalf("GetRepoJVSMutationGateStatus: %v", err)
+	}
+	if !got.InProgress || !got.RecoveryRequired || got.OperationID != "op_manual" || got.OperationType != operations.OperationRestore || got.OperationState != operations.OperationStateOperatorInterventionRequired {
+		t.Fatalf("status = %#v, want operator intervention blocking operation", got)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"SELECT operation_id, operation_type, operation_state",
+		"FROM operations",
+		"repo_id = $1",
+		"operation_type IN ('save_point_create', 'restore', 'template_create', 'template_clone')",
+		"operation_state NOT IN ('succeeded','failed','cancelled')",
+		"ORDER BY",
+		"LIMIT 1",
+	)
+}
+
+func TestRepoJVSMutationGateStatusReturnsEmptyWhenNoRows(t *testing.T) {
+	st := &Store{exec: &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}}
+
+	got, err := st.GetRepoJVSMutationGateStatus(context.Background(), "repo_alpha")
+	if err != nil {
+		t.Fatalf("GetRepoJVSMutationGateStatus: %v", err)
+	}
+	if got.InProgress {
+		t.Fatalf("status = %#v, want no blocking operation", got)
 	}
 }
 

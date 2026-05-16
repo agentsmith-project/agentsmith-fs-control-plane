@@ -1246,10 +1246,6 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	store := newWorkerAppStore(record)
 	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
 	jvs := &workerAppFakeJVSRunner{
-		directListSummary: jvsrunner.DirectListSummary{
-			HistoryHeadID: "sp_before",
-			SavePoints:    []jvsrunner.DirectSavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z", HistoryHead: true}},
-		},
 		directSaveSummary: jvsrunner.DirectSaveSummary{
 			SavePointID:   "sp_after",
 			HistoryHeadID: "sp_after",
@@ -1282,8 +1278,8 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	if store.savePointListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_savepoint" {
 		t.Fatalf("list/acquire = %d/%#v, want save_point_create listed and acquired", store.savePointListCalls, store.acquireIDs)
 	}
-	if strings.Join(jvs.calls, ",") != "direct_list,direct_save" {
-		t.Fatalf("jvs calls = %#v, want direct_list,direct_save", jvs.calls)
+	if strings.Join(jvs.calls, ",") != "direct_save" {
+		t.Fatalf("jvs calls = %#v, want direct_save", jvs.calls)
 	}
 	if store.operation.ID != record.ID || store.operation.Type != operations.OperationSavePointCreate || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseSavePointCreateCommitted {
 		t.Fatalf("operation = %#v, want succeeded save_point_create_committed", store.operation)
@@ -1388,14 +1384,113 @@ func TestRunOnceRestoreEnabledClaimsThroughDirectRestoreExecutor(t *testing.T) {
 	if store.restoreListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_restore" {
 		t.Fatalf("list/acquire = %d/%#v, want restore listed and acquired", store.restoreListCalls, store.acquireIDs)
 	}
-	if strings.Join(jvs.calls, ",") != "direct_restore" {
-		t.Fatalf("jvs calls = %#v, want direct_restore only", jvs.calls)
+	if strings.Join(jvs.calls, ",") != "direct_restore,direct_status" {
+		t.Fatalf("jvs calls = %#v, want direct_restore,direct_status", jvs.calls)
 	}
 	if store.operation.Type != operations.OperationRestore || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestoreCommitted {
 		t.Fatalf("operation = %#v, want succeeded direct restore", store.operation)
 	}
 	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestore || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
 		t.Fatalf("audit events = %#v, want direct restore success", store.auditEvents)
+	}
+}
+
+func TestRunOnceRestoreEnabledAllowsNonBlockingCleanupStatus(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppRestoreOperationRecord("op_restore", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	jvs := &workerAppFakeJVSRunner{
+		directRestoreSummary: jvsrunner.DirectRestoreSummary{RestoredSavePointID: "sp_001", PreviousHeadID: "sp_before", NewHeadID: "sp_001"},
+		directStatusSummary:  jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "cleanup_pending", Recovery: "none"},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRestoreConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_restore" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if summary := result.Summary().Operation; summary.Claimed != 1 || summary.Manual != 0 || summary.Failed != 0 {
+		t.Fatalf("summary = %#v, want restore success despite non-blocking cleanup evidence", summary)
+	}
+	if strings.Join(jvs.calls, ",") != "direct_restore,direct_status" {
+		t.Fatalf("jvs calls = %#v, want direct_restore,direct_status", jvs.calls)
+	}
+	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestoreCommitted {
+		t.Fatalf("operation = %#v, want succeeded direct restore", store.operation)
+	}
+}
+
+func TestRunOnceRestoreEnabledStatusRecoveryRetainsGate(t *testing.T) {
+	now := workerAppNow()
+	tests := []struct {
+		name   string
+		status jvsrunner.DirectStatusSummary
+	}{
+		{name: "journal recovery", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "none", Recovery: "journal_recovery_required"}},
+		{name: "operator intervention", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "none", Recovery: "operator_intervention_required"}},
+		{name: "blocking cleanup", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "cleanup_blocking", Recovery: "none"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := workerAppRestoreOperationRecord("op_restore", now)
+			store := newWorkerAppStore(record)
+			store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+			jvs := &workerAppFakeJVSRunner{
+				directRestoreSummary: jvsrunner.DirectRestoreSummary{RestoredSavePointID: "sp_001", PreviousHeadID: "sp_before", NewHeadID: "sp_001"},
+				directStatusSummary:  tt.status,
+			}
+			runner, err := NewRunOnceRunner(Options{
+				Source: workerAppRestoreConfigSource(nil),
+				StoreFactory: func(context.Context, string) (StoreHandle, error) {
+					return StoreHandle{Store: store}, nil
+				},
+				JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+					return jvs, nil
+				},
+				Clock:        func() time.Time { return now },
+				AuditEventID: func() string { return "evt_restore" },
+			})
+			if err != nil {
+				t.Fatalf("NewRunOnceRunner: %v", err)
+			}
+
+			result, err := runner.RunOnce(context.Background())
+			if err == nil {
+				t.Fatalf("RunOnce succeeded result=%#v, want manual intervention count error", result)
+			}
+			if summary := result.Summary().Operation; summary.Manual != 1 || summary.Failed != 0 {
+				t.Fatalf("summary = %#v, want manual recovery required", summary)
+			}
+			if strings.Join(jvs.calls, ",") != "direct_restore,direct_status" {
+				t.Fatalf("jvs calls = %#v, want direct_restore,direct_status", jvs.calls)
+			}
+			if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.operation.Error == nil || store.operation.Error.Code != "JVS_RESTORE_RECOVERY_REQUIRED" {
+				t.Fatalf("operation = %#v, want JVS_RESTORE_RECOVERY_REQUIRED operator intervention", store.operation)
+			}
+			if store.releasedFenceID != "" || activeWorkerAppWriterFenceCount(store.fences, "op_restore") != 1 {
+				t.Fatalf("released/active writer fence = %q/%#v, want retained writer fence", store.releasedFenceID, store.fences)
+			}
+			rendered := fmt.Sprint(store.operation.JVSJSONOutput, store.operation.VerificationResult, store.operation.Error, store.auditEvents)
+			for _, leaked := range []string{jvs.controlRoot, jvs.payloadRoot, "/srv/afscp", "control_root", "payload_root"} {
+				if leaked != "" && strings.Contains(rendered, leaked) {
+					t.Fatalf("restore status projection leaked internal path/detail %q: %s", leaked, rendered)
+				}
+			}
+		})
 	}
 }
 
@@ -2046,6 +2141,16 @@ func assertWorkerAppUnsupportedAudit(t *testing.T, store *fakeWorkerAppStore, re
 	if event.Details["reason"] != got.Error.Details["reason"] || event.Details["evidence"] == nil {
 		t.Fatalf("audit details = %#v, want reason/evidence matching operation", event.Details)
 	}
+}
+
+func activeWorkerAppWriterFenceCount(fencesList []fences.Fence, operationID string) int {
+	count := 0
+	for _, fence := range fencesList {
+		if fence.Kind == fences.KindWriterSession && fence.HolderOperationID == operationID && fence.Status == fences.StatusActive && fence.ReleasedAt == nil && fence.RecoveredAt == nil {
+			count++
+		}
+	}
+	return count
 }
 
 func workerAppConfigSource(overrides config.MapSource) config.MapSource {
@@ -3556,13 +3661,6 @@ func (store *fakeWorkerAppStore) CommitRepoPurgeFailedWithLease(_ context.Contex
 	return operation, nil
 }
 
-func (store *fakeWorkerAppStore) UpdateSavePointCreateProgressWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time) (operations.OperationRecord, error) {
-	operation := record.Record()
-	store.records[operation.ID] = operation
-	store.operation = operation
-	return operation, nil
-}
-
 func (store *fakeWorkerAppStore) CommitSavePointCreateSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
 	operation := record.Record()
 	operation.LeaseOwner = ""
@@ -3663,7 +3761,7 @@ func (store *fakeWorkerAppStore) CommitRestoreFailedWithLease(_ context.Context,
 	operation.LeaseOwner = ""
 	operation.LeaseExpiresAt = nil
 	store.records[operation.ID] = operation
-	if operation.Phase == operations.OperationPhaseRestoreWriterFenced {
+	if operation.Phase == operations.OperationPhaseRestoreWriterFenced && operation.State == operations.OperationStateFailed {
 		store.releaseWorkerAppWriterFence(operation.SessionFenceID, now)
 	}
 	store.operation = operation

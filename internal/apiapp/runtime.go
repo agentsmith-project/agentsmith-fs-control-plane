@@ -37,7 +37,7 @@ type InternalStore interface {
 	api.RepoReader
 	api.VolumeReader
 	api.RepoFenceReader
-	api.RepoJVSMutationGateReader
+	api.RepoJVSMutationGateStatusReader
 	api.OperationInspectionStoreReader
 	api.OperationIntakeStore
 	api.RepoCreateOperationIntakeStore

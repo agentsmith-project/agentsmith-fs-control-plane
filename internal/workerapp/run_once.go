@@ -1025,10 +1025,6 @@ func (scoped operationRecoveryStore) CommitRepoPurgeFailedWithLease(ctx context.
 	return scoped.store.CommitRepoPurgeFailedWithLease(ctx, record, owner, now, event, releaseFenceID)
 }
 
-func (scoped operationRecoveryStore) UpdateSavePointCreateProgressWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
-	return scoped.store.UpdateSavePointCreateProgressWithLease(ctx, record, owner, now)
-}
-
 func (scoped operationRecoveryStore) CommitSavePointCreateSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	return scoped.store.CommitSavePointCreateSucceededWithLease(ctx, record, owner, now, event)
 }

@@ -308,7 +308,6 @@ type RepoPurgeOperationRecoveryStore interface {
 }
 
 type SavePointCreateOperationCommitStore interface {
-	UpdateSavePointCreateProgressWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error)
 	CommitSavePointCreateSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
 	CommitSavePointCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
 }
@@ -350,10 +349,15 @@ type RepoJVSMutationGateReader interface {
 	RepoHasNonTerminalJVSMutation(ctx context.Context, repoID string) (bool, error)
 }
 
+type RepoJVSMutationGateStatusReader interface {
+	GetRepoJVSMutationGateStatus(ctx context.Context, repoID string) (operations.RepoJVSMutationGateStatus, error)
+}
+
 // SavePointCreateOperationRecoveryStore owns save_point_create recovery. It
 // serializes same-repo JVS mutations at acquire time using earlier
-// non-terminal operation records rather than repo_fences, and it persists the
-// pre-save history pointer before any JVS save command can run.
+// non-terminal operation records rather than repo_fences. The worker executes a
+// single direct save; uncertain retries enter operator intervention instead of
+// issuing list/adoption fallback commands.
 type SavePointCreateOperationRecoveryStore interface {
 	ListSavePointCreateOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
 	AcquireSavePointCreateOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)

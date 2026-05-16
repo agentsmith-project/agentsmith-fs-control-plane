@@ -97,6 +97,7 @@ func TestAFSCPDirectMethodsUseTargetSelectorAndNoLegacyFlags(t *testing.T) {
 				if got.SavePointID != "sp_001" || got.HistoryHeadID != "sp_001" || got.Message != "checkpoint before restore" || got.CreatedAt != "2026-05-05T12:00:00Z" {
 					t.Fatalf("summary = %#v", got)
 				}
+				assertCloneEvidenceSummary(t, got.CloneEvidence, "save", []string{"save_point_payload"})
 			},
 		},
 		{
@@ -125,6 +126,7 @@ func TestAFSCPDirectMethodsUseTargetSelectorAndNoLegacyFlags(t *testing.T) {
 				if got.RestoredSavePointID != "sp_001" || got.PreviousHeadID != "sp_002" || got.NewHeadID != "sp_001" {
 					t.Fatalf("summary = %#v", got)
 				}
+				assertCloneEvidenceSummary(t, got.CloneEvidence, "restore", []string{"restore_staging"})
 			},
 		},
 		{
@@ -139,6 +141,7 @@ func TestAFSCPDirectMethodsUseTargetSelectorAndNoLegacyFlags(t *testing.T) {
 				if got.SourceRepoID != "jvs_repo_alpha" || got.TargetRepoID != "jvs_repo_clone" || got.SavePointID != "sp_001" || got.SavePointsMode != "main" || got.SavePointsCopiedCount != 1 || got.RuntimeStateCopied || got.Workspace != "main" {
 					t.Fatalf("summary = %#v", got)
 				}
+				assertCloneEvidenceSummary(t, got.CloneEvidence, "clone", []string{"clone_target_home", "clone_target_snapshot"})
 			},
 		},
 		{
@@ -743,6 +746,88 @@ func TestNewJVSPrimitivesFailClosedForInvalidEnvelope(t *testing.T) {
 			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
 			return err
 		}},
+		{name: "direct save missing clone evidence", stdout: directSaveStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "clone_evidence") }), call: func(r *Runner) error {
+			_, err := r.DirectSave(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, "checkpoint")
+			return err
+		}},
+		{name: "direct restore missing clone evidence", stdout: directRestoreStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "clone_evidence") }), call: func(r *Runner) error {
+			_, err := r.DirectRestore(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, "sp_001")
+			return err
+		}},
+		{name: "direct clone missing clone evidence", stdout: directCloneStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "clone_evidence") }), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
+			return err
+		}},
+		{name: "direct save clone evidence rejects path field", stdout: directSaveStdoutWith(t, func(env map[string]any) {
+			evidence := env["data"].(map[string]any)["clone_evidence"].([]map[string]any)
+			evidence[0]["source_path"] = testControlRoot
+		}), call: func(r *Runner) error {
+			_, err := r.DirectSave(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, "checkpoint")
+			return err
+		}},
+		{name: "direct restore clone evidence rejects negative duration", stdout: directRestoreStdoutWith(t, func(env map[string]any) {
+			evidence := env["data"].(map[string]any)["clone_evidence"].([]map[string]any)
+			evidence[0]["duration_ms"] = -1
+		}), call: func(r *Runner) error {
+			_, err := r.DirectRestore(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, "sp_001")
+			return err
+		}},
+		{name: "direct clone evidence rejects missing started at", stdout: directCloneStdoutWith(t, func(env map[string]any) {
+			evidence := env["data"].(map[string]any)["clone_evidence"].([]map[string]any)
+			delete(evidence[0], "started_at")
+		}), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
+			return err
+		}},
+		{name: "direct clone evidence rejects missing finished at", stdout: directCloneStdoutWith(t, func(env map[string]any) {
+			evidence := env["data"].(map[string]any)["clone_evidence"].([]map[string]any)
+			delete(evidence[0], "finished_at")
+		}), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
+			return err
+		}},
+		{name: "direct clone evidence rejects missing status", stdout: directCloneStdoutWith(t, func(env map[string]any) {
+			evidence := env["data"].(map[string]any)["clone_evidence"].([]map[string]any)
+			delete(evidence[0], "status")
+		}), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
+			return err
+		}},
+		{name: "direct clone evidence rejects missing engine", stdout: directCloneStdoutWith(t, func(env map[string]any) {
+			evidence := env["data"].(map[string]any)["clone_evidence"].([]map[string]any)
+			delete(evidence[0], "engine")
+		}), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
+			return err
+		}},
+		{name: "direct clone evidence rejects missing phase", stdout: directCloneStdoutWith(t, func(env map[string]any) {
+			evidence := env["data"].(map[string]any)["clone_evidence"].([]map[string]any)
+			delete(evidence[0], "phase")
+		}), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
+			return err
+		}},
+		{name: "direct clone evidence rejects raw argv field", stdout: directCloneStdoutWith(t, func(env map[string]any) {
+			evidence := env["data"].(map[string]any)["clone_evidence"].([]map[string]any)
+			evidence[0]["raw_argv"] = []string{"jvs", "afscp", "clone"}
+		}), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
+			return err
+		}},
+		{name: "direct clone evidence rejects secret field", stdout: directCloneStdoutWith(t, func(env map[string]any) {
+			evidence := env["data"].(map[string]any)["clone_evidence"].([]map[string]any)
+			evidence[0]["secret_ref"] = "credential_alpha"
+		}), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
+			return err
+		}},
+		{name: "direct clone evidence rejects internal path field", stdout: directCloneStdoutWith(t, func(env map[string]any) {
+			evidence := env["data"].(map[string]any)["clone_evidence"].([]map[string]any)
+			evidence[0]["internal_path"] = testControlRoot
+		}), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
+			return err
+		}},
 		{name: "direct clone save point mismatch", stdout: directCloneStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["save_point_id"] = "sp_other" }), call: func(r *Runner) error {
 			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
 			return err
@@ -961,6 +1046,7 @@ func directSaveStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	data["created_at"] = "2026-05-05T12:00:00Z"
 	data["message"] = "checkpoint before restore"
 	data["history_head"] = "sp_001"
+	data["clone_evidence"] = []map[string]any{directCloneEvidence("save", "save_point_payload", 42)}
 	if mutate != nil {
 		mutate(env)
 	}
@@ -999,6 +1085,7 @@ func directRestoreStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	data["restored_save_point_id"] = "sp_001"
 	data["previous_head"] = "sp_002"
 	data["new_head"] = "sp_001"
+	data["clone_evidence"] = []map[string]any{directCloneEvidence("restore", "restore_staging", 17)}
 	if mutate != nil {
 		mutate(env)
 	}
@@ -1018,10 +1105,42 @@ func directCloneStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	data["target_repo_id"] = "jvs_repo_clone"
 	data["save_point_id"] = "sp_001"
 	data["save_points_copied_count"] = 1
+	data["clone_evidence"] = []map[string]any{
+		directCloneEvidence("clone", "clone_target_home", 23),
+		directCloneEvidence("clone", "clone_target_snapshot", 11),
+	}
 	if mutate != nil {
 		mutate(env)
 	}
 	return mustJSON(t, env)
+}
+
+func directCloneEvidence(operation, phase string, durationMs int64) map[string]any {
+	return map[string]any{
+		"operation":   operation,
+		"phase":       phase,
+		"engine":      "juicefs_clone",
+		"status":      "succeeded",
+		"started_at":  "2026-05-05T12:00:00Z",
+		"finished_at": "2026-05-05T12:00:01Z",
+		"duration_ms": durationMs,
+	}
+}
+
+func assertCloneEvidenceSummary(t *testing.T, got []CloneEvidence, operation string, phases []string) {
+	t.Helper()
+	if len(got) != len(phases) {
+		t.Fatalf("clone evidence = %#v, want %d items", got, len(phases))
+	}
+	for idx, phase := range phases {
+		item := got[idx]
+		if item.Operation != operation || item.Phase != phase || item.Engine != "juicefs_clone" || item.Status != "succeeded" {
+			t.Fatalf("clone evidence[%d] = %#v, want %s/%s juicefs_clone succeeded", idx, item, operation, phase)
+		}
+		if item.StartedAt == "" || item.FinishedAt == "" || item.DurationMs < 0 {
+			t.Fatalf("clone evidence[%d] timing = %#v, want operator-safe timing", idx, item)
+		}
+	}
 }
 
 func directStatusSuccessStdout(t *testing.T) []byte {

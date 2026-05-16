@@ -38,6 +38,27 @@ func TestCreateRepoTemplateHandlerQueuesOperationAfterPolicyAndMutationGates(t *
 	}
 }
 
+func TestCreateRepoTemplateMutationGateUsesProductSafeBlockingError(t *testing.T) {
+	store := &fakeOperationIntakeStore{jvsMutation: true}
+	meta := repoTemplateMetaFixture()
+	handler := repoTemplateHandlerForTest(store, meta)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, repoTemplateRequest(http.MethodPost, "/internal/v1/repo-templates", "ns_123", `{"namespace_id":"ns_123","source_repo_id":"repo_123","target_template_id":"tmpl_base01","clone_history_mode":"main"}`))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeFileLibraryOperationPending || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want retryable FILE_LIBRARY_OPERATION_PENDING", env.Error)
+	}
+	assertBlockingOperationErrorProductSafe(t, rec.Body.String(), env, false)
+	if store.calls != 0 || store.jvsMutationCalls != 1 {
+		t.Fatalf("intake/mutation calls = %d/%d, want mutation gate before operation create", store.calls, store.jvsMutationCalls)
+	}
+}
+
 func TestRepoTemplateCreateRejectsDisabledNamespaceBeforeIntakeAndAudits(t *testing.T) {
 	tests := []struct {
 		name string

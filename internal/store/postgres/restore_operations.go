@@ -425,13 +425,13 @@ func restoreFailureCommitWithLeaseSQL() string {
 		"AND input_summary->>'save_point_id' = $20 " +
 		"AND ((phase = 'validate_restore' AND $21 = '') OR (phase = 'restore_writer_fenced' AND session_fence_id = $21 AND $21 <> '')) FOR UPDATE" +
 		"), held_writer_fence AS (" +
-		"SELECT fence_id FROM repo_fences, eligible_operation WHERE eligible_operation.phase = 'restore_writer_fenced' AND repo_fences.repo_id = $15 AND repo_fences.fence_id = $21 AND repo_fences.fence_kind = 'writer_session' AND repo_fences.holder_operation_id = $12 AND repo_fences.status = 'active' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL FOR UPDATE" +
+		"SELECT fence_id FROM repo_fences, eligible_operation WHERE $1 = 'failed' AND eligible_operation.phase = 'restore_writer_fenced' AND repo_fences.repo_id = $15 AND repo_fences.fence_id = $21 AND repo_fences.fence_kind = 'writer_session' AND repo_fences.holder_operation_id = $12 AND repo_fences.status = 'active' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL FOR UPDATE" +
 		"), released_writer_fence AS (" +
 		"UPDATE repo_fences SET status = 'released', released_at = $11, updated_at = $11 FROM held_writer_fence WHERE repo_fences.fence_id = held_writer_fence.fence_id RETURNING repo_fences.fence_id" +
 		"), updated_operation AS (" +
 		operationLeaseFencedUpdateSetSQL() +
 		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id " +
-		"AND (eligible_operation.phase = 'validate_restore' OR EXISTS (SELECT 1 FROM released_writer_fence)) RETURNING " + operationReturningColumnsSQL() +
+		"AND (eligible_operation.phase = 'validate_restore' OR $1 = 'operator_intervention_required' OR EXISTS (SELECT 1 FROM released_writer_fence)) RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(22, len(auditOutboxColumns)) + " FROM updated_operation RETURNING audit_event_id" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"

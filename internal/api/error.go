@@ -17,23 +17,25 @@ const (
 type ErrorCode string
 
 const (
-	CodeAuthenticationFailed      ErrorCode = "AUTHENTICATION_FAILED"
-	CodeCallerNotAllowed          ErrorCode = "CALLER_NOT_ALLOWED"
-	CodeRoleNotAllowed            ErrorCode = "ROLE_NOT_ALLOWED"
-	CodeNamespaceNotFound         ErrorCode = "NAMESPACE_NOT_FOUND"
-	CodeNamespaceDisabled         ErrorCode = "NAMESPACE_DISABLED"
-	CodeResourceNamespaceMismatch ErrorCode = "RESOURCE_NAMESPACE_MISMATCH"
-	CodeInvalidID                 ErrorCode = "INVALID_ID"
-	CodePathDenied                ErrorCode = "PATH_DENIED"
-	CodeCapabilityDenied          ErrorCode = "CAPABILITY_DENIED"
-	CodeIdempotencyConflict       ErrorCode = "IDEMPOTENCY_CONFLICT"
-	CodeRepoAlreadyExists         ErrorCode = "REPO_ALREADY_EXISTS"
-	CodeRepoNotFound              ErrorCode = "REPO_NOT_FOUND"
-	CodeVolumeNotFound            ErrorCode = "VOLUME_NOT_FOUND"
-	CodeOperationNotFound         ErrorCode = "OPERATION_NOT_FOUND"
-	CodeStorageUnavailable        ErrorCode = "STORAGE_UNAVAILABLE"
-	CodeInternalError             ErrorCode = "INTERNAL_ERROR"
-	CodeRepoJVSMutationInProgress ErrorCode = "REPO_JVS_MUTATION_IN_PROGRESS"
+	CodeAuthenticationFailed                 ErrorCode = "AUTHENTICATION_FAILED"
+	CodeCallerNotAllowed                     ErrorCode = "CALLER_NOT_ALLOWED"
+	CodeRoleNotAllowed                       ErrorCode = "ROLE_NOT_ALLOWED"
+	CodeNamespaceNotFound                    ErrorCode = "NAMESPACE_NOT_FOUND"
+	CodeNamespaceDisabled                    ErrorCode = "NAMESPACE_DISABLED"
+	CodeResourceNamespaceMismatch            ErrorCode = "RESOURCE_NAMESPACE_MISMATCH"
+	CodeInvalidID                            ErrorCode = "INVALID_ID"
+	CodePathDenied                           ErrorCode = "PATH_DENIED"
+	CodeCapabilityDenied                     ErrorCode = "CAPABILITY_DENIED"
+	CodeIdempotencyConflict                  ErrorCode = "IDEMPOTENCY_CONFLICT"
+	CodeRepoAlreadyExists                    ErrorCode = "REPO_ALREADY_EXISTS"
+	CodeRepoNotFound                         ErrorCode = "REPO_NOT_FOUND"
+	CodeVolumeNotFound                       ErrorCode = "VOLUME_NOT_FOUND"
+	CodeOperationNotFound                    ErrorCode = "OPERATION_NOT_FOUND"
+	CodeStorageUnavailable                   ErrorCode = "STORAGE_UNAVAILABLE"
+	CodeInternalError                        ErrorCode = "INTERNAL_ERROR"
+	CodeRepoJVSMutationInProgress            ErrorCode = "REPO_JVS_MUTATION_IN_PROGRESS"
+	CodeFileLibraryOperationPending          ErrorCode = "FILE_LIBRARY_OPERATION_PENDING"
+	CodeFileLibraryOperationRequiresRecovery ErrorCode = "FILE_LIBRARY_OPERATION_REQUIRES_RECOVERY"
 
 	CodeActiveWriterSessions        ErrorCode = "ACTIVE_WRITER_SESSIONS"
 	CodeWriterSessionFenceHeld      ErrorCode = "WRITER_SESSION_FENCE_HELD"
@@ -79,6 +81,8 @@ var allErrorCodes = []ErrorCode{
 	CodeStorageUnavailable,
 	CodeInternalError,
 	CodeRepoJVSMutationInProgress,
+	CodeFileLibraryOperationPending,
+	CodeFileLibraryOperationRequiresRecovery,
 	CodeActiveWriterSessions,
 	CodeWriterSessionFenceHeld,
 	CodeStaleWriterSessionUncertain,

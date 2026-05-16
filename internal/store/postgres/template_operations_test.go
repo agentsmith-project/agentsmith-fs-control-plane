@@ -47,6 +47,55 @@ func TestMarkTemplateCreateWriterFencedWithLeaseLocksRepoBeforeWriterFence(t *te
 	}
 }
 
+func TestAcquireTemplateCreateOperationLeaseSerializesEarlierLifecycleAndJVSMutations(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := templateCreateOperationRecord(now, operations.OperationStateRunning, operations.OperationPhaseTemplateCreateValidate)
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
+	st := &Store{exec: exec}
+
+	_, err := st.AcquireTemplateCreateOperationLease(context.Background(), record.ID, operations.LeaseRequest{Owner: "worker-a", Duration: time.Minute, Now: now})
+	if err != nil {
+		t.Fatalf("AcquireTemplateCreateOperationLease: %v", err)
+	}
+
+	assertSQLContainsInOrder(t, exec.query,
+		"WITH eligible_operation AS",
+		"operation_type = 'template_create'",
+		"phase IN ('validate_template_create','template_create_writer_fenced')",
+		"earlier_jvs_mutation AS",
+		"o.operation_id <> e.operation_id",
+		"o.operation_type IN ('save_point_create', 'restore', 'template_create', 'template_clone')",
+		"earlier_repo_lifecycle AS",
+		"o.operation_id <> e.operation_id",
+		"o.operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned', 'repo_purge')",
+		"operation_state NOT IN ('succeeded','failed','cancelled')",
+		"NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)",
+		"NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle)",
+	)
+	for _, forbidden := range []string{"restore_plans", "active_restore_plan"} {
+		if strings.Contains(exec.query, forbidden) {
+			t.Fatalf("template create acquire SQL must not inspect %q: %s", forbidden, exec.query)
+		}
+	}
+}
+
+func TestTemplateCloneJVSGateScopeUsesTargetRepoOnly(t *testing.T) {
+	if got := repoJVSMutationOperationTypeSQLList(); !strings.Contains(got, "'template_clone'") {
+		t.Fatalf("mutation operation list = %s, want template_clone covered", got)
+	}
+	assertSQLContainsInOrder(t, templateCloneOperationCreateOrReuseSQL(),
+		"operation_type = 'template_clone'",
+		"AND NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = $18)",
+	)
+	assertSQLContainsInOrder(t, templateCloneOperationAcquireLeaseSQL(),
+		"operation_type = 'template_clone'",
+		"phase = 'validate_template_clone'",
+	)
+	if strings.Contains(templateCloneOperationAcquireLeaseSQL(), "template_id =") {
+		t.Fatalf("template clone acquire should not serialize source template JVS state because clone mutates target repo only: %s", templateCloneOperationAcquireLeaseSQL())
+	}
+}
+
 func TestCommitTemplateCreateFailedWithLeaseReleasesWriterFenceOnPostFenceFailure(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	record := templateCreateOperationRecord(now, operations.OperationStateFailed, operations.OperationPhaseTemplateCreateWriterFenced)

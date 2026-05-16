@@ -21,6 +21,7 @@ import (
 
 type RestoreJVSRunner interface {
 	DirectRestore(ctx context.Context, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectRestoreSummary, error)
+	DirectStatus(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectStatusSummary, error)
 }
 
 type RestoreConfig struct {
@@ -146,12 +147,23 @@ func (executor *RestoreExecutor) ExecuteOperationRecovery(ctx context.Context, r
 
 	summary, err := executor.jvs.DirectRestore(ctx, target, savePointID)
 	if err != nil {
+		if isJVSRecoveryRequiredError(err) {
+			return executor.commitRestoreIntervention(ctx, working, now, "JVS_RESTORE_RECOVERY_REQUIRED", "jvs restore recovery required", withJVSErrorDetails(nil, err))
+		}
 		return executor.commitRestoreFailed(ctx, working, now, "JVS_RESTORE_FAILED", "jvs restore failed", withJVSErrorDetails(nil, err))
 	}
 	if err := validateDirectRestoreSummary(summary, savePointID); err != nil {
 		return executor.commitRestoreIntervention(ctx, working, now, "RESTORE_RESULT_MISMATCH", "restore result mismatch", nil)
 	}
-	return executor.commitRestoreSuccess(ctx, working, executor.currentTime(), summary)
+	status, err := executor.jvs.DirectStatus(ctx, target)
+	if err != nil {
+		return executor.commitRestoreIntervention(ctx, working, now, "JVS_RESTORE_RECOVERY_REQUIRED", "jvs restore recovery required", map[string]any{"restore_status_unavailable": true})
+	}
+	projection := projectDirectRestoreStatus(status, savePointID)
+	if projection.recoveryRequired {
+		return executor.commitRestoreIntervention(ctx, working, now, "JVS_RESTORE_RECOVERY_REQUIRED", "jvs restore recovery required", projection.evidence)
+	}
+	return executor.commitRestoreSuccess(ctx, working, executor.currentTime(), summary, projection.evidence)
 }
 
 func (executor *RestoreExecutor) currentTime() time.Time {
@@ -259,7 +271,7 @@ func restoreWriterGateFamily(err error) string {
 	return ""
 }
 
-func (executor *RestoreExecutor) commitRestoreSuccess(ctx context.Context, record operations.OperationRecord, now time.Time, summary jvsrunner.DirectRestoreSummary) error {
+func (executor *RestoreExecutor) commitRestoreSuccess(ctx context.Context, record operations.OperationRecord, now time.Time, summary jvsrunner.DirectRestoreSummary, statusEvidence map[string]any) error {
 	operation := record
 	operation.State = operations.OperationStateSucceeded
 	operation.Phase = operations.OperationPhaseRestoreCommitted
@@ -270,11 +282,12 @@ func (executor *RestoreExecutor) commitRestoreSuccess(ctx context.Context, recor
 		jvsOutput["previous_head"] = summary.PreviousHeadID
 		verification["previous_head"] = summary.PreviousHeadID
 	}
-	operation.JVSJSONOutput = jvsOutput
-	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), verification)
+	operation.JVSJSONOutput = withCloneEvidenceProjection(jvsOutput, summary.CloneEvidence)
+	verification = mergeStringAnyMap(verification, statusEvidence)
+	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), withCloneEvidenceProjection(verification, summary.CloneEvidence))
 	operation.Error = nil
 	operation.FinishedAt = &now
-	event, err := executor.auditEvent(operation, now, audit.OutcomeSucceeded, "restore_committed", map[string]any{"repo_id": record.RepoID, "restored_save_point_id": summary.RestoredSavePointID})
+	event, err := executor.auditEvent(operation, now, audit.OutcomeSucceeded, "restore_committed", withCloneEvidenceProjection(map[string]any{"repo_id": record.RepoID, "restored_save_point_id": summary.RestoredSavePointID}, summary.CloneEvidence))
 	if err != nil {
 		return err
 	}
@@ -400,6 +413,49 @@ func validateDirectRestoreSummary(summary jvsrunner.DirectRestoreSummary, savePo
 		}
 	}
 	return nil
+}
+
+type directRestoreStatusProjection struct {
+	recoveryRequired bool
+	evidence         map[string]any
+}
+
+func projectDirectRestoreStatus(status jvsrunner.DirectStatusSummary, savePointID string) directRestoreStatusProjection {
+	evidence := map[string]any{"restore_status_checked": true, "recovery_required": false}
+	if status.HistoryHeadID != savePointID {
+		return directRestoreStatusProjection{
+			recoveryRequired: true,
+			evidence:         map[string]any{"restore_status_checked": true, "recovery_required": true, "restore_status_mismatch": true},
+		}
+	}
+	if strings.TrimSpace(status.MetadataState) != "clean" {
+		return directRestoreStatusProjection{
+			recoveryRequired: true,
+			evidence:         map[string]any{"restore_status_checked": true, "recovery_required": true, "metadata_recovery_required": true},
+		}
+	}
+
+	switch strings.TrimSpace(status.Recovery) {
+	case "", "none":
+	default:
+		return directRestoreStatusProjection{
+			recoveryRequired: true,
+			evidence:         map[string]any{"restore_status_checked": true, "recovery_required": true, "journal_recovery_required": true},
+		}
+	}
+
+	switch strings.TrimSpace(status.ActiveOperation) {
+	case "", "none":
+		return directRestoreStatusProjection{evidence: evidence}
+	case "cleanup_pending", "cleanup_non_blocking":
+		evidence["cleanup_pending"] = true
+		return directRestoreStatusProjection{evidence: evidence}
+	default:
+		return directRestoreStatusProjection{
+			recoveryRequired: true,
+			evidence:         map[string]any{"restore_status_checked": true, "recovery_required": true, "cleanup_blocking": true},
+		}
+	}
 }
 
 var _ recovery.OperationExecutor = (*RestoreExecutor)(nil)

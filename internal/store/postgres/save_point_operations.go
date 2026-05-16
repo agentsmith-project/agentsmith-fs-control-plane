@@ -11,27 +11,6 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
 
-func (store *Store) UpdateSavePointCreateProgressWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
-	record := sanitized.Record()
-	if err := validateSavePointCreateProgressRecord(record); err != nil {
-		return operations.OperationRecord{}, err
-	}
-	args, err := operationLeaseFencedUpdateArgs(record, owner, now)
-	if err != nil {
-		return operations.OperationRecord{}, err
-	}
-	args = append(args, savePointCreateStoredPredicateArgs(record)...)
-	row := store.exec.QueryRowContext(ctx, savePointCreateProgressUpdateWithLeaseSQL(), args...)
-	got, err := scanOperation(row)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return operations.OperationRecord{}, operationLeaseUnavailable("save point create progress update", record.ID, err)
-		}
-		return operations.OperationRecord{}, err
-	}
-	return got, nil
-}
-
 func (store *Store) CommitSavePointCreateSucceededWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	record := sanitized.Record()
 	if err := validateSavePointCreateSuccessRecord(record); err != nil {
@@ -76,19 +55,6 @@ func (store *Store) commitSavePointCreateTerminalWithLease(ctx context.Context, 
 	return got, nil
 }
 
-func validateSavePointCreateProgressRecord(record operations.OperationRecord) error {
-	if record.Type != operations.OperationSavePointCreate {
-		return operationLeaseInvalidRequest("operation_type", "operation record must be save_point_create")
-	}
-	if record.State != operations.OperationStateRunning {
-		return operationLeaseInvalidRequest("operation_state", "save point create progress requires running operation update")
-	}
-	if record.Phase != operations.OperationPhaseSavePointCreatePrepared {
-		return operationLeaseInvalidRequest("phase", "save point create progress requires prepared phase")
-	}
-	return validateSavePointCreateRecordResource(record, false)
-}
-
 func validateSavePointCreateSuccessRecord(record operations.OperationRecord) error {
 	if record.Type != operations.OperationSavePointCreate {
 		return operationLeaseInvalidRequest("operation_type", "operation record must be save_point_create")
@@ -98,9 +64,6 @@ func validateSavePointCreateSuccessRecord(record operations.OperationRecord) err
 	}
 	if record.Phase != operations.OperationPhaseSavePointCreateCommitted {
 		return operationLeaseInvalidRequest("phase", "save point create success requires committed terminal phase")
-	}
-	if !savePointCreatePreSaveHistoryCaptured(record) {
-		return operationLeaseInvalidRequest("verification_result", "save point create success requires captured pre-save history marker")
 	}
 	return validateSavePointCreateRecordResource(record, false)
 }
@@ -151,16 +114,8 @@ func savePointCreateStoredPredicateArgs(record operations.OperationRecord) []any
 	return []any{record.NamespaceID, record.RepoID, record.CallerService, record.CorrelationID, record.AuthorizedActor.Type, record.AuthorizedActor.ID}
 }
 
-func savePointCreateProgressUpdateWithLeaseSQL() string {
-	return operationLeaseFencedUpdateBaseSQL() +
-		"AND operation_type = 'save_point_create' AND phase IN ('validate_save_point_create','save_point_create_prepared') " +
-		"AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
-		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 " +
-		"RETURNING " + operationReturningColumnsSQL()
-}
-
 func savePointCreateSuccessCommitWithLeaseSQL() string {
-	return savePointCreateTerminalCommitWithLeaseSQL("phase = 'save_point_create_prepared' AND verification_result->>'pre_save_history_captured' = 'true'")
+	return savePointCreateTerminalCommitWithLeaseSQL("phase = 'validate_save_point_create'")
 }
 
 func savePointCreateFailureCommitWithLeaseSQL() string {
@@ -179,13 +134,4 @@ func savePointCreateTerminalCommitWithLeaseSQL(storedPhasePredicate string) stri
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") SELECT " + placeholders(20, len(auditOutboxColumns)) + " FROM updated_operation RETURNING audit_event_id" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
-}
-
-func savePointCreatePreSaveHistoryCaptured(record operations.OperationRecord) bool {
-	verification, ok := record.VerificationResult.(map[string]any)
-	if !ok {
-		return false
-	}
-	captured, _ := verification["pre_save_history_captured"].(bool)
-	return captured
 }

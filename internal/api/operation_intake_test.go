@@ -329,6 +329,7 @@ func TestCreateOrReuseOperationIntakeMapsErrors(t *testing.T) {
 		wantCalls int
 	}{
 		{name: "idempotency conflict", store: &fakeOperationIntakeStore{err: operations.ErrIdempotencyConflict}, wantCode: CodeIdempotencyConflict, wantHTTP: http.StatusConflict, wantCalls: 1},
+		{name: "same repo file library operation pending", store: &fakeOperationIntakeStore{err: operations.ErrRepoJVSMutationInProgress}, wantCode: CodeFileLibraryOperationPending, wantHTTP: http.StatusConflict, retryable: true, wantCalls: 1},
 		{name: "store outage", store: &fakeOperationIntakeStore{err: errors.New("postgres dsn password=secret failed")}, wantCode: CodeStorageUnavailable, wantHTTP: http.StatusServiceUnavailable, retryable: true, wantCalls: 1},
 		{name: "missing boundary from store", store: &fakeOperationIntakeStore{err: operations.ErrMissingOperationBoundary}, wantCode: CodeInternalError, wantHTTP: http.StatusInternalServerError, wantCalls: 1},
 		{name: "nil store", wantCode: CodeInternalError, wantHTTP: http.StatusInternalServerError},
@@ -368,6 +369,20 @@ func TestCreateOrReuseOperationIntakeMapsErrors(t *testing.T) {
 			}
 			if strings.Contains(intakeErr.Error(), "secret") || strings.Contains(intakeErr.Error(), "postgres") {
 				t.Fatalf("intake error leaked raw detail: %v", intakeErr)
+			}
+			if tt.store != nil && errors.Is(tt.store.err, operations.ErrRepoJVSMutationInProgress) {
+				if intakeErr.Message != "file library operation is in progress" {
+					t.Fatalf("intake message = %q, want product-safe pending message", intakeErr.Message)
+				}
+				if got, ok := intakeErr.Details["recovery_required"].(bool); !ok || got {
+					t.Fatalf("intake details = %#v, want recovery_required=false", intakeErr.Details)
+				}
+				if got, ok := intakeErr.Details["blocking_status"].(string); !ok || got != "in_progress" {
+					t.Fatalf("intake details = %#v, want blocking_status=in_progress", intakeErr.Details)
+				}
+				if got, ok := intakeErr.Details["retryable"].(bool); !ok || !got {
+					t.Fatalf("intake details = %#v, want retryable=true", intakeErr.Details)
+				}
 			}
 		})
 	}
@@ -478,6 +493,22 @@ func (store *fakeOperationIntakeStore) RepoHasNonTerminalJVSMutation(context.Con
 		return false, store.jvsMutationErr
 	}
 	return store.jvsMutation, nil
+}
+
+func (store *fakeOperationIntakeStore) GetRepoJVSMutationGateStatus(context.Context, string) (RepoJVSMutationGateStatus, error) {
+	store.jvsMutationCalls++
+	if store.jvsMutationErr != nil {
+		return RepoJVSMutationGateStatus{}, store.jvsMutationErr
+	}
+	if store.jvsMutation {
+		return RepoJVSMutationGateStatus{
+			InProgress:     true,
+			OperationID:    "op_blocking",
+			OperationType:  operations.OperationRestore,
+			OperationState: operations.OperationStateRunning,
+		}, nil
+	}
+	return RepoJVSMutationGateStatus{}, nil
 }
 
 func operationIntakeError(t *testing.T, err error) *OperationIntakeError {

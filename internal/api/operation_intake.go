@@ -58,6 +58,7 @@ type OperationIntakeError struct {
 	Status    int
 	Retryable bool
 	Message   string
+	Details   map[string]any
 }
 
 func (err *OperationIntakeError) Error() string {
@@ -281,7 +282,8 @@ func mapOperationIntakeError(err error) error {
 	case errors.Is(err, operations.ErrRepoAlreadyExists):
 		return &OperationIntakeError{Code: CodeRepoAlreadyExists, Status: http.StatusConflict, Retryable: false, Message: "target repo already exists"}
 	case errors.Is(err, operations.ErrRepoJVSMutationInProgress):
-		return &OperationIntakeError{Code: CodeRepoJVSMutationInProgress, Status: http.StatusConflict, Retryable: true, Message: "repo JVS mutation is in progress"}
+		code, message, retryable, details := fileLibraryBlockingOperationError(false)
+		return &OperationIntakeError{Code: code, Status: http.StatusConflict, Retryable: retryable, Message: message, Details: details}
 	case errors.Is(err, operations.ErrMissingOperationBoundary):
 		return internalOperationIntakeError()
 	default:

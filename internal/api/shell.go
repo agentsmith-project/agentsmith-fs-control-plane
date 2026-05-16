@@ -47,7 +47,7 @@ type InternalAPIShellConfig struct {
 	ExportStore                    ExportStore
 	RepoFenceReader                RepoFenceReader
 	SavePointHistoryReader         SavePointHistoryReader
-	SavePointMutationGate          RepoJVSMutationGateReader
+	SavePointMutationGate          RepoJVSMutationGateStatusReader
 	SavePointHistoryJVSRunner      JVSHistoryRunner
 	SavePointHistoryVolumeRoots    map[string]string
 	OperationInspectionReader      OperationInspectionStoreReader
@@ -175,7 +175,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	}
 	savePointMutationGate := config.SavePointMutationGate
 	if savePointMutationGate == nil {
-		if typed, ok := config.OperationIntakeStore.(RepoJVSMutationGateReader); ok {
+		if typed, ok := config.OperationIntakeStore.(RepoJVSMutationGateStatusReader); ok {
 			savePointMutationGate = typed
 		}
 	}

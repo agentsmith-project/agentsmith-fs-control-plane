@@ -14,26 +14,28 @@ import (
 )
 
 type fakeRestoreHTTPStore struct {
-	repo               resources.Repo
-	namespace          resources.Namespace
-	binding            resources.NamespaceVolumeBinding
-	fences             []fences.Fence
-	existing           operations.OperationRecord
-	spec               operations.QueuedOperationSpec
-	repoErr            error
-	namespaceErr       error
-	bindingErr         error
-	fenceErr           error
-	jvsMutation        bool
-	jvsMutationErr     error
-	lookupErr          error
-	createErr          error
-	createCalls        int
-	genericCreateCalls int
-	restoreIntakeCalls int
-	previewIntakeCalls int
-	runIntakeCalls     int
-	jvsMutationCalls   int
+	repo                 resources.Repo
+	namespace            resources.Namespace
+	binding              resources.NamespaceVolumeBinding
+	fences               []fences.Fence
+	existing             operations.OperationRecord
+	spec                 operations.QueuedOperationSpec
+	repoErr              error
+	namespaceErr         error
+	bindingErr           error
+	fenceErr             error
+	jvsMutation          bool
+	jvsMutationErr       error
+	jvsMutationStatus    *RepoJVSMutationGateStatus
+	jvsMutationStatusErr error
+	lookupErr            error
+	createErr            error
+	createCalls          int
+	genericCreateCalls   int
+	restoreIntakeCalls   int
+	previewIntakeCalls   int
+	runIntakeCalls       int
+	jvsMutationCalls     int
 }
 
 func newFakeRestoreHTTPStore(time.Time) *fakeRestoreHTTPStore {
@@ -104,6 +106,28 @@ func (store *fakeRestoreHTTPStore) RepoHasNonTerminalJVSMutation(context.Context
 		return false, store.jvsMutationErr
 	}
 	return store.jvsMutation, nil
+}
+
+func (store *fakeRestoreHTTPStore) GetRepoJVSMutationGateStatus(context.Context, string) (RepoJVSMutationGateStatus, error) {
+	store.jvsMutationCalls++
+	if store.jvsMutationStatusErr != nil {
+		return RepoJVSMutationGateStatus{}, store.jvsMutationStatusErr
+	}
+	if store.jvsMutationStatus != nil {
+		return *store.jvsMutationStatus, nil
+	}
+	if store.jvsMutationErr != nil {
+		return RepoJVSMutationGateStatus{}, store.jvsMutationErr
+	}
+	if store.jvsMutation {
+		return RepoJVSMutationGateStatus{
+			InProgress:     true,
+			OperationID:    "op_blocking",
+			OperationType:  operations.OperationRestore,
+			OperationState: operations.OperationStateRunning,
+		}, nil
+	}
+	return RepoJVSMutationGateStatus{}, nil
 }
 
 func (store *fakeRestoreHTTPStore) GetOperationByIdempotencyScope(context.Context, operations.IdempotencyScope) (operations.OperationRecord, error) {

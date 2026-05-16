@@ -267,7 +267,7 @@ func TestSavePointListReturnsNaturalLanguageSensitiveWords(t *testing.T) {
 
 func TestSavePointListGateConflictDoesNotReadHistory(t *testing.T) {
 	reader := &fakeSavePointHistoryReader{history: SavePointHistory{SavePoints: []SavePointResponse{{SavePointID: "sp_001", CreatedAt: "2026-05-05T12:00:00Z", RepoID: "repo_123"}}}}
-	gate := &fakeRepoJVSMutationGateReader{inProgress: true}
+	gate := &fakeRepoJVSMutationGateReader{status: &RepoJVSMutationGateStatus{InProgress: true, OperationID: "op_active", OperationType: operations.OperationRestore, OperationState: operations.OperationStateRunning}}
 	handler := savePointTestHandlerWithGate(&fakeOperationIntakeStore{}, reader, gate, resources.RepoStatusActive, nil)
 	rec := httptest.NewRecorder()
 
@@ -277,16 +277,44 @@ func TestSavePointListGateConflictDoesNotReadHistory(t *testing.T) {
 		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
 	}
 	env := decodeErrorEnvelope(t, rec.Body.Bytes())
-	if env.Error.Code != CodeRepoJVSMutationInProgress || !env.Error.Retryable {
-		t.Fatalf("error = %#v, want retryable REPO_JVS_MUTATION_IN_PROGRESS", env.Error)
+	if env.Error.Code != CodeFileLibraryOperationPending || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want retryable FILE_LIBRARY_OPERATION_PENDING", env.Error)
 	}
+	if env.Error.OperationID == nil || *env.Error.OperationID != "op_active" {
+		t.Fatalf("error operation id = %#v, want blocking operation id", env.Error.OperationID)
+	}
+	assertBlockingOperationErrorProductSafe(t, rec.Body.String(), env, false)
 	if reader.calls != 0 {
 		t.Fatalf("history calls = %d, want none", reader.calls)
 	}
-	if gate.calls != 1 {
-		t.Fatalf("gate calls = %d, want one pre-history check", gate.calls)
+	if gate.statusCalls != 1 {
+		t.Fatalf("gate status calls = %d, want one pre-history check", gate.statusCalls)
 	}
 	assertSavePointResponseDoesNotLeak(t, rec.Body.String())
+}
+
+func TestSavePointListGateOperatorInterventionMapsRecoveryRequired(t *testing.T) {
+	reader := &fakeSavePointHistoryReader{history: SavePointHistory{SavePoints: []SavePointResponse{{SavePointID: "sp_001", CreatedAt: "2026-05-05T12:00:00Z", RepoID: "repo_123"}}}}
+	gate := &fakeRepoJVSMutationGateReader{status: &RepoJVSMutationGateStatus{InProgress: true, OperationID: "op_manual", OperationType: operations.OperationRestore, OperationState: operations.OperationStateOperatorInterventionRequired, RecoveryRequired: true}}
+	handler := savePointTestHandlerWithGate(&fakeOperationIntakeStore{}, reader, gate, resources.RepoStatusActive, nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, savePointRequest(http.MethodGet, "/internal/v1/repos/repo_123/save-points", "", "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeFileLibraryOperationRequiresRecovery || env.Error.Retryable {
+		t.Fatalf("error = %#v, want non-retryable FILE_LIBRARY_OPERATION_REQUIRES_RECOVERY", env.Error)
+	}
+	if env.Error.OperationID == nil || *env.Error.OperationID != "op_manual" {
+		t.Fatalf("error operation id = %#v, want manual operation id", env.Error.OperationID)
+	}
+	assertBlockingOperationErrorProductSafe(t, rec.Body.String(), env, true)
+	if reader.calls != 0 {
+		t.Fatalf("history calls = %d, want none for recovery required gate", reader.calls)
+	}
 }
 
 func TestSavePointListGateErrorReturnsStorageUnavailable(t *testing.T) {
@@ -325,8 +353,48 @@ func TestSavePointListChecksGateAgainAfterHistory(t *testing.T) {
 		t.Fatalf("history/gate calls = %d/%d, want 1/2", reader.calls, gate.calls)
 	}
 	env := decodeErrorEnvelope(t, rec.Body.Bytes())
-	if env.Error.Code != CodeRepoJVSMutationInProgress || !env.Error.Retryable {
-		t.Fatalf("error = %#v, want retryable REPO_JVS_MUTATION_IN_PROGRESS", env.Error)
+	if env.Error.Code != CodeFileLibraryOperationPending || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want retryable FILE_LIBRARY_OPERATION_PENDING", env.Error)
+	}
+	assertBlockingOperationErrorProductSafe(t, rec.Body.String(), env, false)
+}
+
+func assertBlockingOperationErrorProductSafe(t *testing.T, body string, env ErrorEnvelope, recoveryRequired bool) {
+	t.Helper()
+	for _, forbidden := range []string{
+		"repo JVS mutation",
+		"REPO_JVS_MUTATION",
+		"blocking_operation_type",
+		"blocking_operation_state",
+		"save_point_create",
+		"template_create",
+		"template_clone",
+		"operator_intervention_required",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("blocking operation response leaked internal term %q: %s", forbidden, body)
+		}
+	}
+	if got, ok := env.Error.Details["recovery_required"].(bool); !ok || got != recoveryRequired {
+		t.Fatalf("recovery_required detail = %#v, want %v", env.Error.Details["recovery_required"], recoveryRequired)
+	}
+	wantStatus := "in_progress"
+	wantRetryable := true
+	if recoveryRequired {
+		wantStatus = "requires_recovery"
+		wantRetryable = false
+	}
+	if got, ok := env.Error.Details["blocking_status"].(string); !ok || got != wantStatus {
+		t.Fatalf("blocking_status detail = %#v, want %s", env.Error.Details["blocking_status"], wantStatus)
+	}
+	if got, ok := env.Error.Details["retryable"].(bool); !ok || got != wantRetryable {
+		t.Fatalf("retryable detail = %#v, want %v", env.Error.Details["retryable"], wantRetryable)
+	}
+	if _, ok := env.Error.Details["blocking_operation_type"]; ok {
+		t.Fatalf("details leaked blocking_operation_type: %#v", env.Error.Details)
+	}
+	if _, ok := env.Error.Details["blocking_operation_state"]; ok {
+		t.Fatalf("details leaked blocking_operation_state: %#v", env.Error.Details)
 	}
 }
 
@@ -399,7 +467,7 @@ func savePointTestHandler(intake *fakeOperationIntakeStore, history SavePointHis
 	return savePointTestHandlerWithGate(intake, history, &fakeRepoJVSMutationGateReader{}, repoStatus, held)
 }
 
-func savePointTestHandlerWithGate(intake *fakeOperationIntakeStore, history SavePointHistoryReader, gate RepoJVSMutationGateReader, repoStatus resources.RepoStatus, held []fences.Fence) http.Handler {
+func savePointTestHandlerWithGate(intake *fakeOperationIntakeStore, history SavePointHistoryReader, gate RepoJVSMutationGateStatusReader, repoStatus resources.RepoStatus, held []fences.Fence) http.Handler {
 	return SavePointHandler(SavePointHandlerConfig{
 		RepoReader:        &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", repoStatus)}},
 		NamespaceReader:   &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
@@ -415,7 +483,7 @@ func savePointTestHandlerWithGate(intake *fakeOperationIntakeStore, history Save
 	})
 }
 
-func savePointShellForGateTest(store OperationIntakeStore, history SavePointHistoryReader, gate RepoJVSMutationGateReader) http.Handler {
+func savePointShellForGateTest(store OperationIntakeStore, history SavePointHistoryReader, gate RepoJVSMutationGateStatusReader) http.Handler {
 	return NewInternalAPIShell(InternalAPIShellConfig{
 		PrincipalResolver:      namespaceBindingPrincipalResolver(),
 		NamespaceReader:        &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
@@ -484,10 +552,13 @@ func (reader *fakeSavePointHistoryReader) ListSavePoints(context.Context, string
 }
 
 type fakeRepoJVSMutationGateReader struct {
-	inProgress bool
-	responses  []bool
-	err        error
-	calls      int
+	inProgress  bool
+	responses   []bool
+	err         error
+	calls       int
+	status      *RepoJVSMutationGateStatus
+	statusErr   error
+	statusCalls int
 }
 
 func (reader *fakeRepoJVSMutationGateReader) RepoHasNonTerminalJVSMutation(context.Context, string) (bool, error) {
@@ -503,6 +574,29 @@ func (reader *fakeRepoJVSMutationGateReader) RepoHasNonTerminalJVSMutation(conte
 		return reader.responses[idx], nil
 	}
 	return reader.inProgress, nil
+}
+
+func (reader *fakeRepoJVSMutationGateReader) GetRepoJVSMutationGateStatus(context.Context, string) (RepoJVSMutationGateStatus, error) {
+	reader.statusCalls++
+	if reader.statusErr != nil {
+		return RepoJVSMutationGateStatus{}, reader.statusErr
+	}
+	if reader.status != nil {
+		return *reader.status, nil
+	}
+	inProgress, err := reader.RepoHasNonTerminalJVSMutation(context.Background(), "")
+	if err != nil {
+		return RepoJVSMutationGateStatus{}, err
+	}
+	if inProgress {
+		return RepoJVSMutationGateStatus{
+			InProgress:     true,
+			OperationID:    "op_blocking",
+			OperationType:  operations.OperationRestore,
+			OperationState: operations.OperationStateRunning,
+		}, nil
+	}
+	return RepoJVSMutationGateStatus{}, nil
 }
 
 func assertSavePointResponseDoesNotLeak(t *testing.T, body string) {

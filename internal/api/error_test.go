@@ -28,6 +28,8 @@ func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {
 		CodeStorageUnavailable,
 		CodeInternalError,
 		CodeRepoJVSMutationInProgress,
+		CodeFileLibraryOperationPending,
+		CodeFileLibraryOperationRequiresRecovery,
 		CodeActiveWriterSessions,
 		CodeWriterSessionFenceHeld,
 		CodeStaleWriterSessionUncertain,
