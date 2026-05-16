@@ -153,7 +153,7 @@ Completed:
   release, with focused tests
 - repo create intake for durable `repo_create` operations
 - JVS runner foundations for fixed repo `init`/`doctor --strict` and active
-  direct `jvs afscp` save/list/restore/status/doctor commands
+  direct `jvs afscp` save/list/restore/clone/status/doctor commands
 - opt-in `repo_create` recovery through `afscp-worker --run-once`, `repoexec`,
   JVS `init`/`doctor --strict`, dedicated PostgreSQL atomic commit, and fence
   release when the explicit repo create recovery gate is enabled

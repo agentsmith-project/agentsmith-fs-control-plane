@@ -113,15 +113,6 @@ type HistorySummary struct {
 	SavePoints        []SavePointSummary
 }
 
-type RepoCloneSummary struct {
-	SourceRepoID          string
-	TargetRepoID          string
-	SavePointsMode        string
-	SavePointsCopiedCount int
-	RuntimeStateCopied    bool
-	Workspace             string
-}
-
 type DirectTarget struct {
 	ControlRoot string
 	Home        string
@@ -150,6 +141,16 @@ type DirectRestoreSummary struct {
 	RestoredSavePointID string
 	PreviousHeadID      string
 	NewHeadID           string
+}
+
+type DirectCloneSummary struct {
+	SourceRepoID          string
+	TargetRepoID          string
+	SavePointID           string
+	SavePointsMode        string
+	SavePointsCopiedCount int
+	RuntimeStateCopied    bool
+	Workspace             string
 }
 
 type DirectStatusSummary struct {
@@ -264,6 +265,7 @@ func (runner *Runner) VerifyAFSCPDirectCapability(ctx context.Context) error {
 		{name: "afscp save --help", args: []string{"afscp", "save", "--help"}, required: []string{"save", "--message", "--control-root", "--home", "--json"}},
 		{name: "afscp list --help", args: []string{"afscp", "list", "--help"}, required: []string{"list", "--control-root", "--home", "--json"}},
 		{name: "afscp restore --help", args: []string{"afscp", "restore", "--help"}, required: []string{"restore", "--save-point", "--control-root", "--home", "--json"}},
+		{name: "afscp clone --help", args: []string{"afscp", "clone", "--help"}, required: []string{"clone", "--target-control-root", "--target-home", "--control-root", "--home", "--json"}},
 		{name: "afscp status --help", args: []string{"afscp", "status", "--help"}, required: []string{"status", "--control-root", "--home", "--json"}},
 		{name: "afscp doctor --help", args: []string{"afscp", "doctor", "--help"}, required: []string{"doctor", "--control-root", "--home", "--json"}},
 	}
@@ -288,42 +290,6 @@ func (runner *Runner) VerifyAFSCPDirectCapability(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-func (runner *Runner) RepoClone(ctx context.Context, sourceControlRoot, targetPayloadRoot, targetControlRoot string) (RepoCloneSummary, error) {
-	if runner == nil {
-		return RepoCloneSummary{}, ErrInvalidConfig
-	}
-	for _, item := range []struct {
-		name string
-		path string
-	}{
-		{name: "source control root", path: sourceControlRoot},
-		{name: "target payload root", path: targetPayloadRoot},
-		{name: "target control root", path: targetControlRoot},
-	} {
-		if err := validateCleanAbsolute(item.path, true); err != nil {
-			return RepoCloneSummary{}, fmt.Errorf("%w: %s", ErrInvalidArgument, item.name)
-		}
-	}
-	if rootsOverlap(sourceControlRoot, targetPayloadRoot) || rootsOverlap(sourceControlRoot, targetControlRoot) || rootsOverlap(targetPayloadRoot, targetControlRoot) {
-		return RepoCloneSummary{}, fmt.Errorf("%w: repo roots overlap", ErrInvalidArgument)
-	}
-	envelope, err := runner.runControlJSONExpectRoot(ctx, "repo clone", sourceControlRoot, targetControlRoot, []string{"repo", "clone", targetPayloadRoot, "--target-control-root", targetControlRoot, "--save-points", "main", "--json"})
-	if err != nil {
-		return RepoCloneSummary{}, err
-	}
-	sourceRepoID, okSource := dataSafeID(envelope, "source_repo_id")
-	targetRepoID, okTarget := dataSafeID(envelope, "target_repo_id")
-	savePointsMode, _ := envelope.Data["save_points_mode"].(string)
-	targetFolder, _ := envelope.Data["target_folder"].(string)
-	outTargetControl, _ := envelope.Data["target_control_root"].(string)
-	copiedCount, countOK := intData(envelope.Data["save_points_copied_count"])
-	runtimeCopied, runtimeOK := envelope.Data["runtime_state_copied"].(bool)
-	if !okSource || !okTarget || savePointsMode != "main" || targetFolder != targetPayloadRoot || outTargetControl != targetControlRoot || !countOK || copiedCount < 0 || !runtimeOK || runtimeCopied {
-		return RepoCloneSummary{}, fmt.Errorf("%w: repo clone", ErrInvalidEnvelope)
-	}
-	return RepoCloneSummary{SourceRepoID: sourceRepoID, TargetRepoID: targetRepoID, SavePointsMode: savePointsMode, SavePointsCopiedCount: copiedCount, RuntimeStateCopied: runtimeCopied, Workspace: workspaceMain}, nil
 }
 
 func (runner *Runner) DirectSave(ctx context.Context, target DirectTarget, message string) (DirectSaveSummary, error) {
@@ -405,6 +371,46 @@ func (runner *Runner) DirectRestore(ctx context.Context, target DirectTarget, sa
 		RestoredSavePointID: restored,
 		PreviousHeadID:      previousHead,
 		NewHeadID:           newHead,
+	}, nil
+}
+
+func (runner *Runner) DirectClone(ctx context.Context, source DirectTarget, target DirectTarget, savePointID string) (DirectCloneSummary, error) {
+	savePointID = strings.TrimSpace(savePointID)
+	if savePointID != "" && !safeOpaqueID(savePointID) {
+		return DirectCloneSummary{}, fmt.Errorf("%w: save point id", ErrInvalidArgument)
+	}
+	if err := validateDirectTarget(source); err != nil {
+		return DirectCloneSummary{}, err
+	}
+	if err := validateDirectTarget(target); err != nil {
+		return DirectCloneSummary{}, err
+	}
+	if rootsOverlap(source.ControlRoot, target.ControlRoot) || rootsOverlap(source.ControlRoot, target.Home) || rootsOverlap(source.Home, target.ControlRoot) || rootsOverlap(source.Home, target.Home) {
+		return DirectCloneSummary{}, fmt.Errorf("%w: source and target roots overlap", ErrInvalidArgument)
+	}
+	args := []string{"clone", "--target-control-root", target.ControlRoot, "--target-home", target.Home, "--json"}
+	if savePointID != "" {
+		args = append(args, "--save-point", savePointID)
+	}
+	envelope, err := runner.runAFSCPDirectJSON(ctx, source, "clone", args)
+	if err != nil {
+		return DirectCloneSummary{}, err
+	}
+	sourceRepoID, okSource := directRequiredID(envelope.Data, "source_repo_id")
+	targetRepoID, okTarget := directRequiredID(envelope.Data, "target_repo_id")
+	clonedSavePointID, okSavePoint := directRequiredID(envelope.Data, "save_point_id")
+	copiedCount, countOK := intData(envelope.Data["save_points_copied_count"])
+	if !okSource || !okTarget || !okSavePoint || (savePointID != "" && clonedSavePointID != savePointID) || !countOK || copiedCount != 1 {
+		return DirectCloneSummary{}, fmt.Errorf("%w: afscp clone", ErrInvalidEnvelope)
+	}
+	return DirectCloneSummary{
+		SourceRepoID:          sourceRepoID,
+		TargetRepoID:          targetRepoID,
+		SavePointID:           clonedSavePointID,
+		SavePointsMode:        "main",
+		SavePointsCopiedCount: copiedCount,
+		RuntimeStateCopied:    false,
+		Workspace:             workspaceMain,
 	}, nil
 }
 

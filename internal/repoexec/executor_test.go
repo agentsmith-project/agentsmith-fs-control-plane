@@ -721,9 +721,9 @@ func TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate(t *testin
 	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
-		saveSummary:      jvsrunner.SaveSummary{SavePointID: "sp_template01", NewestSavePointID: "sp_template01", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
-		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_template_alpha", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
-		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_template_alpha", Healthy: true, Workspace: "main"},
+		saveSummary:        jvsrunner.SaveSummary{SavePointID: "sp_template01", NewestSavePointID: "sp_template01", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
+		directCloneSummary: jvsrunner.DirectCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_template_alpha", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:      jvsrunner.DoctorSummary{RepoID: "jvs_template_alpha", Healthy: true, Workspace: "main"},
 	}
 	executor, err := NewTemplateCreateExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_create" }, VolumeRoots: store.volumeRoots})
 	if err != nil {
@@ -737,8 +737,11 @@ func TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate(t *testin
 	if store.templateCreateWriterFenceMarks != 1 {
 		t.Fatalf("writer fence marks = %d, want 1 before JVS", store.templateCreateWriterFenceMarks)
 	}
-	if got := strings.Join(runner.calls, ","); got != "direct_save,repo_clone,direct_doctor" {
-		t.Fatalf("jvs calls = %s, want direct_save,repo_clone,direct_doctor", got)
+	if got := strings.Join(runner.calls, ","); got != "direct_save,direct_clone,direct_doctor" {
+		t.Fatalf("jvs calls = %s, want direct_save,direct_clone,direct_doctor", got)
+	}
+	if runner.cloneSavePointID != "sp_template01" {
+		t.Fatalf("direct clone save point = %q, want fresh template source save point", runner.cloneSavePointID)
 	}
 	verification := asStringAnyMap(store.operation.VerificationResult)
 	if store.repo.ID != "tmpl_base01" || store.repo.Kind != resources.RepoKindTemplate || verification["source_save_point_id"] != "sp_template01" {
@@ -758,13 +761,13 @@ func TestTemplateCreateExecutorUsesFreshTerminalTimestampAfterSlowJVSSaveAndClon
 	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
 	store.repo = activeRepoResource(started)
 	runner := &fakeJVSRunner{
-		saveSummary:      jvsrunner.SaveSummary{SavePointID: "sp_template01", NewestSavePointID: "sp_template01", Workspace: "main", CreatedAt: "2026-05-05T12:01:25Z"},
-		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_template_alpha", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
-		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_template_alpha", Healthy: true, Workspace: "main"},
+		saveSummary:        jvsrunner.SaveSummary{SavePointID: "sp_template01", NewestSavePointID: "sp_template01", Workspace: "main", CreatedAt: "2026-05-05T12:01:25Z"},
+		directCloneSummary: jvsrunner.DirectCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_template_alpha", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:      jvsrunner.DoctorSummary{RepoID: "jvs_template_alpha", Healthy: true, Workspace: "main"},
 		afterSave: func() {
 			clockNow = afterSave
 		},
-		afterRepoClone: func() {
+		afterDirectClone: func() {
 			clockNow = terminal
 		},
 	}
@@ -791,16 +794,16 @@ func TestTemplateCreateExecutorUsesFreshTerminalTimestampAfterSlowJVSSaveAndClon
 	}
 }
 
-func TestTemplateCreateExecutorPreparesCloneParentWithoutOccupyingTargetRoots(t *testing.T) {
+func TestTemplateCreateExecutorPreparesDirectCloneParentWithoutOccupyingTargetRoots(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
-		saveSummary:      jvsrunner.SaveSummary{SavePointID: "1778487604491-0f57855a", NewestSavePointID: "1778487604491-0f57855a", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
-		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_template_alpha", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
-		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_template_alpha", Healthy: true, Workspace: "main"},
-		beforeRepoClone: func(_ string, targetPayloadRoot string, targetControlRoot string) {
+		saveSummary:        jvsrunner.SaveSummary{SavePointID: "1778487604491-0f57855a", NewestSavePointID: "1778487604491-0f57855a", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
+		directCloneSummary: jvsrunner.DirectCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_template_alpha", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:      jvsrunner.DoctorSummary{RepoID: "jvs_template_alpha", Healthy: true, Workspace: "main"},
+		beforeDirectClone: func(_ string, targetPayloadRoot string, targetControlRoot string) {
 			parent := filepath.Dir(targetPayloadRoot)
 			if filepath.Dir(targetControlRoot) != parent {
 				t.Fatalf("target parents differ: payload=%q control=%q", parent, filepath.Dir(targetControlRoot))
@@ -810,7 +813,7 @@ func TestTemplateCreateExecutorPreparesCloneParentWithoutOccupyingTargetRoots(t 
 			}
 			for _, targetRoot := range []string{targetPayloadRoot, targetControlRoot} {
 				if _, err := os.Lstat(targetRoot); !os.IsNotExist(err) {
-					t.Fatalf("target root %q existed before JVS repo clone: %v", targetRoot, err)
+					t.Fatalf("target root %q existed before JVS direct clone: %v", targetRoot, err)
 				}
 			}
 		},
@@ -823,8 +826,8 @@ func TestTemplateCreateExecutorPreparesCloneParentWithoutOccupyingTargetRoots(t 
 	if err := executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "direct_save,repo_clone,direct_doctor" {
-		t.Fatalf("jvs calls = %#v, want direct_save,repo_clone,direct_doctor", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save,direct_clone,direct_doctor" {
+		t.Fatalf("jvs calls = %#v, want direct_save,direct_clone,direct_doctor", runner.calls)
 	}
 }
 
@@ -946,8 +949,8 @@ func TestTemplateCreateExecutorJVSFailureAfterSaveRetainsWriterFence(t *testing.
 	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
 		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
 	}
-	if strings.Join(runner.calls, ",") != "direct_save,repo_clone" {
-		t.Fatalf("jvs calls = %#v, want direct_save,repo_clone", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save,direct_clone" {
+		t.Fatalf("jvs calls = %#v, want direct_save,direct_clone", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.releasedFenceID != "" || activeWriterFenceCount(store.fences, "op_template_create") != 1 {
 		t.Fatalf("operation/release/fences = %#v/%q/%#v, want retained writer fence after uncertain JVS side effect", store.operation, store.releasedFenceID, store.fences)
@@ -960,8 +963,8 @@ func TestTemplateCloneExecutorClonesTemplateToRepoWithoutSave(t *testing.T) {
 	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
 	store.repo = templateResource(now)
 	runner := &fakeJVSRunner{
-		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_template_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
-		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_repo_clone", Healthy: true, Workspace: "main"},
+		directCloneSummary: jvsrunner.DirectCloneSummary{SourceRepoID: "jvs_template_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:      jvsrunner.DoctorSummary{RepoID: "jvs_repo_clone", Healthy: true, Workspace: "main"},
 	}
 	executor, err := NewTemplateCloneExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_clone" }, VolumeRoots: store.volumeRoots})
 	if err != nil {
@@ -972,8 +975,8 @@ func TestTemplateCloneExecutorClonesTemplateToRepoWithoutSave(t *testing.T) {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
 
-	if got := strings.Join(runner.calls, ","); got != "repo_clone,direct_doctor" {
-		t.Fatalf("jvs calls = %s, want repo_clone,direct_doctor", got)
+	if got := strings.Join(runner.calls, ","); got != "direct_clone,direct_doctor" {
+		t.Fatalf("jvs calls = %s, want direct_clone,direct_doctor", got)
 	}
 	if store.repo.ID != "repo_clone01" || store.repo.Kind != resources.RepoKindRepo || store.operation.Phase != operations.OperationPhaseTemplateCloneCommitted {
 		t.Fatalf("committed repo/operation = %#v %#v", store.repo, store.operation)
@@ -988,9 +991,9 @@ func TestTemplateCloneExecutorUsesFreshTerminalTimestampAfterSlowJVSClone(t *tes
 	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
 	store.repo = templateResource(started)
 	runner := &fakeJVSRunner{
-		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_template_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
-		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_repo_clone", Healthy: true, Workspace: "main"},
-		afterRepoClone: func() {
+		directCloneSummary: jvsrunner.DirectCloneSummary{SourceRepoID: "jvs_template_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:      jvsrunner.DoctorSummary{RepoID: "jvs_repo_clone", Healthy: true, Workspace: "main"},
+		afterDirectClone: func() {
 			clockNow = terminal
 		},
 	}
@@ -1025,8 +1028,8 @@ func TestTemplateCloneExecutorSuccessCommitFailurePreservesCause(t *testing.T) {
 	commitErr := errors.New("postgres template clone commit detail")
 	store.templateCloneSuccessErr = commitErr
 	runner := &fakeJVSRunner{
-		repoCloneSummary: jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_template_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
-		doctorSummary:    jvsrunner.DoctorSummary{RepoID: "jvs_repo_clone", Healthy: true, Workspace: "main"},
+		directCloneSummary: jvsrunner.DirectCloneSummary{SourceRepoID: "jvs_template_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"},
+		doctorSummary:      jvsrunner.DoctorSummary{RepoID: "jvs_repo_clone", Healthy: true, Workspace: "main"},
 	}
 	executor, err := NewTemplateCloneExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_clone" }, VolumeRoots: store.volumeRoots})
 	if err != nil {
@@ -1040,8 +1043,8 @@ func TestTemplateCloneExecutorSuccessCommitFailurePreservesCause(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "template clone success commit failed") {
 		t.Fatalf("ExecuteOperationRecovery error = %v, want commit failure context", err)
 	}
-	if strings.Join(runner.calls, ",") != "repo_clone,direct_doctor" {
-		t.Fatalf("jvs calls = %#v, want repo_clone,direct_doctor before durable commit failure", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_clone,direct_doctor" {
+		t.Fatalf("jvs calls = %#v, want direct_clone,direct_doctor before durable commit failure", runner.calls)
 	}
 }
 
@@ -1436,10 +1439,10 @@ type fakeJVSRunner struct {
 	directRestoreSummary jvsrunner.DirectRestoreSummary
 	directStatusSummary  jvsrunner.DirectStatusSummary
 	directDoctorSummary  jvsrunner.DirectDoctorSummary
-	repoCloneSummary     jvsrunner.RepoCloneSummary
-	beforeRepoClone      func(sourceControlRoot, targetPayloadRoot, targetControlRoot string)
+	directCloneSummary   jvsrunner.DirectCloneSummary
+	beforeDirectClone    func(sourceControlRoot, targetPayloadRoot, targetControlRoot string)
 	afterSave            func()
-	afterRepoClone       func()
+	afterDirectClone     func()
 	beforeRestore        func()
 	initErr              error
 	doctorErr            error
@@ -1452,6 +1455,7 @@ type fakeJVSRunner struct {
 	historyErr           error
 	repoCloneErr         error
 	restoreSavePointID   string
+	cloneSavePointID     string
 	afterDoctor          func(context.Context)
 }
 
@@ -1553,21 +1557,23 @@ func (runner *fakeJVSRunner) DirectDoctor(ctx context.Context, target jvsrunner.
 	return runner.directDoctorSummary, runner.doctorErr
 }
 
-func (runner *fakeJVSRunner) RepoClone(_ context.Context, sourceControlRoot, targetPayloadRoot, targetControlRoot string) (jvsrunner.RepoCloneSummary, error) {
-	runner.calls = append(runner.calls, "repo_clone")
-	runner.controlRoot = targetControlRoot
-	runner.payloadRoot = targetPayloadRoot
-	if runner.beforeRepoClone != nil {
-		runner.beforeRepoClone(sourceControlRoot, targetPayloadRoot, targetControlRoot)
+func (runner *fakeJVSRunner) DirectClone(_ context.Context, source jvsrunner.DirectTarget, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectCloneSummary, error) {
+	runner.calls = append(runner.calls, "direct_clone")
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	runner.cloneSavePointID = savePointID
+	if runner.beforeDirectClone != nil {
+		runner.beforeDirectClone(source.ControlRoot, target.Home, target.ControlRoot)
 	}
-	if runner.repoCloneSummary.SourceRepoID == "" {
-		runner.repoCloneSummary.SourceRepoID = "jvs_repo_alpha"
+	if runner.directCloneSummary.SourceRepoID == "" {
+		runner.directCloneSummary.SourceRepoID = "jvs_repo_alpha"
 	}
-	if runner.afterRepoClone != nil {
-		runner.afterRepoClone()
+	if runner.afterDirectClone != nil {
+		runner.afterDirectClone()
 	}
-	_ = sourceControlRoot
-	return runner.repoCloneSummary, runner.repoCloneErr
+	summary := runner.directCloneSummary
+	summary.SavePointID = savePointID
+	return summary, runner.repoCloneErr
 }
 
 func repoCreateFence(now time.Time, fenceID, operationID string) fences.Fence {

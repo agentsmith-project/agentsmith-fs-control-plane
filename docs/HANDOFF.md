@@ -102,7 +102,7 @@ AFSCP owns:
 - caller-service authorization for namespace-bound storage operations
 - repo path allocation and path resolution
 - repo archive, restore, delete, tombstone, and purge lifecycle
-- JVS `init`, `save`, `history`, `restore`, and `repo clone` execution
+- JVS `init` plus direct `save/list/restore/clone/status/doctor` execution
 - repo template storage and clone execution
 - WebDAV/export runtime and short-lived export credentials
 - workload mount binding generation

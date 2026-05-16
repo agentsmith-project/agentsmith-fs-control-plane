@@ -29,7 +29,7 @@ func TestRunnerPublicSurfaceExcludesLegacySaveHistoryAndStrictDoctor(t *testing.
 			t.Fatalf("Runner exposes legacy public JVS method %s; active AFSCP calls must use direct afscp methods", method)
 		}
 	}
-	for _, method := range []string{"DirectSave", "DirectList", "DirectRestore", "DirectStatus", "DirectDoctor"} {
+	for _, method := range []string{"DirectSave", "DirectList", "DirectRestore", "DirectClone", "DirectStatus", "DirectDoctor"} {
 		if _, ok := runnerType.MethodByName(method); !ok {
 			t.Fatalf("Runner is missing direct AFSCP method %s", method)
 		}
@@ -123,6 +123,20 @@ func TestAFSCPDirectMethodsUseTargetSelectorAndNoLegacyFlags(t *testing.T) {
 			check: func(t *testing.T, summary any) {
 				got := summary.(DirectRestoreSummary)
 				if got.RestoredSavePointID != "sp_001" || got.PreviousHeadID != "sp_002" || got.NewHeadID != "sp_001" {
+					t.Fatalf("summary = %#v", got)
+				}
+			},
+		},
+		{
+			name:    "clone",
+			stdout:  directCloneSuccessStdout(t),
+			wantArg: []string{"afscp", "--control-root", testControlRoot, "--home", testDirectHome, "clone", "--target-control-root", testTargetControlRoot, "--target-home", testTargetPayloadRoot, "--json", "--save-point", "sp_001"},
+			call: func(r *Runner) (any, error) {
+				return r.DirectClone(context.Background(), target, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
+			},
+			check: func(t *testing.T, summary any) {
+				got := summary.(DirectCloneSummary)
+				if got.SourceRepoID != "jvs_repo_alpha" || got.TargetRepoID != "jvs_repo_clone" || got.SavePointID != "sp_001" || got.SavePointsMode != "main" || got.SavePointsCopiedCount != 1 || got.RuntimeStateCopied || got.Workspace != "main" {
 					t.Fatalf("summary = %#v", got)
 				}
 			},
@@ -239,6 +253,14 @@ func TestAFSCPDirectRejectsUnsafeTargetsAndArguments(t *testing.T) {
 		}},
 		{name: "unsafe restore save point", call: func() error {
 			_, err := runner.DirectRestore(context.Background(), goodTarget, "sp/secret")
+			return err
+		}},
+		{name: "unsafe clone save point", call: func() error {
+			_, err := runner.DirectClone(context.Background(), goodTarget, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp/secret")
+			return err
+		}},
+		{name: "clone target overlaps source", call: func() error {
+			_, err := runner.DirectClone(context.Background(), goodTarget, DirectTarget{ControlRoot: testControlRoot + "/target", Home: testTargetPayloadRoot}, "")
 			return err
 		}},
 	}
@@ -429,7 +451,7 @@ func TestAFSCPDirectListRedactsPathLikeMessages(t *testing.T) {
 func TestVerifyAFSCPDirectCapabilityUsesAFSCPHelpAndRequiresDirectContract(t *testing.T) {
 	t.Parallel()
 
-	help := "Usage:\n  jvs afscp --control-root <control> --home <home> save --message <message> --json\n  jvs afscp --control-root <control> --home <home> list --json\n  jvs afscp --control-root <control> --home <home> restore --save-point <id> --json\n  jvs afscp --control-root <control> --home <home> status --json\n  jvs afscp --control-root <control> --home <home> doctor --json\n"
+	help := "Usage:\n  jvs afscp --control-root <control> --home <home> save --message <message> --json\n  jvs afscp --control-root <control> --home <home> list --json\n  jvs afscp --control-root <control> --home <home> restore --save-point <id> --json\n  jvs afscp --control-root <control> --home <home> clone --target-control-root <target-control> --target-home <target-home> --json\n  jvs afscp --control-root <control> --home <home> status --json\n  jvs afscp --control-root <control> --home <home> doctor --json\n"
 	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: []byte(help)}}
 	runner := newTestRunner(t, commandRunner)
 
@@ -441,6 +463,7 @@ func TestVerifyAFSCPDirectCapabilityUsesAFSCPHelpAndRequiresDirectContract(t *te
 		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "save", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
 		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "list", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
 		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "restore", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
+		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "clone", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
 		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "status", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
 		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "doctor", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
 	}
@@ -452,42 +475,6 @@ func TestVerifyAFSCPDirectCapabilityUsesAFSCPHelpAndRequiresDirectContract(t *te
 	if err := newTestRunner(t, missingHome).VerifyAFSCPDirectCapability(context.Background()); err == nil {
 		t.Fatal("VerifyAFSCPDirectCapability succeeded without paired selector help, want fail-closed error")
 	}
-}
-
-func TestRepoCloneUsesFixedCommandAndParsesEnvelope(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: repoCloneSuccessStdout(t)}}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
-	if err != nil {
-		t.Fatalf("RepoClone returned error: %v", err)
-	}
-	if summary.SourceRepoID != "jvs_repo_alpha" || summary.TargetRepoID != "jvs_repo_clone" || summary.SavePointsMode != "main" || summary.SavePointsCopiedCount != 2 || summary.RuntimeStateCopied {
-		t.Fatalf("summary = %#v", summary)
-	}
-	if summary.Workspace != "main" {
-		t.Fatalf("summary workspace = %q, want fixed main workspace from argv", summary.Workspace)
-	}
-	want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: []string{"--control-root", testControlRoot, "--workspace", "main", "repo", "clone", testTargetPayloadRoot, "--target-control-root", testTargetControlRoot, "--save-points", "main", "--json"}, Dir: "/var/lib/afscp/jvs-cwd"}
-	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
-		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
-	}
-	assertNoForbiddenJVSFlags(t, commandRunner.calls[0].Args)
-	assertSummaryDoesNotLeakPaths(t, summary)
-}
-
-func TestRepoCloneCommandErrorEnvelopeFromNonZeroStdoutSourceRoot(t *testing.T) {
-	t.Parallel()
-
-	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
-		ExitCode: 31,
-		Stdout:   jvsErrorStdout(t, "repo clone", testControlRoot, "E_SOURCE_DIRTY"),
-	}})
-
-	_, err := runner.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
-	assertJVSCommandError(t, err, "repo clone", 31, "E_SOURCE_DIRTY")
 }
 
 func TestInitCommandErrorEnvelopeFromNonZeroStdout(t *testing.T) {
@@ -730,14 +717,6 @@ func TestRunnerRejectsRawPathArguments(t *testing.T) {
 			_, err := runner.Init(context.Background(), "/srv/afscp/repo/payload", "/srv/afscp/repo/payload/control")
 			return err
 		}},
-		{name: "repo clone target payload inside source control", call: func() error {
-			_, err := runner.RepoClone(context.Background(), testControlRoot, testControlRoot+"/payload", testTargetControlRoot)
-			return err
-		}},
-		{name: "repo clone target roots overlap", call: func() error {
-			_, err := runner.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetPayloadRoot+"/control")
-			return err
-		}},
 	}
 
 	for _, tt := range tests {
@@ -760,26 +739,12 @@ func TestNewJVSPrimitivesFailClosedForInvalidEnvelope(t *testing.T) {
 		stdout []byte
 		call   func(*Runner) error
 	}{
-		{name: "clone runtime copied", stdout: repoCloneStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["runtime_state_copied"] = true }), call: func(r *Runner) error {
-			_, err := r.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
+		{name: "direct clone negative copied count", stdout: directCloneStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["save_points_copied_count"] = -1 }), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
 			return err
 		}},
-		{name: "clone missing runtime copied", stdout: repoCloneStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "runtime_state_copied") }), call: func(r *Runner) error {
-			_, err := r.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
-			return err
-		}},
-		{name: "clone negative copied count", stdout: repoCloneStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["save_points_copied_count"] = -1 }), call: func(r *Runner) error {
-			_, err := r.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
-			return err
-		}},
-		{name: "clone target control mismatch", stdout: repoCloneStdoutWith(t, func(env map[string]any) {
-			env["data"].(map[string]any)["target_control_root"] = "/srv/afscp/secret/control"
-		}), call: func(r *Runner) error {
-			_, err := r.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
-			return err
-		}},
-		{name: "clone envelope root mismatch", stdout: repoCloneStdoutWith(t, func(env map[string]any) { env["repo_root"] = testControlRoot }), call: func(r *Runner) error {
-			_, err := r.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
+		{name: "direct clone save point mismatch", stdout: directCloneStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["save_point_id"] = "sp_other" }), call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
 			return err
 		}},
 	}
@@ -804,8 +769,8 @@ func TestNewJVSPrimitivesFailClosedForCommandAndJSONFailures(t *testing.T) {
 		name string
 		call func(*Runner) error
 	}{
-		{name: "repo clone", call: func(r *Runner) error {
-			_, err := r.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
+		{name: "direct clone", call: func(r *Runner) error {
+			_, err := r.DirectClone(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, DirectTarget{ControlRoot: testTargetControlRoot, Home: testTargetPayloadRoot}, "sp_001")
 			return err
 		}},
 	}
@@ -816,7 +781,7 @@ func TestNewJVSPrimitivesFailClosedForCommandAndJSONFailures(t *testing.T) {
 	}{
 		{name: "nonzero", result: CommandResult{ExitCode: 1, Stderr: []byte("password=secret /srv/afscp/raw")}},
 		{name: "malformed", result: CommandResult{Stdout: []byte(`{"ok":`)}},
-		{name: "ok false", result: CommandResult{Stdout: mustJSON(t, map[string]any{"schema_version": 1, "command": "repo clone", "repo_root": testTargetControlRoot, "workspace": "main", "ok": false, "data": map[string]any{}, "error": map[string]any{"message": "token=secret"}})}},
+		{name: "ok false", result: CommandResult{Stdout: directErrorStdout(t, "clone", "E_SOURCE_DIRTY")}},
 		{name: "runner error", err: errors.New("exec failed token=secret /srv/afscp/raw")},
 	}
 	for _, c := range cases {
@@ -880,15 +845,14 @@ func assertAFSCPDirectArgvHasNoLegacyTokens(t *testing.T, args []string) {
 	t.Helper()
 
 	forbiddenArgs := map[string]bool{
-		"--workspace":           true,
-		"--direct":              true,
-		"--discard-unsaved":     true,
-		"--strict":              true,
-		"--repair-runtime":      true,
-		"--target-control-root": true,
-		"history":               true,
-		"recovery":              true,
-		"discard":               true,
+		"--workspace":       true,
+		"--direct":          true,
+		"--discard-unsaved": true,
+		"--strict":          true,
+		"--repair-runtime":  true,
+		"history":           true,
+		"recovery":          true,
+		"discard":           true,
 	}
 	for i, arg := range args {
 		if forbiddenArgs[arg] {
@@ -1041,6 +1005,25 @@ func directRestoreStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	return mustJSON(t, env)
 }
 
+func directCloneSuccessStdout(t *testing.T) []byte {
+	t.Helper()
+	return directCloneStdoutWith(t, nil)
+}
+
+func directCloneStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
+	t.Helper()
+	env := directEnvelope("clone")
+	data := env["data"].(map[string]any)
+	data["source_repo_id"] = "jvs_repo_alpha"
+	data["target_repo_id"] = "jvs_repo_clone"
+	data["save_point_id"] = "sp_001"
+	data["save_points_copied_count"] = 1
+	if mutate != nil {
+		mutate(env)
+	}
+	return mustJSON(t, env)
+}
+
 func directStatusSuccessStdout(t *testing.T) []byte {
 	t.Helper()
 	return directStatusStdoutWith(t, nil)
@@ -1142,30 +1125,6 @@ func historyStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 		{"save_point_id": "sp_002", "message": "second", "created_at": "2026-05-05T12:01:00Z"},
 		{"save_point_id": "sp_001", "message": "first", "created_at": "2026-05-05T12:00:00Z"},
 	}
-	if mutate != nil {
-		mutate(env)
-	}
-	return mustJSON(t, env)
-}
-
-func repoCloneSuccessStdout(t *testing.T) []byte {
-	t.Helper()
-	return repoCloneStdoutWith(t, nil)
-}
-
-func repoCloneStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
-	t.Helper()
-	env := baseEnvelope("repo clone")
-	env["repo_root"] = testTargetControlRoot
-	data := env["data"].(map[string]any)
-	delete(data, "workspace")
-	data["source_repo_id"] = "jvs_repo_alpha"
-	data["target_repo_id"] = "jvs_repo_clone"
-	data["target_folder"] = testTargetPayloadRoot
-	data["target_control_root"] = testTargetControlRoot
-	data["save_points_mode"] = "main"
-	data["save_points_copied_count"] = 2
-	data["runtime_state_copied"] = false
 	if mutate != nil {
 		mutate(env)
 	}

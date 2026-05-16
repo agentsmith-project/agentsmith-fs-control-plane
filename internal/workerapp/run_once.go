@@ -474,7 +474,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			}
 			templateJVS, ok := jvs.(repoexec.TemplateJVSRunner)
 			if !ok {
-				err = errors.New("template create jvs runner does not support repo clone")
+				err = errors.New("template create jvs runner does not support direct clone")
 				if handle.Close != nil {
 					err = errors.Join(err, handle.Close())
 				}
@@ -511,7 +511,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			}
 			templateJVS, ok := jvs.(repoexec.TemplateJVSRunner)
 			if !ok {
-				err = errors.New("template clone jvs runner does not support repo clone")
+				err = errors.New("template clone jvs runner does not support direct clone")
 				if handle.Close != nil {
 					err = errors.Join(err, handle.Close())
 				}

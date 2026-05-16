@@ -9,7 +9,7 @@ not belong in this repository.
 - GitHub: https://github.com/agentsmith-project/jvs
 - Current pre-GA local direct pin evidence: `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`
 - `afscp-jvs-direct-local-linux-amd64` SHA-256:
-  `8778e43338c0ca34b4ee6b20b4500c8857e9daeea10231705e4e4a429e32b3df`
+  `f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c`
 - Historical release context: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.9
 
 ## JuiceFS

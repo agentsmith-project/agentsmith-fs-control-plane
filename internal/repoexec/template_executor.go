@@ -23,7 +23,7 @@ import (
 
 type TemplateJVSRunner interface {
 	DirectSave(ctx context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error)
-	RepoClone(ctx context.Context, sourceControlRoot, targetPayloadRoot, targetControlRoot string) (jvsrunner.RepoCloneSummary, error)
+	DirectClone(ctx context.Context, source jvsrunner.DirectTarget, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectCloneSummary, error)
 	DirectDoctor(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectDoctorSummary, error)
 }
 
@@ -157,7 +157,7 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 	if err := executor.checkTemplateCreateWriterSessions(ctx, working, now); err != nil {
 		return executor.commitTemplateCreateFailed(ctx, working, "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE", "source repo has active or stale writer sessions after template writer fence")
 	}
-	if err := prepareRepoCloneTargetParents(paths); err != nil {
+	if err := prepareDirectCloneTargetParents(paths); err != nil {
 		return executor.commitTemplateCreateFailed(ctx, working, "TEMPLATE_CREATE_TARGET_PREPARE_FAILED", "template create target preparation failed")
 	}
 	save, err := executor.jvs.DirectSave(ctx, sourceTarget, "template "+record.TemplateID)
@@ -170,11 +170,12 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 		}
 		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs direct save failed", withJVSErrorDetails(nil, err))
 	}
-	clone, err := executor.jvs.RepoClone(ctx, sourceTarget.ControlRoot, paths.PayloadRootPath, paths.ControlRootPath)
+	target := jvsrunner.DirectTarget{ControlRoot: paths.ControlRootPath, Home: paths.PayloadRootPath}
+	clone, err := executor.jvs.DirectClone(ctx, sourceTarget, target, save.SavePointID)
 	if err != nil {
-		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs repo clone failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
+		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs direct clone failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
 	}
-	doctor, err := executor.jvs.DirectDoctor(ctx, jvsrunner.DirectTarget{ControlRoot: paths.ControlRootPath, Home: paths.PayloadRootPath})
+	doctor, err := executor.jvs.DirectDoctor(ctx, target)
 	if err != nil {
 		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
 	}
@@ -257,14 +258,15 @@ func (executor *TemplateCloneExecutor) ExecuteOperationRecovery(ctx context.Cont
 	if err != nil {
 		return base.commitTemplateCloneFailed(ctx, record, "TEMPLATE_CLONE_VALIDATION_FAILED", "template clone validation failed")
 	}
-	if err := prepareRepoCloneTargetParents(paths); err != nil {
+	if err := prepareDirectCloneTargetParents(paths); err != nil {
 		return base.commitTemplateCloneFailed(ctx, record, "TEMPLATE_CLONE_TARGET_PREPARE_FAILED", "template clone target preparation failed")
 	}
-	clone, err := base.jvs.RepoClone(ctx, sourceTarget.ControlRoot, paths.PayloadRootPath, paths.ControlRootPath)
+	target := jvsrunner.DirectTarget{ControlRoot: paths.ControlRootPath, Home: paths.PayloadRootPath}
+	clone, err := base.jvs.DirectClone(ctx, sourceTarget, target, "")
 	if err != nil {
-		return base.commitTemplateCloneIntervention(ctx, record, "JVS_COMMAND_FAILED", "jvs repo clone failed", withJVSErrorDetails(nil, err))
+		return base.commitTemplateCloneIntervention(ctx, record, "JVS_COMMAND_FAILED", "jvs direct clone failed", withJVSErrorDetails(nil, err))
 	}
-	doctor, err := base.jvs.DirectDoctor(ctx, jvsrunner.DirectTarget{ControlRoot: paths.ControlRootPath, Home: paths.PayloadRootPath})
+	doctor, err := base.jvs.DirectDoctor(ctx, target)
 	if err != nil {
 		return base.commitTemplateCloneIntervention(ctx, record, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(nil, err))
 	}
@@ -441,19 +443,19 @@ func templateRootPaths(volumeRoot, namespaceID, templateID string) (pathresolver
 	return pathresolver.RepoRootPaths{RepoPaths: pathresolver.RepoPaths{ContainerVolumeSubdir: paths.ContainerVolumeSubdir, ControlVolumeSubdir: paths.ControlVolumeSubdir, PayloadVolumeSubdir: paths.PayloadVolumeSubdir}, ControlRootPath: controlRoot, PayloadRootPath: payloadRoot}, nil
 }
 
-func prepareRepoCloneTargetParents(paths pathresolver.RepoRootPaths) error {
+func prepareDirectCloneTargetParents(paths pathresolver.RepoRootPaths) error {
 	parents := []string{filepath.Dir(paths.PayloadRootPath), filepath.Dir(paths.ControlRootPath)}
 	seen := map[string]bool{}
 	for _, parent := range parents {
 		if parent == "." || parent == string(filepath.Separator) || !filepath.IsAbs(parent) || filepath.Clean(parent) != parent {
-			return errors.New("invalid repo clone target parent")
+			return errors.New("invalid direct clone target parent")
 		}
 		if seen[parent] {
 			continue
 		}
 		seen[parent] = true
 		if err := os.MkdirAll(parent, 0o755); err != nil {
-			return fmt.Errorf("prepare repo clone target parent: %w", err)
+			return fmt.Errorf("prepare direct clone target parent: %w", err)
 		}
 	}
 	return nil

@@ -650,9 +650,16 @@ POST /internal/v1/repo-templates/{templateId}:clone
 }
 ```
 
-GA template creation always creates a fresh source save point inside the operation and records it as `source_save_point_id` on the resulting `RepoTemplate`. Caller-provided historical `source_save_point_id` is not accepted because JVS `repo clone` clones the current source repo/workspace rather than directly cloning an arbitrary historical save point.
+GA template creation always creates a fresh source save point inside the
+operation and records it as `source_save_point_id` on the resulting
+`RepoTemplate`. Template materialization uses JVS direct clone from that save
+point, so it does not perform ordinary workspace dirty checks or re-read the
+mutable HOME after the save point is created.
 
-If the source repo changes after the source save point is created and JVS reports dirty/current-state mismatch before clone, AFSCP fails with `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE` and the caller may retry. Creating a template from an older save point requires a future staging restore/import flow.
+If the source repo has active or stale writer sessions before the source save
+point is created, AFSCP fails with `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE` and the
+caller may retry after those sessions are closed. Creating a template from an
+older save point requires a future explicit product flow.
 
 `clone_history_mode` must be pinned to the verified JVS capability for the deployment. GA may use `main`. `all` is allowed only after the pinned JVS version supports durable imported-save-point protection.
 

@@ -67,7 +67,7 @@ needed before real handlers and storage mutation work:
   event through the dedicated namespace volume binding store boundary.
 - `jvsrunner`: JVS CLI runner abstraction for repo init/clone helpers and the
   active `jvs afscp --control-root ... --home ...` direct
-  save/list/restore/status/doctor contract. Save point and restore workers use
+  save/list/restore/clone/status/doctor contract. Save point and restore workers use
   the direct primitives only; legacy restore preview/discard/run is not an
   active worker path.
 - `repoexec`: opt-in repo recovery executors. `repo_create` resolves metadata,

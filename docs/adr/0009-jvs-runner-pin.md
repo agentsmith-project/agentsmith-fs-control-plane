@@ -6,7 +6,7 @@ direct-capable JVS build
 ## Context
 
 AFSCP executes JVS for repo init, save point operations, direct restore, clone,
-and metadata diagnostics. The active save/list/restore/status/doctor contract
+and metadata diagnostics. The active save/list/restore/clone/status/doctor contract
 has been reset to direct `jvs afscp ...` commands. The old public save/history,
 strict doctor, restore preview/run/discard lifecycle, and
 `restore --direct --discard-unsaved` adapter are not active contract.
@@ -19,10 +19,10 @@ ref as explicit evidence instead of continuing to claim `v0.4.9` as active.
 Pinned pre-GA local artifact:
 
 ```text
-version: pre-ga-local-afscp-direct-2026-05-16-r2
+version: pre-ga-local-afscp-direct-2026-05-16-r3
 artifact: afscp-jvs-direct-local-linux-amd64
-JVS binary artifact SHA-256: 8778e43338c0ca34b4ee6b20b4500c8857e9daeea10231705e4e4a429e32b3df
-source ref: jvs@main:9ca1a2a883da3501fe37c8f4dc1ca0a714075b6d
+JVS binary artifact SHA-256: f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c
+source ref: jvs@main:edd317474db5fd6f9e3e98015438a47d02ad73c6
 binary evidence path: /tmp/afscp-jvs-direct-local
 ```
 
@@ -38,6 +38,7 @@ AFSCP direct commands must use:
 ```text
 jvs afscp --control-root <control> --home <home> save --message <message> --json
 jvs afscp --control-root <control> --home <home> list --json
+jvs afscp --control-root <source_control> --home <source_home> clone --target-control-root <target_control> --target-home <target_home> --json [--save-point <save_point_id>]
 jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json
 jvs afscp --control-root <control> --home <home> status --json
 jvs afscp --control-root <control> --home <home> doctor --json
@@ -46,10 +47,10 @@ jvs afscp --control-root <control> --home <home> doctor --json
 Save and restore hot paths do not call doctor/status by default. Status and
 doctor are explicit metadata-only diagnostics, recovery aids, or smoke checks.
 
-Non-direct JVS commands remain only for explicitly scoped repo init and repo
-clone paths until JVS provides direct AFSCP equivalents. They are not
-compatibility adapters for active direct save or restore, and they must not
-reintroduce public save/history or strict doctor validation.
+Non-direct JVS commands remain only for explicitly scoped repo init. They are
+not compatibility adapters for active direct save, clone, or restore, and they
+must not reintroduce public save/history, ordinary repo clone, or strict doctor
+validation.
 
 ## Required Evidence
 
@@ -67,7 +68,7 @@ Positive:
 - Prevents AFSCP from advertising old `v0.4.9` or restore-preview behavior as
   active.
 - Makes the pre-GA local artifact explicit and auditable.
-- Keeps active save/list/restore/status/doctor paths on the fast direct
+- Keeps active save/list/restore/clone/status/doctor paths on the fast direct
   contract.
 
 Tradeoffs:

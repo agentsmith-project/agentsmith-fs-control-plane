@@ -134,10 +134,10 @@ Default control-plane output surfaces must redact AFSCP managed raw roots and
 storage material. This includes `/srv/afscp...`, `.jvs`, managed
 `afscp/namespaces/.../control` and `afscp/namespaces/.../payload` subdirs,
 `control_volume_subdir`, `payload_volume_subdir`, AFSCP raw JVS command shapes
-with examples such as `jvs init`, repo clone helpers, old public
+with examples such as `jvs init`, old repo clone helpers, old public
 `jvs doctor`/`jvs save`/`jvs history` commands when found in historical data,
 and the active direct shape
-`jvs afscp --control-root ... --home ... <save|list|restore|status|doctor> --json`
+`jvs afscp --control-root ... --home ... <save|list|restore|clone|status|doctor> --json`
 forms, `juicefs mount` commands, SecretRef values, metadata URLs, tokens, passwords,
 credentials, audit/outbox
 payloads, readiness errors, operation persistence, operation inspection,

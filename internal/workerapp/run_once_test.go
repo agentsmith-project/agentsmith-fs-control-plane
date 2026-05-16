@@ -31,10 +31,10 @@ import (
 )
 
 const (
-	acceptedJVSBinarySHA256           = "8778e43338c0ca34b4ee6b20b4500c8857e9daeea10231705e4e4a429e32b3df"
+	acceptedJVSBinarySHA256           = "f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c"
 	directRestoreLocalJVSBinaryPath   = "/tmp/afscp-jvs-direct-local"
-	directRestoreLocalJVSBinarySHA256 = "8778e43338c0ca34b4ee6b20b4500c8857e9daeea10231705e4e4a429e32b3df"
-	directRestoreLocalJVSSourceRef    = "jvs@main:9ca1a2a883da3501fe37c8f4dc1ca0a714075b6d"
+	directRestoreLocalJVSBinarySHA256 = "f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c"
+	directRestoreLocalJVSSourceRef    = "jvs@main:edd317474db5fd6f9e3e98015438a47d02ad73c6"
 )
 
 func TestNewRunOnceRunnerDisabledFailsBeforeOpeningStore(t *testing.T) {
@@ -1689,7 +1689,7 @@ func TestNewJVSRunnerFromConfigVerifiesFileAgainstAcceptedPin(t *testing.T) {
 }
 
 func TestNewJVSRunnerFromConfigDirectRestorePreflightsCLIHelp(t *testing.T) {
-	path, sha := writeWorkerAppJVSHelpFixture(t, "Usage:\n  jvs afscp --control-root <control> --home <home> save --message <message> --json\n  jvs afscp --control-root <control> --home <home> list --json\n  jvs afscp --control-root <control> --home <home> restore --save-point <id> --json\n  jvs afscp --control-root <control> --home <home> status --json\n  jvs afscp --control-root <control> --home <home> doctor --json\n")
+	path, sha := writeWorkerAppJVSHelpFixture(t, "Usage:\n  jvs afscp --control-root <control> --home <home> save --message <message> --json\n  jvs afscp --control-root <control> --home <home> list --json\n  jvs afscp --control-root <control> --home <home> restore --save-point <id> --json\n  jvs afscp --control-root <control> --home <home> clone --target-control-root <target-control> --target-home <target-home> --json\n  jvs afscp --control-root <control> --home <home> status --json\n  jvs afscp --control-root <control> --home <home> doctor --json\n")
 
 	_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
 		Enabled:                   true,
@@ -1730,7 +1730,7 @@ func writeWorkerAppJVSHelpFixture(t *testing.T, help string) (string, string) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "jvs")
-	content := []byte("#!/bin/sh\nif [ \"$1\" = \"afscp\" ]; then\n  case \"$2:$3\" in\n    \"--help:\"|\"save:--help\"|\"list:--help\"|\"restore:--help\"|\"status:--help\"|\"doctor:--help\")\n      cat <<'EOF'\n" + help + "EOF\n      exit 0\n      ;;\n  esac\nfi\nexit 7\n")
+	content := []byte("#!/bin/sh\nif [ \"$1\" = \"afscp\" ]; then\n  case \"$2:$3\" in\n    \"--help:\"|\"save:--help\"|\"list:--help\"|\"restore:--help\"|\"clone:--help\"|\"status:--help\"|\"doctor:--help\")\n      cat <<'EOF'\n" + help + "EOF\n      exit 0\n      ;;\n  esac\nfi\nexit 7\n")
 	if err := os.WriteFile(path, content, 0o755); err != nil {
 		t.Fatalf("write fake jvs binary: %v", err)
 	}
@@ -3809,14 +3809,15 @@ type workerAppFakeJVSRunner struct {
 	directSaveSummary    jvsrunner.DirectSaveSummary
 	directListSummary    jvsrunner.DirectListSummary
 	directRestoreSummary jvsrunner.DirectRestoreSummary
+	directCloneSummary   jvsrunner.DirectCloneSummary
 	directStatusSummary  jvsrunner.DirectStatusSummary
 	directDoctorSummary  jvsrunner.DirectDoctorSummary
 	directSaveErr        error
 	directListErr        error
 	directRestoreErr     error
+	directCloneErr       error
 	directStatusErr      error
 	directDoctorErr      error
-	repoCloneSummary     jvsrunner.RepoCloneSummary
 	controlRoot          string
 	payloadRoot          string
 	saveMessage          string
@@ -3848,12 +3849,23 @@ func (runner *workerAppFakeJVSRunner) Init(ctx context.Context, _, _ string) (jv
 	return runner.initSummary, nil
 }
 
-func (runner *workerAppFakeJVSRunner) RepoClone(context.Context, string, string, string) (jvsrunner.RepoCloneSummary, error) {
-	runner.calls = append(runner.calls, "repo_clone")
-	if runner.repoCloneSummary.SourceRepoID == "" {
-		runner.repoCloneSummary = jvsrunner.RepoCloneSummary{SourceRepoID: "jvs_repo_alpha", TargetRepoID: "jvs_repo_clone", SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"}
+func (runner *workerAppFakeJVSRunner) DirectClone(_ context.Context, source jvsrunner.DirectTarget, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectCloneSummary, error) {
+	runner.calls = append(runner.calls, "direct_clone")
+	runner.directTarget = source
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	if runner.directCloneSummary.SourceRepoID == "" {
+		sourceRepoID := runner.directCloneSummary.SourceRepoID
+		if sourceRepoID == "" {
+			sourceRepoID = "jvs_repo_alpha"
+		}
+		targetRepoID := runner.directCloneSummary.TargetRepoID
+		if targetRepoID == "" {
+			targetRepoID = "jvs_repo_clone"
+		}
+		runner.directCloneSummary = jvsrunner.DirectCloneSummary{SourceRepoID: sourceRepoID, TargetRepoID: targetRepoID, SavePointID: savePointID, SavePointsMode: "main", SavePointsCopiedCount: 1, RuntimeStateCopied: false, Workspace: "main"}
 	}
-	return runner.repoCloneSummary, nil
+	return runner.directCloneSummary, runner.directCloneErr
 }
 
 func (runner *workerAppFakeJVSRunner) DirectSave(_ context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error) {

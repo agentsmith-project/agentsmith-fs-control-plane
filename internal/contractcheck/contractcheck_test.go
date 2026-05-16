@@ -165,7 +165,7 @@ func TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary(t *
 		"jvs doctor",
 		"jvs save",
 		"jvs history",
-		"jvs afscp --control-root ... --home ... <save|list|restore|status|doctor> --json",
+		"jvs afscp --control-root ... --home ... <save|list|restore|clone|status|doctor> --json",
 		"juicefs mount",
 		"SecretRef",
 		"metadata URLs",

@@ -11,12 +11,13 @@ AFSCP is the only ordinary JVS executor in the storage-control path.
 ## Integration Mode
 
 AFSCP integrates through the JVS CLI with JSON output. The active
-save/list/restore/status/doctor surface is the internal direct contract:
+save/list/restore/clone/status/doctor surface is the internal direct contract:
 
 ```bash
 jvs afscp --control-root <control> --home <home> save --message <message> --json
 jvs afscp --control-root <control> --home <home> list --json
 jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json
+jvs afscp --control-root <control> --home <home> clone --target-control-root <target_control> --target-home <target_home> --json
 jvs afscp --control-root <control> --home <home> status --json
 jvs afscp --control-root <control> --home <home> doctor --json
 ```
@@ -37,6 +38,7 @@ The active direct command expectations include:
 - direct save point creation through `jvs afscp ... save --json`
 - direct save point list/history through `jvs afscp ... list --json`
 - direct version restore through `jvs afscp ... restore --save-point ... --json`
+- direct template/repo materialization through `jvs afscp ... clone --target-control-root ... --target-home ... --json`
 - explicit metadata-only status through `jvs afscp ... status --json`
 - explicit metadata-only doctor through `jvs afscp ... doctor --json`
 
@@ -67,24 +69,21 @@ Repo create command shape:
 jvs init <payload_root_path> --control-root <control_root_path> --workspace main --json
 ```
 
-Non-direct repo/template helper command shape:
-
-```bash
-jvs --control-root <control_root_path> --workspace main <command> --json
-```
-
 External control root rules for AFSCP:
 
 - `payload_root_path` is the JVS `main` workspace folder and contains user files only.
 - `control_root_path` contains JVS control metadata and is not mounted/exported.
 - A bare payload folder cannot auto-discover the control root; AFSCP runner must pass explicit selectors.
 - `--repo` is not the selector for external control root repos.
-- Direct save/list/restore/status/doctor target selection is authoritative only
+- Direct save/list/restore/clone/status/doctor target selection is authoritative only
   through `--control-root <control_root_path>` plus
   `--home <payload_home_path>`.
-- Non-direct `--workspace main` usage is limited to repo init and repo clone
-  until those surfaces have direct AFSCP equivalents. Template source save,
-  save point list/create, restore, status, and doctor use `jvs afscp`.
+- Direct clone target selection is authoritative only through
+  `--target-control-root <target_control_root_path>` plus
+  `--target-home <target_payload_home_path>`.
+- Non-direct `--workspace main` usage is limited to repo init. Template source
+  save, save point list/create, restore, template create/clone materialization,
+  status, and doctor use `jvs afscp`.
 
 ## Operation Rules
 

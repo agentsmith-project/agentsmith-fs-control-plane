@@ -121,7 +121,6 @@ Mutating operations include:
 - repo archive, restore-archived, delete, restore-tombstoned, and purge
 - save point create
 - restore
-- repo clone
 - template clone
 - export create/revoke
 - workload mount binding/plan issuance

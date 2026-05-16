@@ -59,7 +59,6 @@ Require durable operation records:
 - repo archive, restore-archived, delete, restore-tombstoned, and purge
 - save point create
 - direct restore to save point
-- repo clone
 - template create/clone
 - export create/revoke
 - export expiry/reconciliation when it changes session terminal state
