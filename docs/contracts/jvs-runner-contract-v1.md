@@ -14,10 +14,10 @@ The active AFSCP pin is a pre-GA local direct-capable JVS build, not the old
 `v0.4.9` release asset.
 
 ```text
-version: pre-ga-local-afscp-direct-2026-05-16
+version: pre-ga-local-afscp-direct-2026-05-16-r2
 artifact: afscp-jvs-direct-local-linux-amd64
-jvs binary artifact SHA-256: affa86a08dbb2195f594be0be01e9c3f128806f75d04826030afbe4ba283f2e2
-source ref: jvs@main:eb026cc48efb57ef64c9f3e482f0011b9232701b
+jvs binary artifact SHA-256: 8778e43338c0ca34b4ee6b20b4500c8857e9daeea10231705e4e4a429e32b3df
+source ref: jvs@main:9ca1a2a883da3501fe37c8f4dc1ca0a714075b6d
 ```
 
 This local source ref includes the uncommitted AFSCP direct command source in
