@@ -50,19 +50,14 @@ func TestAcquireRepoPurgeOperationLeaseScopesBeforeMutationAndRejectsCancelFinal
 		"AND $5 = ''",
 		"earlier_jvs_mutation AS",
 		"o.operation_id <> e.operation_id",
-		"o.operation_type IN ('save_point_create', 'restore', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
+		"o.operation_type IN ('save_point_create', 'restore', 'template_create', 'template_clone')",
 		"o.operation_state NOT IN ('succeeded','failed','cancelled')",
-		"active_restore_plan AS",
-		"FROM restore_plans p, eligible_operation e",
-		"p.repo_id = e.repo_id",
-		"p.status IN ('pending', 'consuming', 'discarding', 'operator_intervention_required')",
 		"updated_operation AS",
 		"UPDATE operations SET",
 		"NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)",
-		"NOT EXISTS (SELECT 1 FROM active_restore_plan)",
 		"RETURNING",
 	)
-	for _, forbidden := range []string{"repo_fences", "finalize_cancellation", "earlier_repo_lifecycle"} {
+	for _, forbidden := range []string{"repo_fences", "finalize_cancellation", "earlier_repo_lifecycle", "restore_plans", "active_restore_plan"} {
 		if strings.Contains(exec.query, forbidden) {
 			t.Fatalf("purge acquire SQL includes unsupported fragment %q: %s", forbidden, exec.query)
 		}

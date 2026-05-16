@@ -3,9 +3,9 @@
 Status: GA implementation-baseline package.
 
 This package records the documentation, contract, and decision work that
-admitted the current implementation baseline. The JVS upstream blocker found
-during evidence gathering is now closed by the current v0.4.9 pin and runner
-contract evidence. Final GA is
+admitted the current implementation baseline. The JVS direct runner gate is now
+covered for pre-GA by the current local direct pin and runner contract evidence.
+Final GA is
 governed by `docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and the
 repo-local command `scripts/verify-ga-release.sh`.
 
@@ -47,7 +47,8 @@ Operational readiness:
 - `docs/OPERATIONS_AND_AUDIT.md`
 - `docs/OPERATIONAL_READINESS.md`
 - `docs/runbooks/README.md`
-- `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`
+- `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`
+- `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md` historical release evidence
 - `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md` historical v0.4.8 smoke evidence
 - `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md` historical v0.4.7 blocker evidence
 - `docs/RISK_REGISTER.md`
@@ -100,18 +101,19 @@ and active release, and SELECT-only repo recovery inspection readers.
 Worker-owned progress/terminal writes must use the lease-fenced update
 primitive, not unguarded `UpdateOperation`. Resource metadata persistence for
 volumes, namespaces, namespace volume bindings, repo/repo lifecycle metadata,
-exports, workload mounts, restore plans, and repo templates exists as
+exports, workload mounts, direct restore operation state, save point metadata,
+and repo templates exists as
 control-plane state. API/runtime implementation now includes repo/JVS lifecycle,
-save/restore, namespace-scoped template create/clone, WebDAV export
+save point/direct restore, namespace-scoped template create/clone, WebDAV export
 create/get/revoke plus gateway serving, workload mount issuance and
-orchestrator plans, writer fences, and durable operation-backed storage
+orchestrator plans, writer-session fences, and durable operation-backed storage
 mutation. Continue directly toward GA by keeping guardrails, generated
 artifacts, security boundaries, runbooks, and operations behavior covered by
 repo-local verification.
 
-G-005 is auto-verified by current JVS v0.4.9 pin evidence in
-`docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md` and the runner contract. This only
-covers the JVS gate. Repo/JVS/storage handlers may now proceed only through
+G-005 is auto-verified for pre-GA by current direct local JVS evidence in
+`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md` and the runner contract.
+This only covers the JVS gate. Repo/JVS/storage handlers may now proceed only through
 versioned contracts, fences, session drain, operation leases, audit behavior,
 and focused tests.
 
@@ -125,8 +127,8 @@ and focused tests.
 - Do not implement storage mutation handlers from narrative docs alone; use the
   schemas/OpenAPI and recorded ADRs/contracts.
 - Do not implement repo delete as raw filesystem delete.
-- Do not enable WebDAV, workload mount, restore-run, or repo lifecycle behavior
-  without the relevant session drain/fence semantics.
+- Do not enable WebDAV, workload mount, direct restore, or repo lifecycle behavior
+  without the relevant session drain and writer-session fence semantics.
 - Do not treat G-005 closure as implementation approval for storage mutation;
   use contracts, fences, session drain, operation leases, audit behavior, and
   focused tests covered by `scripts/verify-ga-release.sh`.

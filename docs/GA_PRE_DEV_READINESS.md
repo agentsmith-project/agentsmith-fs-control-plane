@@ -30,7 +30,7 @@ GA includes:
 - namespace volume binding and policy
 - repo create/get with AFSCP-owned canonical path allocation
 - repo archive, restore-from-archive, delete request, restore-from-tombstone, and purge lifecycle operations
-- JVS-backed save point create/list, restore preview, and restore-run
+- JVS-backed save point create/list and direct restore
 - namespace-scoped immutable repo templates and same-namespace clone
 - WebDAV export sessions with short-lived credentials
 - workload mount bindings and orchestrator-only mount plans
@@ -86,8 +86,8 @@ AFSCP audit records must always distinguish the authenticated
 - Repo templates are immutable and namespace-scoped in GA.
 - Cross-namespace template clone is rejected by default.
 - Cross-volume template clone is rejected with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
-- Restore-run is a version mutation. It must acquire the writer-session fence, block new read-write sessions, and reject active or uncertain read-write export/workload sessions.
-- Dirty restore-run behavior is fail-closed unless a reviewed API option explicitly models and audits a supported JVS dirty-state choice.
+- Direct restore to a save point is a version mutation. It must acquire the writer-session fence, block new read-write sessions, and reject active or uncertain read-write export/workload sessions.
+- Dirty direct restore behavior is fail-closed unless a reviewed API option explicitly models and audits a supported JVS dirty-state choice.
 - Namespace disable rejects new mutating operations, new exports, and new mount bindings. Existing read-write sessions must be revoked or allowed to expire according to a documented operator action before destructive or restore activity proceeds.
 - `quota_bytes_default` is a policy record and enforcement hook for GA. It is not enforced unless the selected volume capability `directory_quota` supports directory quota enforcement and the corresponding volume integration explicitly enables directory quota enforcement.
 - Product deletion or archive workflows call AFSCP repo lifecycle APIs for storage state changes. Product display names and catalog detach remain caller-owned metadata.
@@ -130,9 +130,9 @@ GA readiness requires evidence, not just implementation completion.
 - Contract tests cover caller authz, namespace mismatch, path traversal, WebDAV method policy, mount-plan secrecy, idempotency, stable error families, and denied audit events.
 - JVS smoke tests prove external control root init/save/history/restore/clone/doctor behavior with no `.jvs` under payload roots.
 - WebDAV tests prove payload-root chroot, root-level `.jvs` denial, encoded traversal denial, symlink escape denial, TTL, revoke, and credential redaction.
-- Workload mount tests prove product callers do not receive Secret refs, orchestrator plans contain only payload subdirs, leases are reconciled, and restore-run treats uncertain writers as active.
+- Workload mount tests prove product callers do not receive Secret refs, orchestrator plans contain only payload subdirs, leases are reconciled, and direct restore treats uncertain writers as active.
 - Repo lifecycle tests prove archive/delete block new sessions, drain or revoke existing read-only and read-write exports and mounts, tombstone retained data, honor purge policy and generic caller approval-reference requirements, and recover correctly after process restart.
-- Operation recovery tests cover process restart during repo create, save, restore-run, template create/clone, export create/revoke, and mount binding create/revoke.
+- Operation recovery tests cover process restart during repo create, save, direct restore, template create/clone, export create/revoke, and mount binding create/revoke.
 - Audit events are emitted for success, failure, denied authz, denied path, credential issue/revoke, mount plan issue, restore rejection, and operator intervention.
 - Operators have documented runbooks for the GA incident and recovery cases listed in `docs/runbooks/README.md`.
 - All GA-blocking risks in `docs/RISK_REGISTER.md` are covered by repo-local automated evidence.

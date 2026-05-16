@@ -215,7 +215,7 @@ func TestInspectRepoRecoveryOperatorInterventionRequiredIsManual(t *testing.T) {
 				repoRecoveryFenceFixture(fences.KindWriterSession, fences.StatusActive, "op_restore01", now),
 			},
 			operations: map[string]operations.OperationRecord{
-				"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestoreRun, operations.OperationStateRunning, &liveLease),
+				"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestore, operations.OperationStateRunning, &liveLease),
 			},
 			wantWriterCount: 1,
 		},
@@ -266,7 +266,7 @@ func TestInspectRepoRecoveryOperatorInterventionRequiredStillFailsClosedForMalfo
 				return fence
 			}(),
 			operations: map[string]operations.OperationRecord{
-				"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestoreRun, operations.OperationStateRunning, &liveLease),
+				"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestore, operations.OperationStateRunning, &liveLease),
 			},
 			wantReason: "invalid_fence",
 		},
@@ -278,7 +278,7 @@ func TestInspectRepoRecoveryOperatorInterventionRequiredStillFailsClosedForMalfo
 				return fence
 			}(),
 			operations: map[string]operations.OperationRecord{
-				"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestoreRun, operations.OperationStateRunning, &liveLease),
+				"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestore, operations.OperationStateRunning, &liveLease),
 			},
 			wantReason: "fence_repo_mismatch",
 		},
@@ -378,7 +378,7 @@ func TestInspectRepoRecoveryLifecycleInProgressFailsClosedOnWriterSessionFence(t
 				},
 				map[string]operations.OperationRecord{
 					tt.opID:        repoRecoveryOperationFixture(tt.opID, tt.typ, operations.OperationStateRunning, tt.lifecycleLease),
-					"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestoreRun, operations.OperationStateRunning, &liveLease),
+					"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestore, operations.OperationStateRunning, &liveLease),
 				},
 				RecoveryContext{Now: now},
 			)
@@ -420,7 +420,7 @@ func TestInspectRepoRecoveryActiveWriterSessionFenceIsNotInspectable(t *testing.
 	repo := repoRecoveryFixture(resources.RepoStatusActive, "")
 	writerFence := repoRecoveryFenceFixture(fences.KindWriterSession, fences.StatusActive, "op_restore01", now)
 	operationsByID := map[string]operations.OperationRecord{
-		"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestoreRun, operations.OperationStateRunning, &liveLease),
+		"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestore, operations.OperationStateRunning, &liveLease),
 	}
 
 	got := InspectRepoRecovery(repo, []fences.Fence{writerFence}, operationsByID, RecoveryContext{Now: now})
@@ -443,7 +443,7 @@ func TestInspectRepoRecoveryActiveWriterSessionFenceIsNotInspectable(t *testing.
 	}
 }
 
-func TestInspectRepoRecoveryWriterSessionFenceRequiresRestoreRunHolder(t *testing.T) {
+func TestInspectRepoRecoveryWriterSessionFenceRequiresRestoreHolder(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	liveLease := now.Add(30 * time.Minute)
 	repo := repoRecoveryFixture(resources.RepoStatusActive, "")
@@ -486,7 +486,7 @@ func TestInspectRepoRecoveryFailsClosedForMalformedInputs(t *testing.T) {
 				}(),
 			},
 			operations: map[string]operations.OperationRecord{
-				"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestoreRun, operations.OperationStateRunning, &liveLease),
+				"op_restore01": repoRecoveryOperationFixture("op_restore01", operations.OperationRestore, operations.OperationStateRunning, &liveLease),
 			},
 			wantReason: "fence_repo_mismatch",
 		},
@@ -505,7 +505,7 @@ func TestInspectRepoRecoveryFailsClosedForMalformedInputs(t *testing.T) {
 				repoRecoveryFenceFixture(fences.KindWriterSession, fences.StatusActive, "op_restore01", now),
 			},
 			operations: map[string]operations.OperationRecord{
-				"op_restore01": repoRecoveryOperationFixture("op_other01", operations.OperationRestoreRun, operations.OperationStateRunning, &liveLease),
+				"op_restore01": repoRecoveryOperationFixture("op_other01", operations.OperationRestore, operations.OperationStateRunning, &liveLease),
 			},
 			wantReason: "holder_operation_id_mismatch",
 		},
@@ -517,7 +517,7 @@ func TestInspectRepoRecoveryFailsClosedForMalformedInputs(t *testing.T) {
 			},
 			operations: map[string]operations.OperationRecord{
 				"op_restore01": func() operations.OperationRecord {
-					record := repoRecoveryOperationFixture("op_restore01", operations.OperationRestoreRun, operations.OperationStateRunning, &liveLease)
+					record := repoRecoveryOperationFixture("op_restore01", operations.OperationRestore, operations.OperationStateRunning, &liveLease)
 					record.RepoID = "repo_other01"
 					return record
 				}(),
@@ -532,7 +532,7 @@ func TestInspectRepoRecoveryFailsClosedForMalformedInputs(t *testing.T) {
 			},
 			operations: map[string]operations.OperationRecord{
 				"op_restore01": func() operations.OperationRecord {
-					record := repoRecoveryOperationFixture("op_restore01", operations.OperationRestoreRun, operations.OperationStateRunning, &liveLease)
+					record := repoRecoveryOperationFixture("op_restore01", operations.OperationRestore, operations.OperationStateRunning, &liveLease)
 					record.RepoID = ""
 					return record
 				}(),
@@ -547,7 +547,7 @@ func TestInspectRepoRecoveryFailsClosedForMalformedInputs(t *testing.T) {
 			},
 			operations: map[string]operations.OperationRecord{
 				"op_restore01": func() operations.OperationRecord {
-					record := repoRecoveryOperationFixture("op_restore01", operations.OperationRestoreRun, operations.OperationStateRunning, &liveLease)
+					record := repoRecoveryOperationFixture("op_restore01", operations.OperationRestore, operations.OperationStateRunning, &liveLease)
 					record.NamespaceID = ""
 					return record
 				}(),

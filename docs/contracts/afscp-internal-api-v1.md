@@ -50,7 +50,7 @@ AFSCP must reject and audit:
 - repo create/get/list
 - repo archive, restore-archived, delete, restore-tombstoned, and purge
 - save point create/list
-- direct restore and legacy restore preview/run/discard
+- direct restore
 - repo template create/clone
 - export create/get/revoke
 - workload mount binding create/get
@@ -73,12 +73,9 @@ database queries, observability dashboards, or deployment-side operator tooling.
 Direct restore is the primary product restore API. The machine-readable API
 contract exposes `POST /internal/v1/repos/{repoId}/restore`, operation type
 `restore`, request/response schemas, route, and OpenAPI contract fixtures for
-handlers and generated clients. `POST
-/internal/v1/repos/{repoId}/restore:admit` exposes restore-specific admission
-without creating a durable operation so callers can distinguish unsupported
-direct restore runtime/config from save point history availability. Restore
-preview discard remains part of the current restore slice for existing internal
-recovery flows.
+handlers and generated clients. GA does not expose a restore admission/preflight
+endpoint; unsupported runtime/config is reported through durable restore
+operation failure or readiness/operator evidence.
 
 See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft payloads.
 
@@ -98,21 +95,12 @@ See [../API_CONTRACT_DRAFT.md](../API_CONTRACT_DRAFT.md) for the current draft p
   volume metadata uses `VOLUME_NOT_FOUND`.
 - Cross-namespace template clone is rejected by default.
 - Cross-volume template clone is rejected with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
-- Direct restore requires `discard_unsaved_changes_confirmed: true`; otherwise
-  the API returns `RESTORE_CONFIRMATION_REQUIRED` and does not create or mutate
-  an operation.
-- Direct restore must not create a restore preview, restore plan, restore-run
-  request, or safety save point. It creates only a durable `restore` operation
-  and the worker calls JVS direct restore.
-- Restore admit must reuse direct restore request/auth/namespace/caller/header
-  admission and the same repo/fence/JVS-mutation/active-plan/save-point checks,
-  then check direct restore runtime capability/config readiness. It must not
-  create an operation, enqueue work, call JVS restore, create a preview, or
-  write a restore plan.
-- Restore-run and restore-preview discard references to preview operations must
-  stay inside the same namespace, repo, and resource boundary; cross-namespace
-  references return `OPERATION_NOT_FOUND` or the existing non-leaking
-  equivalent.
+- Direct restore request bodies contain `save_point_id` only. User confirmation
+  is expressed through caller UI and idempotent operation submission, not a
+  legacy confirmation field.
+- Direct restore must not create a preview, planning artifact, secondary run
+  request, cleanup request, or safety save point. It creates only a durable
+  `restore` operation and the worker calls JVS direct restore.
 - Mutations create operation records before executing external effects.
 - Ordinary product caller responses never include JuiceFS root credentials, raw root paths, or Secret references.
 - `quota_bytes_default` is a policy record and enforcement hook, not enforced as
@@ -132,15 +120,24 @@ operator/global policy when the stored namespace is null. Handlers must not
 return an `OperationRecord` where an `OperationEnvelope` is specified, and
 operation inspection must not wrap the record in an `OperationEnvelope`.
 
+`StandardError.details`, `OperationRecord.jvs_json_output`, and
+`OperationRecord.verification_result` are active API response surfaces after
+redaction. They must not expose raw diagnostic dumps or JVS/storage-internal
+fields such as checksum, digest, capacity, tree scan, file count, payload tree,
+sync, hash, proof, internal path, control-root, home, or raw command material.
+Handlers recursively remove those fields before returning caller-facing
+operation projections.
+
 ## Secret Path Redaction Boundary
 
 Default control-plane output surfaces must redact AFSCP managed raw roots and
 storage material. This includes `/srv/afscp...`, `.jvs`, managed
 `afscp/namespaces/.../control` and `afscp/namespaces/.../payload` subdirs,
 `control_volume_subdir`, `payload_volume_subdir`, AFSCP raw JVS command shapes
-with examples such as `jvs init`, `jvs doctor`, `jvs save`, `jvs history`,
-`jvs restore <save_point>`, `jvs restore --run`, `jvs restore discard`,
-`jvs recovery status`, and canonical `jvs --control-root ... --workspace main ... --json`
+with examples such as `jvs init`, repo clone helpers, old public
+`jvs doctor`/`jvs save`/`jvs history` commands when found in historical data,
+and the active direct shape
+`jvs afscp --control-root ... --home ... <save|list|restore|status|doctor> --json`
 forms, `juicefs mount` commands, SecretRef values, metadata URLs, tokens, passwords,
 credentials, audit/outbox
 payloads, readiness errors, operation persistence, operation inspection,
@@ -180,7 +177,7 @@ or actor-specific discovery output tests.
 | `namespace_admin` | namespace create/disable and volume binding update |
 | `repo_admin` | repo create/get/list, save point create/list, history |
 | `repo_lifecycle_admin` | repo archive, restore-archived, delete, restore-tombstoned, purge when policy permits |
-| `restore_admin` | direct restore and restore preview/run/discard |
+| `restore_admin` | direct restore |
 | `template_admin` | repo template create/clone |
 | `export_admin` | export create/get/revoke |
 | `mount_admin` | workload mount binding create/get/revoke |
@@ -206,54 +203,26 @@ metadata/store unavailability, and unclassified internal service bugs.
 
 Direct restore is a mutating restore operation and the fastest product path:
 `POST /internal/v1/repos/{repoId}/restore` with body
-`{"save_point_id":"sp_...","discard_unsaved_changes_confirmed":true}` returns
-an `OperationEnvelope` for a durable `restore` operation. The operation enters
+`{"save_point_id":"sp_..."}` returns an `OperationEnvelope` for a durable
+`restore` operation. The operation enters
 the normal queued/running/succeeded/failed chain and can be inspected through
 `GET /internal/v1/operations/{operationId}`. Repeating the same
 `Idempotency-Key` with the same body reuses the same operation; changing the
 body returns `IDEMPOTENCY_CONFLICT`.
 
-Restore admit is the non-durable preflight counterpart:
-`POST /internal/v1/repos/{repoId}/restore:admit` with the same body returns a
-small admission response only after the save point is available in the repo
-namespace and direct restore runtime/config is ready. If
-`AFSCP_RESTORE_RECOVERY_ENABLED` is not enabled or the explicit direct-capable
-JVS artifact/SHA/source ref readiness is absent, it returns
-`CAPABILITY_DENIED` and does not create a durable restore operation.
-
 The direct restore worker invokes JVS as
-`jvs --json --control-root <controlRoot> --workspace main restore <save_point_id> --direct --discard-unsaved`.
-It validates the direct JSON result (`mode=direct_restore`,
-`source_save_point`, `restored_save_point`, `workspace`, `files_changed`,
-`history_changed=false`, `unsaved_changes=false`) and must not expect or persist
-`plan_id` or `run_command`.
-
-Restore preview creates a durable pending JVS restore plan and is authorized as
-a mutating restore operation. Restore preview discard is the caller-triggerable
-cleanup path for a cancelled preview and is part of the `restore_admin` endpoint
-group. It must validate the matching preview operation and pending plan, invoke
-JVS restore discard through the runner, and never require ordinary callers to
-ask operators to delete private JVS files.
-
-The durable `RestorePlan` entity is the source of truth for pending, consuming,
-consumed, discarding, discarded, and operator-intervention restore states.
-It also owns restore-preview source metadata (`base_revision`, `head_revision`,
-`generation`, `fence_marker`, `summary`) and stale preview closure metadata
-(`stale`, `blockers`). These are not operation-only details.
-Operation records should reference restore plans only through safe existing
-metadata containers such as `external_resource_ids`, redacted
-`jvs_json_output`, `input_summary`, and `verification_result` until the
-OpenAPI/schema/Go/DB contracts are intentionally upgraded.
+`jvs afscp --control-root <controlRoot> --home <home> restore --save-point <save_point_id> --json`.
+It validates the `jvs.afscp.direct.v1` JSON result (`command=restore`,
+`status=succeeded`, `data.restored_save_point_id`, `data.previous_head`, and
+`data.new_head`) and must not expect or persist `plan_id`, `run_command`, raw
+paths, or secondary command metadata.
 
 Restore error mapping should use stable codes. Active or stale writer
 denials use the writer-session codes. Dirty restore state uses
-`RESTORE_DIRTY_STATE`. A matching stale preview discovered by restore-run uses
-`RESTORE_PREVIEW_STALE`: the restore-run operation fails, the durable plan
-stays `pending` for discard, and `RestorePlan.stale/blockers` are updated in
-the same durable boundary as operation failure and audit. JVS blocking state,
-mismatched or multiple pending plans, or ambiguous recovery use
-`OPERATION_RECOVERY_REQUIRED` or operator intervention instead of returning
-generic `JVS_COMMAND_FAILED` when caller/operator action is required.
+`RESTORE_DIRTY_STATE`. Ambiguous direct restore output, explicit
+diagnostic/recovery evidence requiring repair, or uncertain writer-fence
+recovery uses `OPERATION_RECOVERY_REQUIRED` or operator intervention instead of
+returning generic `JVS_COMMAND_FAILED` when caller/operator action is required.
 
 Repo-create intake resolves idempotency before checking target repo metadata:
 the same idempotency key and same request body reuses the original operation
@@ -283,8 +252,8 @@ Operator repair returns an operator repair response, not a normal
 `OperationEnvelope`. It requires `operator_admin`, no namespace header, an
 allowlisted action, reason, evidence reference, affected IDs, before/after
 state, and an audit event. It must not expose arbitrary SQL, generic state
-rewrite, fence release, session mutation, restore plan mutation, or
-repo/storage/JVS mutation.
+rewrite, fence release, session mutation, restore mutation, or repo/storage/JVS
+mutation.
 
 `STORAGE_UNAVAILABLE` is for durable control-plane metadata/store outages,
 timeouts, or connection/query failures and should map to HTTP 503 with

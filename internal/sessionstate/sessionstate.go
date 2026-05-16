@@ -107,8 +107,8 @@ type Decision struct {
 	BlockingKind string
 }
 
-func RestoreRunWriterGate(request GateRequest) Decision {
-	return evaluate(request, gateRestoreRunWriter)
+func RestoreWriterGate(request GateRequest) Decision {
+	return evaluate(request, gateRestoreWriter)
 }
 
 func LifecycleDrainGate(request GateRequest) Decision {
@@ -118,8 +118,8 @@ func LifecycleDrainGate(request GateRequest) Decision {
 type gateKind string
 
 const (
-	gateRestoreRunWriter gateKind = "restore_run_writer"
-	gateLifecycleDrain   gateKind = "lifecycle_drain"
+	gateRestoreWriter  gateKind = "restore_writer"
+	gateLifecycleDrain gateKind = "lifecycle_drain"
 )
 
 type blockerClass int
@@ -186,13 +186,13 @@ func evaluate(request GateRequest, kind gateKind) Decision {
 		if kind == gateLifecycleDrain {
 			return deny(ErrorFamilyActiveSessionsBlockLifecycle, "active session blocks lifecycle drain", activeKind)
 		}
-		return deny(ErrorFamilyActiveWriterSessions, "active writer session blocks restore-run", activeKind)
+		return deny(ErrorFamilyActiveWriterSessions, "active writer session blocks restore", activeKind)
 	}
 	if stale {
 		if kind == gateLifecycleDrain {
 			return deny(ErrorFamilyStaleSessionsBlockLifecycle, "stale session blocks lifecycle drain", staleKind)
 		}
-		return deny(ErrorFamilyStaleWriterSessionUncertain, "stale writer session blocks restore-run", staleKind)
+		return deny(ErrorFamilyStaleWriterSessionUncertain, "stale writer session blocks restore", staleKind)
 	}
 
 	return allow()
@@ -261,7 +261,7 @@ func (err sessionError) Error() string {
 }
 
 func exportBlocker(kind gateKind, session ExportSession, now time.Time) blockerClass {
-	if kind == gateRestoreRunWriter && session.Mode != AccessModeReadWrite {
+	if kind == gateRestoreWriter && session.Mode != AccessModeReadWrite {
 		return blockerNone
 	}
 	if exportTerminal(session.Status) {
@@ -270,7 +270,7 @@ func exportBlocker(kind gateKind, session ExportSession, now time.Time) blockerC
 		}
 		return blockerNone
 	}
-	if kind == gateRestoreRunWriter && exportWriterDrained(session, now) {
+	if kind == gateRestoreWriter && exportWriterDrained(session, now) {
 		return blockerNone
 	}
 	if exportObservationStale(session, now) {
@@ -320,7 +320,7 @@ func exportHasTerminalEvidence(session ExportSession) bool {
 }
 
 func mountBlocker(kind gateKind, mount WorkloadMountBinding, now time.Time) blockerClass {
-	if kind == gateRestoreRunWriter && mount.ReadOnly {
+	if kind == gateRestoreWriter && mount.ReadOnly {
 		return blockerNone
 	}
 	if mountTerminal(mount.Status) {
@@ -337,7 +337,7 @@ func mountBlocker(kind gateKind, mount WorkloadMountBinding, now time.Time) bloc
 
 func mountHasTerminalEvidence(kind gateKind, mount WorkloadMountBinding) bool {
 	switch kind {
-	case gateRestoreRunWriter:
+	case gateRestoreWriter:
 		if nonZeroTimePtr(mount.ConfirmedUnmountedAt) {
 			return true
 		}

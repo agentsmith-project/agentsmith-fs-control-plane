@@ -29,8 +29,7 @@ The default GA product promise is:
 - Operator/admin can complete Day-0 bootstrap for namespace-bound managed
   storage.
 - Trusted caller can complete repo create/get/projection/list.
-- Trusted caller can complete pinned JVS save/history/restore-preview/
-  restore-run/discard.
+- Trusted caller can complete pinned JVS save/history/direct restore.
 - Trusted caller can complete WebDAV export/gateway/revoke.
 - Trusted caller can trace caller-scoped operation/audit/recovery state for its
   namespace and operations.
@@ -48,8 +47,8 @@ final caller-loop claim.
 Default User Loop and other default GA claims are related but not identical:
 
 - P1 Default User Loop is the caller main loop: trusted caller repo
-  create/get/projection/list, pinned JVS save/history/restore-preview/
-  restore-run/discard, WebDAV export/gateway/revoke, and operation/audit/
+  create/get/projection/list, pinned JVS save/history/direct restore,
+  WebDAV export/gateway/revoke, and operation/audit/
   recovery trace for that loop.
 - Admin bootstrap is a prerequisite to the caller loop.
 - Retained lifecycle, operator repair, capability/terminalization safety, and
@@ -75,7 +74,7 @@ deployment state can become a GA blocker or substitute.
 
 | Lane | Default GA contract | Required evidence owner | Forbidden drift |
 | --- | --- | --- | --- |
-| Default positive | Day-0 bootstrap; trusted caller repo create/get/projection/list; pinned JVS save/history/restore-preview/restore-run/discard; WebDAV export/gateway/revoke; retained lifecycle archive/restore_archived/delete-tombstone/restore_tombstoned. | P1 owns bootstrap/caller/WebDAV/JVS; P4 owns retained lifecycle and restore reconciliation; P5 owns final release evidence wiring. | Do not shrink default GA to doc-only examples. Do not move WebDAV, JVS, or retained lifecycle out of default positive. |
+| Default positive | Day-0 bootstrap; trusted caller repo create/get/projection/list; pinned JVS save/history/direct restore; WebDAV export/gateway/revoke; retained lifecycle archive/restore_archived/delete-tombstone/restore_tombstoned. | P1 owns bootstrap/caller/WebDAV/JVS; P4 owns retained lifecycle and restore reconciliation; P5 owns final release evidence wiring. | Do not shrink default GA to doc-only examples. Do not move WebDAV, JVS, or retained lifecycle out of default positive. |
 | Default safety/ops | Capability matrix, API admission, worker execution/recovery, readyz/discovery, operator inspection, stable errors, operation/audit/recovery terminalization. | P2 owns matrix and terminalization; P3 owns shared operator repair contract/test suite/audit schema. | Do not let readyz replace actor-specific contracts. Do not use ad hoc SQL or manual review as the safety mechanism. |
 | Default negatives | Workload mount, template/clone, purge/break-glass, and real deployment runtime are disabled/denied/recovery/fail-closed by default. | P2 owns default negative admission/recovery evidence; P4 owns purge approval fixture-positive and default denial evidence. | Do not skip default negative evidence because optional positives are unselected. |
 | Optional fixture positives | Optional positive capability evidence can block final only when selected by the final selector. | P4 owns repo-local fixture positive evidence; P0/P5 own selector semantics and final blocking. | Do not infer optional positive final-required from manifest shape alone. Do not use deployment runtime support as optional fixture conformance. |
@@ -102,7 +101,7 @@ test names may differ.
 | --- | --- | --- | --- |
 | `CLAIM_PROFILE_BOUNDARY` | Default release/profile guard | Default, repo-local-fixture-enabled, and deployment-runtime-support profiles cannot be mixed or promoted across boundaries. | P0/P5 |
 | `CLAIM_ADMIN_BOOTSTRAP_READY` | Default positive prerequisite | Volume register/health/preflight; namespace binding; caller/operator role readiness; path redaction. | P1 |
-| `CLAIM_DEFAULT_USER_LOOP` | Default positive | Repo create/get/projection/list; pinned JVS save/history/restore-preview/restore-run/discard; WebDAV export/gateway/revoke; operation/audit/recovery trace. | P1 |
+| `CLAIM_DEFAULT_USER_LOOP` | Default positive | Repo create/get/projection/list; pinned JVS save/history/direct restore; WebDAV export/gateway/revoke; operation/audit/recovery trace. | P1 |
 | `CLAIM_WEBDAV_DEFAULT_ACCESS` | Default positive subclaim | WebDAV first-create credential, gateway access, expiry/revoke, replay redaction, and ledger/audit behavior. | P1d/P5 |
 | `CLAIM_RETAINED_LIFECYCLE_DEFAULT` | Default positive | Archive, restore_archived, delete-to-tombstone, restore_tombstoned; admission; session/fence predicate; worker recovery; stable errors; audit. | P4 |
 | `CLAIM_DEFAULT_DENIAL_SAFE` | Default negative | Unauthorized namespace, policy deny, revoked/expired WebDAV, path escape, secret/path redaction, no permanent queued operation. | P1/P2 |
@@ -258,7 +257,7 @@ concepts needed for its job.
 
 | Actor | Concepts they should understand | Concepts they should not need |
 | --- | --- | --- |
-| Trusted caller | Namespace, repo, repo projection/list, savepoint/history, restore preview/run/discard, WebDAV export/revoke, caller-scoped operation status, caller-scoped audit/recovery status, stable denial. | Volume root path, SecretRef, host path, metadata URL, control root, `.jvs`, mount plan, fence internals, deployment runtime state, global audit/intervention/fence/session/stale lease state. |
+| Trusted caller | Namespace, repo, repo projection/list, savepoint/history, direct restore, WebDAV export/revoke, caller-scoped operation status, caller-scoped audit/recovery status, stable denial. | Volume root path, SecretRef, host path, metadata URL, control root, `.jvs`, mount plan, fence internals, deployment runtime state, global audit/intervention/fence/session/stale lease state. |
 | Client connector | Short-lived WebDAV credential relayed by trusted caller, gateway URL/session expiry, revoked/expired access behavior. | AFSCP caller/admin API, namespace policy, repo lifecycle internals, storage credentials, raw password replay. |
 | Operator/admin | Volume preflight, namespace binding policy, capability/readiness matrix, intervention queue, held fence/session, stale lease, audit lag, allowlisted repair, residual-risk record shape. | Business catalog workflow, connector UI, arbitrary SQL/state rewrite, manual GA approval. |
 | Orchestrator | Only when optional capability is enabled: scoped mount/teardown state, heartbeat/release/revoke/terminal evidence, denied/default-disabled status. | Default GA positive path, ordinary caller repo projection, raw SecretRef/path/credential, business workload management. |
@@ -315,7 +314,7 @@ stay optional, and what evidence strength is required.
 | Journey | Default/optional | Acceptance |
 | --- | --- | --- |
 | Day-0 bootstrap | Default prerequisite | Volume health/preflight, namespace binding, caller/operator role readiness, path redaction, machine-checkable bootstrap evidence. |
-| Trusted caller default loop | Default positive | Repo create/get/projection/list; JVS save/history/restore-preview/restore-run/discard; WebDAV export/gateway/revoke; operation/audit/recovery trace. |
+| Trusted caller default loop | Default positive | Repo create/get/projection/list; JVS save/history/direct restore; WebDAV export/gateway/revoke; operation/audit/recovery trace. |
 | Retained lifecycle | Default positive | Archive, restore_archived, delete-tombstone, restore_tombstoned with admission, session/fence predicate, worker recovery, stable errors, audit, schema/OpenAPI, runbook, manifest evidence. |
 | Default failure loop | Default negative | Unauthorized, policy denied, capability disabled, stale, revoked, expired, unsupported, and redaction paths fail closed and audit. |
 | Workload teardown-only | Default safety for optional capability | Only scoped orchestrator/operator reader can see teardown-only plan; no mount material; audit emitted; stale closure depends on P3 repair. |
@@ -463,8 +462,8 @@ intervention tables live in `docs/contracts/operation-state-machine-v1.md`.
 
 Required rules:
 
-- Maintain operation_type inventory for repo create, save, restore-preview,
-  restore-run, discard, WebDAV export/revoke, retained lifecycle, workload
+- Maintain operation_type inventory for repo create, save, restore,
+  WebDAV export/revoke, retained lifecycle, workload
   mount, template/clone, purge, repair, and recovery-only terminalization.
 - Define side-effect boundary for each operation type: before side effect, after
   durable side effect, uncertain side effect, and replay-safe side effect.
@@ -647,8 +646,8 @@ Work:
   readiness/projection, and machine-checkable bootstrap evidence.
 - P1b Repo create/projection/list: trusted caller repo create/get/projection/list
   under authorized namespace and redacted storage projection.
-- P1c JVS save/restore: pinned JVS save/history/restore-preview/restore-run/
-  discard, with operation/audit/recovery trace.
+- P1c JVS save/restore: pinned JVS save/history/direct restore, with
+  operation/audit/recovery trace.
 - P1d WebDAV: WebDAV export/gateway/revoke, first-create credential relay
   semantics, expiry/revoke denial, and gateway policy.
 - Shared access/session/fence predicate seed for restore/lifecycle.
@@ -865,7 +864,7 @@ product-neutral conformance rows.
 | --- | --- | --- | --- | --- | --- | --- |
 | P1a admin bootstrap | `CLAIM_ADMIN_BOOTSTRAP_READY` | `seed_gap_admin_bootstrap_ready_open` | Current/closed-or-closing slice: `admin_bootstrap_ready_unit`; covers volume preflight, namespace binding, caller/operator role readiness, path redaction. | unit or contract / `default` | `go test -count=1 ./internal/api ./internal/apiapp ./internal/contractcheck -run 'Test.*(AdminBootstrap|Readiness.*Bootstrap|RedactsAdminBootstrap|Readiness|OpenAPI|Schema)'` | If manifest already has `admin_bootstrap_ready_unit` and no open admin seed gap, do not repeat P1a. Default-required final acceptance requires non-placeholder exact replacement. |
 | P1b repo create/projection/list | `CLAIM_DEFAULT_USER_LOOP` | `seed_gap_default_user_loop_open` | `default_user_loop_repo_projection_unit`; repo create/get/projection/list under authorized namespace with redacted projection. | unit/contract / `default` | `go test -count=1 ./internal/api ./internal/store/postgres ./internal/workerapp -run '<selector from default_user_loop_repo_projection_unit>'` | Partial replacement only; does not close `CLAIM_DEFAULT_USER_LOOP` alone. If the manifest already has `default_user_loop_repo_projection_unit` and `seed_gap_default_user_loop_open` remains open, P1b repo projection is closed; do not repeat it. The selector must stay precise and hit real API/store/worker tests: create validation-before-intake, repo read validation-before-store, namespace-scoped boundary, store commit, and worker positive. Requires P1c/P1d plus existing P2b runtime parity before final default-loop closure. |
-| P1c JVS save/restore | `CLAIM_DEFAULT_USER_LOOP` | `seed_gap_default_user_loop_open` | `default_user_loop_jvs_save_restore_unit`; save/history/restore-preview/restore-run/discard with operation/audit/recovery trace. | unit/integration / `default` | `go test -count=1 ./internal/api ./internal/repoexec ./internal/workerapp ./internal/store/postgres -run '<selector from default_user_loop_jvs_save_restore_unit>'` | Partial replacement only; does not close `CLAIM_DEFAULT_USER_LOOP` alone. If the manifest already has `default_user_loop_jvs_save_restore_unit` and `seed_gap_default_user_loop_open` remains open, P1c JVS save/restore is closed; do not repeat it. The selector must stay precise and hit real API/store/repoexec/worker tests for savepoint create/history, restore-preview, restore-run, restore-discard, JVS marker/doctor/pin checks, and atomic store boundaries. Requires P1d plus existing P2b runtime parity before final default-loop closure. |
+| P1c JVS save/restore | `CLAIM_DEFAULT_USER_LOOP` | `seed_gap_default_user_loop_open` | `default_user_loop_jvs_save_restore_unit`; save/history/direct restore with operation/audit/recovery trace. | unit/integration / `default` | `go test -count=1 ./internal/api ./internal/repoexec ./internal/workerapp ./internal/store/postgres -run '<selector from default_user_loop_jvs_save_restore_unit>'` | Partial replacement only; does not close `CLAIM_DEFAULT_USER_LOOP` alone. If the manifest already has `default_user_loop_jvs_save_restore_unit` and `seed_gap_default_user_loop_open` remains open, P1c JVS save/restore is closed; do not repeat it. The selector must stay precise and hit real API/store/repoexec/worker tests for savepoint create/history, direct restore, JVS marker/doctor/pin checks, and atomic store boundaries. Requires P1d plus existing P2b runtime parity before final default-loop closure. |
 | P1d WebDAV default access | `CLAIM_DEFAULT_USER_LOOP`, `CLAIM_WEBDAV_DEFAULT_ACCESS` | `seed_gap_default_user_loop_open`, `seed_gap_webdav_default_access_open` | P1d usually needs two manifest evidence items: `webdav_default_access_unit` closes `CLAIM_WEBDAV_DEFAULT_ACCESS` and `seed_gap_webdav_default_access_open`; `default_user_loop_webdav_access_unit` contributes only partial `CLAIM_DEFAULT_USER_LOOP` evidence and keeps `seed_gap_default_user_loop_open`. Different names are allowed only with equivalent exact claim/subclaim/acceptance guards. Covers first-create credential, trusted-caller relay, gateway access, expiry/revoke, replay redaction, ledger/audit. | integration/contract / `default` | `go test -count=1 ./internal/api ./internal/exportaccess ./internal/exportgateway ./internal/exportreconcile ./internal/store/postgres -run '<precise selector from P1d evidence item>'` | No single WebDAV evidence item may be read as closing the full default loop. If the manifest already has both `webdav_default_access_unit` and `default_user_loop_webdav_access_unit`, and `seed_gap_default_user_loop_open` remains open, P1d WebDAV default access is closed; do not repeat it. Selector must hit real WebDAV API/gateway/access/reconcile/store tests, not helper-only or broad regex. |
 | Default user loop aggregation | `CLAIM_DEFAULT_USER_LOOP` | `seed_gap_default_user_loop_open` | `default_user_loop_positive_unit`; aggregation-only evidence that proves P1b repo projection, P1c JVS save/restore, P1d WebDAV default access, caller-scoped operation/audit/recovery trace, and P2b runtime parity evidence are all exact, non-placeholder, and selector-precise. | releaseevidence/contract / `default` | `go test -count=1 ./internal/releaseevidence ./cmd/afscp-evidence-verify -run 'Test.*DefaultUserLoop.*Aggregation|Test.*SeedGap'`; then `bash scripts/verify-ga-release.sh` | Only this slice may close `seed_gap_default_user_loop_open`. It must fail if any P1b/P1c/P1d/P2b item or caller-scoped trace evidence is missing, placeholder, helper-only, broad-regex, wrong profile/polarity, or not selected by exact claim/subclaim/acceptance guard. |
 | Product-neutral conformance smoke | `CLAIM_DEFAULT_USER_LOOP`, `CLAIM_DISCOVERY_SURFACES`, selected optional fixture claims as applicable | Relevant manifest gaps only; not a sibling gate. | `product_neutral_conformance_*`; caller credential relay, connector WebDAV access/revoke, orchestrator default-denied/discovery, operation inspection negative cases, negative authorization. | smoke/fixture/contractcheck / `default` plus selected fixture | `go test -count=1 ./internal/contractcheck ./internal/api ./internal/exportgateway ./internal/exportaccess -run '^Test(ProductNeutral|ConnectorWebDAV|CallerCredentialRelay|Orchestrator.*Denied|OperationInspection.*Negative)'` | Repo-local fixture/smoke hook. It may support claim closure only when exact manifest evidence exists; it never waits for a sibling project. |
@@ -913,7 +912,7 @@ Recommended next slice depends on the current manifest state:
 | --- | --- | --- |
 | P2b/P1b/P1c/P1d evidence are exact but `seed_gap_default_user_loop_open` remains open | Default user loop aggregation guard. | Close the caller loop only through `default_user_loop_positive_unit`, with exact P2b/P1b/P1c/P1d evidence and caller-scoped operation/audit/recovery trace. |
 | Default user loop aggregation is closed and `seed_gap_operator_repair_safe_open` remains open | P3 Operator repair. | Operator repair is the next default safety blocker; it must be allowlisted repair with shared audit/test contract, not a generic operations platform. |
-| Operator repair is closed and `seed_gap_restore_reconciliation_open` remains open | P4b Restore reconciliation. | Restore reconciliation is separate from P1c restore-run and must prove no credential reissue, no purged resurrection, and mismatch-to-intervention behavior. |
+| Operator repair is closed and `seed_gap_restore_reconciliation_open` remains open | P4b Restore reconciliation. | Restore reconciliation is separate from P1c direct restore and must prove no credential reissue, no purged resurrection, and mismatch-to-intervention behavior. |
 | P3/P4b blockers are closed but discovery/redaction/profile/release gaps remain | Discovery surfaces, secret/path redaction, profile/workflow/release hardening. | These are default safety/release claims and should close with exact repo-local evidence before selected optional positives. |
 | Default safety/release blockers are closed but runtime envelope gaps remain | Residual/deployment envelope. | Runtime-support/doc-sync only: use repo-local schema/doc/audit/runbook guards; do not require production deployment state and do not treat it as a default blocker or local positive final proof. |
 | Default blockers are closed and optional capabilities are selected by the final selector | Selected optional fixture positives. | Workload/template/purge positives block only under selector-selected `repo-local-fixture-enabled` semantics. |
@@ -1031,9 +1030,9 @@ Evidence status:
 | --- | --- | --- |
 | Default caller loop aggregation | Releaseevidence/CLI guard proving P1b repo, P1c JVS, P1d WebDAV, caller-scoped operation/audit/recovery trace, and P2b runtime parity exact evidence all exist and selectors are precise. | Any single P1b/P1c/P1d partial item, missing trace evidence, broad regex, or helper-only check. |
 | WebDAV default access | Real API/exportaccess/exportgateway/exportreconcile/store tests for one-time credential issuance to trusted caller, caller relay safety, gateway access, expiry/revoke, replay redaction, ledger/audit, and stable failures. | Gateway helper tests without handler/store/ledger path; doc-only credential description. |
-| JVS save/restore | Real API/repoexec/worker/store tests for savepoint create/history, restore-preview/run/discard, JVS pin/marker/doctor behavior, crash recovery, and atomic plan/operation commits. | JVS helper or history parser tests alone. |
+| JVS save/restore | Real API/repoexec/worker/store tests for savepoint create/history, direct restore, JVS pin/marker/doctor behavior, crash recovery, and atomic operation commits. | JVS helper or history parser tests alone. |
 | Operator repair | `docs/contracts/operator-repair-v1.md`, one API or CLI entry, allowlisted actions/preconditions/reason/evidence/before-after/audit schema, stable denial/intervention tests. | Arbitrary SQL, runbook-only repair, or manual approval. |
-| Restore reconciliation | Executable tests for no credential reissue, dangerous-write denial, no purged resurrection, metadata/storage mismatch to intervention, plus schema/runbook evidence. | P1c restore run evidence alone. |
+| Restore reconciliation | Executable tests for no credential reissue, dangerous-write denial, no purged resurrection, metadata/storage mismatch to intervention, plus schema/runbook evidence. | P1c direct restore evidence alone. |
 | Retained lifecycle | Admission, session/fence predicate, worker recovery, stable errors, audit, schema/OpenAPI, runbook, manifest evidence. | Lifecycle doc or handler-only happy path. |
 | Default negatives | Real denied/disabled/recovery/fail-closed tests proving no permanent queued operations and historical visibility. | Capability row existence without request-path or worker evidence. |
 | Capability matrix | Surface-decision row tests across API, worker, recovery, readyz, discovery, operator inspection, evidence, plus runtime parity tests for behavior claims. | Coarse capability list or self-comparing helper sets. |

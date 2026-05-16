@@ -22,20 +22,8 @@ type RestoreReconciliationWriteGate interface {
 	RestoreReconciliationWriteBlocked(ctx context.Context, namespaceID, repoID string) (bool, error)
 }
 
-type RestorePreviewOperationIntakeStore interface {
-	CreateOrReuseRestorePreviewOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
-}
-
 type RestoreOperationIntakeStore interface {
 	CreateOrReuseRestoreOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
-}
-
-type RestorePreviewDiscardOperationIntakeStore interface {
-	CreateOrReuseRestorePreviewDiscardOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
-}
-
-type RestoreRunOperationIntakeStore interface {
-	CreateOrReuseRestoreRunOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
 type OperationIdempotencyLookupStore interface {
@@ -100,27 +88,6 @@ func CreateOrReuseOperationIntake(ctx context.Context, config OperationIntakeCon
 	return operationEnvelopeFromRecord(resolution.Operation), nil
 }
 
-func CreateOrReuseRestorePreviewOperationIntake(ctx context.Context, store RestorePreviewOperationIntakeStore, request OperationIntakeRequest) (OperationEnvelope, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if isNilOperationIntakeValue(store) {
-		return OperationEnvelope{}, internalOperationIntakeError()
-	}
-	spec, err := operationIntakeSpec(request)
-	if err != nil {
-		return OperationEnvelope{}, err
-	}
-	if err := checkRestoreReconciliationIntakeGate(ctx, store, nil, request); err != nil {
-		return OperationEnvelope{}, err
-	}
-	resolution, err := store.CreateOrReuseRestorePreviewOperation(ctx, spec)
-	if err != nil {
-		return OperationEnvelope{}, mapOperationIntakeError(err)
-	}
-	return operationEnvelopeFromRecord(resolution.Operation), nil
-}
-
 func CreateOrReuseRestoreOperationIntake(ctx context.Context, store RestoreOperationIntakeStore, request OperationIntakeRequest) (OperationEnvelope, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -136,48 +103,6 @@ func CreateOrReuseRestoreOperationIntake(ctx context.Context, store RestoreOpera
 		return OperationEnvelope{}, err
 	}
 	resolution, err := store.CreateOrReuseRestoreOperation(ctx, spec)
-	if err != nil {
-		return OperationEnvelope{}, mapOperationIntakeError(err)
-	}
-	return operationEnvelopeFromRecord(resolution.Operation), nil
-}
-
-func CreateOrReuseRestorePreviewDiscardOperationIntake(ctx context.Context, store RestorePreviewDiscardOperationIntakeStore, request OperationIntakeRequest) (OperationEnvelope, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if isNilOperationIntakeValue(store) {
-		return OperationEnvelope{}, internalOperationIntakeError()
-	}
-	spec, err := operationIntakeSpec(request)
-	if err != nil {
-		return OperationEnvelope{}, err
-	}
-	if err := checkRestoreReconciliationIntakeGate(ctx, store, nil, request); err != nil {
-		return OperationEnvelope{}, err
-	}
-	resolution, err := store.CreateOrReuseRestorePreviewDiscardOperation(ctx, spec)
-	if err != nil {
-		return OperationEnvelope{}, mapOperationIntakeError(err)
-	}
-	return operationEnvelopeFromRecord(resolution.Operation), nil
-}
-
-func CreateOrReuseRestoreRunOperationIntake(ctx context.Context, store RestoreRunOperationIntakeStore, request OperationIntakeRequest) (OperationEnvelope, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if isNilOperationIntakeValue(store) {
-		return OperationEnvelope{}, internalOperationIntakeError()
-	}
-	spec, err := operationIntakeSpec(request)
-	if err != nil {
-		return OperationEnvelope{}, err
-	}
-	if err := checkRestoreReconciliationIntakeGate(ctx, store, nil, request); err != nil {
-		return OperationEnvelope{}, err
-	}
-	resolution, err := store.CreateOrReuseRestoreRunOperation(ctx, spec)
 	if err != nil {
 		return OperationEnvelope{}, mapOperationIntakeError(err)
 	}
@@ -216,9 +141,6 @@ func restoreReconciliationDangerousRoute(operationID string) bool {
 		"purgeRepo",
 		"createSavePoint",
 		"restore",
-		"restorePreview",
-		"restorePreviewDiscard",
-		"restoreRun",
 		"createRepoTemplate",
 		"cloneRepoTemplate":
 		return true
@@ -358,14 +280,8 @@ func mapOperationIntakeError(err error) error {
 		return &OperationIntakeError{Code: CodeIdempotencyConflict, Status: http.StatusConflict, Retryable: false, Message: "idempotency key conflicts with a different request"}
 	case errors.Is(err, operations.ErrRepoAlreadyExists):
 		return &OperationIntakeError{Code: CodeRepoAlreadyExists, Status: http.StatusConflict, Retryable: false, Message: "target repo already exists"}
-	case errors.Is(err, operations.ErrActiveRestorePlan):
-		return &OperationIntakeError{Code: CodeOperationRecoveryRequired, Status: http.StatusConflict, Retryable: true, Message: "active restore plan requires operator recovery"}
 	case errors.Is(err, operations.ErrRepoJVSMutationInProgress):
 		return &OperationIntakeError{Code: CodeRepoJVSMutationInProgress, Status: http.StatusConflict, Retryable: true, Message: "repo JVS mutation is in progress"}
-	case errors.Is(err, operations.ErrRestoreRunAlreadyExists):
-		return &OperationIntakeError{Code: CodeRepoJVSMutationInProgress, Status: http.StatusConflict, Retryable: true, Message: "restore run is already queued for this preview"}
-	case errors.Is(err, operations.ErrRestorePlanNotPending):
-		return &OperationIntakeError{Code: CodeOperationRecoveryRequired, Status: http.StatusConflict, Retryable: true, Message: "restore preview plan is not pending"}
 	case errors.Is(err, operations.ErrMissingOperationBoundary):
 		return internalOperationIntakeError()
 	default:

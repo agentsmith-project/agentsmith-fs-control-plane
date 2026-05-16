@@ -41,7 +41,7 @@ func TestListRestoreOperationsForRecoveryScopesBeforeOrderAndLimit(t *testing.T)
 	}
 }
 
-func TestAcquireRestoreOperationLeaseSerializesMutationsPlansAndRequiresConfirmation(t *testing.T) {
+func TestAcquireRestoreOperationLeaseSerializesMutationsForDirectRestore(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	record := restoreOperationRecord(now, operations.OperationStateRunning, operations.OperationPhaseRestoreValidate)
 	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
@@ -57,15 +57,15 @@ func TestAcquireRestoreOperationLeaseSerializesMutationsPlansAndRequiresConfirma
 		"operation_type = 'restore'",
 		"phase IN ('validate_restore','restore_writer_fenced')",
 		"input_summary->>'save_point_id'",
-		"input_summary->>'discard_unsaved_changes_confirmed' = 'true'",
 		"earlier_jvs_mutation AS",
-		"o.operation_type IN ('save_point_create', 'restore', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
+		"o.operation_type IN ('save_point_create', 'restore', 'template_create', 'template_clone')",
 		"earlier_repo_lifecycle AS",
-		"active_restore_plan AS",
 		"NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)",
 		"NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle)",
-		"NOT EXISTS (SELECT 1 FROM active_restore_plan)",
 	)
+	if strings.Contains(exec.query, "restore_plans") || strings.Contains(exec.query, "active_restore_plan") {
+		t.Fatalf("direct restore acquire SQL must not inspect restore plans: %s", exec.query)
+	}
 }
 
 func TestMarkRestoreWriterFencedWithLeaseCreatesOrConfirmsWriterFence(t *testing.T) {
@@ -105,7 +105,7 @@ func TestCommitRestoreSucceededWithLeaseAuditsAndReleasesFenceWithoutPlan(t *tes
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	record := restoreOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseRestoreCommitted)
 	record.SessionFenceID = "fence_restore01"
-	record.JVSJSONOutput = map[string]any{"source_save_point_id": "sp_001", "restored_save_point_id": "sp_001", "workspace": "main", "mode": "direct_restore"}
+	record.JVSJSONOutput = map[string]any{"restored_save_point_id": "sp_001", "previous_head": "sp_before", "new_head": "sp_001", "workspace": "main", "mode": "direct_restore"}
 	record.FinishedAt = &now
 	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
 	st := &Store{exec: exec}
@@ -180,7 +180,7 @@ func TestRestoreCommitsRejectRawCommandsBeforeSQL(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			record := restoreOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseRestoreCommitted)
 			record.SessionFenceID = "fence_restore01"
-			record.JVSJSONOutput = map[string]any{"source_save_point_id": "sp_001", "restored_save_point_id": "sp_001", key: "jvs restore --run plan_001"}
+			record.JVSJSONOutput = map[string]any{"restored_save_point_id": "sp_001", "previous_head": "sp_before", "new_head": "sp_001", key: "jvs restore --run plan_001"}
 			record.FinishedAt = &now
 			exec := &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}
 			st := &Store{exec: exec}
@@ -198,7 +198,7 @@ func TestRestoreCommitsRejectRawCommandsBeforeSQL(t *testing.T) {
 		record := restoreOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseRestoreCommitted)
 		record.SessionFenceID = "fence_restore01"
 		record.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001"}
-		record.JVSJSONOutput = map[string]any{"source_save_point_id": "sp_001", "restored_save_point_id": "sp_001"}
+		record.JVSJSONOutput = map[string]any{"restored_save_point_id": "sp_001", "previous_head": "sp_before", "new_head": "sp_001"}
 		record.FinishedAt = &now
 		exec := &fakeExecutor{row: fakeRow{err: sql.ErrNoRows}}
 		st := &Store{exec: exec}
@@ -233,7 +233,7 @@ func restoreOperationRecord(now time.Time, state operations.OperationState, phas
 		Resource:            operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:         "ns_alpha01",
 		RepoID:              "repo_alpha01",
-		InputSummary:        map[string]any{"save_point_id": "sp_001", "discard_unsaved_changes_confirmed": true},
+		InputSummary:        map[string]any{"save_point_id": "sp_001"},
 		ExternalResourceIDs: map[string]string{},
 		StartedAt:           &started,
 		CreatedAt:           now.Add(-time.Hour),

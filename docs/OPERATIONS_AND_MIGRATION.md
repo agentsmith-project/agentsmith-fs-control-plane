@@ -97,17 +97,16 @@ Explicit migration flow should be:
 
 ## Restore Safety
 
-Ordinary concurrent reads and writes are allowed for normal file IO. Restore-run is different: it changes repo version state.
+Ordinary concurrent reads and writes are allowed for normal file IO. Direct restore to a save point is different: it changes repo version state.
 
-GA restore-run must reject active or uncertain read-write WebDAV export and workload mount sessions by default. It should:
+GA direct restore must reject active or uncertain read-write WebDAV export and workload mount sessions by default. It should:
 
-- run restore preview
 - acquire the per-repo writer-session fence to block new read-write export/mount issuance
 - inspect active and uncertain read-write sessions
 - reject if active or uncertain read-write sessions exist
 - acquire repo-level restore lock
-- execute restore
-- validate with `jvs doctor --strict`
+- execute direct restore for the requested save point
+- capture redacted direct JVS evidence and use explicit diagnostics when recovery or smoke evidence requires them
 - emit audit events
 - release the writer-session fence after terminal success/failure handling
 

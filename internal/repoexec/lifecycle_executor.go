@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
@@ -171,13 +172,13 @@ func (executor *LifecycleExecutor) ExecuteOperationRecovery(ctx context.Context,
 	}
 
 	if repoLifecycleRequiresDoctor(record.Type) {
-		controlRoot, err := executor.controlRoot(repo)
+		target, err := executor.directTarget(repo)
 		if err != nil {
 			return executor.commitLifecycleIntervention(ctx, record, now, "REPO_LIFECYCLE_VALIDATION_FAILED", "repo lifecycle validation failed", fenceID, nil)
 		}
-		doctor, err := executor.jvs.DoctorStrict(ctx, controlRoot)
-		if err != nil || !doctor.Healthy || doctor.Workspace != "main" || doctor.RepoID != repo.JVSRepoID {
-			return executor.commitLifecycleIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, withJVSErrorDetails(map[string]any{"repo_id": repo.JVSRepoID, "workspace": "main"}, err))
+		doctor, err := executor.jvs.DirectDoctor(ctx, target)
+		if err != nil || !doctor.Healthy || doctor.RepoID != repo.JVSRepoID {
+			return executor.commitLifecycleIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, withJVSErrorDetails(map[string]any{"repo_id": repo.JVSRepoID}, err))
 		}
 	}
 
@@ -241,6 +242,18 @@ func (executor *LifecycleExecutor) controlRoot(repo resources.Repo) (string, err
 		return "", errors.New("invalid control root")
 	}
 	return controlRoot, nil
+}
+
+func (executor *LifecycleExecutor) directTarget(repo resources.Repo) (jvsrunner.DirectTarget, error) {
+	root, ok := executor.volumeRoots[repo.VolumeID]
+	if !ok {
+		return jvsrunner.DirectTarget{}, errors.New("missing volume root")
+	}
+	roots, err := pathresolver.ResolveRepoRootPaths(root, repo.NamespaceID, repo.ID)
+	if err != nil || roots.ControlVolumeSubdir != repo.ControlVolumeSubdir || roots.PayloadVolumeSubdir != repo.PayloadVolumeSubdir {
+		return jvsrunner.DirectTarget{}, errors.New("invalid repo roots")
+	}
+	return jvsrunner.DirectTarget{ControlRoot: roots.ControlRootPath, Home: roots.PayloadRootPath}, nil
 }
 
 func (executor *LifecycleExecutor) commitLifecycleFailed(ctx context.Context, record operations.OperationRecord, now time.Time, code, message, releaseFenceID string) error {

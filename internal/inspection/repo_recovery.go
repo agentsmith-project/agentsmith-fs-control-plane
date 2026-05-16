@@ -209,7 +209,7 @@ func inspectHeldFence(fence fences.Fence, repo resources.Repo, operationsByID ma
 	if record.NamespaceID != repo.NamespaceID {
 		return inspection, manual("holder_operation_namespace_mismatch")
 	}
-	if fence.Kind == fences.KindWriterSession && record.Type != operations.OperationRestoreRun {
+	if fence.Kind == fences.KindWriterSession && record.Type != operations.OperationRestore {
 		return inspection, manual("writer_session_operation_type_mismatch")
 	}
 

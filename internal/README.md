@@ -40,7 +40,7 @@ needed before real handlers and storage mutation work:
   control-plane admission/gating. It validates stored repo/binding/fence invariants and
   returns stable error-family decisions.
 - `sessionstate`: pure export and workload-mount session substrate for
-  restore-run writer gating and repo lifecycle drain gating. Export session
+  direct restore writer gating and repo lifecycle drain gating. Export session
   state is now used by API export create/get/revoke, WebDAV gateway admission
   and runtime request ledger accounting, terminal reconcile, and opt-in repo archive/delete
   recovery drain checks. Workload mount issuance remains separate.
@@ -65,13 +65,13 @@ needed before real handlers and storage mutation work:
 - `namespacebindingexec`: minimal recovery executor for `namespace_volume_binding_put`;
   it commits binding metadata, the terminal operation update, and the audit
   event through the dedicated namespace volume binding store boundary.
-- `jvsrunner`: JVS v0.4.9 CLI runner abstraction for fixed
-  external-control-root JSON commands, including `init`, `doctor --strict`,
-  strict doctor runtime repair, save/history/restore primitives, recovery
-  status, and repo clone. Repo, save point, restore preview/discard/run, and
-  template recovery workers wire these primitives behind explicit worker gates.
+- `jvsrunner`: JVS CLI runner abstraction for repo init/clone helpers and the
+  active `jvs afscp --control-root ... --home ...` direct
+  save/list/restore/status/doctor contract. Save point and restore workers use
+  the direct primitives only; legacy restore preview/discard/run is not an
+  active worker path.
 - `repoexec`: opt-in repo recovery executors. `repo_create` resolves metadata,
-  acquires the create fence, runs JVS `init`/`doctor --strict`, and commits repo
+  acquires the create fence, runs JVS `init` plus direct `jvs afscp doctor`, and commits repo
   metadata, terminal operation, audit, and fence release through dedicated store
   boundaries. The repo lifecycle executor currently covers `repo_archive`,
   `repo_restore_archived`, `repo_delete`, and `repo_restore_tombstoned` behind
@@ -87,7 +87,7 @@ needed before real handlers and storage mutation work:
   IDs.
 
 Repo create intake, repo lifecycle operation intake/admission, save point,
-restore preview/discard/run, repo template, export create/get/revoke, workload
+durable direct restore, repo template, export create/get/revoke, workload
 mount binding, namespace-bound repo read handlers, operation inspection, and
 the WebDAV export gateway exist. Still intentionally absent: host/orchestrator
 mount application beyond control-plane workload mount binding issuance, real

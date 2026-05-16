@@ -27,7 +27,6 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
@@ -321,8 +320,10 @@ func TestInternalRuntimeJVSReadyWiresSavePointHistoryReaderWithoutHiddenAPIGate(
 	if !runnerConfig.Enabled || runnerConfig.VolumeRoots["vol_main"] != "/srv/afscp/volumes/vol_main" {
 		t.Fatalf("runner config = %#v, want API history config from JVS readiness", runnerConfig)
 	}
-	if historyRunner.calls != 1 || !strings.HasSuffix(historyRunner.controlRoot, "/afscp/namespaces/ns_alpha/repos/repo_alpha/control") {
-		t.Fatalf("history runner calls/root = %d/%q", historyRunner.calls, historyRunner.controlRoot)
+	if historyRunner.calls != 1 ||
+		!strings.HasSuffix(historyRunner.directTarget.ControlRoot, "/afscp/namespaces/ns_alpha/repos/repo_alpha/control") ||
+		!strings.HasSuffix(historyRunner.directTarget.Home, "/afscp/namespaces/ns_alpha/repos/repo_alpha/payload") {
+		t.Fatalf("history runner calls/target = %d/%#v", historyRunner.calls, historyRunner.directTarget)
 	}
 	if body := rec.Body.String(); !strings.Contains(body, `"save_point_id":"sp_001"`) || strings.Contains(body, string(api.CodeInternalError)) {
 		t.Fatalf("body = %s, want save point history without internal error", body)
@@ -1380,33 +1381,6 @@ func TestInternalRuntimeAdmissionDisabledFlagsMatchCapabilityMatrix(t *testing.T
 	}
 }
 
-func TestInternalRuntimeDirectRestoreAdmissionDisabledFollowsRestoreRecoveryReadiness(t *testing.T) {
-	base := config.Config{}
-	if !directRestoreAdmissionDisabled(base) {
-		t.Fatal("direct restore admission disabled = false, want disabled when AFSCP_RESTORE_RECOVERY_ENABLED is not configured")
-	}
-
-	base.Worker.OperationRecovery.Restore = config.WorkerRepoCreateRecoveryConfig{
-		Enabled:                   true,
-		JVSBinarySHA256:           config.JVSAcceptedLinuxAMD64SHA256,
-		JVSDirectRestoreRequired:  true,
-		JVSDirectRestoreSourceRef: "jvs@direct-restore-test",
-	}
-	if !directRestoreAdmissionDisabled(base) {
-		t.Fatal("direct restore admission disabled = false, want disabled for default pinned JVS without direct restore artifact")
-	}
-
-	base.Worker.OperationRecovery.Restore = config.WorkerRepoCreateRecoveryConfig{
-		Enabled:                   true,
-		JVSBinarySHA256:           strings.Repeat("c", 64),
-		JVSDirectRestoreRequired:  true,
-		JVSDirectRestoreSourceRef: "jvs@direct-restore-test",
-	}
-	if directRestoreAdmissionDisabled(base) {
-		t.Fatal("direct restore admission disabled = true, want enabled with explicit direct artifact readiness")
-	}
-}
-
 func TestInternalRuntimeWiresRepoTemplateAndPurgeCapabilitiesToAdmission(t *testing.T) {
 	source := readyTestRuntimeSource()
 	source["AFSCP_REPO_TEMPLATE_ENABLED"] = "false"
@@ -2036,48 +2010,28 @@ func (store *fakeRuntimeStore) CreateOrReuseTemplateCloneOperation(context.Conte
 	return operations.IdempotencyResolution{}, errors.New("not implemented")
 }
 
-func (*fakeRuntimeStore) CreateOrReuseRestorePreviewOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
-	return operations.IdempotencyResolution{}, errors.New("not implemented")
-}
-
-func (*fakeRuntimeStore) CreateOrReuseRestorePreviewDiscardOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
-	return operations.IdempotencyResolution{}, errors.New("not implemented")
-}
-
-func (*fakeRuntimeStore) CreateOrReuseRestoreRunOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
-	return operations.IdempotencyResolution{}, errors.New("not implemented")
-}
-
-func (*fakeRuntimeStore) GetActiveRestorePlanByRepo(context.Context, string) (restoreplan.Plan, error) {
-	return restoreplan.Plan{}, sql.ErrNoRows
-}
-
-func (*fakeRuntimeStore) GetRestorePlanByPreviewOperation(context.Context, string) (restoreplan.Plan, error) {
-	return restoreplan.Plan{}, sql.ErrNoRows
-}
-
-func (*fakeRuntimeStore) RestoreRunExistsForPreviewOperation(context.Context, string, string, string) (bool, error) {
-	return false, nil
-}
-
 func (*fakeRuntimeStore) AppendAuditEvent(context.Context, audit.Event) error {
 	return nil
 }
 
 type runtimeFakeJVSHistoryRunner struct {
-	calls       int
-	controlRoot string
-	summary     jvsrunner.HistorySummary
-	err         error
+	calls        int
+	directTarget jvsrunner.DirectTarget
+	summary      jvsrunner.HistorySummary
+	err          error
 }
 
-func (runner *runtimeFakeJVSHistoryRunner) History(_ context.Context, controlRoot string) (jvsrunner.HistorySummary, error) {
+func (runner *runtimeFakeJVSHistoryRunner) DirectList(_ context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error) {
 	runner.calls++
-	runner.controlRoot = controlRoot
+	runner.directTarget = target
 	if runner.err != nil {
-		return jvsrunner.HistorySummary{}, runner.err
+		return jvsrunner.DirectListSummary{}, runner.err
 	}
-	return runner.summary, nil
+	savePoints := make([]jvsrunner.DirectSavePointSummary, 0, len(runner.summary.SavePoints))
+	for _, savePoint := range runner.summary.SavePoints {
+		savePoints = append(savePoints, jvsrunner.DirectSavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, CreatedAt: savePoint.CreatedAt, HistoryHead: savePoint.SavePointID == runner.summary.NewestSavePointID})
+	}
+	return jvsrunner.DirectListSummary{HistoryHeadID: runner.summary.NewestSavePointID, SavePoints: savePoints}, nil
 }
 
 func testSavePointHistoryRunnerFactory() SavePointHistoryRunnerFactory {

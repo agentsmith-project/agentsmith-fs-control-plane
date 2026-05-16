@@ -7,10 +7,12 @@ import (
 )
 
 const (
-	acceptedJVSBinarySHA256           = "0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944"
-	directRestoreLocalJVSBinaryPath   = "/home/percy/works/mbos-v1/jvs/bin/jvs-direct-restore"
-	directRestoreLocalJVSBinarySHA256 = "c88553bb18bdd70e1399bf562fcb853bd200798498bd24bc25458196fb568902"
-	directRestoreLocalJVSSourceRef    = "/home/percy/works/mbos-v1/jvs@agentsmith-direct-restore-operation:c65b418f58d6e39e91199c1d55783e2ec91be9a1"
+	acceptedJVSBinarySHA256            = "affa86a08dbb2195f594be0be01e9c3f128806f75d04826030afbe4ba283f2e2"
+	directRestoreLocalJVSBinaryPath    = "/tmp/afscp-jvs-direct-local"
+	directRestoreLocalJVSBinarySHA256  = "affa86a08dbb2195f594be0be01e9c3f128806f75d04826030afbe4ba283f2e2"
+	directRestoreLocalJVSSourceRef     = "jvs@main:eb026cc48efb57ef64c9f3e482f0011b9232701b"
+	customDirectRestoreJVSBinarySHA256 = "c88553bb18bdd70e1399bf562fcb853bd200798498bd24bc25458196fb568902"
+	customDirectRestoreJVSSourceRef    = "jvs@agentsmith-direct-restore-operation:c65b418f58d6e39e91199c1d55783e2ec91be9a1"
 )
 
 func TestLoadDefaultsFailClosed(t *testing.T) {
@@ -59,15 +61,6 @@ func TestLoadDefaultsFailClosed(t *testing.T) {
 	}
 	if cfg.Worker.OperationRecovery.Restore.Enabled {
 		t.Fatal("restore recovery enabled by default, want disabled")
-	}
-	if cfg.Worker.OperationRecovery.RestorePreview.Enabled {
-		t.Fatal("restore preview recovery enabled by default, want disabled")
-	}
-	if cfg.Worker.OperationRecovery.RestorePreviewDiscard.Enabled {
-		t.Fatal("restore preview discard recovery enabled by default, want disabled")
-	}
-	if cfg.Worker.OperationRecovery.RestoreRun.Enabled {
-		t.Fatal("restore run recovery enabled by default, want disabled")
 	}
 	if cfg.Worker.AuditDelivery.Enabled {
 		t.Fatal("audit delivery enabled by default, want disabled")
@@ -467,9 +460,9 @@ func TestLoadAPIJVSReadyAllowsDeclaredDirectRestoreArtifactForSavePointHistory(t
 		"AFSCP_JVS_ENABLED":                           "true",
 		"AFSCP_JVS_READY":                             "true",
 		"AFSCP_JVS_BINARY_PATH":                       directRestoreLocalJVSBinaryPath,
-		"AFSCP_JVS_BINARY_SHA256":                     directRestoreLocalJVSBinarySHA256,
-		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256":      directRestoreLocalJVSBinarySHA256,
-		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":         directRestoreLocalJVSSourceRef,
+		"AFSCP_JVS_BINARY_SHA256":                     customDirectRestoreJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256":      customDirectRestoreJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":         customDirectRestoreJVSSourceRef,
 		"AFSCP_JVS_CWD":                               "/var/lib/afscp/jvs-cwd",
 		"AFSCP_API_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -477,7 +470,7 @@ func TestLoadAPIJVSReadyAllowsDeclaredDirectRestoreArtifactForSavePointHistory(t
 		t.Fatalf("Load: %v", err)
 	}
 	history := cfg.API.SavePointHistory
-	if !history.Enabled || history.JVSBinarySHA256 != directRestoreLocalJVSBinarySHA256 || !history.JVSDirectRestoreRequired || history.JVSDirectRestoreSourceRef != directRestoreLocalJVSSourceRef {
+	if !history.Enabled || history.JVSBinarySHA256 != customDirectRestoreJVSBinarySHA256 || !history.JVSDirectRestoreRequired || history.JVSDirectRestoreSourceRef != customDirectRestoreJVSSourceRef {
 		t.Fatalf("API save point history direct JVS config = %#v", history)
 	}
 }
@@ -807,9 +800,9 @@ func TestLoadRestoreRecoveryParsesIndependentExplicitGate(t *testing.T) {
 		"AFSCP_WORKER_OWNER":                      "worker-a",
 		"AFSCP_RESTORE_RECOVERY_ENABLED":          "true",
 		"AFSCP_JVS_BINARY_PATH":                   directRestoreLocalJVSBinaryPath,
-		"AFSCP_JVS_BINARY_SHA256":                 directRestoreLocalJVSBinarySHA256,
-		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256":  directRestoreLocalJVSBinarySHA256,
-		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":     directRestoreLocalJVSSourceRef,
+		"AFSCP_JVS_BINARY_SHA256":                 customDirectRestoreJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256":  customDirectRestoreJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":     customDirectRestoreJVSSourceRef,
 		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
 	})
@@ -817,51 +810,45 @@ func TestLoadRestoreRecoveryParsesIndependentExplicitGate(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	restore := cfg.Worker.OperationRecovery.Restore
-	if !restore.Enabled || restore.JVSBinaryPath != directRestoreLocalJVSBinaryPath || restore.JVSBinarySHA256 != directRestoreLocalJVSBinarySHA256 || !restore.JVSDirectRestoreRequired || restore.JVSDirectRestoreSourceRef != directRestoreLocalJVSSourceRef || restore.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
+	if !restore.Enabled || restore.JVSBinaryPath != directRestoreLocalJVSBinaryPath || restore.JVSBinarySHA256 != customDirectRestoreJVSBinarySHA256 || !restore.JVSDirectRestoreRequired || restore.JVSDirectRestoreSourceRef != customDirectRestoreJVSSourceRef || restore.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
 		t.Fatalf("restore config = %#v", restore)
 	}
-	if cfg.Worker.OperationRecovery.RestorePreview.Enabled || cfg.Worker.OperationRecovery.RestorePreviewDiscard.Enabled || cfg.Worker.OperationRecovery.RestoreRun.Enabled || cfg.Worker.OperationRecovery.SavePoint.Enabled || cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
+	if cfg.Worker.OperationRecovery.SavePoint.Enabled || cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
 		t.Fatalf("restore gate should not enable other JVS workers: %#v", cfg.Worker.OperationRecovery)
 	}
 }
 
 func TestLoadSharedJVSRecoveryGatesAllowDeclaredDirectRestoreArtifact(t *testing.T) {
 	cfg, err := Load(MapSource{
-		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED":        "true",
-		"AFSCP_POSTGRES_DSN":                             "postgres://user:password@db/afscp",
-		"AFSCP_WORKER_OWNER":                             "worker-a",
-		"AFSCP_SAVE_POINT_RECOVERY_ENABLED":              "true",
-		"AFSCP_TEMPLATE_CREATE_RECOVERY_ENABLED":         "true",
-		"AFSCP_RESTORE_RECOVERY_ENABLED":                 "true",
-		"AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED":         "true",
-		"AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED": "true",
-		"AFSCP_RESTORE_RUN_RECOVERY_ENABLED":             "true",
-		"AFSCP_JVS_BINARY_PATH":                          directRestoreLocalJVSBinaryPath,
-		"AFSCP_JVS_BINARY_SHA256":                        directRestoreLocalJVSBinarySHA256,
-		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256":         directRestoreLocalJVSBinarySHA256,
-		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":            directRestoreLocalJVSSourceRef,
-		"AFSCP_JVS_CWD":                                  "/var/lib/afscp/jvs-cwd",
-		"AFSCP_VOLUME_ROOTS":                             "vol_123=/srv/afscp/volumes/vol_123",
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
+		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
+		"AFSCP_WORKER_OWNER":                      "worker-a",
+		"AFSCP_SAVE_POINT_RECOVERY_ENABLED":       "true",
+		"AFSCP_TEMPLATE_CREATE_RECOVERY_ENABLED":  "true",
+		"AFSCP_RESTORE_RECOVERY_ENABLED":          "true",
+		"AFSCP_JVS_BINARY_PATH":                   directRestoreLocalJVSBinaryPath,
+		"AFSCP_JVS_BINARY_SHA256":                 customDirectRestoreJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256":  customDirectRestoreJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":     customDirectRestoreJVSSourceRef,
+		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	for name, worker := range map[string]WorkerRepoCreateRecoveryConfig{
-		"save point":              cfg.Worker.OperationRecovery.SavePoint,
-		"template create":         cfg.Worker.OperationRecovery.TemplateCreate,
-		"restore":                 cfg.Worker.OperationRecovery.Restore,
-		"restore preview":         cfg.Worker.OperationRecovery.RestorePreview,
-		"restore preview discard": cfg.Worker.OperationRecovery.RestorePreviewDiscard,
-		"restore run":             cfg.Worker.OperationRecovery.RestoreRun,
+		"save point":      cfg.Worker.OperationRecovery.SavePoint,
+		"template create": cfg.Worker.OperationRecovery.TemplateCreate,
+		"restore":         cfg.Worker.OperationRecovery.Restore,
 	} {
-		if !worker.Enabled || worker.JVSBinarySHA256 != directRestoreLocalJVSBinarySHA256 || !worker.JVSDirectRestoreRequired || worker.JVSDirectRestoreSourceRef != directRestoreLocalJVSSourceRef {
+		if !worker.Enabled || worker.JVSBinarySHA256 != customDirectRestoreJVSBinarySHA256 || !worker.JVSDirectRestoreRequired || worker.JVSDirectRestoreSourceRef != customDirectRestoreJVSSourceRef {
 			t.Fatalf("%s worker direct JVS config = %#v", name, worker)
 		}
 	}
 }
 
-func TestLoadRestoreRecoveryRejectsDefaultPinnedJVSWithoutDirectRestoreCapability(t *testing.T) {
-	_, err := Load(MapSource{
+func TestLoadRestoreRecoveryAcceptsCurrentDirectLocalJVSPin(t *testing.T) {
+	cfg, err := Load(MapSource{
 		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
 		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
 		"AFSCP_WORKER_OWNER":                      "worker-a",
@@ -871,13 +858,12 @@ func TestLoadRestoreRecoveryRejectsDefaultPinnedJVSWithoutDirectRestoreCapabilit
 		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
 	})
-	if err == nil {
-		t.Fatal("Load succeeded, want direct restore capability rejection for the default JVS pin")
+	if err != nil {
+		t.Fatalf("Load returned error for current direct local JVS pin: %v", err)
 	}
-	for _, want := range []string{"restore --direct", "v0.4.9"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error = %q, want %q", err, want)
-		}
+	restore := cfg.Worker.OperationRecovery.Restore
+	if !restore.Enabled || !restore.JVSDirectRestoreRequired || restore.JVSDirectRestoreSourceRef != directRestoreLocalJVSSourceRef {
+		t.Fatalf("restore config = %#v, want current direct local pin accepted", restore)
 	}
 }
 
@@ -888,7 +874,7 @@ func TestLoadRestoreRecoveryRequiresDirectRestoreArtifactDeclaration(t *testing.
 		"AFSCP_WORKER_OWNER":                      "worker-a",
 		"AFSCP_RESTORE_RECOVERY_ENABLED":          "true",
 		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                 directRestoreLocalJVSBinarySHA256,
+		"AFSCP_JVS_BINARY_SHA256":                 customDirectRestoreJVSBinarySHA256,
 		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
 	}
@@ -898,8 +884,8 @@ func TestLoadRestoreRecoveryRequiresDirectRestoreArtifactDeclaration(t *testing.
 		want     string
 	}{
 		{name: "missing direct sha", want: "AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256"},
-		{name: "mismatched direct sha", override: MapSource{"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256": strings.Repeat("2", 64), "AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF": directRestoreLocalJVSSourceRef}, want: "must match AFSCP_JVS_BINARY_SHA256"},
-		{name: "missing source ref", override: MapSource{"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256": directRestoreLocalJVSBinarySHA256}, want: "AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF"},
+		{name: "mismatched direct sha", override: MapSource{"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256": strings.Repeat("2", 64), "AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF": customDirectRestoreJVSSourceRef}, want: "must match AFSCP_JVS_BINARY_SHA256"},
+		{name: "missing source ref", override: MapSource{"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256": customDirectRestoreJVSBinarySHA256}, want: "AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -918,75 +904,6 @@ func TestLoadRestoreRecoveryRequiresDirectRestoreArtifactDeclaration(t *testing.
 				t.Fatalf("error = %q, want %q", err, tt.want)
 			}
 		})
-	}
-}
-
-func TestLoadRestorePreviewRecoveryParsesIndependentExplicitGate(t *testing.T) {
-	cfg, err := Load(MapSource{
-		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
-		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
-		"AFSCP_WORKER_OWNER":                      "worker-a",
-		"AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED":  "true",
-		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                 acceptedJVSBinarySHA256,
-		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
-		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
-	})
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	restorePreview := cfg.Worker.OperationRecovery.RestorePreview
-	if !restorePreview.Enabled || restorePreview.JVSBinaryPath != "/opt/afscp/bin/jvs" || restorePreview.JVSBinarySHA256 != acceptedJVSBinarySHA256 || restorePreview.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
-		t.Fatalf("restore preview config = %#v", restorePreview)
-	}
-	if cfg.Worker.OperationRecovery.SavePoint.Enabled || cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
-		t.Fatalf("restore preview gate should not enable other JVS workers: %#v", cfg.Worker.OperationRecovery)
-	}
-}
-
-func TestLoadRestorePreviewDiscardRecoveryParsesIndependentExplicitGate(t *testing.T) {
-	cfg, err := Load(MapSource{
-		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED":        "true",
-		"AFSCP_POSTGRES_DSN":                             "postgres://user:password@db/afscp",
-		"AFSCP_WORKER_OWNER":                             "worker-a",
-		"AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED": "true",
-		"AFSCP_JVS_BINARY_PATH":                          "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                        acceptedJVSBinarySHA256,
-		"AFSCP_JVS_CWD":                                  "/var/lib/afscp/jvs-cwd",
-		"AFSCP_VOLUME_ROOTS":                             "vol_123=/srv/afscp/volumes/vol_123",
-	})
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	discard := cfg.Worker.OperationRecovery.RestorePreviewDiscard
-	if !discard.Enabled || discard.JVSBinaryPath != "/opt/afscp/bin/jvs" || discard.JVSBinarySHA256 != acceptedJVSBinarySHA256 || discard.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
-		t.Fatalf("restore preview discard config = %#v", discard)
-	}
-	if cfg.Worker.OperationRecovery.RestorePreview.Enabled || cfg.Worker.OperationRecovery.SavePoint.Enabled || cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
-		t.Fatalf("restore preview discard gate should not enable other JVS workers: %#v", cfg.Worker.OperationRecovery)
-	}
-}
-
-func TestLoadRestoreRunRecoveryParsesIndependentExplicitGate(t *testing.T) {
-	cfg, err := Load(MapSource{
-		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
-		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
-		"AFSCP_WORKER_OWNER":                      "worker-a",
-		"AFSCP_RESTORE_RUN_RECOVERY_ENABLED":      "true",
-		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                 acceptedJVSBinarySHA256,
-		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
-		"AFSCP_VOLUME_ROOTS":                      "vol_123=/srv/afscp/volumes/vol_123",
-	})
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	restoreRun := cfg.Worker.OperationRecovery.RestoreRun
-	if !restoreRun.Enabled || restoreRun.JVSBinaryPath != "/opt/afscp/bin/jvs" || restoreRun.JVSBinarySHA256 != acceptedJVSBinarySHA256 || restoreRun.VolumeRoots["vol_123"] != "/srv/afscp/volumes/vol_123" {
-		t.Fatalf("restore run config = %#v", restoreRun)
-	}
-	if cfg.Worker.OperationRecovery.RestorePreview.Enabled || cfg.Worker.OperationRecovery.RestorePreviewDiscard.Enabled || cfg.Worker.OperationRecovery.SavePoint.Enabled || cfg.Worker.OperationRecovery.RepoLifecycle.Enabled {
-		t.Fatalf("restore run gate should not enable other JVS workers: %#v", cfg.Worker.OperationRecovery)
 	}
 }
 

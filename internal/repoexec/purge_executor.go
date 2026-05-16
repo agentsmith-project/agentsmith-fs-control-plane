@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
@@ -214,9 +215,9 @@ func (executor *PurgeExecutor) ExecuteOperationRecovery(ctx context.Context, rec
 		}
 		controlExists := strings.TrimSpace(repo.ControlVolumeSubdir) != ""
 		if controlExists {
-			doctor, err := executor.jvs.DoctorStrict(ctx, paths.ControlRootPath)
-			if err != nil || !doctor.Healthy || doctor.Workspace != "main" || doctor.RepoID != repo.JVSRepoID {
-				return executor.commitPurgeIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"repo_id": repo.JVSRepoID, "workspace": "main"}, err))
+			doctor, err := executor.jvs.DirectDoctor(ctx, jvsrunner.DirectTarget{ControlRoot: paths.ControlRootPath, Home: paths.PayloadRootPath})
+			if err != nil || !doctor.Healthy || doctor.RepoID != repo.JVSRepoID {
+				return executor.commitPurgeIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"repo_id": repo.JVSRepoID}, err))
 			}
 		}
 		if err := executor.purger.PurgeRepoStorage(ctx, paths); err != nil {

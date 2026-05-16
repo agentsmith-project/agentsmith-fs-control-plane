@@ -28,7 +28,7 @@ AFSCP should provide an independently runnable, independently releasable shared 
 - Repo lifecycle uses common product semantics: archive is retained but unavailable, delete is recoverable tombstone/trash during retention, and purge is permanent deletion.
 - Trusted callers and operators can inspect repo storage projections by ID and by namespace/lifecycle status for reconciliation. These projections are not product catalog listings and contain no display names or raw paths.
 - Repos are JVS-managed payload workspaces with external control roots, stable IDs, and controlled paths.
-- AFSCP runs JVS operations for save points, restore preview/run, history, and repo clone.
+- AFSCP runs direct JVS operations for save point create/list and durable restore, plus repo init/clone helpers.
 - AFSCP manages namespace-scoped immutable repo templates for GA.
 - Same-namespace template clone creates an independent repo with a new JVS repo identity.
 - Cross-namespace template clone is rejected by default.
@@ -84,7 +84,7 @@ AFSCP should provide an independently runnable, independently releasable shared 
 9. Repo purge permanently removes tombstoned storage only after retention/policy checks and explicit authorization.
 10. Workload mount bindings mount the repo payload root, not the JVS control root or repo container directory, without exposing JuiceFS root credentials or Secret references to the workload or ordinary product caller.
 11. Client export flow returns WebDAV export credentials rather than JuiceFS direct mount credentials.
-12. JVS save point, history, restore preview, and restore-run work through AFSCP; restore-run blocks new read-write sessions and rejects active or uncertain read-write sessions by default.
+12. JVS save point create/list and durable direct restore work through AFSCP; direct restore blocks new read-write sessions and rejects active or uncertain read-write sessions by default.
 13. A source repo can be saved/cloned into a namespace-scoped immutable repo template.
 14. A template can be cloned within the same namespace into an independent repo with a new JVS repo identity.
 15. Cross-namespace template clone is rejected by default.

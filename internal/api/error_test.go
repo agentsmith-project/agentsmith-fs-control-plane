@@ -32,8 +32,6 @@ func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {
 		CodeWriterSessionFenceHeld,
 		CodeStaleWriterSessionUncertain,
 		CodeRestoreDirtyState,
-		CodeRestorePreviewStale,
-		CodeRestoreConfirmationRequired,
 		CodeJVSCommandFailed,
 		CodeJVSDoctorFailed,
 		CodeSourceDirtyAfterTemplateSave,
@@ -243,4 +241,75 @@ func TestErrorEnvelopeRedactsAFSCPForbiddenDetailsAndBearerValues(t *testing.T) 
 	if got, want := env.Error.Details["safe"], "visible"; got != want {
 		t.Fatalf("safe = %#v, want %#v", got, want)
 	}
+}
+
+func TestErrorEnvelopeDropsJVSInternalDetailsFromProductSurface(t *testing.T) {
+	details := map[string]any{
+		"repo_id":        "repo_123",
+		"checksum":       "sha256:internal-checksum",
+		"digest":         "sha256:internal-digest",
+		"capacity_bytes": 123456,
+		"tree_scan":      "internal-tree-scan",
+		"file_count":     42,
+		"payload_tree":   map[string]any{"root": "internal-payload-tree"},
+		"sync_state":     "internal-sync-state",
+		"proof":          "internal-proof",
+		"internal_path":  "/srv/afscp/internal/path",
+		"control-root":   "/srv/afscp/control",
+		"home_path":      "/home/afscp/runtime/repo_123",
+		"raw command":    "jvs afscp --control-root raw-control --home raw-home restore",
+		"nested": map[string]any{
+			"safe":         "visible",
+			"payload_hash": "internal-payload-hash",
+		},
+		"array": []any{
+			map[string]any{"proof": "array-proof", "safe": "visible-array"},
+		},
+	}
+
+	env := NewErrorEnvelope(CodeJVSCommandFailed, "failed", true, "corr_redact", nil, details)
+	rendered := strings.ToLower(toJSONForTest(t, env.Error.Details))
+
+	for _, forbidden := range []string{
+		"checksum",
+		"internal-checksum",
+		"digest",
+		"internal-digest",
+		"capacity_bytes",
+		"tree_scan",
+		"file_count",
+		"payload_tree",
+		"sync_state",
+		"proof",
+		"internal_path",
+		"control-root",
+		"home_path",
+		"raw command",
+		"payload_hash",
+		"array-proof",
+		"/srv/afscp",
+		"/home/afscp",
+		"jvs afscp",
+	} {
+		if strings.Contains(rendered, strings.ToLower(forbidden)) {
+			t.Fatalf("JVS/internal detail %q leaked into product error surface: %s", forbidden, rendered)
+		}
+	}
+	if got := env.Error.Details["repo_id"]; got != "repo_123" {
+		t.Fatalf("repo_id = %#v, want safe detail preserved", got)
+	}
+	nested, ok := env.Error.Details["nested"].(map[string]any)
+	if !ok || nested["safe"] != "visible" {
+		t.Fatalf("nested safe detail not preserved: %#v", env.Error.Details["nested"])
+	}
+}
+
+func toJSONForTest(t *testing.T, value any) string {
+	t.Helper()
+
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal test JSON: %v", err)
+	}
+	return string(encoded)
 }

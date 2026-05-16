@@ -290,9 +290,6 @@ const cliValidSchema = `
         "repo_purge",
         "save_point_create",
         "restore",
-        "restore_preview",
-        "restore_preview_discard",
-        "restore_run",
         "template_create",
         "template_clone",
         "export_create",
@@ -364,8 +361,6 @@ const cliValidSchema = `
         "WRITER_SESSION_FENCE_HELD",
         "STALE_WRITER_SESSION_UNCERTAIN",
         "RESTORE_DIRTY_STATE",
-        "RESTORE_PREVIEW_STALE",
-        "RESTORE_CONFIRMATION_REQUIRED",
         "JVS_COMMAND_FAILED",
         "JVS_DOCTOR_FAILED",
         "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE",
@@ -451,7 +446,7 @@ The flat ` + "`OperationEnvelope`" + ` API response is separate from the durable
 | ` + "`namespace_admin`" + ` | namespace create/disable and volume binding update |
 | ` + "`repo_admin`" + ` | repo create/get/list |
 | ` + "`repo_lifecycle_admin`" + ` | repo lifecycle |
-| ` + "`restore_admin`" + ` | direct restore and restore preview/run |
+| ` + "`restore_admin`" + ` | direct restore and direct restore admission |
 | ` + "`template_admin`" + ` | repo template create/clone |
 | ` + "`export_admin`" + ` | export create/get/revoke |
 | ` + "`mount_admin`" + ` | workload mount binding create/get/revoke |

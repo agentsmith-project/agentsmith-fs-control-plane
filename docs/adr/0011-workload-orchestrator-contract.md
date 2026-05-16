@@ -29,9 +29,10 @@ Only the dedicated `orchestrator_mount` role can fetch:
 
 Mount bindings are lease-based. Status, heartbeat, release, and revoke are GA
 APIs. `revoked` is terminal only after the orchestrator confirms unmounted or
-unable to write. Read-write uncertain sessions block restore-run. Any
-non-terminal export or mount blocks archive/delete/purge lifecycle drain when
-the lifecycle contract requires no access.
+unable to write. Read-write uncertain sessions block direct restore to a save
+point through the writer-session fence. Any non-terminal export or mount blocks
+archive/delete/purge lifecycle drain when the lifecycle contract requires no
+access.
 
 ## Consequences
 
@@ -48,4 +49,3 @@ Tradeoffs:
 - AFSCP must reject degraded mount behavior with `CAPABILITY_DENIED`.
 - Test environments need an orchestrator fake that proves confirmed-unmounted
   semantics.
-

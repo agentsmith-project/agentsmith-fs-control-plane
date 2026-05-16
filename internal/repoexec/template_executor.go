@@ -2,7 +2,6 @@ package repoexec
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -23,9 +22,9 @@ import (
 )
 
 type TemplateJVSRunner interface {
-	Save(ctx context.Context, controlRoot, message string) (jvsrunner.SaveSummary, error)
+	DirectSave(ctx context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error)
 	RepoClone(ctx context.Context, sourceControlRoot, targetPayloadRoot, targetControlRoot string) (jvsrunner.RepoCloneSummary, error)
-	DoctorStrict(ctx context.Context, controlRoot string) (jvsrunner.DoctorSummary, error)
+	DirectDoctor(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectDoctorSummary, error)
 }
 
 type TemplateConfig struct {
@@ -136,7 +135,7 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 	if err != nil {
 		return executor.commitTemplateCreateFailed(ctx, record, "TEMPLATE_CREATE_VALIDATION_FAILED", "template create validation failed")
 	}
-	sourceControlRoot, err := executor.controlRoot(source)
+	sourceTarget, err := executor.directTarget(source)
 	if err != nil {
 		return executor.commitTemplateCreateFailed(ctx, record, "TEMPLATE_CREATE_VALIDATION_FAILED", "template create validation failed")
 	}
@@ -145,24 +144,15 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 		return executor.commitTemplateCreateFailed(ctx, record, "TEMPLATE_CREATE_VALIDATION_FAILED", "template create validation failed")
 	}
 	working := record
-	if blocked, err := executor.commitTemplateCreateRestoreBlockedIfPresent(ctx, working); err != nil || blocked {
-		return err
-	}
 	if record.Phase == operations.OperationPhaseTemplateCreateValidate {
 		fence := templateCreateWriterFenceForOperation(record, now)
 		working = withTemplateCreateWriterFencedMarker(record, fence.ID)
 		updatedFence, updatedOperation, err := executor.store.MarkTemplateCreateWriterFencedWithLease(ctx, fence, working.SanitizedForPersistence(), executor.owner, now)
 		if err != nil {
-			if blocked, blockErr := executor.commitTemplateCreateRestoreBlockedIfPresent(ctx, record); blockErr != nil || blocked {
-				return blockErr
-			}
 			return fmt.Errorf("template create writer fence mark failed: %w", err)
 		}
 		working = updatedOperation
 		working.SessionFenceID = updatedFence.ID
-	}
-	if blocked, err := executor.commitTemplateCreateRestoreBlockedIfPresent(ctx, working); err != nil || blocked {
-		return err
 	}
 	if err := executor.checkTemplateCreateWriterSessions(ctx, working, now); err != nil {
 		return executor.commitTemplateCreateFailed(ctx, working, "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE", "source repo has active or stale writer sessions after template writer fence")
@@ -170,22 +160,21 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 	if err := prepareRepoCloneTargetParents(paths); err != nil {
 		return executor.commitTemplateCreateFailed(ctx, working, "TEMPLATE_CREATE_TARGET_PREPARE_FAILED", "template create target preparation failed")
 	}
-	save, err := executor.jvs.Save(ctx, sourceControlRoot, "template "+record.TemplateID)
+	save, err := executor.jvs.DirectSave(ctx, sourceTarget, "template "+record.TemplateID)
 	if err != nil {
 		if isJVSRecoveryBlockingError(err) {
 			return executor.commitTemplateCreateBlocked(ctx, working, map[string]any{
-				"active_restore_plan_present": true,
-				"jvs_recovery_blocking":       true,
-				"restore_blocker_source":      "jvs_recovery_state",
+				"jvs_recovery_blocking":  true,
+				"restore_blocker_source": "jvs_recovery_state",
 			})
 		}
-		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs save failed", withJVSErrorDetails(nil, err))
+		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs direct save failed", withJVSErrorDetails(nil, err))
 	}
-	clone, err := executor.jvs.RepoClone(ctx, sourceControlRoot, paths.PayloadRootPath, paths.ControlRootPath)
+	clone, err := executor.jvs.RepoClone(ctx, sourceTarget.ControlRoot, paths.PayloadRootPath, paths.ControlRootPath)
 	if err != nil {
 		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs repo clone failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
 	}
-	doctor, err := executor.jvs.DoctorStrict(ctx, paths.ControlRootPath)
+	doctor, err := executor.jvs.DirectDoctor(ctx, jvsrunner.DirectTarget{ControlRoot: paths.ControlRootPath, Home: paths.PayloadRootPath})
 	if err != nil {
 		return executor.commitTemplateCreateIntervention(ctx, working, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"source_save_point_id": save.SavePointID}, err))
 	}
@@ -260,7 +249,7 @@ func (executor *TemplateCloneExecutor) ExecuteOperationRecovery(ctx context.Cont
 	if err != nil {
 		return base.commitTemplateCloneFailed(ctx, record, "TEMPLATE_CLONE_VALIDATION_FAILED", "template clone validation failed")
 	}
-	sourceControlRoot, err := base.controlRoot(template)
+	sourceTarget, err := base.directTarget(template)
 	if err != nil {
 		return base.commitTemplateCloneFailed(ctx, record, "TEMPLATE_CLONE_VALIDATION_FAILED", "template clone validation failed")
 	}
@@ -271,11 +260,11 @@ func (executor *TemplateCloneExecutor) ExecuteOperationRecovery(ctx context.Cont
 	if err := prepareRepoCloneTargetParents(paths); err != nil {
 		return base.commitTemplateCloneFailed(ctx, record, "TEMPLATE_CLONE_TARGET_PREPARE_FAILED", "template clone target preparation failed")
 	}
-	clone, err := base.jvs.RepoClone(ctx, sourceControlRoot, paths.PayloadRootPath, paths.ControlRootPath)
+	clone, err := base.jvs.RepoClone(ctx, sourceTarget.ControlRoot, paths.PayloadRootPath, paths.ControlRootPath)
 	if err != nil {
 		return base.commitTemplateCloneIntervention(ctx, record, "JVS_COMMAND_FAILED", "jvs repo clone failed", withJVSErrorDetails(nil, err))
 	}
-	doctor, err := base.jvs.DoctorStrict(ctx, paths.ControlRootPath)
+	doctor, err := base.jvs.DirectDoctor(ctx, jvsrunner.DirectTarget{ControlRoot: paths.ControlRootPath, Home: paths.PayloadRootPath})
 	if err != nil {
 		return base.commitTemplateCloneIntervention(ctx, record, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(nil, err))
 	}
@@ -411,6 +400,34 @@ func (executor *TemplateCreateExecutor) controlRoot(repo resources.Repo) (string
 	return controlRoot, nil
 }
 
+func (executor *TemplateCreateExecutor) directTarget(repo resources.Repo) (jvsrunner.DirectTarget, error) {
+	root, ok := executor.volumeRoots[repo.VolumeID]
+	if !ok {
+		return jvsrunner.DirectTarget{}, errors.New("missing volume root")
+	}
+	controlRoot, err := safeVolumeSubdirPath(root, repo.ControlVolumeSubdir, "control")
+	if err != nil {
+		return jvsrunner.DirectTarget{}, err
+	}
+	payloadRoot, err := safeVolumeSubdirPath(root, repo.PayloadVolumeSubdir, "payload")
+	if err != nil {
+		return jvsrunner.DirectTarget{}, err
+	}
+	return jvsrunner.DirectTarget{ControlRoot: controlRoot, Home: payloadRoot}, nil
+}
+
+func safeVolumeSubdirPath(root, subdir, label string) (string, error) {
+	cleanSubdir := filepath.Clean(subdir)
+	if cleanSubdir == "." || filepath.IsAbs(cleanSubdir) || strings.HasPrefix(cleanSubdir, ".."+string(filepath.Separator)) || cleanSubdir == ".." {
+		return "", errors.New("invalid " + label + " subdir")
+	}
+	resolved := filepath.Join(root, cleanSubdir)
+	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+		return "", errors.New("invalid " + label + " root")
+	}
+	return resolved, nil
+}
+
 func templateRootPaths(volumeRoot, namespaceID, templateID string) (pathresolver.RepoRootPaths, error) {
 	if err := validateVolumeRoot(volumeRoot); err != nil {
 		return pathresolver.RepoRootPaths{}, err
@@ -478,23 +495,6 @@ func (executor *TemplateCreateExecutor) commitTemplateCreateFailed(ctx context.C
 		return errors.New("template create failure commit failed")
 	}
 	return nil
-}
-
-func (executor *TemplateCreateExecutor) commitTemplateCreateRestoreBlockedIfPresent(ctx context.Context, record operations.OperationRecord) (bool, error) {
-	plan, err := executor.store.GetActiveRestorePlanByRepo(ctx, record.RepoID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	if strings.TrimSpace(plan.ID) == "" || !plan.Active() {
-		return false, nil
-	}
-	return true, executor.commitTemplateCreateBlocked(ctx, record, map[string]any{
-		"active_restore_plan_present": true,
-		"restore_plan_status":         plan.Status.String(),
-	})
 }
 
 func (executor *TemplateCreateExecutor) commitTemplateCreateBlocked(ctx context.Context, record operations.OperationRecord, details map[string]any) error {
@@ -567,7 +567,7 @@ func (executor *TemplateCreateExecutor) checkTemplateCreateWriterSessions(ctx co
 	if err != nil {
 		return err
 	}
-	decision := sessionstate.RestoreRunWriterGate(sessionstate.GateRequest{NamespaceID: record.NamespaceID, RepoID: record.RepoID, Now: now, ExportSessions: exports, Mounts: mounts})
+	decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{NamespaceID: record.NamespaceID, RepoID: record.RepoID, Now: now, ExportSessions: exports, Mounts: mounts})
 	if decision.Allowed {
 		return nil
 	}

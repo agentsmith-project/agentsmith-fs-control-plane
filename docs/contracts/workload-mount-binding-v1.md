@@ -65,7 +65,7 @@ Statuses:
 - `expired`
 - `failed`
 
-`released` and `revoked` are evidence-bearing non-accessing terminal statuses: the orchestrator may report them only after confirming that the runtime mount is unmounted or otherwise non-accessing. This also proves unable-to-write. A control-plane revoke request that has not yet stopped runtime access remains `releasing` and continues to block restore-run. `expired` and `failed` are observed terminal statuses; they do not carry confirmed-unmounted, non-accessing, or unable-to-write evidence by themselves.
+`released` and `revoked` are evidence-bearing non-accessing terminal statuses: the orchestrator may report them only after confirming that the runtime mount is unmounted or otherwise non-accessing. This also proves unable-to-write. A control-plane revoke request that has not yet stopped runtime access remains `releasing` and continues to block direct restore. `expired` and `failed` are observed terminal statuses; they do not carry confirmed-unmounted, non-accessing, or unable-to-write evidence by themselves.
 
 GA requires:
 
@@ -75,14 +75,14 @@ GA requires:
 - revoke endpoint for AFSCP/operator initiated teardown
 - `lease_expires_at` on every binding
 
-Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions. Expired read-write bindings block restore-run until reconciliation reaches an evidence-bearing terminal state proving that the runtime is unmounted or otherwise non-accessing. `revoked` may unblock restore-run only when it means confirmed non-accessing, not merely requested.
+Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions. Expired read-write bindings block direct restore until reconciliation reaches an evidence-bearing terminal state proving that the runtime is unmounted or otherwise non-accessing. `revoked` may unblock direct restore only when it means confirmed non-accessing, not merely requested.
 
-Repo lifecycle drain is stricter than restore-run. Any binding, read-only or
+Repo lifecycle drain is stricter than direct restore. Any binding, read-only or
 read-write, blocks archive, delete, and purge until AFSCP has a confirmed
 terminal non-accessing state from the orchestrator or reconciliation process.
 
 Future support for unable-to-write-but-still-mounted/readable evidence for
-restore-run must use a new explicit evidence field or status. It must not reuse
+direct restore must use a new explicit evidence field or status. It must not reuse
 `released` or `revoked`, because current GA lifecycle and purge gates treat
 those statuses as confirmed non-accessing evidence.
 
@@ -96,7 +96,7 @@ those statuses as confirmed non-accessing evidence.
 - Permission-only protection on an embedded `.jvs` directory is insufficient by itself.
 - If a repo has embedded JVS control metadata under the mounted root, workload mounts must be rejected until the repo is migrated to external control root mode or protected by a verified filtered mount/view.
 - Stock JuiceFS CSI subdirectory mounting and Kubernetes `subPath` may be used to select the payload root. They must not mount the repo container directory that contains both `control/` and `payload/`.
-- Read-write binding issuance must be serialized with restore-run by a per-repo writer-session fence.
+- Read-write binding issuance must be serialized with direct restore by a per-repo writer-session fence.
 - All binding issuance and status-changing calls must respect the per-repo lifecycle fence.
 - Issuance-track mount plans for `issued`, `pending`, or `active` bindings require a fresh lease at the API and store boundary. Expired issuance leases must fail closed until recovery or reconciliation advances state.
 - Bindings already in `releasing` may receive the payload-only Secret-bearing orchestrator plan solely so the dedicated orchestrator can identify and tear down existing runtime mounts. This does not re-admit workload access, and AFSCP must force `allow_privileged_workload=false` for these teardown plans.

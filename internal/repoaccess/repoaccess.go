@@ -16,8 +16,7 @@ const (
 	IntentExportCreate               Intent = "export_create"
 	IntentWorkloadMount              Intent = "workload_mount"
 	IntentSavePointCreate            Intent = "save_point_create"
-	IntentRestorePreviewDiscard      Intent = "restore_preview_discard"
-	IntentRestoreRun                 Intent = "restore_run"
+	IntentRestore                    Intent = "restore"
 	IntentTemplateCreateFromRepo     Intent = "template_create_from_repo"
 	IntentTemplateCloneIntoRepo      Intent = "template_clone_into_repo"
 	IntentLifecycleArchive           Intent = "lifecycle_archive"
@@ -126,7 +125,7 @@ func Admit(request Request) Decision {
 		return deny(ErrorFamilyInternalError, "invalid stored control-plane state", "")
 	}
 
-	if request.Binding.Status != resources.NamespaceStatusActive || (request.Namespace.Status != resources.NamespaceStatusActive && request.Intent != IntentRestorePreviewDiscard) {
+	if request.Binding.Status != resources.NamespaceStatusActive || request.Namespace.Status != resources.NamespaceStatusActive {
 		return deny(ErrorFamilyNamespaceDisabled, "namespace or namespace binding is not active", "")
 	}
 
@@ -233,8 +232,7 @@ func (intent Intent) valid() bool {
 		IntentExportCreate,
 		IntentWorkloadMount,
 		IntentSavePointCreate,
-		IntentRestorePreviewDiscard,
-		IntentRestoreRun,
+		IntentRestore,
 		IntentTemplateCreateFromRepo,
 		IntentTemplateCloneIntoRepo,
 		IntentLifecycleArchive,
@@ -261,7 +259,7 @@ func writerFenceBlocks(intent Intent, mode Mode) bool {
 	switch intent {
 	case IntentExportCreate, IntentWorkloadMount, IntentStorageSession:
 		return mode == ModeReadWrite
-	case IntentStorageMutation, IntentRestoreRun:
+	case IntentStorageMutation, IntentRestore:
 		return true
 	default:
 		return isLifecycleIntent(intent)

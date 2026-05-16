@@ -1,6 +1,7 @@
 # JVS Integration
 
-Status: GA implementation-baseline JVS integration guidance.
+Status: current implementation baseline for pre-GA direct AFSCP integration
+guidance.
 
 Final GA is governed by `docs/GA_RELEASE_GATES.md`,
 `docs/READINESS_EVIDENCE.md`, and `scripts/verify-ga-release.sh`.
@@ -9,11 +10,21 @@ AFSCP is the only ordinary JVS executor in the storage-control path.
 
 ## Integration Mode
 
-The GA implementation baseline integrates through the JVS CLI with JSON output.
-The JVS `v0.4.9` release pin, asset, checksum, and runner contract evidence are
-accepted as G-005 in `docs/READINESS_EVIDENCE.md`; that evidence covers the JVS
-pin gate only and does not by itself close GA release evidence for storage
-mutation.
+AFSCP integrates through the JVS CLI with JSON output. The active
+save/list/restore/status/doctor surface is the internal direct contract:
+
+```bash
+jvs afscp --control-root <control> --home <home> save --message <message> --json
+jvs afscp --control-root <control> --home <home> list --json
+jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json
+jvs afscp --control-root <control> --home <home> status --json
+jvs afscp --control-root <control> --home <home> doctor --json
+```
+
+The current active pin is the pre-GA local direct-capable artifact recorded in
+`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`. The old `v0.4.9` release
+evidence is historical only and must not be treated as active direct restore
+support.
 
 Do not reimplement JVS save, version restore, or clone semantics inside AFSCP.
 Repo availability, archive, tombstone, and purge semantics are owned by the
@@ -21,41 +32,34 @@ AFSCP repo lifecycle contract.
 
 ## Required Commands
 
-The baseline command expectations include:
+The active direct command expectations include:
 
-- `jvs init`
-- save point creation
-- save point history/list with a complete-history request
-- restore preview
-- restore-run
-- restore discard
-- recovery status/resume/rollback or an explicit operator-intervention state for failed restore runs
-- repo clone
-- `jvs doctor --strict`
-- `jvs doctor --strict --repair-runtime` after save `E_REPO_BUSY` for stale
-  repository mutation lock cleanup
+- direct save point creation through `jvs afscp ... save --json`
+- direct save point list/history through `jvs afscp ... list --json`
+- direct version restore through `jvs afscp ... restore --save-point ... --json`
+- explicit metadata-only status through `jvs afscp ... status --json`
+- explicit metadata-only doctor through `jvs afscp ... doctor --json`
+
+The active contract excludes restore preview, restore-run, restore discard,
+`--direct --discard-unsaved`, automatic safety save points, and default
+doctor/status calls in save or restore hot paths.
 
 Repo lifecycle operations are GA storage-control operations implemented through
 AFSCP durable lifecycle state, session drain, and the accepted tombstone/purge
 storage contract. JVS lifecycle commands are optional implementation helpers
 only after their external-control-root behavior is pinned; they are not the GA
-source of lifecycle authority. AFSCP must not perform lifecycle filesystem
-changes that leave JVS control metadata inconsistent.
+source of lifecycle authority.
 
 See:
 
-- JVS `v0.4.9` release/tag documentation and assets:
-  `https://github.com/agentsmith-project/jvs/releases/tag/v0.4.9`
 - [contracts/jvs-runner-contract-v1.md](contracts/jvs-runner-contract-v1.md)
   for the self-contained AFSCP command matrix and fail-closed behavior.
-
-Local source checkouts are development-machine references only. They are not a
-handoff dependency for AFSCP worker implementation; use the pinned release/tag
-documentation and asset checksums as the authority.
+- [JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md](JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md)
+  for the current local pin evidence.
 
 ## External Control Root Mode
 
-AFSCP-managed repos must use JVS external control roots for GA.
+AFSCP-managed repos must use JVS external control roots.
 
 Repo create command shape:
 
@@ -63,7 +67,7 @@ Repo create command shape:
 jvs init <payload_root_path> --control-root <control_root_path> --workspace main --json
 ```
 
-Routine command shape:
+Non-direct repo/template helper command shape:
 
 ```bash
 jvs --control-root <control_root_path> --workspace main <command> --json
@@ -73,225 +77,32 @@ External control root rules for AFSCP:
 
 - `payload_root_path` is the JVS `main` workspace folder and contains user files only.
 - `control_root_path` contains JVS control metadata and is not mounted/exported.
-- A bare payload folder cannot auto-discover the control root; AFSCP runner must pass `--control-root` and `--workspace main`.
+- A bare payload folder cannot auto-discover the control root; AFSCP runner must pass explicit selectors.
 - `--repo` is not the selector for external control root repos.
-- Current JVS external control root contract is main-only.
-- AFSCP runner target selection is authoritative only through explicit
-  `--control-root <control_root_path> --workspace main`. The process CWD must
-  be clean and controlled, must not be inside another JVS repo, and must never
-  be used to discover the target repo.
-- Repo create, save/restore, and template clone have explicit-gated worker
-  paths that use this JVS external-control-root contract and the command matrix
-  in [contracts/jvs-runner-contract-v1.md](contracts/jvs-runner-contract-v1.md).
-  WebDAV and workload mount behavior are AFSCP features that depend on the same
-  external-control-root and payload/control path separation; they are not JVS
-  runner commands or deferred JVS runner slices.
-- JVS has repo/workspace lifecycle commands for ordinary repos, but AFSCP GA
-  lifecycle does not depend on them. If AFSCP later uses those commands, their
-  external-control-root behavior must first be pinned and tested against the
-  same AFSCP lifecycle contract.
+- Direct save/list/restore/status/doctor target selection is authoritative only
+  through `--control-root <control_root_path>` plus
+  `--home <payload_home_path>`.
+- Non-direct `--workspace main` usage is limited to repo init and repo clone
+  until those surfaces have direct AFSCP equivalents. Template source save,
+  save point list/create, restore, status, and doctor use `jvs afscp`.
 
 ## Operation Rules
 
 - Every mutating JVS action must have an AFSCP operation record.
 - Mutating JVS actions must use resource locks.
 - JVS JSON output stored with the operation record must be reduced to a safe
-  summary and must not include absolute roots, raw stdout/stderr, or secrets.
-  Restore preview `run_command` and recovery `recommended_next_command` are
-  especially sensitive because they may contain internal paths; store only safe
-  metadata such as command kind, plan ID, source save point ID, redaction flags,
-  and normalized recovery state.
-- AFSCP should map JVS errors into stable caller-visible error codes.
-- Save point history/list must request complete history; if JVS reports
-  `truncated:true`, AFSCP must fail closed instead of returning a partial list.
-- Save point create may run `doctor --strict --repair-runtime` only after JVS
-  save returns `E_REPO_BUSY`; it must require a successful `clean_locks` repair
-  result before retrying and must never delete JVS lock files directly.
-- `doctor --strict` should be run after repo create, restore, and clone in GA smoke paths.
-- `doctor --strict` should be run before reactivating archived or tombstoned repos when retained JVS metadata is expected to remain usable.
-- The supported JVS release version, binary asset name, checksum, and signature
-  bundle are pinned by G-005 evidence and must remain aligned with the runner
-  contract and packaged binary.
-- The packaged JVS binary must come from the pinned GitHub release asset; CI should verify the checksum, verify Sigstore/cosign bundles where supported, and smoke-test the required commands instead of trusting a stale local artifact.
-- When `AFSCP_JVS_READY=true`, the API image needs the same pinned JVS binary
-  config as workers because save-point history/list is JVS-backed in the
-  internal API runtime. Missing `AFSCP_JVS_BINARY_PATH`, accepted checksum,
-  clean JVS CWD, or volume-root mapping is a startup/readiness failure, not an
-  optional history feature toggle.
-- AFSCP should run JVS commands from a clean working directory outside another JVS repo; explicit `--control-root --workspace main` is the target selector and CWD must not affect target resolution.
-- Cross-resource operations must use deterministic lock ordering.
-
-## Required Separation Smoke Test
-
-Workload mount readiness should keep CI evidence that the pinned JVS binary can:
-
-1. `jvs init <payload> --control-root <control> --workspace main --json`.
-2. Create a save point from the separated repo.
-3. Confirm `<payload>/.jvs` is absent and `<control>/.jvs` is present.
-4. Clone with `jvs --control-root <control> --workspace main repo clone <target_payload> --target-control-root <target_control> --save-points main --json`.
-5. Confirm `<target_payload>/.jvs` is absent and `jvs --control-root <target_control> --workspace main doctor --strict --json` reports success.
-
-## Resource Locks
-
-- Save, restore-preview, restore-run, and restore discard use an exclusive repo
-  JVS lock.
-- Restore-preview is a mutating operation because it creates a JVS pending
-  restore plan. It does not block ordinary file IO, but the resulting active
-  durable restore plan blocks other same-repo JVS mutations until it is consumed
-  by the matching restore-run, discarded by the matching discard operation, or
-  moved to operator intervention.
-- History uses a shared/read repo gate.
-- Template create uses an exclusive source repo JVS lock while materializing the source save point, then a shared/read gate on the source repo plus an exclusive create lock on the target template while cloning.
-- Template clone uses a shared/read gate on the template repo and an exclusive create lock on the target repo.
-- Multi-resource locks are acquired in lexical order by `(volume_id, namespace_id, repo_kind, resource_id)`.
-
-## Restore Preview And Run
-
-AFSCP owns the durable restore plan lifecycle around JVS pending plans. Each
-repo may have at most one active restore plan. Active plan statuses are
-`pending`, `consuming`, `discarding`, and `operator_intervention_required`;
-`consumed` and `discarded` are terminal. Active plans reject unrelated
-same-repo save, restore preview, restore-run, template create, and template
-clone JVS mutations with existing stable mutation or recovery errors.
-The durable `RestorePlan` table/entity is the source of truth for this
-lifecycle. `restore_plan_id` is normalized from the JVS preview `plan_id` and
-maps back to the JVS plan ID used for restore-run and discard commands; it is
-not a new top-level `OperationRecord` field. Preview source metadata, stale
-state, and blockers are stored on `RestorePlan`, not only in operation details.
-
-Restore preview flow:
-
-1. Acquire the repo JVS exclusive mutation lock.
-2. Verify the repo has no active durable restore plan.
-3. Run `jvs recovery status --json` and require idle recovery status.
-4. Persist a preview preflight idle marker on the operation record.
-5. Run JVS restore preview for the requested save point.
-6. Persist `restore_plan_id`, `source_save_point_id`,
-   `expected_newest_save_point`, `history_head`,
-   `expected_folder_evidence`, the redacted `managed_files` summary, and plan
-   `pending`.
-
-Crash recovery after JVS preview may adopt a single pending JVS plan only when
-AFSCP-exclusive-control assumptions hold and the current operation is the
-earliest same-repo non-terminal restore preview or JVS mutation. If recovery
-after the durable preflight marker still reports idle/no-pending, AFSCP retries
-the preview from that marker; if timeout reconciliation reports idle/no-pending,
-AFSCP records a retryable failure instead of manual intervention because there
-is no JVS side effect to reconcile. Any mismatch, multiple pending plans,
-unknown blocking state, unsafe plan ID, discard failure, or competing operation
-moves the plan or operation to `operator_intervention_required`.
-`afscp-worker --run-once` startup timeout bounds worker pass setup such as store
-opening; once an operation lease is acquired, long JVS restore-preview work is
-kept single-owner by durable operation lease renewal, not by a fixed
-per-operation 30s wall-clock cap. The recovery worker renews the same
-operation ID and owner well before expiry; renewal failure cancels the operation
-context so the JVS child exits and the executor can reconcile through
-lease-fenced durable commits. If the process dies, renewal stops and another
-worker may reclaim only after the durable lease expires. JVS command
-cancellation or deadline errors must remain visible as
-`context.Canceled`/`context.DeadlineExceeded` so the executor can perform the
-same post-error recovery-status check before choosing retryable failure versus
-`operator_intervention_required`.
-`stale_restore_preview` defaults to intervention unless the caller explicitly
-uses restore preview discard. During restore-run for the matching pending plan,
-`stale_restore_preview` is a typed `RESTORE_PREVIEW_STALE` failure: AFSCP marks
-the durable plan `stale=true`, persists a `restore_preview_stale` blocker, and
-leaves the plan `pending` for discard.
-
-Restore-run flow:
-
-1. Validate the preview operation and durable plan against namespace, repo,
-   operation type, succeeded preview state, `restore_plan_id`,
-   `source_save_point_id`, `status=pending`, and restore-run references.
-2. If the durable plan is already `stale=true`, fail typed with
-   `RESTORE_PREVIEW_STALE` before JVS or writer fence.
-3. Preflight `jvs recovery status --json` and require exactly one pending JVS
-   plan matching the stored `restore_plan_id`; matching
-   `stale_restore_preview` fails typed with `RESTORE_PREVIEW_STALE` and updates
-   durable plan stale/blocker fields.
-4. Acquire the writer-session fence.
-5. Reject active or uncertain read-write sessions.
-6. Mark the plan `consuming`.
-7. Run JVS restore-run.
-8. Run `jvs doctor --strict`.
-9. Verify JVS recovery status is idle.
-10. Atomically record restore-run success, audit success, writer-fence release,
-   and plan `consumed`.
-
-If writer/session gating denies the run before JVS is invoked, release the
-writer-session fence and leave the plan `pending`. If JVS restore-run, doctor,
-or recovery-idle verification is ambiguous, keep the writer-session fence held
-and move the operation and/or plan to `operator_intervention_required`.
-
-Restore discard flow validates the same pending plan relationship, marks the
-plan `discarding`, runs `jvs restore discard <plan_id>` through the runner, and
-marks the plan `discarded` only after JVS confirms discard. AFSCP must never
-delete private `.jvs` files directly.
-
-## Repo Create
-
-Creating a repo should:
-
-1. Resolve namespace and volume policy.
-2. Resolve canonical runtime `control_root_path` and `payload_root_path` from
-   the worker's trusted volume root map plus canonical volume-relative subdirs.
-3. Ensure parent directories exist and the payload root is ready for adoption.
-4. Run `jvs init <payload_root_path> --control-root <control_root_path> --workspace main --json`.
-5. Store `repo_id`, `namespace_id`, `volume_id`, `control_volume_subdir`,
-   `payload_volume_subdir`, and `jvs_repo_id`; do not store absolute
-   `control_root_path` or `payload_root_path` in DB, operation, or audit data.
-6. Return only IDs and status to ordinary callers. Absolute volume roots remain
-   worker config only and raw paths remain internal.
-
-## Repo Lifecycle
-
-AFSCP repo lifecycle should:
-
-1. Acquire the repo lifecycle fence.
-2. Block new export, mount, save, restore-run, template, and lifecycle mutations.
-3. Drain or revoke existing exports and workload mounts, read-only or read-write, according to the lifecycle operation.
-4. Preserve JVS control metadata for archive and tombstone restore.
-5. Verify retained repos with `doctor --strict` before returning to `active` or the recorded lifecycle accessibility state.
-6. Permanently remove control and payload metadata only during approved purge.
-7. Store JVS output or lifecycle verification output with the operation record.
-
-## Template Flow
-
-Creating a repo template should:
-
-1. Caller authorizes the request in its own product domain.
-2. Caller invokes AFSCP with source repo, target template identity, namespace context, actor, correlation ID, and idempotency key.
-3. AFSCP resolves the source repo and validates the namespace boundary.
-4. AFSCP creates a fresh source save point under an exclusive source repo JVS lock and records it as the template's `source_save_point_id`.
-5. AFSCP allocates new template control and payload roots under the same namespace root.
-6. AFSCP clones the source repo into the template repo with the pinned `clone_history_mode`.
-7. AFSCP returns the template repo identity and JVS repo identity.
-
-The GA template is immutable after publication. Replacing a template means creating a new template or a caller-managed revision that points to a new AFSCP `template_id`.
-
-GA does not accept caller-provided historical `source_save_point_id` for template creation. JVS `repo clone` clones the current source repo/workspace; creating a template from an older save point requires a future staging restore/import flow.
-
-For external control root repos, GA must use `--save-points main` and record `clone_history_mode=main` unless a pinned JVS version supports durable imported-save-point protection and the contract is updated. If the source becomes dirty after the template save point is created and before clone, fail with `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE`.
-
-Using a template should:
-
-1. Caller authorizes the request in its own product domain.
-2. AFSCP validates that source template repo and target namespace are the same namespace.
-3. AFSCP validates volume policy. If the template volume differs from the target namespace default volume, GA rejects with `VOLUME_MISMATCH_REQUIRES_IMPORT`.
-4. AFSCP creates new target control and payload roots.
-5. AFSCP runs `jvs --control-root <template_control_root_path> --workspace main repo clone <target_payload_root_path> --target-control-root <target_control_root_path> --save-points <clone_history_mode> --json`.
-6. AFSCP returns the new target repo metadata to the caller.
-
-Both clone steps create independent JVS repo identities. Modifying a cloned repo must not affect the source repo or template repo.
-
-Template clone is not Git clone. Do not add remote/push/pull/origin concepts.
-
-## Dirty State
-
-JVS repo clone can reject dirty source state depending on command semantics. AFSCP must use an explicit source save point before template creation so the product behavior is explicit and repeatable.
-
-Template creation must also prevent source writes between the fresh save point and clone publication, or detect the race and fail closed with cleanup. `doctor --strict` is not a substitute for proving the source stayed clean relative to the template save point.
-
-Restore preview/run must model JVS dirty-state decisions explicitly. GA should fail closed on dirty repos unless the API exposes a supported `discard_unsaved` or `save_first` mode and audits that choice.
-
-External control root `jvs repo clone` permits target payload and target control roots to be missing or empty, but fails closed if they are non-empty. AFSCP should allocate the target paths but must not pre-populate the clone target roots before invoking JVS.
+  summary and must not include absolute roots, raw stdout/stderr, commands, or
+  secrets.
+- AFSCP maps JVS errors into stable caller-visible error codes.
+- Direct list must fail closed on malformed or old envelope output rather than
+  returning partial or legacy history output.
+- `jvs afscp status` and `jvs afscp doctor` are explicit metadata-only
+  diagnostics, recovery aids, or smoke checks. They are not called by default
+  after save or restore.
+- The packaged JVS binary must match the active JVS binary artifact SHA-256 and
+  source ref. Until a formal JVS release exists, Docker builds must inject the
+  verified local direct-capable binary instead of downloading the old release
+  asset.
+- When `AFSCP_JVS_READY=true`, the API image needs the same direct-capable JVS
+  binary config as workers because save-point list is JVS-backed in the
+  internal API runtime.

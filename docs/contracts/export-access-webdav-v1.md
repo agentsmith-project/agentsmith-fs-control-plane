@@ -113,6 +113,6 @@ GA freezes:
 Read-write export sessions count as active or uncertain writer sessions until
 the gateway confirms no future writes are possible and any active write-capable
 requests are closed, expired and reconciled, or terminal. A control-plane revoke
-record alone does not unblock restore-run. Read-only exports do not block
-restore-run, but still must respect namespace disable, credential expiry, path
+record alone does not unblock direct restore. Read-only exports do not block
+direct restore, but still must respect namespace disable, credential expiry, path
 policy, audit, and repo lifecycle drain.

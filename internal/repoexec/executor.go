@@ -23,16 +23,21 @@ const durableCommitTimeout = 10 * time.Second
 type AuditEventIDGenerator func() string
 
 type JVSRunner interface {
+	DirectSave(ctx context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error)
+	DirectList(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error)
+	DirectRestore(ctx context.Context, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectRestoreSummary, error)
+	DirectStatus(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectStatusSummary, error)
+	DirectDoctor(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectDoctorSummary, error)
+}
+
+type RepoCreateJVSRunner interface {
 	Init(ctx context.Context, payloadRoot, controlRoot string) (jvsrunner.InitSummary, error)
-	DoctorStrict(ctx context.Context, controlRoot string) (jvsrunner.DoctorSummary, error)
-	DoctorRepairRuntime(ctx context.Context, controlRoot string) (jvsrunner.DoctorRepairRuntimeSummary, error)
-	Save(ctx context.Context, controlRoot, message string) (jvsrunner.SaveSummary, error)
-	History(ctx context.Context, controlRoot string) (jvsrunner.HistorySummary, error)
+	DirectDoctor(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectDoctorSummary, error)
 }
 
 type Config struct {
 	Store        repoCreateStore
-	JVSRunner    JVSRunner
+	JVSRunner    RepoCreateJVSRunner
 	Owner        string
 	Now          time.Time
 	Clock        func() time.Time
@@ -51,7 +56,7 @@ type repoCreateStore interface {
 
 type Executor struct {
 	store        repoCreateStore
-	jvs          JVSRunner
+	jvs          RepoCreateJVSRunner
 	owner        string
 	now          time.Time
 	clock        func() time.Time
@@ -164,8 +169,9 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 	adoptionAllowed := hasSameOpFence && (plan.Action == recovery.RecoveryActionRetry || plan.Action == recovery.RecoveryActionReclaim)
 	var jvsRepoID string
 	adopted := false
+	directTarget := jvsrunner.DirectTarget{ControlRoot: roots.ControlRootPath, Home: roots.PayloadRootPath}
 	if adoptionAllowed {
-		doctor, err := executor.jvs.DoctorStrict(ctx, roots.ControlRootPath)
+		doctor, err := executor.jvs.DirectDoctor(ctx, directTarget)
 		if err != nil {
 			return executor.commitIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, withJVSErrorDetails(nil, err))
 		}
@@ -174,10 +180,9 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 	} else {
 		initSummary, err := executor.jvs.Init(ctx, roots.PayloadRootPath, roots.ControlRootPath)
 		if err != nil {
-			_, _ = executor.jvs.DoctorStrict(ctx, roots.ControlRootPath)
 			return executor.commitIntervention(ctx, record, now, "JVS_COMMAND_FAILED", "jvs init failed", fenceID, withJVSErrorDetails(nil, err))
 		}
-		doctor, err := executor.jvs.DoctorStrict(ctx, roots.ControlRootPath)
+		doctor, err := executor.jvs.DirectDoctor(ctx, directTarget)
 		if err != nil {
 			return executor.commitIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, withJVSErrorDetails(map[string]any{"repo_id": initSummary.RepoID, "workspace": initSummary.Workspace}, err))
 		}

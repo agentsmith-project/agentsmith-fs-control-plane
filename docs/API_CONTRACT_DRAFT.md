@@ -84,7 +84,7 @@ without parsing messages:
 {
   "error": {
     "code": "ACTIVE_WRITER_SESSIONS",
-    "message": "restore-run is blocked by active read-write sessions",
+    "message": "direct restore is blocked by active read-write sessions",
     "retryable": false,
     "correlation_id": "corr_123",
     "operation_id": "op_123",
@@ -94,6 +94,13 @@ without parsing messages:
   }
 }
 ```
+
+The standard error envelope is an active product-facing API surface. `details`
+may carry only stable, safe caller-action details such as IDs, validation error
+codes, or disabled capability names. It must not carry raw credentials, backend
+URLs, AFSCP/JVS raw roots, command material, checksum, digest, capacity, tree
+scan, file count, payload tree, sync, hash, proof, internal path, control-root,
+home, or other JVS/internal evidence fields.
 
 GA error families:
 
@@ -118,7 +125,6 @@ GA error families:
 - `WRITER_SESSION_FENCE_HELD`
 - `STALE_WRITER_SESSION_UNCERTAIN`
 - `RESTORE_DIRTY_STATE`
-- `RESTORE_PREVIEW_STALE`
 - `JVS_COMMAND_FAILED`
 - `JVS_DOCTOR_FAILED`
 - `SOURCE_DIRTY_AFTER_TEMPLATE_SAVE`
@@ -148,18 +154,13 @@ Missing volume metadata on volume-global health uses `VOLUME_NOT_FOUND` with
 HTTP 404 and must not reveal raw store or SQL details.
 `REPO_JVS_MUTATION_IN_PROGRESS` means a same-repo JVS mutation is non-terminal;
 handlers should map it to HTTP 409 with `retryable=true`.
-Restore plan validation must use stable codes. A restore-run request
-that references a preview operation outside the caller namespace, repo, or
-resource boundary must return `OPERATION_NOT_FOUND` or the existing equivalent
-that does not reveal existence. Active or stale writers use
+Direct restore validation must use stable codes. Active or stale writers use
 `ACTIVE_WRITER_SESSIONS`, `WRITER_SESSION_FENCE_HELD`, or
 `STALE_WRITER_SESSION_UNCERTAIN`. Dirty restore state uses
-`RESTORE_DIRTY_STATE`. A matching stale restore preview discovered by
-restore-run uses `RESTORE_PREVIEW_STALE`: the restore-run operation fails as a
-typed caller-visible terminal result, the durable plan remains `pending` for
-discard, and `RestorePlan.stale/blockers` record the source of truth. JVS
-blocking, mismatched plan IDs, multiple pending plans, or ambiguous recovery
-state use `OPERATION_RECOVERY_REQUIRED` and/or move the operation or plan to
+`RESTORE_DIRTY_STATE`. Ambiguous direct restore evidence, JVS output mismatch,
+explicit diagnostic/recovery evidence requiring repair, or uncertain fence
+recovery uses
+`OPERATION_RECOVERY_REQUIRED` and/or moves the operation to
 `operator_intervention_required` rather than falling through to generic
 `JVS_COMMAND_FAILED` when caller or operator action is required.
 
@@ -273,54 +274,15 @@ tombstone/trash while retention allows, and purge is permanent deletion. Delete
 is allowed from `active` or `archived`; restore-tombstoned returns the repo to
 the recorded pre-delete accessibility state.
 
-### RestorePlan
+### Direct Restore
 
-`restore-preview` is not a pure read. It creates a JVS pending restore plan and
-AFSCP must persist that plan as durable restore lifecycle state. The terminal
-state of the preview operation is not enough to infer whether the repo has an
-active plan. The durable `RestorePlan` table/entity is the source of truth for
-restore plan lifecycle. `restore_plan_id` is the AFSCP-safe ID normalized from
-the JVS preview `plan_id`; workers use the matching JVS plan ID for
-`jvs restore --run <plan_id>` and `jvs restore discard <plan_id>`.
-
-```json
-{
-  "restore_plan_id": "rp_123",
-  "namespace_id": "ns_123",
-  "repo_id": "repo_123",
-  "preview_operation_id": "op_preview_123",
-  "source_save_point_id": "sp_456",
-  "base_revision": "sp_789",
-  "head_revision": "sp_789",
-  "generation": "sha256:preview-base",
-  "fence_marker": "preview_fence_op_preview_123",
-  "summary": {
-    "added": { "count": 0, "samples": [] },
-    "changed": { "count": 1, "samples": ["docs/readme.md"] },
-    "removed": { "count": 0, "samples": [] },
-    "destructive": false
-  },
-  "stale": false,
-  "blockers": [],
-  "status": "pending",
-  "created_at": "2026-05-03T12:00:00Z",
-  "updated_at": "2026-05-03T12:00:00Z"
-}
-```
-
-GA restore plan statuses are `pending`, `consuming`, `consumed`,
-`discarding`, `discarded`, and `operator_intervention_required`.
-`pending`, `consuming`, `discarding`, and `operator_intervention_required` are
-active statuses. Each repo may have at most one active restore plan. Active
-plans block other same-repo JVS mutations, including save, restore preview,
-unrelated restore-run, template create, and template clone. They do not block
-ordinary file IO. The only allowed same-repo JVS mutations while a plan is
-active are the matching restore-run that consumes the plan and the matching
-discard that cleans it up. `consumed` and `discarded` are terminal.
-`base_revision`, `head_revision`, `generation`, `fence_marker`, `summary`,
-`stale`, and `blockers` are durable restore-plan metadata, not operation-only
-details. A stale pending plan is not consumable; it remains pending only so the
-matching discard path can clean it up.
+Direct restore is represented by one durable `restore` operation. It does not
+create a planning artifact, secondary run request, cleanup request, or safety
+save point. The operation stores only safe restore metadata
+in existing `OperationRecord` containers such as `input_summary.save_point_id`,
+redacted JVS JSON output, and verification results. `plan_id`,
+`restore_plan_id`, `run_command`, and recovery-command material are forbidden
+on active direct restore records.
 
 ### RepoTemplate
 
@@ -600,10 +562,6 @@ an approved break-glass policy; otherwise AFSCP rejects it with
 POST /internal/v1/repos/{repoId}/save-points
 GET  /internal/v1/repos/{repoId}/save-points
 POST /internal/v1/repos/{repoId}/restore
-POST /internal/v1/repos/{repoId}/restore:admit
-POST /internal/v1/repos/{repoId}/restore-preview
-POST /internal/v1/repos/{repoId}/restore-run
-POST /internal/v1/repos/{repoId}/restore-preview:discard
 ```
 
 `restore` is the direct product restore API. It requires `Idempotency-Key`,
@@ -611,137 +569,64 @@ namespace/auth headers, and body:
 
 ```json
 {
-  "save_point_id": "sp_001",
-  "discard_unsaved_changes_confirmed": true
+  "save_point_id": "sp_001"
 }
 ```
 
-If `discard_unsaved_changes_confirmed` is not exactly `true`, AFSCP returns
-400 `RESTORE_CONFIRMATION_REQUIRED` before mutable gates or operation intake.
 Successful intake returns the normal operation envelope for operation type
 `restore`; callers poll `GET /internal/v1/operations/{operationId}`. Repeated
 requests with the same idempotency key and body reuse the same operation; a
-different body conflicts through the existing idempotency semantics.
+different body conflicts through the existing idempotency semantics. User
+confirmation is expressed outside this request body by the caller UI and the
+idempotent operation submission.
 
-`restore:admit` is the restore-specific preflight/admission API for direct
-restore. It uses the same request body, auth, namespace, caller role,
-idempotency header, actor header, repo admission, repo fence, same-repo JVS
-mutation, active restore-plan, and save point availability checks as direct
-restore intake, then checks direct restore runtime capability/config readiness.
-It does not create an operation, enqueue work, invoke JVS restore, create a
-restore preview, or write a restore plan. If direct restore recovery is not
-enabled with an explicit direct-capable JVS artifact/SHA/source ref and ready
-config, the endpoint returns `CAPABILITY_DENIED` instead of allowing callers to
-discover the gap only after a durable restore operation reaches worker
-intervention.
-
-Direct restore does not create a restore preview, restore plan, restore-run
-request, or safety save point. Worker execution calls:
+Direct restore does not create a planning artifact, secondary run request,
+cleanup request, or safety save point. Worker execution calls:
 
 ```bash
-jvs --json --control-root <controlRoot> --workspace main restore <save_point_id> --direct --discard-unsaved
+jvs afscp --control-root <controlRoot> --home <home> restore --save-point <save_point_id> --json
 ```
 
-The worker expects `data.mode == "direct_restore"`, `source_save_point`,
-`restored_save_point`, `workspace`, `files_changed`,
-`history_changed:false`, and `unsaved_changes:false`. It must not parse or
-expect `plan_id` or `run_command`.
+The worker expects the `jvs.afscp.direct.v1` envelope with
+`command:"restore"`, `status:"succeeded"`, `data.restored_save_point_id`,
+optional `data.previous_head`, and `data.new_head`. It must not parse or expect
+`plan_id`, `run_command`, planning-artifact state, raw paths, or command
+material.
 
-`restore-preview:discard` is exposed in the current GA restore slice. The
-machine-readable OpenAPI/schema contract includes the route, operation type
-`restore_preview_discard`, request/response schemas, and contract fixtures for
-handlers and generated clients.
+`jvs_json_output` and `verification_result` are active redacted operation
+inspection surfaces, not raw diagnostic dumps. They must recursively strip JVS
+and storage-internal field names such as checksum, digest, capacity, tree scan,
+file count, payload tree, sync, hash, proof, internal path, control-root, home,
+and raw command material before any caller-facing projection.
 
-GA `restore-run` is version restore and must reject active or uncertain read-write export or workload mount sessions by default. Lifecycle restore is handled by `restore-archived` and `restore-tombstoned`; audit event names and product copy must distinguish these from version restore. An operator break-glass restore can be designed separately with explicit approval, session revoke/drain, and audit.
+Direct restore is a version restore and must reject active or uncertain
+read-write export or workload mount sessions by default. Lifecycle restore is
+handled by `restore-archived` and `restore-tombstoned`; audit event names and
+product copy must distinguish these from version restore. An operator
+break-glass restore can be designed separately with explicit approval,
+session revoke/drain, and audit.
 
-`restore-preview` runs under the repo JVS exclusive mutation lock and creates a
-durable `RestorePlan` with `status=pending`, `restore_plan_id`, and
-`source_save_point_id`. The request must fail if another active restore plan
-already exists for the repo or if JVS recovery status reports blocking,
-mismatched, multiple, stale, or ambiguous restore state. The worker persists a
-preflight idle marker before invoking JVS preview. After a crash, AFSCP may
-adopt a single pending JVS plan only when AFSCP-exclusive-control assumptions
-hold and the recovering operation is the earliest same-repo non-terminal
-restore preview or JVS mutation; otherwise the plan or operation enters
-`operator_intervention_required`. `stale_restore_preview` defaults to
-operator intervention during restore-preview recovery unless the caller
-explicitly discards it through the discard flow below. During restore-run,
-a matching `stale_restore_preview` is a typed `RESTORE_PREVIEW_STALE` failure:
-the worker marks the durable plan `stale=true`, persists a
-`restore_preview_stale` blocker, does not acquire the writer fence, and leaves
-the plan `pending` for discard.
-Current GA namespace-bound restore preview follows ordinary namespace policy and
-fails closed when the namespace or namespace binding is disabled; any operator
-or break-glass exception is a future explicit capability, not this API path.
+Direct restore phase order is fixed:
 
-Restore-run accepts a `preview_operation_id` that resolves to a valid preview
-operation and durable plan. A valid preview operation/plan must be in the same
-namespace, repo, and resource boundary; have operation type `restore_preview`;
-have succeeded; reference a durable `RestorePlan` with `restore_plan_id` and
-`source_save_point_id`; have restore plan status `pending`; not be consumed,
-discarded, discarding, or consuming; and not already be referenced by a
-succeeded or non-terminal restore-run operation. The preview operation record
-stores only safe metadata in existing containers such as
-`input_summary.preview_operation_id`, `external_resource_ids` when safe, and
-redacted `jvs_json_output` or `verification_result`; it does not gain new
-top-level DTO fields.
-Brand-new restore-run intake follows ordinary restore mutation admission and
-fails closed when the namespace is disabled, even if the namespace volume
-binding remains active.
-
-Restore-run phase order is fixed:
-
-1. Validate the preview operation and durable plan.
-2. If the durable plan is already `stale=true`, fail typed with
-   `RESTORE_PREVIEW_STALE` before JVS or writer fence.
-3. Preflight JVS recovery status and require exactly one pending plan matching
-   the stored `restore_plan_id`. If JVS reports matching
-   `stale_restore_preview`, fail typed with `RESTORE_PREVIEW_STALE`, persist
-   `RestorePlan.stale/blockers`, and leave the plan `pending` for discard.
-4. Acquire the per-repo writer-session fence.
-5. Reject active or uncertain read-write sessions.
-6. Mark the restore plan `consuming` before invoking JVS.
-7. Run the JVS restore-run command for `<plan_id>` through the runner.
-8. Run `jvs doctor --strict`.
-9. Verify JVS recovery status is idle.
-10. Atomically record operation success, audit success, writer-fence release, and
-   restore plan `consumed`.
+1. Validate the queued `restore` operation and `save_point_id`.
+2. Acquire the per-repo writer-session fence.
+3. Reject active or uncertain read-write sessions.
+4. Invoke JVS direct restore for the requested save point.
+5. Atomically record operation success, audit success, and writer-fence release.
 
 Writer-session denial before JVS is invoked releases the writer-session fence
-and leaves the restore plan `pending` for a later restore-run or discard. JVS
-run failure, doctor failure, or recovery-status ambiguity keeps the fence held
-and moves the restore-run operation and/or plan to
-`operator_intervention_required`.
-
-Discard is a caller-triggerable cleanup path, not operator-only cleanup for
-cancelled previews. The request body contains the preview operation ID:
-
-```json
-{
-  "preview_operation_id": "op_preview_123"
-}
-```
-
-Discard validates the same namespace, repo, resource, preview operation, and
-pending plan relationship, marks the plan `discarding`, runs
-`jvs restore discard <plan_id>` through the runner, and atomically records
-operation success, audit success, and restore plan `discarded`. It must not
-delete `.jvs` private files directly. Discard failure or recovery ambiguity
-moves the plan or operation to `operator_intervention_required`.
-Discard is the only restore flow with a namespace-disabled cleanup exception:
-when the matching preview and durable plan are still `pending`, the repo is
-active, lifecycle fences are clear, caller auth remains valid through the
-namespace binding, and the namespace binding itself is active, AFSCP may queue
-and execute the matching discard so the active JVS plan can be cleared. The
-exception does not allow disabled bindings, inactive repos, mismatched
-preview/plan metadata, inactive volume state, or unrelated lifecycle/recovery
-risk.
+and records a stable writer error. JVS direct restore failure before confirmed
+mutation records a terminal failed operation. Ambiguous JVS output, direct
+restore result mismatch, recovery-required metadata, or uncertain fence recovery
+keeps the operation in `operator_intervention_required` until an operator repair
+path resolves it.
 
 The writer-session fence is also the API contract for read-write export and
 mount issuance: while the fence is held, AFSCP rejects new read-write export and
 workload mount binding issuance for the repo. The fence is released only after
-restore, `jvs doctor --strict`, recovery-status idle verification, and audit
-completion.
+restore and audit completion. `jvs afscp status --json` and
+`jvs afscp doctor --json` are explicit metadata-only diagnostics and are not
+called by default in the restore hot path.
 
 Dirty-state behavior is fail-closed by default with `RESTORE_DIRTY_STATE`.
 Any future `discard_unsaved` or `save_first` mode must be represented in the
@@ -829,7 +714,7 @@ GET  /internal/v1/workload-mount-bindings/{mountBindingId}/orchestrator-plan
 
 Only caller services with the `orchestrator_mount` role may call `orchestrator-plan`.
 
-GA mount bindings must be lease-based. Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions for restore-run. Expired leases are treated as active until reconciliation marks them terminal, because stale writable mounts are a safety risk. `revoked` is terminal only after the orchestrator confirms the runtime mount is stopped or unable to write; a requested revoke remains `releasing`.
+GA mount bindings must be lease-based. Read-write bindings in `issued`, `pending`, `active`, or `releasing` state with a live lease count as active writer sessions for direct restore. Expired leases are treated as active until reconciliation marks them terminal, because stale writable mounts are a safety risk. `revoked` is terminal only after the orchestrator confirms the runtime mount is stopped or unable to write; a requested revoke remains `releasing`.
 
 If the orchestrator contract cannot prove payload-only mount, heartbeat,
 release, revoke, and confirmed-unmounted behavior, AFSCP must reject mount
@@ -872,10 +757,8 @@ Mutating endpoints must support:
 - caller_service
 - operation ID
 - resource locks where applicable
-- per-repo writer-session fence for restore-run versus read-write export/mount issuance
+- per-repo writer-session fence for direct restore versus read-write export/mount issuance
 - per-repo lifecycle fence for archive, restore-archived, delete, restore-tombstoned, and purge versus all export/mount/session issuance and repo storage mutations
-- durable `RestorePlan` lifecycle for restore-preview, restore-run, and
-  restore-preview discard
 - durable operation record with phase and external resource IDs
 - structured JVS JSON output capture reduced to safe metadata; `run_command`,
   `recommended_next_command`, raw paths, stdout/stderr, and secrets must not be
@@ -895,15 +778,12 @@ Minimum GA operation matrix:
 | repo_restore_tombstoned | repo lifecycle exclusive | reject after purge or retention denial | inspect tombstone status, retention policy, and repo health |
 | repo_purge | repo lifecycle exclusive plus session drain | require no active or uncertain sessions | inspect purge marker and absence of retained storage |
 | save_point_create | repo JVS exclusive | allow ordinary IO | retry only from recorded phase |
-| restore | repo JVS exclusive direct restore mutation | block other same-repo JVS mutations and active writer sessions; no preview/plan/safety save point | recover from operation phase, writer fence, and direct JVS/doctor evidence |
-| restore_preview | repo JVS exclusive restore-plan mutation | allow ordinary IO; block other same-repo JVS mutations while the plan is active except matching restore-run or discard | recover from durable plan lifecycle and JVS recovery status |
-| restore_preview_discard | repo JVS exclusive matching active plan | allow ordinary IO; block unrelated same-repo JVS mutations until discarded or intervention | inspect durable plan and JVS discard status |
-| restore_run | repo JVS exclusive matching active plan plus writer-session fence | block new read-write sessions, then reject existing active or uncertain read-write sessions | validate preview plan, inspect JVS recovery status, run doctor, verify idle |
+| restore | repo JVS exclusive direct restore mutation | block other same-repo JVS mutations and active writer sessions; no preview/plan/safety save point | recover from operation phase, writer fence, direct JVS output, and explicit diagnostic/recovery evidence |
 | template_create | source repo JVS exclusive during save phase, then source read gate plus target template exclusive create | fail if source becomes dirty after template save point | inspect source save point, clone history mode, and target template path |
 | template_clone | template read gate plus target repo exclusive create | none | inspect target repo path |
 | export_create | repo export lock plus writer-session fence for read_write mode | reject if repo not active, restore fence is held for read_write, or lifecycle fence is held | revoke leaked partial credential |
 | export_revoke | export session lock | revoke idempotently | repeat returns terminal state |
-| export_session_reconcile | export session lock | terminal only after gateway confirms no future access for lifecycle, and no future writes for restore-run | repeat from observed gateway state |
+| export_session_reconcile | export session lock | terminal only after gateway confirms no future access for lifecycle, and no future writes for direct restore | repeat from observed gateway state |
 | mount_binding_create | repo mount lock plus writer-session fence for read_write mode | reject mount unless repo is active, lifecycle fence is clear, and repo uses external control root or equivalent verified protection; reject read_write when restore fence is held | repeat returns existing binding |
 | mount_binding_status_update | mount binding lock | terminal only when orchestrator confirms runtime access ended or failed safely | repeat from observed orchestrator state |
 | mount_binding_heartbeat | mount binding lock | extend only non-terminal live bindings | repeat with same lease state |

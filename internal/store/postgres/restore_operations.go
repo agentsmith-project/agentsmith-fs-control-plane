@@ -118,6 +118,9 @@ func validateRestoreProgressRecord(record operations.OperationRecord, phase, mes
 	if record.Phase != phase {
 		return operationLeaseInvalidRequest("phase", message)
 	}
+	if restoreRecordWasRedacted(record) {
+		return operationLeaseInvalidRequest("redaction", "restore progress must not persist redacted storage or command evidence")
+	}
 	if restoreContainsForbiddenCommand(record) {
 		return operationLeaseInvalidRequest("jvs_json_output", "restore must not persist raw commands")
 	}
@@ -137,6 +140,9 @@ func validateRestoreSuccessRecord(record operations.OperationRecord) error {
 	if strings.TrimSpace(record.SessionFenceID) == "" {
 		return operationLeaseInvalidRequest("session_fence_id", "restore success requires session fence id")
 	}
+	if restoreRecordWasRedacted(record) {
+		return operationLeaseInvalidRequest("redaction", "restore success must not persist redacted storage or command evidence")
+	}
 	if restoreContainsForbiddenCommand(record) {
 		return operationLeaseInvalidRequest("jvs_json_output", "restore must not persist raw commands")
 	}
@@ -144,11 +150,14 @@ func validateRestoreSuccessRecord(record operations.OperationRecord) error {
 		return err
 	}
 	jvsOutput, _ := record.JVSJSONOutput.(map[string]any)
-	if source, _ := jvsOutput["source_save_point_id"].(string); strings.TrimSpace(source) == "" {
-		return operationLeaseInvalidRequest("jvs_json_output", "restore success requires source save point evidence")
-	}
 	if restored, _ := jvsOutput["restored_save_point_id"].(string); strings.TrimSpace(restored) == "" {
 		return operationLeaseInvalidRequest("jvs_json_output", "restore success requires restored save point evidence")
+	}
+	if previousHead, ok := jvsOutput["previous_head"].(string); ok && strings.TrimSpace(previousHead) == "" {
+		return operationLeaseInvalidRequest("jvs_json_output", "restore success requires non-empty previous head evidence when present")
+	}
+	if newHead, _ := jvsOutput["new_head"].(string); strings.TrimSpace(newHead) == "" {
+		return operationLeaseInvalidRequest("jvs_json_output", "restore success requires new head evidence")
 	}
 	return nil
 }
@@ -165,6 +174,9 @@ func validateRestoreFailureRecord(record operations.OperationRecord) error {
 	}
 	if record.Phase != operations.OperationPhaseRestoreValidate && strings.TrimSpace(record.SessionFenceID) == "" {
 		return operationLeaseInvalidRequest("session_fence_id", "restore post-fence failure requires session fence id")
+	}
+	if restoreRecordWasRedacted(record) {
+		return operationLeaseInvalidRequest("redaction", "restore failure must not persist redacted storage or command evidence")
 	}
 	if restoreContainsForbiddenCommand(record) {
 		return operationLeaseInvalidRequest("jvs_json_output", "restore must not persist raw commands")
@@ -184,10 +196,6 @@ func validateRestoreRecordResource(record operations.OperationRecord, requireErr
 		return operationLeaseInvalidRequest("input_summary", "restore requires save point id")
 	} else if err := operations.ValidateSavePointID(savePointID); err != nil {
 		return operationLeaseInvalidRequest("input_summary", "restore save point id is invalid")
-	}
-	confirmed, _ := record.InputSummary["discard_unsaved_changes_confirmed"].(bool)
-	if !confirmed {
-		return operationLeaseInvalidRequest("input_summary", "restore requires discard confirmation")
 	}
 	if requireError && record.Error == nil {
 		return operationLeaseInvalidRequest("error", "restore failure requires operation error")
@@ -230,6 +238,74 @@ func restoreContainsForbiddenCommand(record operations.OperationRecord) bool {
 		containsForbiddenDirectRestoreEvidence(record.VerificationResult)
 }
 
+func restoreRecordWasRedacted(record operations.OperationRecord) bool {
+	if !record.Redaction.Redacted && len(record.Redaction.Fields) == 0 {
+		return false
+	}
+	if record.Redaction.Redacted && len(record.Redaction.Fields) == 0 {
+		return true
+	}
+	for _, field := range record.Redaction.Fields {
+		if restoreRedactionFieldIsForbiddenEvidence(field) {
+			return true
+		}
+	}
+	return false
+}
+
+func restoreRedactionFieldIsForbiddenEvidence(field string) bool {
+	normalized := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		case r >= '0' && r <= '9':
+			return r
+		default:
+			return -1
+		}
+	}, field)
+	if normalized == "" {
+		return false
+	}
+	for _, forbidden := range []string{
+		"planid",
+		"restoreplanid",
+		"runcommand",
+		"recommendednextcommand",
+		"mountcommand",
+		"restorecommand",
+		"rawcommand",
+		"rawmountcommand",
+		"directmountcommand",
+		"stdout",
+		"stderr",
+		"command",
+		"controlroot",
+		"controlrootpath",
+		"controlpath",
+		"payloadroot",
+		"payloadrootpath",
+		"payloadvolumesubdir",
+		"controlvolumesubdir",
+		"reporoot",
+		"targetfolder",
+		"targetcontrolroot",
+		"rawpath",
+		"internalpath",
+		"internalpaths",
+		"internalroot",
+		"internalrootpath",
+		"homepath",
+	} {
+		if strings.Contains(normalized, forbidden) {
+			return true
+		}
+	}
+	return false
+}
+
 func containsForbiddenDirectRestoreEvidence(value any) bool {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -258,7 +334,44 @@ func containsForbiddenDirectRestoreEvidence(value any) bool {
 			}
 		}
 	}
-	return containsForbiddenRestoreRunCommand(value)
+	return containsForbiddenRestoreCommandText(value)
+}
+
+func containsForbiddenRestoreCommandText(value any) bool {
+	switch typed := value.(type) {
+	case string:
+		normalized := strings.ToLower(typed)
+		return strings.Contains(normalized, "run_command") ||
+			strings.Contains(normalized, "recommended_next_command") ||
+			strings.Contains(normalized, "jvs restore --run")
+	case map[string]any:
+		for key, child := range typed {
+			normalized := strings.ToLower(strings.TrimSpace(key))
+			if normalized == "run_command" || normalized == "recommended_next_command" || normalized == "restore_command" || normalized == "mount_command" {
+				return true
+			}
+			if containsForbiddenRestoreCommandText(child) {
+				return true
+			}
+		}
+	case map[string]string:
+		for key, child := range typed {
+			normalized := strings.ToLower(strings.TrimSpace(key))
+			if normalized == "run_command" || normalized == "recommended_next_command" || normalized == "restore_command" || normalized == "mount_command" {
+				return true
+			}
+			if containsForbiddenRestoreCommandText(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if containsForbiddenRestoreCommandText(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func restoreWriterFencedMarkWithLeaseSQL() string {

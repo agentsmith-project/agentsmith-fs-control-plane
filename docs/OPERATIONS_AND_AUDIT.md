@@ -58,7 +58,7 @@ Require durable operation records:
 - repo create
 - repo archive, restore-archived, delete, restore-tombstoned, and purge
 - save point create
-- restore preview/run
+- direct restore to save point
 - repo clone
 - template create/clone
 - export create/revoke
@@ -102,7 +102,7 @@ Audit events are required for:
 - mount binding heartbeat, release, revoke, expiry, and stale-lease reconciliation
 - namespace binding changes
 - repo lifecycle archive, restore, delete, tombstone, purge, denial, and intervention
-- restore-run active session denials
+- direct restore active writer-session denials
 - migration cutover in future tooling
 - operator break-glass overrides
 
@@ -160,13 +160,12 @@ Recovery behavior must be explicit per operation type:
 | repo_restore_tombstoned | inspect tombstone status, retention policy, and repo health |
 | repo_purge | inspect purge marker and absence of retained storage |
 | save_point_create | inspect JVS save point existence before retry |
-| restore_preview | retry from request input |
-| restore_run | inspect restore state, hold writer-session fence, block new read-write sessions, verify no active read-write sessions, run doctor |
+| restore | inspect operation phase, requested save point ID, writer-session fence, active or uncertain writer sessions, redacted direct JVS restore evidence, and explicit diagnostics when needed |
 | template_create | inspect source save point, clone history mode, and target template path |
 | template_clone | inspect target repo path and JVS identity |
 | export_create | synchronous durable boundary commits operation, export session, and succeeded audit event; replay returns the existing session without reissuing credential secret |
 | export_revoke | idempotently move session to `revoking`/drain; terminal revoke depends on gateway or reconcile confirmation |
-| export_session_reconcile | inspect gateway state; terminal only after no future access for lifecycle and no future writes for restore-run |
+| export_session_reconcile | inspect gateway state; terminal only after no future access for lifecycle and no future writes for direct restore |
 | mount_binding_create | inspect binding state and issued orchestrator plan state |
 | mount_binding_status_update | inspect orchestrator-reported terminal state and runtime access guarantee |
 | mount_binding_heartbeat | idempotently extend lease or reject terminal bindings |

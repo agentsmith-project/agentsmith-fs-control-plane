@@ -259,6 +259,44 @@ func TestValidateManifestRejectsGoTestAllPackagesRunSelectorThatMatchesNoTestsIn
 	assertReleaseEvidenceFindingContains(t, findings, "match")
 }
 
+func TestValidateManifestUsesStaticRunSelectorCheckWithoutExecutingGo(t *testing.T) {
+	root := releaseEvidenceFixtureRoot(t)
+	fakeBin := filepath.Join(root, "fakebin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatalf("mkdir fakebin: %v", err)
+	}
+	marker := filepath.Join(root, "fake-go-invoked")
+	fakeGo := filepath.Join(fakeBin, "go")
+	if err := os.WriteFile(fakeGo, []byte("#!/bin/sh\nprintf invoked > \"$AFSCP_FAKE_GO_MARKER\"\nexit 99\n"), 0o755); err != nil {
+		t.Fatalf("write fake go: %v", err)
+	}
+	t.Setenv("AFSCP_FAKE_GO_MARKER", marker)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	writeReleaseEvidenceFile(t, filepath.Join(root, "internal", "releaseevidence", "self_reference_test.go"), `package releaseevidence
+
+import "testing"
+
+func TestSelfReferenceStaticSelector(t *testing.T) {}
+`)
+	body := strings.Replace(validReleaseEvidenceManifest(), `"command":["bash","scripts/pass.sh"]`, `"command":["go","test","./internal/releaseevidence","-run","^TestSelfReferenceStaticSelector$"]`, 1)
+	path := filepath.Join(root, "manifest.json")
+	writeReleaseEvidenceFile(t, path, body)
+
+	findings, err := VerifyFile(path, Options{Mode: ManifestModeSeed, RepoRoot: root, ExecuteRequired: false})
+	if err != nil {
+		t.Fatalf("VerifyFile returned unexpected error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("VerifyFile returned findings for static self-reference selector check: %+v", findings)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("static selector check executed go instead of reading repo-local test names")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat fake go marker: %v", err)
+	}
+}
+
 func TestValidateManifestRejectsGoTestRunSelectorThatOnlyMatchesBenchmark(t *testing.T) {
 	root := releaseEvidenceFixtureRoot(t)
 	body := strings.Replace(validReleaseEvidenceManifest(), `"command":["bash","scripts/pass.sh"]`, `"command":["go","test","./internal/benchonly","-run","BenchmarkEvidenceOnly$"]`, 1)
@@ -529,7 +567,7 @@ func TestCurrentRepoManifestWorkloadMountDisabledAdmissionSelectorCoversCoreTest
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 	passCriteria := strings.Join(item.PassCriteria.Assertions, "\n")
 	for _, required := range []string{"workload mount binding", "status update", "heartbeat", "ordinary orchestrator plan", "workload teardown plan"} {
@@ -590,7 +628,7 @@ func TestCurrentRepoManifestCapabilityMatrixSelectorCoversReadyzWorkloadSplitTes
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 	for _, anchor := range []string{
 		"internal/api/health.go",
@@ -685,7 +723,7 @@ func TestCurrentRepoManifestReplacesAdminBootstrapSeedGap(t *testing.T) {
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -738,7 +776,7 @@ func TestCurrentRepoManifestContainsP2aOperationTerminalizationContractEvidence(
 	for _, testName := range []string{
 		"TestCapabilityMatrixV1DecisionRowsCoverP2aSurfaceContract",
 		"TestCapabilityMatrixV1CoversEveryRouteMutationOperation",
-		"TestCapabilityMatrixV1IncludesDirectRestoreAndPreviewAsDurableJVSMutations",
+		"TestCapabilityMatrixV1IncludesDirectRestoreAsDurableJVSMutation",
 		"TestCapabilityMatrixV1ClassifiesVolumeEnsureAdmission",
 		"TestOperationStateMachineContractCoversEveryOperationType",
 		"TestOperationTerminalizationContractRequiresSideEffectReplayAndTerminalDecision",
@@ -746,7 +784,7 @@ func TestCurrentRepoManifestContainsP2aOperationTerminalizationContractEvidence(
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -840,9 +878,7 @@ func TestCurrentRepoManifestContainsP2bRuntimeParityEvidence(t *testing.T) {
 				"TestRunOnceSavePointCreateDisabledScansAndPersistsUnsupportedIntervention",
 				"TestRunOnceTemplateCreateDisabledScansAndPersistsUnsupportedIntervention",
 				"TestRunOnceTemplateCloneDisabledScansAndPersistsUnsupportedIntervention",
-				"TestRunOnceRestorePreviewDisabledScansAndPersistsUnsupportedIntervention",
-				"TestRunOnceRestorePreviewDiscardDisabledScansAndPersistsUnsupportedIntervention",
-				"TestRunOnceRestoreRunDisabledScansAndPersistsUnsupportedIntervention",
+				"TestRunOnceRestoreDisabledScansAndPersistsUnsupportedIntervention",
 			},
 		},
 	}
@@ -882,7 +918,7 @@ func TestCurrentRepoManifestContainsP2bRuntimeParityEvidence(t *testing.T) {
 				if !compiled.MatchString(testName) {
 					t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 				}
-				assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+				assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 			}
 		})
 	}
@@ -955,7 +991,7 @@ func TestCurrentRepoManifestContainsP1bRepoProjectionEvidence(t *testing.T) {
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -993,8 +1029,8 @@ func TestCurrentRepoManifestContainsP1cJVSSaveRestoreEvidence(t *testing.T) {
 		item.PassCriteria.Kind != "positive_path" {
 		t.Fatalf("%s shape = %+v, want default required P1c JVS save/restore positive evidence", item.ID, item)
 	}
-	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/api", "./internal/repoexec", "./internal/workerapp", "./internal/store/postgres"}) {
-		t.Fatalf("%s command packages = %#v, want api, repoexec, workerapp, and postgres store", item.ID, packages)
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/jvsrunner", "./internal/api", "./internal/repoexec", "./internal/workerapp", "./internal/store/postgres"}) {
+		t.Fatalf("%s command packages = %#v, want jvsrunner, api, repoexec, workerapp, and postgres store", item.ID, packages)
 	}
 	selector, ok := goTestRunSelector(item.Command)
 	if !ok {
@@ -1014,47 +1050,42 @@ func TestCurrentRepoManifestContainsP1cJVSSaveRestoreEvidence(t *testing.T) {
 		"TestSavePointListDeniesArchivedAndLifecycleFenceBeforeHistory",
 		"TestJVSBackedSavePointHistoryReaderResolvesRootAndReturnsSafeHistoryInJVSOrder",
 		"TestJVSBackedSavePointHistoryReaderFailsClosedWithoutLeakingRawPaths",
-		"TestRestorePreviewHandlerCreatesQueuedPreviewForSavePoint",
-		"TestRestorePreviewHandlerFailsClosedForActivePlanOrJVSMutation",
-		"TestRestorePreviewHandlerReusesExistingIdempotentOperationBeforePlanState",
-		"TestRestorePreviewHandlerRejectsDisabledNamespacePolicy",
-		"TestRestoreRunHandlerCreatesQueuedRunForPendingPlan",
-		"TestRestoreRunHandlerRejectsDisabledNamespaceBeforeIntake",
-		"TestRestoreRunHandlerRejectsLifecycleFenceBeforeIntake",
-		"TestRestoreRunHandlerRejectsPreviewMetadataMismatch",
-		"TestRestoreRunHandlerReusesExistingIdempotentOperationBeforePlanStateAndRunGate",
-		"TestRestorePreviewDiscardHandlerCreatesQueuedDiscardForPendingPlan",
-		"TestRestorePreviewDiscardHandlerRejectsCleanupAdmissionRisksBeforePreviewPlanAndIntake",
-		"TestRestorePreviewDiscardHandlerReusesExistingIdempotentOperationBeforePlanState",
-		"TestRestorePreviewDiscardHandlerAllowsDisabledNamespaceCleanupForPendingPlan",
+		"TestRunnerPublicSurfaceExcludesLegacySaveHistoryAndStrictDoctor",
+		"TestAFSCPDirectRejectsForbiddenInternalFields",
+		"TestJVSRunnerInterfaceIsDirectOnly",
+		"TestRestoreHandlerRejectsLegacyDiscardConfirmationField",
+		"TestRestoreHandlerCreatesQueuedOperationForDirectRestore",
+		"TestRestoreHandlerReusesExistingIdempotentOperationBeforeMutationGate",
+		"TestRestoreHandlerMapsAtomicIntakeGateFailures",
+		"TestRestoreHandlerSourceDoesNotCallPreviewOrRunHandlers",
 		"TestSavePointExecutorPersistsPreSaveMarkerThenSavesAndCommits",
 		"TestSavePointExecutorAdoptsCrashAfterSaveWithoutCallingSaveAgain",
 		"TestSavePointExecutorRejectsSecretShapedMessageBeforeJVS",
-		"TestRestorePreviewExecutorPersistsIdleMarkerBeforePreviewAndCommitsPlan",
-		"TestRestorePreviewExecutorNonIdleRecoveryStatusRequiresOperatorIntervention",
-		"TestRestorePreviewDiscardExecutorMarksPlanDiscardingBeforeJVSAndCommitsDiscarded",
-		"TestRestorePreviewDiscardExecutorAllowsDisabledNamespaceCleanupAndCommitsDiscarded",
-		"TestRestoreRunExecutorFencesWriterRunsDoctorChecksIdleAndCommitsConsumed",
-		"TestRestoreRunExecutorPreJVSWriterSessionDenialReleasesFenceAndKeepsPlanPending",
+		"TestRestoreExecutorFencesWriterCallsDirectRestoreAndCommitsSucceeded",
+		"TestRestoreExecutorBlocksActiveWriterSessionsBeforeJVSRestore",
+		"TestRestoreExecutorJVSFailureCommitsFailedWithoutPreviewOrRun",
+		"TestRestoreExecutorSourceDoesNotCallPreviewRunOrPlanExecutors",
 		"TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor",
-		"TestRunOnceRestorePreviewEnabledClaimsThroughRestorePreviewExecutor",
-		"TestRunOnceRestorePreviewDiscardEnabledClaimsThroughDiscardExecutor",
-		"TestRunOnceRestoreRunEnabledClaimsThroughRestoreRunExecutor",
-		"TestRunOnceRestorePreviewEnabledRejectsUnpinnedJVSChecksum",
+		"TestRunOnceRestoreEnabledClaimsThroughDirectRestoreExecutor",
+		"TestRunOnceRestoreDisabledScansAndPersistsUnsupportedIntervention",
 		"TestNewJVSRunnerFromConfigVerifiesFileAgainstAcceptedPin",
+		"TestNewJVSRunnerFromConfigDirectRestorePreflightsCLIHelp",
+		"TestNewJVSRunnerFromConfigDirectRestoreRejectsMissingCLIFlag",
 		"TestAcquireSavePointCreateOperationLeaseSerializesEarlierLifecycleAndJVSMutations",
+		"TestAcquireRestoreOperationLeaseSerializesMutationsForDirectRestore",
 		"TestCommitSavePointCreateSucceededRequiresPreparedStoredMarkerBoundary",
-		"TestCreateOrReuseRestorePreviewOperationUsesAtomicGateAfterIdempotency",
-		"TestCreateOrReuseRestoreRunOperationUsesAtomicPlanAndDuplicateGatesAfterIdempotency",
-		"TestCreateOrReuseRestorePreviewDiscardOperationUsesAtomicPlanGateAfterIdempotency",
-		"TestCommitRestorePreviewSucceededWithLeaseInsertsPlanAuditAndOperationAtomically",
-		"TestCommitRestorePreviewDiscardSucceededWithLeaseDiscardsPlanAuditAndOperationAtomically",
-		"TestCommitRestoreRunSucceededWithLeaseConsumesPlanAuditAndReleasesFenceAtomically",
+		"TestCreateOrReuseRestoreOperationUsesAtomicGateAfterIdempotency",
+		"TestCreateOrReuseRestoreOperationReusesExistingBeforeGates",
+		"TestCreateOrReuseRestoreOperationMapsAtomicGateFailures",
+		"TestCreateOrReuseRestoreOperationMapsJVSUniqueIndexViolation",
+		"TestCommitRestoreSucceededWithLeaseAuditsAndReleasesFenceWithoutPlan",
+		"TestCommitRestoreFailedWithLeaseAllowsValidateOrWriterFenced",
+		"TestRestoreCommitsRejectRawCommandsBeforeSQL",
 	} {
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -1137,7 +1168,7 @@ func assertCurrentRepoManifestContainsP1dWebDAVEvidence(t *testing.T, want p1dWe
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -1240,7 +1271,7 @@ func TestCurrentRepoManifestContainsDefaultUserLoopTraceEvidence(t *testing.T) {
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -1297,7 +1328,7 @@ func TestCurrentRepoManifestContainsDefaultUserLoopAggregationEvidence(t *testin
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -1480,7 +1511,7 @@ func TestCurrentRepoManifestContainsP3OperatorRepairSafeEvidence(t *testing.T) {
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -1698,7 +1729,7 @@ func TestCurrentRepoManifestContainsP4bRestoreReconciliationEvidence(t *testing.
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -1715,7 +1746,7 @@ func TestRestoreReconciliationReplacementRejectsWrongShapeBroadSelectorOrP1cOnly
 			return replaceItemField(t, body, "restore_reconciliation_safe_unit", `"doc_only_allowed":false`, `"doc_only_allowed":true`)
 		}, want: "restore_reconciliation_safe_unit"},
 		{name: "p1c only selector", edit: func(body string) string {
-			return replaceItemCommand(t, body, "restore_reconciliation_safe_unit", `"command":["go","test","./internal/repoexec","-run","Test.*RestoreRun"]`)
+			return replaceItemCommand(t, body, "restore_reconciliation_safe_unit", `"command":["go","test","./internal/repoexec","-run","Test.*RestoreExecutor"]`)
 		}, want: "selector"},
 	}
 	for _, tt := range tests {
@@ -1782,7 +1813,7 @@ func TestCurrentRepoManifestContainsDiscoverySurfacesEvidence(t *testing.T) {
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -1890,7 +1921,7 @@ func TestCurrentRepoManifestContainsSecretPathRedactionEvidence(t *testing.T) {
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -2082,7 +2113,7 @@ func TestCurrentRepoManifestContainsProfileBoundaryEvidence(t *testing.T) {
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -2179,7 +2210,7 @@ func TestCurrentRepoManifestContainsWorkflowHardeningEvidence(t *testing.T) {
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -2273,7 +2304,7 @@ func TestCurrentRepoManifestContainsResidualRiskCatalogEvidence(t *testing.T) {
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -2388,7 +2419,7 @@ func TestCurrentRepoManifestContainsDeploymentRiskEnvelopeEvidence(t *testing.T)
 		if !compiled.MatchString(testName) {
 			t.Fatalf("%s -run selector %q does not match required test %s", item.ID, selector, testName)
 		}
-		assertGoTestListIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, goTestPackageForTestName(testName), testName)
 	}
 }
 
@@ -2896,7 +2927,12 @@ func goTestPackageForTestName(testName string) string {
 	if strings.HasPrefix(testName, "TestInternalRuntime") {
 		return "./internal/apiapp"
 	}
+	if strings.HasPrefix(testName, "TestRunnerPublicSurface") ||
+		strings.HasPrefix(testName, "TestAFSCPDirect") {
+		return "./internal/jvsrunner"
+	}
 	if strings.HasPrefix(testName, "TestOperationInspectionHandler") ||
+		strings.HasPrefix(testName, "TestRestoreHandler") ||
 		strings.HasPrefix(testName, "TestOperationEnvelope") ||
 		strings.HasPrefix(testName, "TestProductCallerOperationResponses") ||
 		strings.HasPrefix(testName, "TestAuthGateWithAuditSink") ||
@@ -2930,9 +2966,8 @@ func goTestPackageForTestName(testName string) string {
 		return "./internal/workerapp"
 	}
 	if strings.HasPrefix(testName, "TestSavePointExecutor") ||
-		strings.HasPrefix(testName, "TestRestorePreviewExecutor") ||
-		strings.HasPrefix(testName, "TestRestorePreviewDiscardExecutor") ||
-		strings.HasPrefix(testName, "TestRestoreRunExecutor") {
+		strings.HasPrefix(testName, "TestRestoreExecutor") ||
+		strings.HasPrefix(testName, "TestJVSRunnerInterface") {
 		return "./internal/repoexec"
 	}
 	if strings.HasPrefix(testName, "TestCreateGetAndListRepos") ||
@@ -2946,9 +2981,11 @@ func goTestPackageForTestName(testName string) string {
 		strings.HasPrefix(testName, "TestMarkAuditOutbox") ||
 		strings.HasPrefix(testName, "TestGetOperationScans") ||
 		strings.HasPrefix(testName, "TestAcquireSavePointCreateOperationLease") ||
+		strings.HasPrefix(testName, "TestAcquireRestoreOperationLease") ||
 		strings.HasPrefix(testName, "TestCommitSavePointCreate") ||
 		strings.HasPrefix(testName, "TestCreateOrReuseRestore") ||
 		strings.HasPrefix(testName, "TestCommitRestore") ||
+		strings.HasPrefix(testName, "TestRestoreCommits") ||
 		strings.HasPrefix(testName, "TestGetExportSession") ||
 		strings.HasPrefix(testName, "TestRevokeExportSQL") ||
 		strings.HasPrefix(testName, "TestRevokeExportClassifies") ||
@@ -3000,7 +3037,7 @@ func manifestItemByID(manifest Manifest, id string) (Item, bool) {
 	return Item{}, false
 }
 
-func assertGoTestListIncludesTest(t *testing.T, repoRoot, itemID, selector, pkg, testName string) {
+func assertStaticTestNameScanIncludesTest(t *testing.T, repoRoot, itemID, selector, pkg, testName string) {
 	t.Helper()
 
 	compiled, err := regexp.Compile(selector)
@@ -3010,16 +3047,16 @@ func assertGoTestListIncludesTest(t *testing.T, repoRoot, itemID, selector, pkg,
 	if !compiled.MatchString(testName) {
 		t.Fatalf("%s selector %q does not match %s before package lookup", itemID, selector, testName)
 	}
-	result := goTestListPackage(repoRoot, pkg)
+	result := goTestStaticPackageNames(repoRoot, pkg)
 	if result.err != "" {
-		t.Fatalf("%s go test -list %s failed: %s: %s", itemID, pkg, result.err, result.output)
+		t.Fatalf("%s static test-name scan %s failed: %s: %s", itemID, pkg, result.err, result.output)
 	}
 	for _, name := range result.tests {
 		if name == testName {
 			return
 		}
 	}
-	t.Fatalf("%s go test -list %s output missing %s: %s", itemID, pkg, testName, result.output)
+	t.Fatalf("%s static test-name scan %s output missing %s: %s", itemID, pkg, testName, result.output)
 }
 
 func TestValidateManifestRequiresExactReleaseEvidenceItems(t *testing.T) {
@@ -3747,7 +3784,7 @@ var package0FixtureMetadata = []struct {
 	{"repo_purge_disabled_admission_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_admission", "P0_OPTIONAL_DENIED_PURGE_ADMISSION", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "repo purge disabled admission rejects before metadata and audits without queuing"},
 	{"repo_purge_disabled_worker_recovery_unit", "CLAIM_OPTIONAL_DENIED_SAFE", "repo_purge_disabled_worker_recovery", "P0_OPTIONAL_DENIED_PURGE_RECOVERY", "F13", "", "default", "true", "false", "fast", "package", "negative", "false", "denial_safety", "disabled repo purge recovery terminalizes unsupported historical operations"},
 	{"default_user_loop_repo_projection_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_repo_projection", "P1B_DEFAULT_USER_LOOP_REPO_PROJECTION", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "repo create get list projection and repo-create worker positive path pass without closing the full default user loop"},
-	{"default_user_loop_jvs_save_restore_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_jvs_save_restore", "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "JVS save history restore-preview restore-run and discard paths pass without closing the full default user loop"},
+	{"default_user_loop_jvs_save_restore_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_jvs_save_restore", "P1C_DEFAULT_USER_LOOP_JVS_SAVE_RESTORE", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "JVS save history and direct restore paths pass without closing the full default user loop"},
 	{"webdav_default_access_unit", "CLAIM_WEBDAV_DEFAULT_ACCESS", "webdav_default_access", "P0_WEBDAV_DEFAULT_ACCESS", "F8", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "webdav default access passes in default mode"},
 	{"default_user_loop_webdav_access_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_webdav_access", "P1D_DEFAULT_USER_LOOP_WEBDAV_ACCESS", "F2", "", "default", "true", "false", "fast", "package", "positive", "true", "positive_path", "WebDAV access contributes only partial default user loop evidence"},
 	{"default_user_loop_trace_unit", "CLAIM_DEFAULT_USER_LOOP", "default_user_loop_trace", "P1E_DEFAULT_USER_LOOP_TRACE", "F2", "", "default", "true", "false", "fast", "package", "both", "true", "coverage_guard", "caller-scoped operation audit and recovery trace stays redacted and terminally visible"},

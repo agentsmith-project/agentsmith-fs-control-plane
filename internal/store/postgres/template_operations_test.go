@@ -36,30 +36,27 @@ func TestMarkTemplateCreateWriterFencedWithLeaseLocksRepoBeforeWriterFence(t *te
 		"FOR UPDATE",
 		"held_lifecycle_fence AS",
 		"repo_fences.repo_id = locked_repo.repo_id",
-		"active_restore_plan AS",
-		"FROM restore_plans p, locked_repo",
-		"p.namespace_id = $14",
-		"p.status IN ('pending', 'consuming', 'discarding', 'operator_intervention_required')",
 		"active_writer_fence AS",
 		"repo_fences.repo_id = locked_repo.repo_id",
 		"inserted_writer_fence AS",
 		"FROM eligible_operation, locked_repo",
-		"NOT EXISTS (SELECT 1 FROM active_restore_plan)",
 		"ON CONFLICT (repo_id, fence_kind) WHERE released_at IS NULL DO NOTHING",
 	)
+	if strings.Contains(exec.query, "restore_plans") || strings.Contains(exec.query, "active_restore_plan") {
+		t.Fatalf("template writer fence SQL must not inspect restore plans: %s", exec.query)
+	}
 }
 
-func TestCommitTemplateCreateFailedWithLeaseReleasesWriterFenceOnBlockedFailure(t *testing.T) {
+func TestCommitTemplateCreateFailedWithLeaseReleasesWriterFenceOnPostFenceFailure(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	record := templateCreateOperationRecord(now, operations.OperationStateFailed, operations.OperationPhaseTemplateCreateWriterFenced)
 	record.SessionFenceID = "fence_template01"
 	record.Error = &operations.OperationError{
-		Code:          "TEMPLATE_CREATE_RESTORE_BLOCKED",
-		Message:       "template create blocked by active restore plan",
+		Code:          "TEMPLATE_CREATE_FAILED",
+		Message:       "template create failed after writer fence",
 		Retryable:     true,
 		CorrelationID: record.CorrelationID,
 		OperationID:   record.ID,
-		Details:       map[string]any{"active_restore_plan_present": true},
 	}
 	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
 	st := &Store{exec: exec}

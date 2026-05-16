@@ -3,10 +3,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
 
 var repoFenceColumns = []string{
@@ -178,4 +180,111 @@ func scanRepoFence(row rowScanner) (fences.Fence, error) {
 		return fences.Fence{}, fmt.Errorf("invalid repo fence %q: %w", fence.ID, err)
 	}
 	return fence, nil
+}
+
+func scanRepoFenceAndOperation(row rowScanner) (fences.Fence, operations.OperationRecord, error) {
+	var fence fences.Fence
+	var kind, status string
+	var releasedAt, recoveryStartedAt, recoveredAt sql.NullTime
+	var recoveryOperationID, recoveryReason sql.NullString
+	var record operations.OperationRecord
+	var operationType, operationState, requestHash string
+	var leaseOwner, repoID, templateID, exportID, mountBindingID, sessionFenceID, compensationStatus sql.NullString
+	var leaseExpiresAt, startedAt, finishedAt sql.NullTime
+	var externalResourceIDsJSON, inputSummaryJSON, jvsJSONOutputJSON, verificationResultJSON, errorJSON []byte
+
+	values := []any{
+		&fence.ID,
+		&fence.RepoID,
+		&kind,
+		&fence.HolderOperationID,
+		&status,
+		&fence.ExpiresAt,
+		&releasedAt,
+		&recoveryOperationID,
+		&recoveryReason,
+		&recoveryStartedAt,
+		&recoveredAt,
+		&fence.CreatedAt,
+		&fence.UpdatedAt,
+		&record.ID,
+		&operationType,
+		&operationState,
+		&record.Phase,
+		&record.Attempt,
+		&leaseOwner,
+		&leaseExpiresAt,
+		&record.IdempotencyScope,
+		&record.IdempotencyKey,
+		&requestHash,
+		&record.CorrelationID,
+		&record.CallerService,
+		&record.AuthorizedActor.Type,
+		&record.AuthorizedActor.ID,
+		&record.Resource.Type,
+		&record.Resource.ID,
+		&record.NamespaceID,
+		&repoID,
+		&templateID,
+		&exportID,
+		&mountBindingID,
+		&sessionFenceID,
+		&externalResourceIDsJSON,
+		&inputSummaryJSON,
+		&jvsJSONOutputJSON,
+		&verificationResultJSON,
+		&compensationStatus,
+		&errorJSON,
+		&record.CreatedAt,
+		&startedAt,
+		&finishedAt,
+	}
+	if err := row.Scan(values...); err != nil {
+		return fences.Fence{}, operations.OperationRecord{}, err
+	}
+
+	fence.Kind = fences.Kind(kind)
+	fence.Status = fences.Status(status)
+	fence.ReleasedAt = nullTimePtr(releasedAt)
+	fence.RecoveryOperationID = nullStringValue(recoveryOperationID)
+	fence.RecoveryReason = nullStringValue(recoveryReason)
+	fence.RecoveryStartedAt = nullTimePtr(recoveryStartedAt)
+	fence.RecoveredAt = nullTimePtr(recoveredAt)
+	if err := fences.ValidateFence(fence); err != nil {
+		return fences.Fence{}, operations.OperationRecord{}, fmt.Errorf("invalid repo fence %q: %w", fence.ID, err)
+	}
+
+	record.Type = operations.OperationType(operationType)
+	record.State = operations.OperationState(operationState)
+	record.RequestHash = operations.RequestHash(requestHash)
+	record.LeaseOwner = nullStringValue(leaseOwner)
+	record.LeaseExpiresAt = nullTimePtr(leaseExpiresAt)
+	record.RepoID = nullStringValue(repoID)
+	record.TemplateID = nullStringValue(templateID)
+	record.ExportID = nullStringValue(exportID)
+	record.MountBindingID = nullStringValue(mountBindingID)
+	record.SessionFenceID = nullStringValue(sessionFenceID)
+	record.CompensationStatus = nullStringValue(compensationStatus)
+	record.StartedAt = nullTimePtr(startedAt)
+	record.FinishedAt = nullTimePtr(finishedAt)
+	if err := unmarshalObject(externalResourceIDsJSON, &record.ExternalResourceIDs); err != nil {
+		return fences.Fence{}, operations.OperationRecord{}, fmt.Errorf("unmarshal external_resource_ids: %w", err)
+	}
+	if err := unmarshalObject(inputSummaryJSON, &record.InputSummary); err != nil {
+		return fences.Fence{}, operations.OperationRecord{}, fmt.Errorf("unmarshal input_summary: %w", err)
+	}
+	if err := unmarshalNullableJSON(jvsJSONOutputJSON, &record.JVSJSONOutput); err != nil {
+		return fences.Fence{}, operations.OperationRecord{}, fmt.Errorf("unmarshal jvs_json_output: %w", err)
+	}
+	if err := unmarshalNullableJSON(verificationResultJSON, &record.VerificationResult); err != nil {
+		return fences.Fence{}, operations.OperationRecord{}, fmt.Errorf("unmarshal verification_result: %w", err)
+	}
+	if len(errorJSON) > 0 {
+		var opErr operations.OperationError
+		if err := json.Unmarshal(errorJSON, &opErr); err != nil {
+			return fences.Fence{}, operations.OperationRecord{}, fmt.Errorf("unmarshal error_json: %w", err)
+		}
+		record.Error = &opErr
+	}
+	return fence, record.Sanitized(), nil
 }

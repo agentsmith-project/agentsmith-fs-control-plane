@@ -95,37 +95,6 @@ func TestRouteMetadataForRequestMethodMismatchAndUnknownRoute(t *testing.T) {
 	}
 }
 
-func TestRestorePreviewDiscardRouteMetadata(t *testing.T) {
-	route, ok := RouteMetadataByOperationID("restorePreviewDiscard")
-	if !ok {
-		t.Fatal("restorePreviewDiscard route metadata missing")
-	}
-	if route.Method != http.MethodPost {
-		t.Fatalf("method = %s, want POST", route.Method)
-	}
-	if route.Path != "/internal/v1/repos/{repoId}/restore-preview:discard" {
-		t.Fatalf("path = %q, want discard endpoint", route.Path)
-	}
-	if route.Class != auth.RouteClassNamespaceBound {
-		t.Fatalf("class = %q, want namespace-bound", route.Class)
-	}
-	if !route.Mutating {
-		t.Fatal("mutating = false, want true")
-	}
-	if route.RequiredRole != auth.RoleRestoreAdmin {
-		t.Fatalf("required role = %q, want restore_admin", route.RequiredRole)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/internal/v1/repos/repo_123/restore-preview:discard", nil)
-	got, ok := RouteMetadataForRequest(req)
-	if !ok {
-		t.Fatal("RouteMetadataForRequest did not match restore-preview:discard")
-	}
-	if got.OperationID != "restorePreviewDiscard" {
-		t.Fatalf("operation id = %q, want restorePreviewDiscard", got.OperationID)
-	}
-}
-
 func TestInternalV1RouteMetadataDoesNotExposeRawDirectMountAccess(t *testing.T) {
 	for _, route := range InternalV1RouteMetadata() {
 		t.Run(route.OperationID, func(t *testing.T) {
@@ -137,6 +106,29 @@ func TestInternalV1RouteMetadataDoesNotExposeRawDirectMountAccess(t *testing.T) 
 				t.Fatalf("route %s %s operationId %q contains forbidden raw/direct mount token(s): %s", route.Method, route.Path, route.OperationID, strings.Join(tokens, ", "))
 			}
 		})
+	}
+}
+
+func TestInternalV1RouteMetadataDoesNotExposeLegacyRestorePlanRoutes(t *testing.T) {
+	for _, route := range InternalV1RouteMetadata() {
+		switch route.OperationID {
+		case "restorePreview", "restorePreviewDiscard", "restoreRun", "restoreAdmit":
+			t.Fatalf("legacy restore plan operationId %q remains routed at %s %s", route.OperationID, route.Method, route.Path)
+		}
+		if strings.Contains(route.Path, "restore-preview") || strings.Contains(route.Path, "restore-run") || strings.Contains(route.Path, "restore:admit") {
+			t.Fatalf("legacy restore plan path remains routed: %s %s", route.Method, route.Path)
+		}
+	}
+
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/internal/v1/repos/repo_123/restore-preview", nil),
+		httptest.NewRequest(http.MethodPost, "/internal/v1/repos/repo_123/restore-preview:discard", nil),
+		httptest.NewRequest(http.MethodPost, "/internal/v1/repos/repo_123/restore-run", nil),
+		httptest.NewRequest(http.MethodPost, "/internal/v1/repos/repo_123/restore:admit", nil),
+	} {
+		if metadata, ok := RouteMetadataForRequest(req); ok {
+			t.Fatalf("legacy restore route %s matched metadata %#v, want no route", req.URL.Path, metadata)
+		}
 	}
 }
 

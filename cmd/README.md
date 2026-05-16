@@ -38,11 +38,11 @@ The repo now has neutral Go command entrypoints:
   `AFSCP_REPO_LIFECYCLE_RECOVERY_ENABLED`,
   `AFSCP_REPO_PURGE_RECOVERY_ENABLED`, `AFSCP_SAVE_POINT_RECOVERY_ENABLED`,
   `AFSCP_TEMPLATE_CREATE_RECOVERY_ENABLED`,
-  `AFSCP_TEMPLATE_CLONE_RECOVERY_ENABLED`,
-  `AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED`,
-  `AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED`, and
-  `AFSCP_RESTORE_RUN_RECOVERY_ENABLED`; those true gates require the pinned JVS
-  path/hash/cwd and `AFSCP_VOLUME_ROOTS`. Audit delivery is independently
+  `AFSCP_TEMPLATE_CLONE_RECOVERY_ENABLED`, and
+  `AFSCP_RESTORE_RECOVERY_ENABLED`; those true gates require the pinned direct
+  JVS path/hash/source ref/cwd and `AFSCP_VOLUME_ROOTS`. Direct restore
+  recovery uses the durable restore operation, save point ID, writer-session
+  fence, and redacted direct JVS evidence. Audit delivery is independently
   enabled by `AFSCP_WORKER_AUDIT_DELIVERY_ENABLED=true`; it runs stale outbox
   recovery then HTTP JSON at-least-once delivery, and the external sink must
   dedupe by `audit_event_id`.

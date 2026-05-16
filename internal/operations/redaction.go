@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/projectionguard"
 )
 
 const redactedValue = "[REDACTED]"
@@ -116,6 +117,10 @@ func (redactor *valueRedactor) redactMap(values map[string]any, path string) map
 	out := make(map[string]any, len(values))
 	for key, value := range values {
 		fieldPath := joinPath(path, key)
+		if projectionguard.ForbiddenJVSInternalField(key) {
+			redactor.mark(fieldPath)
+			continue
+		}
 		if isSensitiveKey(key) {
 			out[key] = redactedValue
 			redactor.mark(fieldPath)
@@ -139,6 +144,9 @@ func (redactor *valueRedactor) redactString(value, path string) string {
 }
 
 func containsSensitiveText(value string) bool {
+	if projectionguard.ContainsForbiddenJVSInternalText(value) {
+		return true
+	}
 	normalized := strings.ToLower(value)
 	for _, fragment := range []string{"/srv/afscp", "afscp/namespaces/", ".jvs", "jvs restore --run"} {
 		if strings.Contains(normalized, fragment) {
@@ -202,26 +210,7 @@ func isSensitiveKey(key string) bool {
 }
 
 func isStorageInternalOrCommandKey(normalized string) bool {
-	switch normalized {
-	case "controlroot",
-		"payloadroot",
-		"controlrootpath",
-		"payloadrootpath",
-		"reporoot",
-		"targetcontrolroot",
-		"controlvolumesubdir",
-		"payloadvolumesubdir",
-		"runcommand",
-		"recommendednextcommand",
-		"restorecommand",
-		"mountcommand",
-		"rawmountcommand",
-		"directmountcommand",
-		"command":
-		return true
-	default:
-		return false
-	}
+	return projectionguard.ForbiddenJVSInternalField(normalized)
 }
 
 func joinPath(prefix, name string) string {

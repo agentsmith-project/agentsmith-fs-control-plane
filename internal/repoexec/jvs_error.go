@@ -11,13 +11,6 @@ const (
 	jvsErrorCodeDetail = "jvs_error_code"
 	jvsCommandDetail   = "jvs_command"
 	jvsExitCodeDetail  = "jvs_exit_code"
-
-	jvsRepairAttemptedDetail         = "jvs_repair_attempted"
-	jvsRepairSucceededDetail         = "jvs_repair_succeeded"
-	jvsRepairCommandDetail           = "jvs_repair_command"
-	jvsRepairExitCodeDetail          = "jvs_repair_exit_code"
-	jvsRepairErrorCodeDetail         = "jvs_repair_error_code"
-	jvsRepairCleanLocksCleanedDetail = "jvs_repair_clean_locks_cleaned"
 )
 
 func withJVSErrorDetails(details map[string]any, err error) map[string]any {
@@ -38,48 +31,6 @@ func attachJVSErrorDetails(operation *operations.OperationRecord, details map[st
 	}
 	errorDetails := asStringAnyMap(operation.Error.Details)
 	for _, key := range []string{jvsErrorCodeDetail, jvsCommandDetail, jvsExitCodeDetail} {
-		if value, ok := details[key]; ok {
-			errorDetails[key] = value
-		}
-	}
-	operation.Error.Details = errorDetails
-}
-
-func withJVSRepairDetails(details map[string]any, repair *jvsrunner.DoctorRepairRuntimeSummary, err error) map[string]any {
-	if repair == nil && err == nil {
-		return details
-	}
-	out := asStringAnyMap(details)
-	out[jvsRepairAttemptedDetail] = true
-	if repair != nil {
-		out[jvsRepairSucceededDetail] = true
-		out[jvsRepairCleanLocksCleanedDetail] = repair.CleanLocks.Cleaned
-	}
-	if err != nil {
-		out[jvsRepairSucceededDetail] = false
-		var commandErr *jvsrunner.CommandError
-		if errors.As(err, &commandErr) {
-			out[jvsRepairErrorCodeDetail] = commandErr.Code
-			out[jvsRepairCommandDetail] = commandErr.Command
-			out[jvsRepairExitCodeDetail] = commandErr.ExitCode
-		}
-	}
-	return out
-}
-
-func attachJVSRepairDetails(operation *operations.OperationRecord, details map[string]any) {
-	if operation == nil || operation.Error == nil || details == nil {
-		return
-	}
-	errorDetails := asStringAnyMap(operation.Error.Details)
-	for _, key := range []string{
-		jvsRepairAttemptedDetail,
-		jvsRepairSucceededDetail,
-		jvsRepairCommandDetail,
-		jvsRepairExitCodeDetail,
-		jvsRepairErrorCodeDetail,
-		jvsRepairCleanLocksCleanedDetail,
-	} {
 		if value, ok := details[key]; ok {
 			errorDetails[key] = value
 		}

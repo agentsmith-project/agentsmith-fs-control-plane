@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,8 +20,7 @@ import (
 )
 
 type RestoreJVSRunner interface {
-	Restore(ctx context.Context, controlRoot, savePointID string) (jvsrunner.RestoreSummary, error)
-	DoctorStrict(ctx context.Context, controlRoot string) (jvsrunner.DoctorSummary, error)
+	DirectRestore(ctx context.Context, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectRestoreSummary, error)
 }
 
 type RestoreConfig struct {
@@ -125,7 +123,7 @@ func (executor *RestoreExecutor) ExecuteOperationRecovery(ctx context.Context, r
 	if err := executor.validateMetadata(ctx, record, repo); err != nil {
 		return executor.commitRestoreFailed(ctx, record, now, "RESTORE_VALIDATION_FAILED", "restore validation failed", nil)
 	}
-	controlRoot, err := executor.controlRoot(repo)
+	target, err := executor.directTarget(repo)
 	if err != nil {
 		return executor.commitRestoreFailed(ctx, record, now, "RESTORE_VALIDATION_FAILED", "restore validation failed", nil)
 	}
@@ -146,16 +144,12 @@ func (executor *RestoreExecutor) ExecuteOperationRecovery(ctx context.Context, r
 		return executor.commitRestoreFailed(ctx, working, now, "RESTORE_WRITER_SESSIONS_DENIED", "restore writer sessions denied", map[string]any{"writer_gate_error_family": restoreWriterGateFamily(err)})
 	}
 
-	summary, err := executor.jvs.Restore(ctx, controlRoot, savePointID)
+	summary, err := executor.jvs.DirectRestore(ctx, target, savePointID)
 	if err != nil {
 		return executor.commitRestoreFailed(ctx, working, now, "JVS_RESTORE_FAILED", "jvs restore failed", withJVSErrorDetails(nil, err))
 	}
-	if err := validateRestoreSummary(summary, savePointID); err != nil {
+	if err := validateDirectRestoreSummary(summary, savePointID); err != nil {
 		return executor.commitRestoreIntervention(ctx, working, now, "RESTORE_RESULT_MISMATCH", "restore result mismatch", nil)
-	}
-	doctor, err := executor.jvs.DoctorStrict(ctx, controlRoot)
-	if err != nil || doctor.Workspace != "main" || !doctor.Healthy || doctor.RepoID != repo.JVSRepoID {
-		return executor.commitRestoreIntervention(ctx, working, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(nil, err))
 	}
 	return executor.commitRestoreSuccess(ctx, working, executor.currentTime(), summary)
 }
@@ -181,7 +175,7 @@ func (executor *RestoreExecutor) validateMetadata(ctx context.Context, record op
 	if err != nil {
 		return err
 	}
-	decision := repoaccess.Admit(repoaccess.Request{Repo: repo, Namespace: namespace, Binding: binding, HeldRepoFences: restoreRepoAccessFences(record, held), Intent: repoaccess.IntentRestoreRun, Mode: repoaccess.ModeReadWrite})
+	decision := repoaccess.Admit(repoaccess.Request{Repo: repo, Namespace: namespace, Binding: binding, HeldRepoFences: restoreRepoAccessFences(record, held), Intent: repoaccess.IntentRestore, Mode: repoaccess.ModeReadWrite})
 	if !decision.Allowed {
 		return errors.New("repo access denied")
 	}
@@ -203,20 +197,16 @@ func restoreRepoAccessFences(record operations.OperationRecord, held []fences.Fe
 	return savePointRepoAccessFencesFromStore(filtered)
 }
 
-func (executor *RestoreExecutor) controlRoot(repo resources.Repo) (string, error) {
+func (executor *RestoreExecutor) directTarget(repo resources.Repo) (jvsrunner.DirectTarget, error) {
 	root, ok := executor.volumeRoots[repo.VolumeID]
 	if !ok {
-		return "", errors.New("missing volume root")
+		return jvsrunner.DirectTarget{}, errors.New("missing volume root")
 	}
-	cleanSubdir := filepath.Clean(repo.ControlVolumeSubdir)
-	if cleanSubdir == "." || filepath.IsAbs(cleanSubdir) || strings.HasPrefix(cleanSubdir, ".."+string(filepath.Separator)) || cleanSubdir == ".." {
-		return "", errors.New("invalid control subdir")
+	roots, err := pathresolver.ResolveRepoRootPaths(root, repo.NamespaceID, repo.ID)
+	if err != nil || roots.ControlVolumeSubdir != repo.ControlVolumeSubdir || roots.PayloadVolumeSubdir != repo.PayloadVolumeSubdir {
+		return jvsrunner.DirectTarget{}, errors.New("invalid repo roots")
 	}
-	controlRoot := filepath.Join(root, cleanSubdir)
-	if !strings.HasPrefix(controlRoot, root+string(filepath.Separator)) {
-		return "", errors.New("invalid control root")
-	}
-	return controlRoot, nil
+	return jvsrunner.DirectTarget{ControlRoot: roots.ControlRootPath, Home: roots.PayloadRootPath}, nil
 }
 
 var (
@@ -247,7 +237,7 @@ func (executor *RestoreExecutor) checkWriterSessions(ctx context.Context, record
 	if err != nil {
 		return restoreWriterGateError{family: sessionstate.ErrorFamilyInternalError, err: errRestoreInvalidWriterSession}
 	}
-	decision := sessionstate.RestoreRunWriterGate(sessionstate.GateRequest{NamespaceID: record.NamespaceID, RepoID: record.RepoID, Now: now, ExportSessions: exports, Mounts: mounts})
+	decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{NamespaceID: record.NamespaceID, RepoID: record.RepoID, Now: now, ExportSessions: exports, Mounts: mounts})
 	if decision.Allowed {
 		return nil
 	}
@@ -269,16 +259,22 @@ func restoreWriterGateFamily(err error) string {
 	return ""
 }
 
-func (executor *RestoreExecutor) commitRestoreSuccess(ctx context.Context, record operations.OperationRecord, now time.Time, summary jvsrunner.RestoreSummary) error {
+func (executor *RestoreExecutor) commitRestoreSuccess(ctx context.Context, record operations.OperationRecord, now time.Time, summary jvsrunner.DirectRestoreSummary) error {
 	operation := record
 	operation.State = operations.OperationStateSucceeded
 	operation.Phase = operations.OperationPhaseRestoreCommitted
 	operation.ExternalResourceIDs = map[string]string{"restored_save_point_id": summary.RestoredSavePointID}
-	operation.JVSJSONOutput = map[string]any{"mode": "direct_restore", "source_save_point_id": summary.SourceSavePointID, "restored_save_point_id": summary.RestoredSavePointID, "workspace": summary.Workspace, "files_changed": summary.FilesChanged, "history_changed": summary.HistoryChanged, "unsaved_changes": summary.UnsavedChanges}
-	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), map[string]any{"direct_restore": true, "source_save_point_id": summary.SourceSavePointID, "restored_save_point_id": summary.RestoredSavePointID, "workspace": summary.Workspace, "files_changed": summary.FilesChanged, "history_changed": summary.HistoryChanged, "unsaved_changes": summary.UnsavedChanges, "discard_unsaved_changes_confirmed": true, "writer_gate_allowed": true})
+	jvsOutput := map[string]any{"mode": "afscp_direct_restore", "restored_save_point_id": summary.RestoredSavePointID, "new_head": summary.NewHeadID}
+	verification := map[string]any{"direct_restore": true, "restored_save_point_id": summary.RestoredSavePointID, "new_head": summary.NewHeadID, "writer_gate_allowed": true}
+	if strings.TrimSpace(summary.PreviousHeadID) != "" {
+		jvsOutput["previous_head"] = summary.PreviousHeadID
+		verification["previous_head"] = summary.PreviousHeadID
+	}
+	operation.JVSJSONOutput = jvsOutput
+	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), verification)
 	operation.Error = nil
 	operation.FinishedAt = &now
-	event, err := executor.auditEvent(operation, now, audit.OutcomeSucceeded, "restore_committed", map[string]any{"repo_id": record.RepoID, "source_save_point_id": summary.SourceSavePointID, "restored_save_point_id": summary.RestoredSavePointID})
+	event, err := executor.auditEvent(operation, now, audit.OutcomeSucceeded, "restore_committed", map[string]any{"repo_id": record.RepoID, "restored_save_point_id": summary.RestoredSavePointID})
 	if err != nil {
 		return err
 	}
@@ -364,10 +360,6 @@ func validateRestoreLeasedRecord(record operations.OperationRecord, owner string
 	if strings.TrimSpace(record.CallerService) == "" || strings.TrimSpace(record.CorrelationID) == "" || strings.TrimSpace(record.AuthorizedActor.Type) == "" || strings.TrimSpace(record.AuthorizedActor.ID) == "" {
 		return errors.New("invalid restore recovery record")
 	}
-	confirmed, _ := record.InputSummary["discard_unsaved_changes_confirmed"].(bool)
-	if !confirmed {
-		return errors.New("invalid restore recovery record")
-	}
 	return nil
 }
 
@@ -395,18 +387,17 @@ func withRestoreWriterFencedMarker(record operations.OperationRecord, fenceID st
 	return record
 }
 
-func validateRestoreSummary(summary jvsrunner.RestoreSummary, savePointID string) error {
-	if summary.Workspace != "main" {
-		return errors.New("invalid restore summary")
-	}
-	if strings.TrimSpace(summary.SourceSavePointID) != savePointID {
-		return errors.New("invalid restore summary")
-	}
-	if err := operations.ValidateSavePointID(summary.SourceSavePointID); err != nil {
-		return err
-	}
+func validateDirectRestoreSummary(summary jvsrunner.DirectRestoreSummary, savePointID string) error {
 	if err := operations.ValidateSavePointID(summary.RestoredSavePointID); err != nil {
 		return err
+	}
+	if summary.RestoredSavePointID != savePointID || summary.NewHeadID != savePointID {
+		return errors.New("invalid restore summary")
+	}
+	if strings.TrimSpace(summary.PreviousHeadID) != "" {
+		if err := operations.ValidateSavePointID(summary.PreviousHeadID); err != nil {
+			return err
+		}
 	}
 	return nil
 }

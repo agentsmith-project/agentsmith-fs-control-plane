@@ -122,7 +122,7 @@ var capabilityMatrixV1Rows = []Row{
 		ID:                      JVSSaveRestore,
 		SurfaceType:             SurfaceDurableOperation,
 		DefaultGARequired:       true,
-		AdmissionOperationTypes: []operations.OperationType{operations.OperationSavePointCreate, operations.OperationRestore, operations.OperationRestorePreview, operations.OperationRestorePreviewDiscard, operations.OperationRestoreRun},
+		AdmissionOperationTypes: []operations.OperationType{operations.OperationSavePointCreate, operations.OperationRestore},
 	},
 	{
 		ID:                JVSProjection,
@@ -398,9 +398,6 @@ func volumeRuntimeCapabilityForOperation(operationType operations.OperationType)
 		operations.OperationRepoPurge,
 		operations.OperationSavePointCreate,
 		operations.OperationRestore,
-		operations.OperationRestorePreview,
-		operations.OperationRestorePreviewDiscard,
-		operations.OperationRestoreRun,
 		operations.OperationTemplateCreate,
 		operations.OperationTemplateClone,
 		operations.OperationExportCreate,

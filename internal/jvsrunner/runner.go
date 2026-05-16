@@ -12,11 +12,14 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/projectionguard"
 )
 
 const (
 	workspaceMain          = "main"
 	schemaVersionV048      = 1
+	directContractV1       = "jvs.afscp.direct.v1"
 	defaultMaxOutputBytes  = 64 * 1024
 	maxSafeRepoIDLength    = 128
 	maxHistoryMessageRunes = 512
@@ -90,19 +93,6 @@ type DoctorSummary struct {
 	Workspace string
 }
 
-type RepairActionSummary struct {
-	Action  string
-	Success bool
-	Cleaned int
-}
-
-type DoctorRepairRuntimeSummary struct {
-	RepoID     string
-	Healthy    bool
-	Workspace  string
-	CleanLocks RepairActionSummary
-}
-
 type SaveSummary struct {
 	SavePointID       string
 	NewestSavePointID string
@@ -123,60 +113,6 @@ type HistorySummary struct {
 	SavePoints        []SavePointSummary
 }
 
-type RestorePreviewSummary struct {
-	PlanID            string
-	SourceSavePointID string
-	BaseRevision      string
-	HeadRevision      string
-	Generation        string
-	ManagedFiles      RestorePreviewManagedFilesSummary
-	Workspace         string
-	RunCommandPresent bool
-}
-
-type RestorePreviewChangeSummary struct {
-	Count   int
-	Samples []string
-}
-
-type RestorePreviewManagedFilesSummary struct {
-	Added       RestorePreviewChangeSummary
-	Changed     RestorePreviewChangeSummary
-	Removed     RestorePreviewChangeSummary
-	Destructive bool
-}
-
-type RestoreRunSummary struct {
-	PlanID              string
-	SourceSavePointID   string
-	RestoredSavePointID string
-	Workspace           string
-}
-
-type RestoreSummary struct {
-	SourceSavePointID   string
-	RestoredSavePointID string
-	Workspace           string
-	FilesChanged        bool
-	HistoryChanged      bool
-	UnsavedChanges      bool
-}
-
-type RestoreDiscardSummary struct {
-	PlanID        string
-	PlanDiscarded bool
-	Workspace     string
-}
-
-type RecoveryStatusSummary struct {
-	RestoreState         string
-	ActivePlanID         string
-	ActiveRecoveryPlanID string
-	Blocking             bool
-	Message              string
-	Workspace            string
-}
-
 type RepoCloneSummary struct {
 	SourceRepoID          string
 	TargetRepoID          string
@@ -184,6 +120,52 @@ type RepoCloneSummary struct {
 	SavePointsCopiedCount int
 	RuntimeStateCopied    bool
 	Workspace             string
+}
+
+type DirectTarget struct {
+	ControlRoot string
+	Home        string
+}
+
+type DirectSaveSummary struct {
+	SavePointID   string
+	HistoryHeadID string
+	Message       string
+	CreatedAt     string
+}
+
+type DirectSavePointSummary struct {
+	SavePointID string
+	Message     string
+	CreatedAt   string
+	HistoryHead bool
+}
+
+type DirectListSummary struct {
+	HistoryHeadID string
+	SavePoints    []DirectSavePointSummary
+}
+
+type DirectRestoreSummary struct {
+	RestoredSavePointID string
+	PreviousHeadID      string
+	NewHeadID           string
+}
+
+type DirectStatusSummary struct {
+	HistoryHeadID   string
+	MetadataState   string
+	ActiveOperation string
+	Recovery        string
+}
+
+type DirectDoctorSummary struct {
+	RepoID        string
+	Healthy       bool
+	FindingCount  int
+	MetadataState string
+	Journal       string
+	Recovery      string
 }
 
 func New(config Config) (*Runner, error) {
@@ -269,377 +251,43 @@ func (runner *Runner) Init(ctx context.Context, payloadRoot, controlRoot string)
 	return InitSummary{RepoID: repoID, Workspace: workspace}, nil
 }
 
-func (runner *Runner) DoctorStrict(ctx context.Context, controlRoot string) (DoctorSummary, error) {
-	if runner == nil {
-		return DoctorSummary{}, ErrInvalidConfig
-	}
-	if err := validateCleanAbsolute(controlRoot, true); err != nil {
-		return DoctorSummary{}, fmt.Errorf("%w: control root", ErrInvalidArgument)
-	}
-
-	result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{
-		Path: runner.binaryPath,
-		Args: []string{
-			"--control-root",
-			controlRoot,
-			"--workspace",
-			workspaceMain,
-			"doctor",
-			"--strict",
-			"--json",
-		},
-		Dir: runner.cwd,
-	})
-	if err != nil {
-		return DoctorSummary{}, commandFailedError("doctor", err)
-	}
-	result = runner.capResult(result)
-	if result.ExitCode != 0 {
-		if commandErr, ok := commandErrorFromResult("doctor", controlRoot, result); ok {
-			return DoctorSummary{}, commandErr
-		}
-		return DoctorSummary{}, fmt.Errorf("%w: doctor", ErrCommandFailed)
-	}
-
-	envelope, err := decodeEnvelope(result.Stdout)
-	if err != nil {
-		return DoctorSummary{}, fmt.Errorf("%w: doctor", ErrInvalidEnvelope)
-	}
-	if commandErr, ok := commandErrorFromEnvelope("doctor", controlRoot, 0, envelope); ok {
-		return DoctorSummary{}, commandErr
-	}
-	healthy, ok := envelope.Data["healthy"].(bool)
-	repoID, _ := envelope.Data["repo_id"].(string)
-	workspace, _ := envelope.Data["workspace"].(string)
-	if !envelope.validFor("doctor", controlRoot) || !ok || !healthy || !safeOpaqueID(repoID) || workspace != workspaceMain {
-		return DoctorSummary{}, fmt.Errorf("%w: doctor", ErrInvalidEnvelope)
-	}
-
-	return DoctorSummary{RepoID: repoID, Healthy: true, Workspace: workspace}, nil
-}
-
-func (runner *Runner) DoctorRepairRuntime(ctx context.Context, controlRoot string) (DoctorRepairRuntimeSummary, error) {
-	if runner == nil {
-		return DoctorRepairRuntimeSummary{}, ErrInvalidConfig
-	}
-	if err := validateCleanAbsolute(controlRoot, true); err != nil {
-		return DoctorRepairRuntimeSummary{}, fmt.Errorf("%w: control root", ErrInvalidArgument)
-	}
-
-	result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{
-		Path: runner.binaryPath,
-		Args: []string{
-			"--control-root",
-			controlRoot,
-			"--workspace",
-			workspaceMain,
-			"doctor",
-			"--strict",
-			"--repair-runtime",
-			"--json",
-		},
-		Dir: runner.cwd,
-	})
-	if err != nil {
-		return DoctorRepairRuntimeSummary{}, commandFailedError("doctor", err)
-	}
-	result = runner.capResult(result)
-	if result.ExitCode != 0 {
-		if commandErr, ok := commandErrorFromResult("doctor", controlRoot, result); ok {
-			return DoctorRepairRuntimeSummary{}, commandErr
-		}
-		return DoctorRepairRuntimeSummary{}, fmt.Errorf("%w: doctor", ErrCommandFailed)
-	}
-
-	envelope, err := decodeEnvelope(result.Stdout)
-	if err != nil {
-		return DoctorRepairRuntimeSummary{}, fmt.Errorf("%w: doctor", ErrInvalidEnvelope)
-	}
-	if commandErr, ok := commandErrorFromEnvelope("doctor", controlRoot, 0, envelope); ok {
-		return DoctorRepairRuntimeSummary{}, commandErr
-	}
-	healthy, healthyOK := envelope.Data["healthy"].(bool)
-	repoID, _ := envelope.Data["repo_id"].(string)
-	workspace, _ := envelope.Data["workspace"].(string)
-	cleanLocks, cleanLocksOK := repairActionSummary(envelope.Data["repairs"], "clean_locks")
-	if !envelope.validFor("doctor", controlRoot) || !healthyOK || !healthy || !safeOpaqueID(repoID) || workspace != workspaceMain || !cleanLocksOK || !cleanLocks.Success {
-		return DoctorRepairRuntimeSummary{}, fmt.Errorf("%w: doctor", ErrInvalidEnvelope)
-	}
-
-	return DoctorRepairRuntimeSummary{RepoID: repoID, Healthy: true, Workspace: workspace, CleanLocks: cleanLocks}, nil
-}
-
-func (runner *Runner) Save(ctx context.Context, controlRoot, message string) (SaveSummary, error) {
-	message = strings.TrimSpace(message)
-	if message == "" {
-		return SaveSummary{}, fmt.Errorf("%w: save message", ErrInvalidArgument)
-	}
-	envelope, err := runner.runControlJSON(ctx, "save", controlRoot, []string{"save", "--message", message, "--json"})
-	if err != nil {
-		return SaveSummary{}, err
-	}
-	savePointID, ok := dataSafeID(envelope, "save_point_id")
-	workspace, _ := envelope.Data["workspace"].(string)
-	newest, newestOK := dataSafeID(envelope, "newest_save_point")
-	unsavedChanges, unsavedOK := envelope.Data["unsaved_changes"].(bool)
-	createdAt, createdAtOK := envelope.Data["created_at"].(string)
-	if !ok || !newestOK || newest != savePointID || workspace != workspaceMain || !unsavedOK || !createdAtOK || strings.TrimSpace(createdAt) == "" {
-		return SaveSummary{}, fmt.Errorf("%w: save", ErrInvalidEnvelope)
-	}
-	return SaveSummary{SavePointID: savePointID, NewestSavePointID: newest, Workspace: workspace, UnsavedChanges: unsavedChanges, CreatedAt: safeSummaryText(createdAt)}, nil
-}
-
-func (runner *Runner) History(ctx context.Context, controlRoot string) (HistorySummary, error) {
-	envelope, err := runner.runControlJSON(ctx, "history", controlRoot, []string{"history", "--limit", "0", "--json"})
-	if err != nil {
-		return HistorySummary{}, err
-	}
-	workspace, _ := envelope.Data["workspace"].(string)
-	truncated, truncatedOK := envelope.Data["truncated"].(bool)
-	if workspace != workspaceMain || !truncatedOK || truncated {
-		return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
-	}
-	rawSavePoints, ok := envelope.Data["save_points"].([]any)
-	if !ok {
-		return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
-	}
-	savePoints := make([]SavePointSummary, 0, len(rawSavePoints))
-	for _, raw := range rawSavePoints {
-		item, ok := raw.(map[string]any)
-		if !ok {
-			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
-		}
-		if workspace, exists := item["workspace"]; exists && workspace != workspaceMain {
-			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
-		}
-		id, _ := item["save_point_id"].(string)
-		if !safeOpaqueID(id) {
-			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
-		}
-		message, ok := item["message"].(string)
-		if !ok {
-			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
-		}
-		createdAt, ok := item["created_at"].(string)
-		if !ok || strings.TrimSpace(createdAt) == "" {
-			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
-		}
-		savePoints = append(savePoints, SavePointSummary{SavePointID: id, Message: safeHistoryMessageText(message), CreatedAt: safeSummaryText(createdAt)})
-	}
-	newest := ""
-	if len(savePoints) > 0 {
-		var newestOK bool
-		newest, newestOK = dataSafeID(envelope, "newest_save_point")
-		if !newestOK || newest != savePoints[0].SavePointID {
-			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
-		}
-	} else if _, exists := envelope.Data["newest_save_point"]; exists {
-		var newestOK bool
-		newest, newestOK = optionalDataSafeID(envelope, "newest_save_point")
-		if !newestOK {
-			return HistorySummary{}, fmt.Errorf("%w: history", ErrInvalidEnvelope)
-		}
-	}
-	return HistorySummary{Workspace: workspace, NewestSavePointID: newest, SavePoints: savePoints}, nil
-}
-
-func (runner *Runner) RestorePreview(ctx context.Context, controlRoot, savePointID string) (RestorePreviewSummary, error) {
-	if !safeOpaqueID(strings.TrimSpace(savePointID)) {
-		return RestorePreviewSummary{}, fmt.Errorf("%w: save point id", ErrInvalidArgument)
-	}
-	envelope, err := runner.runControlJSON(ctx, "restore", controlRoot, []string{"restore", strings.TrimSpace(savePointID), "--json"})
-	if err != nil {
-		return RestorePreviewSummary{}, err
-	}
-	planID, okPlan := dataSafeID(envelope, "plan_id")
-	source, okSource := dataSafeID(envelope, "source_save_point")
-	base, okBase := dataSafeID(envelope, "expected_newest_save_point")
-	head, okHead := dataSafeID(envelope, "history_head")
-	generation, okGeneration := dataSafeID(envelope, "expected_folder_evidence")
-	managedFiles, okManagedFiles := parseRestorePreviewManagedFiles(envelope.Data["managed_files"])
-	workspace, _ := envelope.Data["workspace"].(string)
-	runCommand, _ := envelope.Data["run_command"].(string)
-	filesChanged, filesOK := envelope.Data["files_changed"].(bool)
-	historyChanged, historyOK := envelope.Data["history_changed"].(bool)
-	if envelope.Data["mode"] != "preview" || workspace != workspaceMain || !okPlan || !okSource || !okBase || !okHead || !okGeneration || !okManagedFiles || strings.TrimSpace(runCommand) == "" || !filesOK || filesChanged || !historyOK || historyChanged {
-		return RestorePreviewSummary{}, fmt.Errorf("%w: restore preview", ErrInvalidEnvelope)
-	}
-	return RestorePreviewSummary{
-		PlanID:            planID,
-		SourceSavePointID: source,
-		BaseRevision:      base,
-		HeadRevision:      head,
-		Generation:        generation,
-		ManagedFiles:      managedFiles,
-		Workspace:         workspace,
-		RunCommandPresent: true,
-	}, nil
-}
-
-func (runner *Runner) Restore(ctx context.Context, controlRoot, savePointID string) (RestoreSummary, error) {
-	savePointID = strings.TrimSpace(savePointID)
-	if !safeOpaqueID(savePointID) {
-		return RestoreSummary{}, fmt.Errorf("%w: save point id", ErrInvalidArgument)
-	}
-	if runner == nil {
-		return RestoreSummary{}, ErrInvalidConfig
-	}
-	if err := validateCleanAbsolute(controlRoot, true); err != nil {
-		return RestoreSummary{}, fmt.Errorf("%w: control root", ErrInvalidArgument)
-	}
-
-	result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{
-		Path: runner.binaryPath,
-		Args: []string{
-			"--json",
-			"--control-root",
-			controlRoot,
-			"--workspace",
-			workspaceMain,
-			"restore",
-			savePointID,
-			"--direct",
-			"--discard-unsaved",
-		},
-		Dir: runner.cwd,
-	})
-	if err != nil {
-		return RestoreSummary{}, commandFailedError("restore", err)
-	}
-	result = runner.capResult(result)
-	if result.ExitCode != 0 {
-		if commandErr, ok := commandErrorFromResult("restore", controlRoot, result); ok {
-			return RestoreSummary{}, commandErr
-		}
-		return RestoreSummary{}, fmt.Errorf("%w: restore", ErrCommandFailed)
-	}
-	envelope, err := decodeEnvelope(result.Stdout)
-	if err != nil {
-		return RestoreSummary{}, fmt.Errorf("%w: restore", ErrInvalidEnvelope)
-	}
-	if commandErr, ok := commandErrorFromEnvelope("restore", controlRoot, 0, envelope); ok {
-		return RestoreSummary{}, commandErr
-	}
-	source, okSource := dataSafeID(envelope, "source_save_point")
-	restored, okRestored := dataSafeID(envelope, "restored_save_point")
-	workspace, _ := envelope.Data["workspace"].(string)
-	filesChanged, filesOK := envelope.Data["files_changed"].(bool)
-	historyChanged, historyOK := envelope.Data["history_changed"].(bool)
-	unsavedChanges, unsavedOK := envelope.Data["unsaved_changes"].(bool)
-	if !envelope.validFor("restore", controlRoot) ||
-		envelope.Data["mode"] != "direct_restore" ||
-		workspace != workspaceMain ||
-		!okSource ||
-		source != savePointID ||
-		!okRestored ||
-		!filesOK ||
-		!historyOK ||
-		historyChanged ||
-		!unsavedOK ||
-		unsavedChanges {
-		return RestoreSummary{}, fmt.Errorf("%w: restore", ErrInvalidEnvelope)
-	}
-	return RestoreSummary{SourceSavePointID: source, RestoredSavePointID: restored, Workspace: workspace, FilesChanged: filesChanged, HistoryChanged: historyChanged, UnsavedChanges: unsavedChanges}, nil
-}
-
-func (runner *Runner) VerifyRestoreDirectCapability(ctx context.Context) error {
+func (runner *Runner) VerifyAFSCPDirectCapability(ctx context.Context) error {
 	if runner == nil {
 		return ErrInvalidConfig
 	}
-	result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{
-		Path: runner.binaryPath,
-		Args: []string{"restore", "--help"},
-		Dir:  runner.cwd,
-	})
-	if err != nil {
-		return commandFailedError("restore --help", err)
+	checks := []struct {
+		name     string
+		args     []string
+		required []string
+	}{
+		{name: "afscp --help", args: []string{"afscp", "--help"}, required: []string{"jvs afscp", "--control-root", "--home", "--json"}},
+		{name: "afscp save --help", args: []string{"afscp", "save", "--help"}, required: []string{"save", "--message", "--control-root", "--home", "--json"}},
+		{name: "afscp list --help", args: []string{"afscp", "list", "--help"}, required: []string{"list", "--control-root", "--home", "--json"}},
+		{name: "afscp restore --help", args: []string{"afscp", "restore", "--help"}, required: []string{"restore", "--save-point", "--control-root", "--home", "--json"}},
+		{name: "afscp status --help", args: []string{"afscp", "status", "--help"}, required: []string{"status", "--control-root", "--home", "--json"}},
+		{name: "afscp doctor --help", args: []string{"afscp", "doctor", "--help"}, required: []string{"doctor", "--control-root", "--home", "--json"}},
 	}
-	result = runner.capResult(result)
-	if result.ExitCode != 0 {
-		return fmt.Errorf("%w: restore --help", ErrCommandFailed)
-	}
-	help := string(result.Stdout) + "\n" + string(result.Stderr)
-	if !strings.Contains(help, "--direct") || !strings.Contains(help, "--discard-unsaved") {
-		return fmt.Errorf("%w: restore --direct capability", ErrCommandFailed)
+	for _, check := range checks {
+		result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{
+			Path: runner.binaryPath,
+			Args: check.args,
+			Dir:  runner.cwd,
+		})
+		if err != nil {
+			return commandFailedError(check.name, err)
+		}
+		result = runner.capResult(result)
+		if result.ExitCode != 0 {
+			return fmt.Errorf("%w: %s", ErrCommandFailed, check.name)
+		}
+		help := string(result.Stdout) + "\n" + string(result.Stderr)
+		for _, required := range check.required {
+			if !strings.Contains(help, required) {
+				return fmt.Errorf("%w: afscp direct capability", ErrCommandFailed)
+			}
+		}
 	}
 	return nil
-}
-
-func (runner *Runner) RestoreRun(ctx context.Context, controlRoot, planID string) (RestoreRunSummary, error) {
-	planID = strings.TrimSpace(planID)
-	if !safeOpaqueID(planID) {
-		return RestoreRunSummary{}, fmt.Errorf("%w: plan id", ErrInvalidArgument)
-	}
-	envelope, err := runner.runControlJSON(ctx, "restore", controlRoot, []string{"restore", "--run", planID, "--json"})
-	if err != nil {
-		return RestoreRunSummary{}, err
-	}
-	outPlanID, okPlan := dataSafeID(envelope, "plan_id")
-	source, okSource, hasSource := optionalDataSafeIDPresence(envelope, "source_save_point")
-	restored, okRestored, hasRestored := optionalDataSafeIDPresence(envelope, "restored_save_point")
-	workspace, _ := envelope.Data["workspace"].(string)
-	_, filesOK := envelope.Data["files_changed"].(bool)
-	historyChanged, historyOK := envelope.Data["history_changed"].(bool)
-	unsavedChanges, unsavedOK := envelope.Data["unsaved_changes"].(bool)
-	if envelope.Data["mode"] != "run" || workspace != workspaceMain || !okPlan || outPlanID != planID || !okSource || !okRestored || (!hasSource && !hasRestored) || !filesOK || !historyOK || historyChanged || !unsavedOK || unsavedChanges {
-		return RestoreRunSummary{}, fmt.Errorf("%w: restore run", ErrInvalidEnvelope)
-	}
-	return RestoreRunSummary{PlanID: outPlanID, SourceSavePointID: source, RestoredSavePointID: restored, Workspace: workspace}, nil
-}
-
-func (runner *Runner) RestoreDiscard(ctx context.Context, controlRoot, planID string) (RestoreDiscardSummary, error) {
-	planID = strings.TrimSpace(planID)
-	if !safeOpaqueID(planID) {
-		return RestoreDiscardSummary{}, fmt.Errorf("%w: plan id", ErrInvalidArgument)
-	}
-	envelope, err := runner.runControlJSON(ctx, "restore discard", controlRoot, []string{"restore", "discard", planID, "--json"})
-	if err != nil {
-		return RestoreDiscardSummary{}, err
-	}
-	outPlanID, okPlan := dataSafeID(envelope, "plan_id")
-	workspace, _ := envelope.Data["workspace"].(string)
-	discarded, discardedOK := envelope.Data["plan_discarded"].(bool)
-	filesChanged, filesOK := envelope.Data["files_changed"].(bool)
-	historyChanged, historyOK := envelope.Data["history_changed"].(bool)
-	if envelope.Data["mode"] != "discard" || workspace != workspaceMain || !okPlan || outPlanID != planID || !discardedOK || !discarded || !filesOK || filesChanged || !historyOK || historyChanged {
-		return RestoreDiscardSummary{}, fmt.Errorf("%w: restore discard", ErrInvalidEnvelope)
-	}
-	return RestoreDiscardSummary{PlanID: outPlanID, PlanDiscarded: true, Workspace: workspace}, nil
-}
-
-func (runner *Runner) RecoveryStatus(ctx context.Context, controlRoot string) (RecoveryStatusSummary, error) {
-	envelope, err := runner.runControlJSON(ctx, "recovery status", controlRoot, []string{"recovery", "status", "--json"})
-	if err != nil {
-		return RecoveryStatusSummary{}, err
-	}
-	workspace, _ := envelope.Data["workspace"].(string)
-	if workspace != workspaceMain {
-		return RecoveryStatusSummary{}, fmt.Errorf("%w: recovery status", ErrInvalidEnvelope)
-	}
-	rawPlans, plansOK := envelope.Data["plans"].([]any)
-	if !plansOK {
-		return RecoveryStatusSummary{}, fmt.Errorf("%w: recovery status", ErrInvalidEnvelope)
-	}
-	if rawState, exists := envelope.Data["restore_state"]; exists && rawState != nil {
-		state, err := parseRestoreStateObject(rawState)
-		if err != nil {
-			return RecoveryStatusSummary{}, fmt.Errorf("%w: recovery status", ErrInvalidEnvelope)
-		}
-		state.Workspace = workspace
-		if err := validateRecoveryPlans(rawPlans); err != nil {
-			return RecoveryStatusSummary{}, fmt.Errorf("%w: recovery status", ErrInvalidEnvelope)
-		}
-		return state, nil
-	}
-	if len(rawPlans) == 0 {
-		return RecoveryStatusSummary{RestoreState: "idle", Workspace: workspace}, nil
-	}
-	state, err := parseActiveRecoveryPlans(rawPlans)
-	if err != nil {
-		return RecoveryStatusSummary{}, fmt.Errorf("%w: recovery status", ErrInvalidEnvelope)
-	}
-	state.Workspace = workspace
-	return state, nil
 }
 
 func (runner *Runner) RepoClone(ctx context.Context, sourceControlRoot, targetPayloadRoot, targetControlRoot string) (RepoCloneSummary, error) {
@@ -676,6 +324,173 @@ func (runner *Runner) RepoClone(ctx context.Context, sourceControlRoot, targetPa
 		return RepoCloneSummary{}, fmt.Errorf("%w: repo clone", ErrInvalidEnvelope)
 	}
 	return RepoCloneSummary{SourceRepoID: sourceRepoID, TargetRepoID: targetRepoID, SavePointsMode: savePointsMode, SavePointsCopiedCount: copiedCount, RuntimeStateCopied: runtimeCopied, Workspace: workspaceMain}, nil
+}
+
+func (runner *Runner) DirectSave(ctx context.Context, target DirectTarget, message string) (DirectSaveSummary, error) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return DirectSaveSummary{}, fmt.Errorf("%w: save message", ErrInvalidArgument)
+	}
+	envelope, err := runner.runAFSCPDirectJSON(ctx, target, "save", []string{"save", "--message", message, "--json"})
+	if err != nil {
+		return DirectSaveSummary{}, err
+	}
+	savePointID, okSavePoint := directRequiredID(envelope.Data, "save_point_id")
+	historyHead, okHistoryHead := directRequiredID(envelope.Data, "history_head")
+	createdAt, okCreatedAt := stringFromMap(envelope.Data, "created_at")
+	outMessage, okMessage := stringFromMap(envelope.Data, "message")
+	if !okSavePoint || !okHistoryHead || historyHead != savePointID || !okCreatedAt || strings.TrimSpace(createdAt) == "" || !okMessage {
+		return DirectSaveSummary{}, fmt.Errorf("%w: afscp save", ErrInvalidEnvelope)
+	}
+	return DirectSaveSummary{
+		SavePointID:   savePointID,
+		HistoryHeadID: historyHead,
+		Message:       safeHistoryMessageText(outMessage),
+		CreatedAt:     safeSummaryText(createdAt),
+	}, nil
+}
+
+func (runner *Runner) DirectList(ctx context.Context, target DirectTarget) (DirectListSummary, error) {
+	envelope, err := runner.runAFSCPDirectJSON(ctx, target, "list", []string{"list", "--json"})
+	if err != nil {
+		return DirectListSummary{}, err
+	}
+	rawSavePoints, ok := envelope.Data["save_points"].([]any)
+	if !ok {
+		return DirectListSummary{}, fmt.Errorf("%w: afscp list", ErrInvalidEnvelope)
+	}
+	historyHead, okHistoryHead, _ := optionalIDPresenceFromMap(envelope.Data, "history_head")
+	if !okHistoryHead {
+		return DirectListSummary{}, fmt.Errorf("%w: afscp list", ErrInvalidEnvelope)
+	}
+	savePoints := make([]DirectSavePointSummary, 0, len(rawSavePoints))
+	for _, raw := range rawSavePoints {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return DirectListSummary{}, fmt.Errorf("%w: afscp list", ErrInvalidEnvelope)
+		}
+		id, okID := directRequiredID(item, "save_point_id")
+		message, okMessage := optionalStringFromMap(item, "message")
+		createdAt, okCreatedAt := optionalStringFromMap(item, "created_at")
+		itemHistoryHead, okItemHistoryHead := optionalBoolFromMap(item, "history_head")
+		if !okID || !okMessage || !okCreatedAt || !okItemHistoryHead {
+			return DirectListSummary{}, fmt.Errorf("%w: afscp list", ErrInvalidEnvelope)
+		}
+		savePoints = append(savePoints, DirectSavePointSummary{
+			SavePointID: id,
+			Message:     safeHistoryMessageText(message),
+			CreatedAt:   safeSummaryText(createdAt),
+			HistoryHead: itemHistoryHead,
+		})
+	}
+	return DirectListSummary{HistoryHeadID: historyHead, SavePoints: savePoints}, nil
+}
+
+func (runner *Runner) DirectRestore(ctx context.Context, target DirectTarget, savePointID string) (DirectRestoreSummary, error) {
+	savePointID = strings.TrimSpace(savePointID)
+	if !safeOpaqueID(savePointID) {
+		return DirectRestoreSummary{}, fmt.Errorf("%w: save point id", ErrInvalidArgument)
+	}
+	envelope, err := runner.runAFSCPDirectJSON(ctx, target, "restore", []string{"restore", "--save-point", savePointID, "--json"})
+	if err != nil {
+		return DirectRestoreSummary{}, err
+	}
+	restored, okRestored := directRequiredID(envelope.Data, "restored_save_point_id")
+	previousHead, okPreviousHead, _ := optionalIDPresenceFromMap(envelope.Data, "previous_head")
+	newHead, okNewHead := directRequiredID(envelope.Data, "new_head")
+	if !okRestored || restored != savePointID || !okPreviousHead || !okNewHead || newHead != restored {
+		return DirectRestoreSummary{}, fmt.Errorf("%w: afscp restore", ErrInvalidEnvelope)
+	}
+	return DirectRestoreSummary{
+		RestoredSavePointID: restored,
+		PreviousHeadID:      previousHead,
+		NewHeadID:           newHead,
+	}, nil
+}
+
+func (runner *Runner) DirectStatus(ctx context.Context, target DirectTarget) (DirectStatusSummary, error) {
+	envelope, err := runner.runAFSCPDirectJSON(ctx, target, "status", []string{"status", "--json"})
+	if err != nil {
+		return DirectStatusSummary{}, err
+	}
+	historyHead, okHistoryHead, _ := optionalIDPresenceFromMap(envelope.Data, "history_head")
+	metadataState, okMetadataState := requiredSafeSummaryFromMap(envelope.Data, "metadata_state")
+	activeOperation, okActiveOperation := requiredSafeSummaryFromMap(envelope.Data, "active_operation")
+	recovery, okRecovery := requiredSafeSummaryFromMap(envelope.Data, "recovery")
+	if !okHistoryHead || !okMetadataState || !okActiveOperation || !okRecovery {
+		return DirectStatusSummary{}, fmt.Errorf("%w: afscp status", ErrInvalidEnvelope)
+	}
+	return DirectStatusSummary{HistoryHeadID: historyHead, MetadataState: metadataState, ActiveOperation: activeOperation, Recovery: recovery}, nil
+}
+
+func (runner *Runner) DirectDoctor(ctx context.Context, target DirectTarget) (DirectDoctorSummary, error) {
+	envelope, err := runner.runAFSCPDirectJSON(ctx, target, "doctor", []string{"doctor", "--json"})
+	if err != nil {
+		return DirectDoctorSummary{}, err
+	}
+	repoID, okRepoID := directRequiredID(envelope.Data, "repo_id")
+	healthy, okHealthy := boolFromMap(envelope.Data, "healthy")
+	findings, okFindings := envelope.Data["findings"].([]any)
+	metadataState, okMetadataState := requiredSafeSummaryFromMap(envelope.Data, "metadata_state")
+	journal, okJournal := requiredSafeSummaryFromMap(envelope.Data, "journal")
+	recovery, okRecovery := requiredSafeSummaryFromMap(envelope.Data, "recovery")
+	if !okRepoID || !okHealthy || !healthy || !okFindings || !okMetadataState || !okJournal || !okRecovery {
+		return DirectDoctorSummary{}, fmt.Errorf("%w: afscp doctor", ErrInvalidEnvelope)
+	}
+	return DirectDoctorSummary{RepoID: repoID, Healthy: healthy, FindingCount: len(findings), MetadataState: metadataState, Journal: journal, Recovery: recovery}, nil
+}
+
+func (runner *Runner) runAFSCPDirectJSON(ctx context.Context, target DirectTarget, operation string, operationArgs []string) (afscpDirectEnvelope, error) {
+	if runner == nil {
+		return afscpDirectEnvelope{}, ErrInvalidConfig
+	}
+	if err := validateDirectTarget(target); err != nil {
+		return afscpDirectEnvelope{}, err
+	}
+	args := []string{"afscp", "--control-root", target.ControlRoot, "--home", target.Home}
+	args = append(args, operationArgs...)
+	result, err := runner.commandRunner.RunJVSCommand(ctx, CommandSpec{Path: runner.binaryPath, Args: args, Dir: runner.cwd})
+	if err != nil {
+		return afscpDirectEnvelope{}, commandFailedError("afscp "+operation, err)
+	}
+	result = runner.capResult(result)
+	if result.ExitCode != 0 {
+		if commandErr, ok := directCommandErrorFromResult(operation, result); ok {
+			commandErr.ExitCode = result.ExitCode
+			return afscpDirectEnvelope{}, commandErr
+		}
+		return afscpDirectEnvelope{}, fmt.Errorf("%w: afscp %s", ErrCommandFailed, operation)
+	}
+	parsed, err := decodeAFSCPDirectEnvelope(result.Stdout)
+	if err != nil {
+		return afscpDirectEnvelope{}, fmt.Errorf("%w: afscp %s", ErrInvalidEnvelope, operation)
+	}
+	if parsed.Command != operation {
+		return afscpDirectEnvelope{}, fmt.Errorf("%w: afscp %s", ErrInvalidEnvelope, operation)
+	}
+	if commandErr, ok := directCommandErrorFromEnvelope(operation, 0, parsed); ok {
+		return afscpDirectEnvelope{}, commandErr
+	}
+	if !parsed.OK || parsed.Status != "succeeded" || parsed.Error != nil || parsed.Data == nil {
+		return afscpDirectEnvelope{}, fmt.Errorf("%w: afscp %s", ErrInvalidEnvelope, operation)
+	}
+	if _, ok := forbiddenDirectFieldInValue(parsed.Data); ok {
+		return afscpDirectEnvelope{}, fmt.Errorf("%w: afscp %s", ErrInvalidEnvelope, operation)
+	}
+	return parsed, nil
+}
+
+func validateDirectTarget(target DirectTarget) error {
+	if err := validateCleanAbsolute(target.ControlRoot, true); err != nil {
+		return fmt.Errorf("%w: control root", ErrInvalidArgument)
+	}
+	if err := validateCleanAbsolute(target.Home, true); err != nil {
+		return fmt.Errorf("%w: home", ErrInvalidArgument)
+	}
+	if rootsOverlap(target.ControlRoot, target.Home) {
+		return fmt.Errorf("%w: direct target roots overlap", ErrInvalidArgument)
+	}
+	return nil
 }
 
 func (runner *Runner) runControlJSON(ctx context.Context, command, controlRoot string, commandArgs []string) (envelope, error) {
@@ -738,6 +553,22 @@ type envelopeError struct {
 	Code string `json:"code"`
 }
 
+type afscpDirectEnvelope struct {
+	Contract  string                    `json:"contract"`
+	Command   string                    `json:"command"`
+	OK        bool                      `json:"ok"`
+	Status    string                    `json:"status"`
+	Data      map[string]any            `json:"data"`
+	Error     *afscpDirectEnvelopeError `json:"error,omitempty"`
+	Retryable bool                      `json:"retryable,omitempty"`
+}
+
+type afscpDirectEnvelopeError struct {
+	Code      string `json:"code"`
+	Message   string `json:"message,omitempty"`
+	Retryable bool   `json:"retryable,omitempty"`
+}
+
 func decodeEnvelope(stdout []byte) (envelope, error) {
 	decoder := json.NewDecoder(bytes.NewReader(stdout))
 	var parsed envelope
@@ -754,6 +585,44 @@ func decodeEnvelope(stdout []byte) (envelope, error) {
 	return parsed, nil
 }
 
+func decodeAFSCPDirectEnvelope(stdout []byte) (afscpDirectEnvelope, error) {
+	decoder := json.NewDecoder(bytes.NewReader(stdout))
+	decoder.DisallowUnknownFields()
+	var parsed afscpDirectEnvelope
+	if err := decoder.Decode(&parsed); err != nil {
+		return afscpDirectEnvelope{}, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return afscpDirectEnvelope{}, ErrInvalidEnvelope
+	}
+	if parsed.Contract != directContractV1 {
+		return afscpDirectEnvelope{}, ErrInvalidEnvelope
+	}
+	if parsed.Command == "" || !knownDirectStatus(parsed.Status) {
+		return afscpDirectEnvelope{}, ErrInvalidEnvelope
+	}
+	if parsed.OK {
+		if parsed.Status != "succeeded" || parsed.Data == nil || parsed.Error != nil {
+			return afscpDirectEnvelope{}, ErrInvalidEnvelope
+		}
+		return parsed, nil
+	}
+	if parsed.Error == nil || !safeOpaqueID(parsed.Error.Code) {
+		return afscpDirectEnvelope{}, ErrInvalidEnvelope
+	}
+	return parsed, nil
+}
+
+func knownDirectStatus(status string) bool {
+	switch status {
+	case "accepted", "running", "succeeded", "failed", "recovery_required":
+		return true
+	default:
+		return false
+	}
+}
+
 func commandErrorFromResult(command, acceptedRepoRoot string, result CommandResult, otherAcceptedRepoRoots ...string) (*CommandError, bool) {
 	for _, output := range [][]byte{result.Stdout, result.Stderr} {
 		parsed, err := decodeEnvelope(output)
@@ -761,6 +630,19 @@ func commandErrorFromResult(command, acceptedRepoRoot string, result CommandResu
 			continue
 		}
 		if commandErr, ok := commandErrorFromEnvelope(command, acceptedRepoRoot, result.ExitCode, parsed, otherAcceptedRepoRoots...); ok {
+			return commandErr, true
+		}
+	}
+	return nil, false
+}
+
+func directCommandErrorFromResult(operation string, result CommandResult) (*CommandError, bool) {
+	for _, output := range [][]byte{result.Stdout, result.Stderr} {
+		parsed, err := decodeAFSCPDirectEnvelope(output)
+		if err != nil {
+			continue
+		}
+		if commandErr, ok := directCommandErrorFromEnvelope(operation, result.ExitCode, parsed); ok {
 			return commandErr, true
 		}
 	}
@@ -778,6 +660,17 @@ func commandErrorFromEnvelope(command, acceptedRepoRoot string, exitCode int, pa
 		return nil, false
 	}
 	return &CommandError{Command: command, ExitCode: exitCode, Code: parsed.Error.Code}, true
+}
+
+func directCommandErrorFromEnvelope(operation string, exitCode int, parsed afscpDirectEnvelope) (*CommandError, bool) {
+	if parsed.Contract != directContractV1 ||
+		parsed.Command != operation ||
+		parsed.OK ||
+		parsed.Error == nil ||
+		!safeOpaqueID(parsed.Error.Code) {
+		return nil, false
+	}
+	return &CommandError{Command: "afscp " + operation, ExitCode: exitCode, Code: parsed.Error.Code}, true
 }
 
 func repoRootMatches(repoRoot, acceptedRepoRoot string, otherAcceptedRepoRoots ...string) bool {
@@ -837,6 +730,122 @@ func optionalDataSafeIDPresence(parsed envelope, key string) (string, bool, bool
 	return text, true, true
 }
 
+func directRequiredID(object map[string]any, key string) (string, bool) {
+	value, ok := object[key]
+	if !ok || value == nil || value == "" {
+		return "", false
+	}
+	text, _ := value.(string)
+	if !safeOpaqueID(text) {
+		return "", false
+	}
+	return text, true
+}
+
+func optionalIDFromMap(object map[string]any, key string) (string, bool) {
+	value, ok := object[key]
+	if !ok || value == nil || value == "" {
+		return "", true
+	}
+	text, _ := value.(string)
+	if !safeOpaqueID(text) {
+		return "", false
+	}
+	return text, true
+}
+
+func optionalIDPresenceFromMap(object map[string]any, key string) (string, bool, bool) {
+	value, ok := object[key]
+	if !ok {
+		return "", false, false
+	}
+	if value == nil || value == "" {
+		return "", true, true
+	}
+	text, _ := value.(string)
+	if !safeOpaqueID(text) {
+		return "", false, true
+	}
+	return text, true, true
+}
+
+func stringFromMap(object map[string]any, key string) (string, bool) {
+	value, ok := object[key]
+	if !ok {
+		return "", false
+	}
+	text, ok := value.(string)
+	return text, ok
+}
+
+func optionalStringFromMap(object map[string]any, key string) (string, bool) {
+	value, ok := object[key]
+	if !ok || value == nil {
+		return "", true
+	}
+	text, ok := value.(string)
+	return text, ok
+}
+
+func boolFromMap(object map[string]any, key string) (bool, bool) {
+	value, ok := object[key]
+	if !ok {
+		return false, false
+	}
+	boolean, ok := value.(bool)
+	return boolean, ok
+}
+
+func optionalBoolFromMap(object map[string]any, key string) (bool, bool) {
+	value, ok := object[key]
+	if !ok || value == nil {
+		return false, true
+	}
+	boolean, ok := value.(bool)
+	return boolean, ok
+}
+
+func requiredSafeSummaryFromMap(object map[string]any, key string) (string, bool) {
+	value, ok := object[key]
+	if !ok {
+		return "", false
+	}
+	return safeDirectSummaryValue(value)
+}
+
+func safeDirectSummaryValue(value any) (string, bool) {
+	switch typed := value.(type) {
+	case nil:
+		return "none", true
+	case string:
+		text := safeSummaryText(typed)
+		return text, text != "" && text != "redacted"
+	case bool:
+		if typed {
+			return "true", true
+		}
+		return "false", true
+	case map[string]any:
+		for _, key := range []string{"status", "state", "operation", "mode"} {
+			if text, ok := optionalStringFromMap(typed, key); ok && text != "" {
+				safe := safeSummaryText(text)
+				return safe, safe != "" && safe != "redacted"
+			}
+		}
+		if len(typed) == 0 {
+			return "none", true
+		}
+		return "present", true
+	case []any:
+		if len(typed) == 0 {
+			return "none", true
+		}
+		return "present", true
+	default:
+		return "", false
+	}
+}
+
 func stringData(value any) string {
 	text, _ := value.(string)
 	return text
@@ -856,171 +865,29 @@ func intData(value any) (int, bool) {
 	}
 }
 
-func repairActionSummary(raw any, action string) (RepairActionSummary, bool) {
-	items, ok := raw.([]any)
-	if !ok {
-		return RepairActionSummary{}, false
-	}
-	for _, rawItem := range items {
-		item, ok := rawItem.(map[string]any)
-		if !ok {
-			return RepairActionSummary{}, false
-		}
-		itemAction, _ := item["action"].(string)
-		if itemAction != action {
-			continue
-		}
-		success, successOK := item["success"].(bool)
-		if !successOK {
-			return RepairActionSummary{}, false
-		}
-		cleaned := 0
-		if rawCleaned, exists := item["cleaned"]; exists {
-			var cleanedOK bool
-			cleaned, cleanedOK = intData(rawCleaned)
-			if !cleanedOK || cleaned < 0 {
-				return RepairActionSummary{}, false
+func forbiddenDirectFieldInValue(value any) (string, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if forbiddenDirectResultField(key) {
+				return key, true
+			}
+			if field, ok := forbiddenDirectFieldInValue(child); ok {
+				return field, true
 			}
 		}
-		return RepairActionSummary{Action: itemAction, Success: success, Cleaned: cleaned}, true
+	case []any:
+		for _, child := range typed {
+			if field, ok := forbiddenDirectFieldInValue(child); ok {
+				return field, true
+			}
+		}
 	}
-	return RepairActionSummary{}, false
+	return "", false
 }
 
-func parseRestorePreviewManagedFiles(raw any) (RestorePreviewManagedFilesSummary, bool) {
-	object, ok := raw.(map[string]any)
-	if !ok {
-		return RestorePreviewManagedFilesSummary{}, false
-	}
-	changed, okChanged := parseRestorePreviewChangeSummary(object["overwrite"])
-	removed, okRemoved := parseRestorePreviewChangeSummary(object["delete"])
-	added, okAdded := parseRestorePreviewChangeSummary(object["create"])
-	if !okChanged || !okRemoved || !okAdded {
-		return RestorePreviewManagedFilesSummary{}, false
-	}
-	return RestorePreviewManagedFilesSummary{
-		Added:       added,
-		Changed:     changed,
-		Removed:     removed,
-		Destructive: changed.Count > 0 || removed.Count > 0,
-	}, true
-}
-
-func parseRestorePreviewChangeSummary(raw any) (RestorePreviewChangeSummary, bool) {
-	object, ok := raw.(map[string]any)
-	if !ok {
-		return RestorePreviewChangeSummary{}, false
-	}
-	count, ok := intData(object["count"])
-	if !ok || count < 0 {
-		return RestorePreviewChangeSummary{}, false
-	}
-	rawSamples, ok := object["samples"].([]any)
-	if !ok {
-		if count == 0 {
-			return RestorePreviewChangeSummary{Count: count, Samples: []string{}}, true
-		}
-		return RestorePreviewChangeSummary{}, false
-	}
-	if len(rawSamples) > 10 {
-		return RestorePreviewChangeSummary{}, false
-	}
-	samples := make([]string, 0, len(rawSamples))
-	for _, rawSample := range rawSamples {
-		sample, ok := rawSample.(string)
-		if !ok || !safeDisplayPath(sample) {
-			return RestorePreviewChangeSummary{}, false
-		}
-		samples = append(samples, sample)
-	}
-	return RestorePreviewChangeSummary{Count: count, Samples: samples}, true
-}
-
-func knownRestoreState(state string) bool {
-	switch state {
-	case "idle", "none", "pending_restore_preview", "stale_restore_preview":
-		return true
-	default:
-		return false
-	}
-}
-
-func parseRestoreStateObject(raw any) (RecoveryStatusSummary, error) {
-	object, ok := raw.(map[string]any)
-	if !ok {
-		return RecoveryStatusSummary{}, ErrInvalidEnvelope
-	}
-	state, _ := object["state"].(string)
-	if !knownRestoreState(state) || state == "idle" || state == "none" {
-		return RecoveryStatusSummary{}, ErrInvalidEnvelope
-	}
-	blocking, blockingOK := object["blocking"].(bool)
-	if !blockingOK {
-		return RecoveryStatusSummary{}, ErrInvalidEnvelope
-	}
-	planID, okPlan := safeRequiredIDFromMap(object, "plan_id")
-	recoveryPlanID, okRecovery := safeOptionalIDFromMap(object, "recovery_plan_id")
-	if !okPlan || !okRecovery {
-		return RecoveryStatusSummary{}, ErrInvalidEnvelope
-	}
-	return RecoveryStatusSummary{
-		RestoreState:         state,
-		ActivePlanID:         planID,
-		ActiveRecoveryPlanID: recoveryPlanID,
-		Blocking:             blocking,
-		Message:              safeSummaryText(stringData(object["message"])),
-	}, nil
-}
-
-func parseActiveRecoveryPlans(rawPlans []any) (RecoveryStatusSummary, error) {
-	var active RecoveryStatusSummary
-	activeCount := 0
-	for _, raw := range rawPlans {
-		plan, ok := raw.(map[string]any)
-		if !ok {
-			return RecoveryStatusSummary{}, ErrInvalidEnvelope
-		}
-		status := strings.ToLower(stringData(plan["status"]))
-		if status != "active" {
-			continue
-		}
-		activeCount++
-		if activeCount > 1 {
-			return RecoveryStatusSummary{}, ErrInvalidEnvelope
-		}
-		recoveryPlanID, okPlan := safeRequiredIDFromMap(plan, "plan_id")
-		restorePlanID, okRestore := safeOptionalIDFromMap(plan, "restore_plan_id")
-		if !okPlan || !okRestore {
-			return RecoveryStatusSummary{}, ErrInvalidEnvelope
-		}
-		active = RecoveryStatusSummary{
-			RestoreState:         "active_recovery",
-			ActiveRecoveryPlanID: recoveryPlanID,
-			ActivePlanID:         restorePlanID,
-			Blocking:             true,
-		}
-	}
-	if activeCount != 1 {
-		return RecoveryStatusSummary{}, ErrInvalidEnvelope
-	}
-	return active, nil
-}
-
-func validateRecoveryPlans(rawPlans []any) error {
-	for _, raw := range rawPlans {
-		plan, ok := raw.(map[string]any)
-		if !ok {
-			return ErrInvalidEnvelope
-		}
-		if _, ok := safeOptionalIDFromMap(plan, "plan_id"); !ok {
-			return ErrInvalidEnvelope
-		}
-		state, _ := plan["state"].(string)
-		if state != "" && !knownRestoreState(state) {
-			return ErrInvalidEnvelope
-		}
-	}
-	return nil
+func forbiddenDirectResultField(key string) bool {
+	return projectionguard.ForbiddenJVSInternalField(key)
 }
 
 func safeRequiredIDFromMap(object map[string]any, key string) (string, bool) {

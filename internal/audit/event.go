@@ -27,9 +27,6 @@ const (
 	EventTypeRepoPurge                       EventType = "repo_purge"
 	EventTypeSavePointCreate                 EventType = "save_point_create"
 	EventTypeRestore                         EventType = "restore"
-	EventTypeRestorePreview                  EventType = "restore_preview"
-	EventTypeRestorePreviewDiscard           EventType = "restore_preview_discard"
-	EventTypeRestoreRun                      EventType = "restore_run"
 	EventTypeTemplateCreate                  EventType = "template_create"
 	EventTypeTemplateClone                   EventType = "template_clone"
 	EventTypeExportCreate                    EventType = "export_create"
@@ -62,9 +59,6 @@ var eventTypes = []EventType{
 	EventTypeRepoPurge,
 	EventTypeSavePointCreate,
 	EventTypeRestore,
-	EventTypeRestorePreview,
-	EventTypeRestorePreviewDiscard,
-	EventTypeRestoreRun,
 	EventTypeTemplateCreate,
 	EventTypeTemplateClone,
 	EventTypeExportCreate,
@@ -93,9 +87,6 @@ var operationEventTypes = map[string]EventType{
 	"repo_purge":                   EventTypeRepoPurge,
 	"save_point_create":            EventTypeSavePointCreate,
 	"restore":                      EventTypeRestore,
-	"restore_preview":              EventTypeRestorePreview,
-	"restore_preview_discard":      EventTypeRestorePreviewDiscard,
-	"restore_run":                  EventTypeRestoreRun,
 	"template_create":              EventTypeTemplateCreate,
 	"template_clone":               EventTypeTemplateClone,
 	"export_create":                EventTypeExportCreate,

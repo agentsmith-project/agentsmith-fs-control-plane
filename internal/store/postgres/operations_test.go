@@ -25,18 +25,11 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.OperationWorkerCommitStore = (*Store)(nil)
 	var _ store.RepoCreateOperationIntakeStore = (*Store)(nil)
 	var _ store.RestoreOperationIntakeStore = (*Store)(nil)
-	var _ store.RestorePreviewOperationIntakeStore = (*Store)(nil)
-	var _ store.RestorePreviewDiscardOperationIntakeStore = (*Store)(nil)
-	var _ store.RestoreRunOperationIntakeStore = (*Store)(nil)
 	var _ store.RepoCreateOperationCommitStore = (*Store)(nil)
 	var _ store.RepoCreateOperationRecoveryStore = (*Store)(nil)
 	var _ store.SavePointCreateOperationRecoveryStore = (*Store)(nil)
 	var _ store.RestoreOperationRecoveryStore = (*Store)(nil)
-	var _ store.RestorePreviewOperationRecoveryStore = (*Store)(nil)
-	var _ store.RestorePreviewDiscardOperationRecoveryStore = (*Store)(nil)
-	var _ store.RestoreRunOperationRecoveryStore = (*Store)(nil)
 	var _ store.RepoJVSMutationGateReader = (*Store)(nil)
-	var _ store.RestoreRunIntakeGateReader = (*Store)(nil)
 	var _ store.VolumeEnsureOperationCommitStore = (*Store)(nil)
 	var _ store.VolumeEnsureOperationRecoveryStore = (*Store)(nil)
 	var _ store.NamespaceUpsertOperationCommitStore = (*Store)(nil)
@@ -70,7 +63,7 @@ func TestRepoHasNonTerminalJVSMutationScopesRepoTypeAndNonTerminalState(t *testi
 		"SELECT EXISTS",
 		"FROM operations",
 		"repo_id = $1",
-		"operation_type IN ('save_point_create', 'restore', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
+		"operation_type IN ('save_point_create', 'restore', 'template_create', 'template_clone')",
 		"operation_state NOT IN ('succeeded','failed','cancelled')",
 	)
 	for _, forbidden := range []string{"UPDATE ", "INSERT ", "DELETE ", "FOR UPDATE", "lease_owner", "repo_fences", "restore_plans"} {
@@ -80,49 +73,14 @@ func TestRepoHasNonTerminalJVSMutationScopesRepoTypeAndNonTerminalState(t *testi
 	}
 }
 
-func TestRepoHasNonTerminalJVSMutationDoesNotBlockFailedNoSideEffectRestorePreview(t *testing.T) {
+func TestRepoHasNonTerminalJVSMutationDoesNotInspectRestorePlans(t *testing.T) {
 	query := repoHasNonTerminalJVSMutationSQL()
 	assertSQLContainsInOrder(t, query,
-		"operation_type IN ('save_point_create', 'restore', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
+		"operation_type IN ('save_point_create', 'restore', 'template_create', 'template_clone')",
 		"operation_state NOT IN ('succeeded','failed','cancelled')",
 	)
 	if strings.Contains(query, "restore_plans") {
 		t.Fatalf("save point history gate must not inspect durable restore plans: %s", query)
-	}
-	if strings.Contains(query, "operation_state = 'failed'") {
-		t.Fatalf("save point history gate must not block failed no-side-effect preview operations: %s", query)
-	}
-}
-
-func TestRestoreRunExistsForPreviewOperationScopesPreviewRepoNamespaceAndBlockingStates(t *testing.T) {
-	exec := &fakeExecutor{row: fakeRow{values: []any{true}}}
-	st := &Store{exec: exec}
-
-	got, err := st.RestoreRunExistsForPreviewOperation(context.Background(), "ns_alpha01", "repo_alpha01", "op_preview01")
-	if err != nil {
-		t.Fatalf("RestoreRunExistsForPreviewOperation: %v", err)
-	}
-	if !got {
-		t.Fatal("RestoreRunExistsForPreviewOperation = false, want true")
-	}
-	if exec.queryRowCalls != 1 || len(exec.args) != 3 || exec.args[0] != "ns_alpha01" || exec.args[1] != "repo_alpha01" || exec.args[2] != "op_preview01" {
-		t.Fatalf("query calls/args = %d/%#v, want namespace/repo/preview query", exec.queryRowCalls, exec.args)
-	}
-	assertSQLContainsInOrder(t, exec.query,
-		"SELECT EXISTS",
-		"FROM operations",
-		"operation_type = 'restore_run'",
-		"namespace_id = $1",
-		"repo_id = $2",
-		"resource_type = 'repo'",
-		"resource_id = $2",
-		"input_summary->>'preview_operation_id' = $3",
-		"operation_state NOT IN ('failed','cancelled')",
-	)
-	for _, forbidden := range []string{"UPDATE ", "INSERT ", "DELETE ", "FOR UPDATE", "repo_fences", "restore_plans", "run_command", "recommended_next_command"} {
-		if strings.Contains(strings.ToUpper(exec.query), strings.ToUpper(forbidden)) {
-			t.Fatalf("restore run intake gate query contains forbidden SQL/detail %q: %s", forbidden, exec.query)
-		}
 	}
 }
 
@@ -882,87 +840,6 @@ func TestCreateOrReuseRepoCreateOperationDifferentHashReturnsIdempotencyConflict
 	}
 }
 
-func TestCreateOrReuseRestorePreviewOperationUsesAtomicGateAfterIdempotency(t *testing.T) {
-	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
-	spec := restorePreviewQueuedSpecFixture(createdAt)
-	record, err := operations.NewQueuedOperationRecord(spec)
-	if err != nil {
-		t.Fatalf("NewQueuedOperationRecord: %v", err)
-	}
-	exec := &fakeExecutor{row: fakeRow{values: append(operationRowValues(record.Sanitized()), true, "")}}
-	st := &Store{exec: exec}
-
-	got, err := st.CreateOrReuseRestorePreviewOperation(context.Background(), spec)
-	if err != nil {
-		t.Fatalf("CreateOrReuseRestorePreviewOperation: %v", err)
-	}
-	if got.Existing || got.Reused {
-		t.Fatalf("resolution = %#v, want brand-new preview operation", got)
-	}
-	assertSQLContainsInOrder(t, exec.query,
-		"WITH existing_operation AS (",
-		"FROM operations",
-		"operation_type = 'restore_preview'",
-		"idempotency_key = $9",
-		"), same_repo_jvs_mutation AS (",
-		"operation_type IN ('save_point_create', 'restore', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
-		"operation_state NOT IN ('succeeded','failed','cancelled')",
-		"NOT EXISTS (SELECT 1 FROM existing_operation)",
-		"), active_restore_plan AS (",
-		"FROM restore_plans",
-		"status IN ('pending', 'consuming', 'discarding', 'operator_intervention_required')",
-		"NOT EXISTS (SELECT 1 FROM existing_operation)",
-		"), inserted_operation AS (",
-		"INSERT INTO operations",
-		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation)",
-		"AND NOT EXISTS (SELECT 1 FROM same_repo_jvs_mutation)",
-		"AND NOT EXISTS (SELECT 1 FROM active_restore_plan)",
-		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key)",
-	)
-	for _, forbidden := range []string{"UPDATE restore_plans", "UPDATE repo_fences", "DELETE ", "repo_fences", "INSERT INTO restore_plans"} {
-		if strings.Contains(strings.ToUpper(exec.query), strings.ToUpper(forbidden)) {
-			t.Fatalf("restore preview intake SQL contains forbidden fragment %q: %s", forbidden, exec.query)
-		}
-	}
-}
-
-func TestCreateOrReuseRestorePreviewOperationMapsAtomicGateFailures(t *testing.T) {
-	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
-	spec := restorePreviewQueuedSpecFixture(createdAt)
-	record, err := operations.NewQueuedOperationRecord(spec)
-	if err != nil {
-		t.Fatalf("NewQueuedOperationRecord: %v", err)
-	}
-	for _, tt := range []struct {
-		name string
-		gate string
-		want error
-	}{
-		{name: "active restore plan", gate: "active_restore_plan", want: operations.ErrActiveRestorePlan},
-		{name: "same repo jvs mutation", gate: "same_repo_jvs_mutation", want: operations.ErrRepoJVSMutationInProgress},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			exec := &fakeExecutor{row: fakeRow{values: append(operationRowValues(record.Sanitized()), false, tt.gate)}}
-			st := &Store{exec: exec}
-
-			_, err := st.CreateOrReuseRestorePreviewOperation(context.Background(), spec)
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("CreateOrReuseRestorePreviewOperation error = %v, want %v", err, tt.want)
-			}
-		})
-	}
-}
-
-func TestCreateOrReuseRestorePreviewOperationMapsJVSUniqueIndexViolation(t *testing.T) {
-	spec := restorePreviewQueuedSpecFixture(time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC))
-	st := &Store{exec: &fakeExecutor{row: fakeRow{err: &pq.Error{Code: "23505", Constraint: "operations_one_non_terminal_jvs_mutation_per_repo_idx"}}}}
-
-	_, err := st.CreateOrReuseRestorePreviewOperation(context.Background(), spec)
-	if !errors.Is(err, operations.ErrRepoJVSMutationInProgress) {
-		t.Fatalf("CreateOrReuseRestorePreviewOperation error = %v, want ErrRepoJVSMutationInProgress", err)
-	}
-}
-
 func TestCreateOrReuseRestoreOperationUsesAtomicGateAfterIdempotency(t *testing.T) {
 	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
 	spec := restoreQueuedSpecFixture(createdAt)
@@ -986,18 +863,13 @@ func TestCreateOrReuseRestoreOperationUsesAtomicGateAfterIdempotency(t *testing.
 		"operation_type = 'restore'",
 		"idempotency_key = $9",
 		"), same_repo_jvs_mutation AS (",
-		"operation_type IN ('save_point_create', 'restore', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
+		"operation_type IN ('save_point_create', 'restore', 'template_create', 'template_clone')",
 		"operation_state NOT IN ('succeeded','failed','cancelled')",
-		"NOT EXISTS (SELECT 1 FROM existing_operation)",
-		"), active_restore_plan AS (",
-		"FROM restore_plans",
-		"status IN ('pending', 'consuming', 'discarding', 'operator_intervention_required')",
 		"NOT EXISTS (SELECT 1 FROM existing_operation)",
 		"), inserted_operation AS (",
 		"INSERT INTO operations",
 		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation)",
 		"AND NOT EXISTS (SELECT 1 FROM same_repo_jvs_mutation)",
-		"AND NOT EXISTS (SELECT 1 FROM active_restore_plan)",
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key)",
 	)
 	for _, forbidden := range []string{"UPDATE restore_plans", "INSERT INTO restore_plans", "restore_plan_id", "run_command", "recommended_next_command"} {
@@ -1030,8 +902,6 @@ func TestCreateOrReuseRestoreOperationReusesExistingBeforeGates(t *testing.T) {
 		"idempotency_key = $9",
 		"), same_repo_jvs_mutation AS (",
 		"AND NOT EXISTS (SELECT 1 FROM existing_operation)",
-		"), active_restore_plan AS (",
-		"AND NOT EXISTS (SELECT 1 FROM existing_operation)",
 	)
 }
 
@@ -1047,7 +917,6 @@ func TestCreateOrReuseRestoreOperationMapsAtomicGateFailures(t *testing.T) {
 		gate string
 		want error
 	}{
-		{name: "active restore plan", gate: "active_restore_plan", want: operations.ErrActiveRestorePlan},
 		{name: "same repo jvs mutation", gate: "same_repo_jvs_mutation", want: operations.ErrRepoJVSMutationInProgress},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1072,177 +941,6 @@ func TestCreateOrReuseRestoreOperationMapsJVSUniqueIndexViolation(t *testing.T) 
 	}
 }
 
-func TestCreateOrReuseRestoreRunOperationUsesAtomicPlanAndDuplicateGatesAfterIdempotency(t *testing.T) {
-	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
-	spec := restoreRunQueuedSpecFixture(createdAt)
-	record, err := operations.NewQueuedOperationRecord(spec)
-	if err != nil {
-		t.Fatalf("NewQueuedOperationRecord: %v", err)
-	}
-	exec := &fakeExecutor{row: fakeRow{values: append(operationRowValues(record.Sanitized()), true, "")}}
-	st := &Store{exec: exec}
-
-	got, err := st.CreateOrReuseRestoreRunOperation(context.Background(), spec)
-	if err != nil {
-		t.Fatalf("CreateOrReuseRestoreRunOperation: %v", err)
-	}
-	if got.Existing || got.Reused {
-		t.Fatalf("resolution = %#v, want brand-new restore-run operation", got)
-	}
-	assertSQLContainsInOrder(t, exec.query,
-		"WITH existing_operation AS (",
-		"operation_type = 'restore_run'",
-		"idempotency_key = $9",
-		"), duplicate_restore_run AS (",
-		"FROM operations",
-		"operation_type = 'restore_run'",
-		"namespace_id = $17",
-		"repo_id = $18",
-		"resource_type = 'repo'",
-		"resource_id = $18",
-		"input_summary->>'preview_operation_id' = $24::jsonb->>'preview_operation_id'",
-		"operation_state NOT IN ('failed','cancelled')",
-		"NOT EXISTS (SELECT 1 FROM existing_operation)",
-		"), matching_pending_restore_plan AS (",
-		"FROM restore_plans",
-		"namespace_id = $17",
-		"repo_id = $18",
-		"preview_operation_id = $24::jsonb->>'preview_operation_id'",
-		"status = 'pending'",
-		"NOT EXISTS (SELECT 1 FROM existing_operation)",
-		"FOR UPDATE",
-		"), inserted_operation AS (",
-		"INSERT INTO operations",
-		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation)",
-		"AND EXISTS (SELECT 1 FROM matching_pending_restore_plan)",
-		"AND NOT EXISTS (SELECT 1 FROM duplicate_restore_run)",
-		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key)",
-	)
-	for _, forbidden := range []string{"UPDATE restore_plans", "UPDATE repo_fences", "DELETE ", "repo_fences", "INSERT INTO restore_plans", "run_command", "recommended_next_command"} {
-		if strings.Contains(strings.ToUpper(exec.query), strings.ToUpper(forbidden)) {
-			t.Fatalf("restore run intake SQL contains forbidden fragment %q: %s", forbidden, exec.query)
-		}
-	}
-}
-
-func TestCreateOrReuseRestoreRunOperationMapsPlanAndDuplicateGateFailures(t *testing.T) {
-	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
-	spec := restoreRunQueuedSpecFixture(createdAt)
-	record, err := operations.NewQueuedOperationRecord(spec)
-	if err != nil {
-		t.Fatalf("NewQueuedOperationRecord: %v", err)
-	}
-	tests := []struct {
-		name string
-		gate string
-		want error
-	}{
-		{name: "duplicate run", gate: "duplicate_restore_run", want: operations.ErrRestoreRunAlreadyExists},
-		{name: "plan not pending", gate: "plan_not_pending", want: operations.ErrRestorePlanNotPending},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			exec := &fakeExecutor{row: fakeRow{values: append(operationRowValues(record.Sanitized()), false, tt.gate)}}
-			st := &Store{exec: exec}
-
-			_, err = st.CreateOrReuseRestoreRunOperation(context.Background(), spec)
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("CreateOrReuseRestoreRunOperation error = %v, want %v", err, tt.want)
-			}
-		})
-	}
-}
-
-func TestCreateOrReuseRestoreRunOperationMapsUniqueIndexViolations(t *testing.T) {
-	spec := restoreRunQueuedSpecFixture(time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC))
-	tests := []struct {
-		name       string
-		constraint string
-		want       error
-	}{
-		{name: "same repo jvs mutation", constraint: "operations_one_non_terminal_jvs_mutation_per_repo_idx", want: operations.ErrRepoJVSMutationInProgress},
-		{name: "duplicate run preview", constraint: "operations_restore_run_one_per_preview_idx", want: operations.ErrRestoreRunAlreadyExists},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			st := &Store{exec: &fakeExecutor{row: fakeRow{err: &pq.Error{Code: "23505", Constraint: tt.constraint}}}}
-
-			_, err := st.CreateOrReuseRestoreRunOperation(context.Background(), spec)
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("CreateOrReuseRestoreRunOperation error = %v, want %v", err, tt.want)
-			}
-		})
-	}
-}
-
-func TestCreateOrReuseRestorePreviewDiscardOperationUsesAtomicPlanGateAfterIdempotency(t *testing.T) {
-	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
-	spec := restorePreviewDiscardQueuedSpecFixture(createdAt)
-	record, err := operations.NewQueuedOperationRecord(spec)
-	if err != nil {
-		t.Fatalf("NewQueuedOperationRecord: %v", err)
-	}
-	exec := &fakeExecutor{row: fakeRow{values: append(operationRowValues(record.Sanitized()), true, "")}}
-	st := &Store{exec: exec}
-
-	got, err := st.CreateOrReuseRestorePreviewDiscardOperation(context.Background(), spec)
-	if err != nil {
-		t.Fatalf("CreateOrReuseRestorePreviewDiscardOperation: %v", err)
-	}
-	if got.Existing || got.Reused {
-		t.Fatalf("resolution = %#v, want brand-new restore-preview discard operation", got)
-	}
-	assertSQLContainsInOrder(t, exec.query,
-		"WITH existing_operation AS (",
-		"operation_type = 'restore_preview_discard'",
-		"idempotency_key = $9",
-		"), matching_pending_restore_plan AS (",
-		"FROM restore_plans",
-		"namespace_id = $17",
-		"repo_id = $18",
-		"preview_operation_id = $24::jsonb->>'preview_operation_id'",
-		"status = 'pending'",
-		"NOT EXISTS (SELECT 1 FROM existing_operation)",
-		"FOR UPDATE",
-		"), inserted_operation AS (",
-		"INSERT INTO operations",
-		"WHERE NOT EXISTS (SELECT 1 FROM existing_operation)",
-		"AND EXISTS (SELECT 1 FROM matching_pending_restore_plan)",
-		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key)",
-	)
-	for _, forbidden := range []string{"UPDATE restore_plans", "UPDATE repo_fences", "DELETE ", "repo_fences", "INSERT INTO restore_plans", "run_command", "recommended_next_command"} {
-		if strings.Contains(strings.ToUpper(exec.query), strings.ToUpper(forbidden)) {
-			t.Fatalf("restore preview discard intake SQL contains forbidden fragment %q: %s", forbidden, exec.query)
-		}
-	}
-}
-
-func TestCreateOrReuseRestorePreviewDiscardOperationMapsPlanGateFailure(t *testing.T) {
-	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
-	spec := restorePreviewDiscardQueuedSpecFixture(createdAt)
-	record, err := operations.NewQueuedOperationRecord(spec)
-	if err != nil {
-		t.Fatalf("NewQueuedOperationRecord: %v", err)
-	}
-	exec := &fakeExecutor{row: fakeRow{values: append(operationRowValues(record.Sanitized()), false, "plan_not_pending")}}
-	st := &Store{exec: exec}
-
-	_, err = st.CreateOrReuseRestorePreviewDiscardOperation(context.Background(), spec)
-	if !errors.Is(err, operations.ErrRestorePlanNotPending) {
-		t.Fatalf("CreateOrReuseRestorePreviewDiscardOperation error = %v, want ErrRestorePlanNotPending", err)
-	}
-}
-
-func TestCreateOrReuseRestorePreviewDiscardOperationMapsJVSUniqueIndexViolation(t *testing.T) {
-	spec := restorePreviewDiscardQueuedSpecFixture(time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC))
-	st := &Store{exec: &fakeExecutor{row: fakeRow{err: &pq.Error{Code: "23505", Constraint: "operations_one_non_terminal_jvs_mutation_per_repo_idx"}}}}
-
-	_, err := st.CreateOrReuseRestorePreviewDiscardOperation(context.Background(), spec)
-	if !errors.Is(err, operations.ErrRepoJVSMutationInProgress) {
-		t.Fatalf("CreateOrReuseRestorePreviewDiscardOperation error = %v, want ErrRepoJVSMutationInProgress", err)
-	}
-}
-
 func TestOperationAcquireLeaseSQLCastsLeaseExpiresAtCaseToTimestamptz(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -1257,10 +955,7 @@ func TestOperationAcquireLeaseSQLCastsLeaseExpiresAtCaseToTimestamptz(t *testing
 		{name: "repo create", query: repoCreateOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
 		{name: "repo lifecycle", query: repoLifecycleOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
 		{name: "save point create", query: savePointCreateOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
-		{name: "restore preview", query: restorePreviewOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
 		{name: "restore", query: restoreOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
-		{name: "restore preview discard", query: restorePreviewDiscardOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
-		{name: "restore run", query: restoreRunOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
 		{name: "template create", query: templateCreateOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
 		{name: "template clone", query: templateCloneOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
 		{name: "workload mount binding", query: workloadMountBindingOperationAcquireLeaseSQL(), cancelPolicyParam: "$5"},
@@ -1286,10 +981,7 @@ func TestOperationAcquireLeaseSQLDoesNotExposeAmbiguousOperationStateFromSourceC
 	}{
 		{name: "repo lifecycle", query: repoLifecycleOperationAcquireLeaseSQL()},
 		{name: "save point create", query: savePointCreateOperationAcquireLeaseSQL()},
-		{name: "restore preview", query: restorePreviewOperationAcquireLeaseSQL()},
 		{name: "restore", query: restoreOperationAcquireLeaseSQL()},
-		{name: "restore preview discard", query: restorePreviewDiscardOperationAcquireLeaseSQL()},
-		{name: "restore run", query: restoreRunOperationAcquireLeaseSQL()},
 	}
 
 	for _, tt := range tests {
@@ -2057,23 +1749,6 @@ func repoCreateQueuedSpecFixture(createdAt time.Time) operations.QueuedOperation
 	}
 }
 
-func restorePreviewQueuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
-	return operations.QueuedOperationSpec{
-		OperationID:     "op_restore_preview",
-		Scope:           operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreview, "idem-preview"),
-		RequestHash:     "sha256:restore-preview",
-		Phase:           operations.OperationPhaseRestorePreviewValidate,
-		CorrelationID:   "corr-preview",
-		CallerService:   "product-caller",
-		AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"},
-		Resource:        operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
-		NamespaceID:     "ns_alpha01",
-		RepoID:          "repo_alpha01",
-		InputSummary:    map[string]any{"save_point_id": "sp_001"},
-		CreatedAt:       createdAt,
-	}
-}
-
 func restoreQueuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
 	return operations.QueuedOperationSpec{
 		OperationID:     "op_restore",
@@ -2086,41 +1761,7 @@ func restoreQueuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpe
 		Resource:        operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:     "ns_alpha01",
 		RepoID:          "repo_alpha01",
-		InputSummary:    map[string]any{"save_point_id": "sp_001", "discard_unsaved_changes_confirmed": true},
-		CreatedAt:       createdAt,
-	}
-}
-
-func restoreRunQueuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
-	return operations.QueuedOperationSpec{
-		OperationID:     "op_restore_run",
-		Scope:           operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestoreRun, "idem-run"),
-		RequestHash:     "sha256:restore-run",
-		Phase:           operations.OperationPhaseRestoreRunValidate,
-		CorrelationID:   "corr-run",
-		CallerService:   "product-caller",
-		AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"},
-		Resource:        operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
-		NamespaceID:     "ns_alpha01",
-		RepoID:          "repo_alpha01",
-		InputSummary:    map[string]any{"preview_operation_id": "op_preview01"},
-		CreatedAt:       createdAt,
-	}
-}
-
-func restorePreviewDiscardQueuedSpecFixture(createdAt time.Time) operations.QueuedOperationSpec {
-	return operations.QueuedOperationSpec{
-		OperationID:     "op_restore_discard",
-		Scope:           operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem-discard"),
-		RequestHash:     "sha256:restore-preview-discard",
-		Phase:           operations.OperationPhaseRestorePreviewDiscardValidate,
-		CorrelationID:   "corr-discard",
-		CallerService:   "product-caller",
-		AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"},
-		Resource:        operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
-		NamespaceID:     "ns_alpha01",
-		RepoID:          "repo_alpha01",
-		InputSummary:    map[string]any{"preview_operation_id": "op_preview01"},
+		InputSummary:    map[string]any{"save_point_id": "sp_001"},
 		CreatedAt:       createdAt,
 	}
 }

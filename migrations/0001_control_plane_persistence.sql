@@ -46,9 +46,7 @@ CREATE TABLE IF NOT EXISTS operations (
             'repo_restore_tombstoned',
             'repo_purge',
             'save_point_create',
-            'restore_preview',
-            'restore_preview_discard',
-            'restore_run',
+            'restore',
             'template_create',
             'template_clone',
             'export_create',
@@ -110,20 +108,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS operations_one_non_terminal_jvs_mutation_per_r
     WHERE repo_id IS NOT NULL
         AND operation_type IN (
             'save_point_create',
-            'restore_preview',
-            'restore_preview_discard',
-            'restore_run',
+            'restore',
             'template_create',
             'template_clone'
         )
         AND operation_state NOT IN ('succeeded', 'failed', 'cancelled');
-
-CREATE UNIQUE INDEX IF NOT EXISTS operations_restore_run_one_per_preview_idx
-    ON operations (namespace_id, repo_id, (input_summary->>'preview_operation_id'))
-    WHERE operation_type = 'restore_run'
-        AND operation_state NOT IN ('failed', 'cancelled')
-        AND (input_summary->>'preview_operation_id') IS NOT NULL
-        AND btrim(input_summary->>'preview_operation_id') <> '';
 
 CREATE TABLE IF NOT EXISTS audit_outbox (
     audit_event_id text PRIMARY KEY,
@@ -391,43 +380,6 @@ CREATE INDEX IF NOT EXISTS repos_namespace_idx
 
 CREATE INDEX IF NOT EXISTS repos_volume_idx
     ON repos (volume_id);
-
-CREATE TABLE IF NOT EXISTS restore_plans (
-    restore_plan_id text PRIMARY KEY,
-    namespace_id text NOT NULL,
-    repo_id text NOT NULL,
-    preview_operation_id text NOT NULL REFERENCES operations (operation_id),
-    source_save_point_id text NOT NULL,
-    base_revision text NOT NULL,
-    head_revision text NOT NULL,
-    generation text NOT NULL,
-    fence_marker text NOT NULL,
-    summary_json jsonb NOT NULL,
-    blockers_json jsonb NOT NULL,
-    stale boolean NOT NULL DEFAULT false,
-    status text NOT NULL,
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT restore_plans_preview_operation_unique UNIQUE (preview_operation_id),
-    CONSTRAINT restore_plans_summary_json_object CHECK (jsonb_typeof(summary_json) = 'object'),
-    CONSTRAINT restore_plans_blockers_json_array CHECK (jsonb_typeof(blockers_json) = 'array'),
-    CONSTRAINT restore_plans_repo_fk FOREIGN KEY (namespace_id, repo_id)
-        REFERENCES repos (namespace_id, repo_id),
-    CONSTRAINT restore_plans_status_check CHECK (
-        status IN (
-            'pending',
-            'consuming',
-            'consumed',
-            'discarding',
-            'discarded',
-            'operator_intervention_required'
-        )
-    )
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS restore_plans_one_active_per_repo_idx
-    ON restore_plans (repo_id)
-    WHERE status IN ('pending', 'consuming', 'discarding', 'operator_intervention_required');
 
 CREATE TABLE IF NOT EXISTS export_sessions (
     export_id text PRIMARY KEY,

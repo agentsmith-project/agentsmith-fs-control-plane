@@ -2,6 +2,7 @@ package repoexec
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -19,8 +20,7 @@ func TestRestoreExecutorFencesWriterCallsDirectRestoreAndCommitsSucceeded(t *tes
 	store := newFakeStore()
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
-		restoreSummary: jvsrunner.RestoreSummary{SourceSavePointID: "sp_001", RestoredSavePointID: "sp_001", Workspace: "main"},
-		doctorSummary:  jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
+		directRestoreSummary: jvsrunner.DirectRestoreSummary{RestoredSavePointID: "sp_001", PreviousHeadID: "sp_002", NewHeadID: "sp_001"},
 	}
 	store.beforeListSessions = func() {
 		if store.restoreWriterFenceMarks != 1 || activeWriterFenceCount(store.fences, "op_restore") != 1 {
@@ -32,11 +32,15 @@ func TestRestoreExecutorFencesWriterCallsDirectRestoreAndCommitsSucceeded(t *tes
 	if err := executor.ExecuteOperationRecovery(context.Background(), restoreLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "restore,doctor" {
-		t.Fatalf("JVS calls = %#v, want direct restore then doctor", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_restore" {
+		t.Fatalf("JVS calls = %#v, want direct restore only", runner.calls)
 	}
 	if runner.restoreSavePointID != "sp_001" {
 		t.Fatalf("restore save point id = %q, want sp_001", runner.restoreSavePointID)
+	}
+	if !strings.HasSuffix(runner.directTarget.ControlRoot, "/afscp/namespaces/ns_alpha01/repos/repo_alpha01/control") ||
+		!strings.HasSuffix(runner.directTarget.Home, "/afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload") {
+		t.Fatalf("direct target = %#v, want resolved control and payload roots", runner.directTarget)
 	}
 	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestoreCommitted {
 		t.Fatalf("operation = %#v, want succeeded restore_committed", store.operation)
@@ -48,6 +52,22 @@ func TestRestoreExecutorFencesWriterCallsDirectRestoreAndCommitsSucceeded(t *tes
 		t.Fatalf("audit events = %#v, want restore success", store.auditEvents)
 	}
 	assertNoRestoreRunCommandLeak(t, store.operation, store.auditEvents)
+}
+
+func assertNoRestoreRunCommandLeak(t *testing.T, operation operations.OperationRecord, events []audit.Event) {
+	t.Helper()
+	rendered := strings.ToLower(fmt.Sprint(operation.InputSummary, operation.JVSJSONOutput, operation.VerificationResult, operation.Error))
+	for _, event := range events {
+		rendered += " " + strings.ToLower(fmt.Sprint(event.Details))
+	}
+	for _, leaked := range []string{"run_command", "recommended_next_command", "restore_command", "jvs restore --run"} {
+		if strings.Contains(rendered, leaked) {
+			t.Fatalf("restore persisted raw command marker %q in operation/events: %#v %#v", leaked, operation, events)
+		}
+	}
+	if strings.Contains(rendered, "discard_unsaved_changes_confirmed") {
+		t.Fatalf("restore persisted legacy request confirmation in operation/events: %#v %#v", operation, events)
+	}
 }
 
 func TestRestoreExecutorBlocksActiveWriterSessionsBeforeJVSRestore(t *testing.T) {
@@ -76,20 +96,17 @@ func TestRestoreExecutorJVSFailureCommitsFailedWithoutPreviewOrRun(t *testing.T)
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = activeRepoResource(now)
-	runner := &fakeJVSRunner{restoreErr: &jvsrunner.CommandError{Command: "restore", ExitCode: 1, Code: "E_RESTORE_FAILED"}}
+	runner := &fakeJVSRunner{directRestoreErr: &jvsrunner.CommandError{Command: "afscp restore", ExitCode: 1, Code: "E_RESTORE_FAILED"}}
 	executor := newTestRestoreExecutor(t, store, runner, now)
 
 	if err := executor.ExecuteOperationRecovery(context.Background(), restoreLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "restore" {
+	if strings.Join(runner.calls, ",") != "direct_restore" {
 		t.Fatalf("JVS calls = %#v, want direct restore only", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "JVS_RESTORE_FAILED" {
 		t.Fatalf("operation = %#v, want failed JVS_RESTORE_FAILED", store.operation)
-	}
-	if store.previewOperation.ID != "" || store.restorePlan.ID != "" {
-		t.Fatalf("direct restore created preview/plan state: preview=%#v plan=%#v", store.previewOperation, store.restorePlan)
 	}
 }
 
@@ -106,6 +123,10 @@ func TestRestoreExecutorSourceDoesNotCallPreviewRunOrPlanExecutors(t *testing.T)
 		"restoreplan.",
 		"GetRestorePlanByPreviewOperation",
 		"MarkRestoreRunConsumingWithLease",
+		"DirectStatus(",
+		"DirectDoctor(",
+		"validateDirectRestoreStatus",
+		"validateDirectRestoreDoctor",
 	} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("restore executor must not reference preview/run/plan flow %q", forbidden)
@@ -145,7 +166,7 @@ func restoreLeasedRecord(now time.Time) operations.OperationRecord {
 		Resource:            operations.ResourceRef{Type: "repo", ID: "repo_alpha01"},
 		NamespaceID:         "ns_alpha01",
 		RepoID:              "repo_alpha01",
-		InputSummary:        map[string]any{"save_point_id": "sp_001", "discard_unsaved_changes_confirmed": true},
+		InputSummary:        map[string]any{"save_point_id": "sp_001"},
 		ExternalResourceIDs: map[string]string{},
 		CreatedAt:           now.Add(-time.Hour),
 		StartedAt:           &now,

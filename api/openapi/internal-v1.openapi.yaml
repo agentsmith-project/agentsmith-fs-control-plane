@@ -85,14 +85,6 @@ components:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateSavePointRequest
     RestoreRequest:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestoreRequest
-    RestoreAdmitResponse:
-      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestoreAdmitResponse
-    RestorePreviewRequest:
-      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestorePreviewRequest
-    RestorePreviewDiscardRequest:
-      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestorePreviewDiscardRequest
-    RestoreRunRequest:
-      $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RestoreRunRequest
     CreateRepoTemplateRequest:
       $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/CreateRepoTemplateRequest
     CloneRepoTemplateRequest:
@@ -617,7 +609,7 @@ paths:
     post:
       operationId: restore
       summary: Directly restore a repo to a save point.
-      description: Creates a durable direct restore operation. This endpoint does not create a restore preview, restore plan, or safety save point.
+      description: Creates a durable direct restore operation. This endpoint does not create a planning artifact, secondary run request, cleanup request, or safety save point.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationId"
@@ -641,139 +633,6 @@ paths:
           $ref: "#/components/responses/Error"
         "202":
           description: Direct restore operation.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OperationEnvelope"
-        default:
-          $ref: "#/components/responses/Error"
-  /internal/v1/repos/{repoId}/restore:admit:
-    post:
-      operationId: restoreAdmit
-      summary: Admit a direct restore request without creating an operation.
-      description: Runs restore-specific API admission and save point availability checks, including direct restore runtime capability readiness. This endpoint does not create a durable restore operation, enqueue work, invoke JVS restore, create a restore preview, or create a restore plan.
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/CorrelationId"
-        - $ref: "#/components/parameters/CallerService"
-        - $ref: "#/components/parameters/NamespaceId"
-        - $ref: "#/components/parameters/ActorType"
-        - $ref: "#/components/parameters/ActorId"
-        - name: repoId
-          in: path
-          required: true
-          schema:
-            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RestoreRequest"
-      responses:
-        "400":
-          $ref: "#/components/responses/Error"
-        "200":
-          description: Restore request admitted without creating a durable operation.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RestoreAdmitResponse"
-        default:
-          $ref: "#/components/responses/Error"
-  /internal/v1/repos/{repoId}/restore-preview:
-    post:
-      operationId: restorePreview
-      summary: Create a restore preview.
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/CorrelationId"
-        - $ref: "#/components/parameters/CallerService"
-        - $ref: "#/components/parameters/NamespaceId"
-        - $ref: "#/components/parameters/ActorType"
-        - $ref: "#/components/parameters/ActorId"
-        - name: repoId
-          in: path
-          required: true
-          schema:
-            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RestorePreviewRequest"
-      responses:
-        "400":
-          $ref: "#/components/responses/Error"
-        "202":
-          description: Restore preview operation.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OperationEnvelope"
-        default:
-          $ref: "#/components/responses/Error"
-  /internal/v1/repos/{repoId}/restore-preview:discard:
-    post:
-      operationId: restorePreviewDiscard
-      summary: Discard a restore preview.
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/CorrelationId"
-        - $ref: "#/components/parameters/CallerService"
-        - $ref: "#/components/parameters/NamespaceId"
-        - $ref: "#/components/parameters/ActorType"
-        - $ref: "#/components/parameters/ActorId"
-        - name: repoId
-          in: path
-          required: true
-          schema:
-            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RestorePreviewDiscardRequest"
-      responses:
-        "400":
-          $ref: "#/components/responses/Error"
-        "202":
-          description: Restore preview discard operation.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OperationEnvelope"
-        default:
-          $ref: "#/components/responses/Error"
-  /internal/v1/repos/{repoId}/restore-run:
-    post:
-      operationId: restoreRun
-      summary: Run a restore from a preview.
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/CorrelationId"
-        - $ref: "#/components/parameters/CallerService"
-        - $ref: "#/components/parameters/NamespaceId"
-        - $ref: "#/components/parameters/ActorType"
-        - $ref: "#/components/parameters/ActorId"
-        - name: repoId
-          in: path
-          required: true
-          schema:
-            $ref: ../schemas/afscp-internal-v1.schema.json#/$defs/RepoId
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RestoreRunRequest"
-      responses:
-        "400":
-          $ref: "#/components/responses/Error"
-        "202":
-          description: Restore run operation.
           content:
             application/json:
               schema:

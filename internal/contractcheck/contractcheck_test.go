@@ -105,7 +105,7 @@ func TestRestoreReconciliationContractDefinesModeDenialCredentialPurgeMismatch(t
 	body := readRepoFileForContractTest(t, "docs/contracts/restore-reconciliation-v1.md")
 	requireContractPhrases(t, body,
 		"after-restore safety mode",
-		"not JVS restore-run",
+		"not direct restore execution",
 		"reconciling",
 		"blocked_operator_intervention",
 		"completed",
@@ -165,11 +165,7 @@ func TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary(t *
 		"jvs doctor",
 		"jvs save",
 		"jvs history",
-		"jvs restore <save_point>",
-		"jvs restore --run",
-		"jvs restore discard",
-		"jvs recovery status",
-		"jvs --control-root ... --workspace main ... --json",
+		"jvs afscp --control-root ... --home ... <save|list|restore|status|doctor> --json",
 		"juicefs mount",
 		"SecretRef",
 		"metadata URLs",
@@ -1661,7 +1657,7 @@ func TestVerifyCoreProductDocsCatchesProductSpecificTerms(t *testing.T) {
 	writeFile(t, researchPath, "workspace storage and file library research copied from /home/percy/works/mbos-v1/improve-agentsmith-fs.\n")
 	writeFile(t, localDevPath, "sandbox manager local handoff for /home/percy/works/mbos-v1/mbos-sandbox-v1.\n")
 	writeFile(t, filepath.Join(root, "docs", "adr", "0001-create-afscp.md"), "GitHub org path github.com/agentsmith-project/agentsmith-fs-control-plane is allowed.\n")
-	writeFile(t, filepath.Join(root, "docs", "JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md"), "Release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.9\n")
+	writeFile(t, filepath.Join(root, "docs", "JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md"), "Pre-GA local direct JVS evidence.\n")
 
 	findings := verifyCoreProductDocs(root)
 
@@ -2080,6 +2076,73 @@ func TestCurrentRepoActiveDocsHaveCurrentImplementationStatus(t *testing.T) {
 			}
 			if filepath.Base(path) == "GA_RELEASE_GATES.md" {
 				assertSelectorDrivenFinalModeDocContract(t, path, text)
+			}
+		})
+	}
+}
+
+func TestActiveUserAndRunbookDocsUseDirectRestoreMindset(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	paths := []string{
+		filepath.Join(repoRoot, "cmd", "README.md"),
+		filepath.Join(repoRoot, "planning", "ROADMAP.md"),
+		filepath.Join(repoRoot, "docs", "USER_GUIDE.md"),
+		filepath.Join(repoRoot, "docs", "DEVELOPER_HANDOFF.md"),
+		filepath.Join(repoRoot, "docs", "GA_PRE_DEV_READINESS.md"),
+		filepath.Join(repoRoot, "docs", "PRE_DEV_COMPLETION.md"),
+		filepath.Join(repoRoot, "docs", "MVP_PLAN.md"),
+		filepath.Join(repoRoot, "docs", "OPERATIONAL_READINESS.md"),
+		filepath.Join(repoRoot, "docs", "REVIEW_CHECKLIST.md"),
+		filepath.Join(repoRoot, "docs", "OPERATIONS_AND_AUDIT.md"),
+		filepath.Join(repoRoot, "docs", "OPERATIONS_AND_MIGRATION.md"),
+		filepath.Join(repoRoot, "docs", "EXPORT_WEBDAV.md"),
+		filepath.Join(repoRoot, "docs", "WORKLOAD_MOUNTS.md"),
+		filepath.Join(repoRoot, "docs", "security", "threat-model.md"),
+		filepath.Join(repoRoot, "docs", "adr", "0004-no-ordinary-single-writer-lock.md"),
+		filepath.Join(repoRoot, "docs", "adr", "0010-webdav-export-gateway.md"),
+		filepath.Join(repoRoot, "docs", "adr", "0011-workload-orchestrator-contract.md"),
+		filepath.Join(repoRoot, "docs", "adr", "0012-path-resolver-and-fences.md"),
+		filepath.Join(repoRoot, "docs", "runbooks", "ga-runbooks.md"),
+		filepath.Join(repoRoot, "docs", "runbooks", "README.md"),
+	}
+	for _, path := range paths {
+		t.Run(filepath.ToSlash(path), func(t *testing.T) {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile returned error: %v", err)
+			}
+			text := string(body)
+			normalized := strings.ToLower(strings.Join(strings.Fields(text), " "))
+			for _, forbidden := range []string{
+				"restore preview",
+				"restore-preview",
+				"restore run",
+				"restore-run",
+				"restore plan",
+				"restore plans",
+				"preview/run/discard",
+				"restore_plan",
+				"restore_plan_id",
+				"preview_operation_id",
+				"afscp_restore_preview",
+				"afscp_restore_run",
+				"jvs restore discard",
+				"pending_restore_preview",
+				"stale_restore_preview",
+				"restore_preview_stale",
+			} {
+				if strings.Contains(normalized, forbidden) {
+					t.Fatalf("%s retains legacy restore mental model phrase %q", path, forbidden)
+				}
+			}
+			for _, required := range []string{
+				"direct restore",
+				"save point",
+				"writer-session fence",
+			} {
+				if !strings.Contains(normalized, required) {
+					t.Fatalf("%s must explain direct restore/save point/writer-session fence mindset; missing %q", path, required)
+				}
 			}
 		})
 	}
@@ -3053,9 +3116,6 @@ const validSchema = `
         "repo_purge",
         "save_point_create",
         "restore",
-        "restore_preview",
-        "restore_preview_discard",
-        "restore_run",
         "template_create",
         "template_clone",
         "export_create",
@@ -3124,7 +3184,6 @@ const validSchema = `
         "WRITER_SESSION_FENCE_HELD",
         "STALE_WRITER_SESSION_UNCERTAIN",
         "RESTORE_DIRTY_STATE",
-        "RESTORE_CONFIRMATION_REQUIRED",
         "JVS_COMMAND_FAILED",
         "JVS_DOCTOR_FAILED",
         "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE",
@@ -3214,7 +3273,7 @@ The durable ` + "`OperationRecord`" + ` is stored internally and returned only b
 | ` + "`namespace_admin`" + ` | namespace create/disable and volume binding update |
 | ` + "`repo_admin`" + ` | repo create/get/list |
 | ` + "`repo_lifecycle_admin`" + ` | repo lifecycle |
-| ` + "`restore_admin`" + ` | direct restore and restore preview/run |
+| ` + "`restore_admin`" + ` | direct restore and direct restore admission |
 | ` + "`template_admin`" + ` | repo template create/clone |
 | ` + "`export_admin`" + ` | export create/get/revoke |
 | ` + "`mount_admin`" + ` | workload mount binding create/get/revoke |

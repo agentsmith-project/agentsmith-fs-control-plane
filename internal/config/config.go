@@ -33,9 +33,10 @@ const (
 )
 
 const (
-	JVSAcceptedReleaseVersion      = "v0.4.9"
-	JVSAcceptedLinuxAMD64AssetName = "jvs-linux-amd64"
-	JVSAcceptedLinuxAMD64SHA256    = "0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944"
+	JVSAcceptedReleaseVersion      = "pre-ga-local-afscp-direct-2026-05-16"
+	JVSAcceptedLinuxAMD64AssetName = "afscp-jvs-direct-local-linux-amd64"
+	JVSAcceptedLinuxAMD64SHA256    = "affa86a08dbb2195f594be0be01e9c3f128806f75d04826030afbe4ba283f2e2"
+	JVSAcceptedSourceRef           = "jvs@main:eb026cc48efb57ef64c9f3e482f0011b9232701b"
 )
 
 const (
@@ -125,21 +126,18 @@ type WorkerConfig struct {
 }
 
 type WorkerOperationRecoveryConfig struct {
-	Enabled               bool
-	PostgresDSN           string
-	Owner                 string
-	Limit                 int
-	LeaseDuration         time.Duration
-	RepoCreate            WorkerRepoCreateRecoveryConfig
-	RepoLifecycle         WorkerRepoCreateRecoveryConfig
-	RepoPurge             WorkerRepoCreateRecoveryConfig
-	SavePoint             WorkerRepoCreateRecoveryConfig
-	TemplateCreate        WorkerRepoCreateRecoveryConfig
-	TemplateClone         WorkerRepoCreateRecoveryConfig
-	Restore               WorkerRepoCreateRecoveryConfig
-	RestorePreview        WorkerRepoCreateRecoveryConfig
-	RestorePreviewDiscard WorkerRepoCreateRecoveryConfig
-	RestoreRun            WorkerRepoCreateRecoveryConfig
+	Enabled        bool
+	PostgresDSN    string
+	Owner          string
+	Limit          int
+	LeaseDuration  time.Duration
+	RepoCreate     WorkerRepoCreateRecoveryConfig
+	RepoLifecycle  WorkerRepoCreateRecoveryConfig
+	RepoPurge      WorkerRepoCreateRecoveryConfig
+	SavePoint      WorkerRepoCreateRecoveryConfig
+	TemplateCreate WorkerRepoCreateRecoveryConfig
+	TemplateClone  WorkerRepoCreateRecoveryConfig
+	Restore        WorkerRepoCreateRecoveryConfig
 }
 
 type WorkerRepoCreateRecoveryConfig struct {
@@ -360,21 +358,6 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.OperationRecovery.Restore = restore
-	restorePreview, err := loadRestorePreviewRecoveryConfig(source)
-	if err != nil {
-		return WorkerConfig{}, err
-	}
-	worker.OperationRecovery.RestorePreview = restorePreview
-	restorePreviewDiscard, err := loadRestorePreviewDiscardRecoveryConfig(source)
-	if err != nil {
-		return WorkerConfig{}, err
-	}
-	worker.OperationRecovery.RestorePreviewDiscard = restorePreviewDiscard
-	restoreRun, err := loadRestoreRunRecoveryConfig(source)
-	if err != nil {
-		return WorkerConfig{}, err
-	}
-	worker.OperationRecovery.RestoreRun = restoreRun
 
 	limit, err := intValue(source, "AFSCP_OPERATION_RECOVERY_LIMIT", worker.OperationRecovery.Limit)
 	if err != nil {
@@ -923,18 +906,6 @@ func loadRestoreRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, e
 	return loadJVSDirectRestoreOperationRecoveryConfig(source, "AFSCP_RESTORE_RECOVERY_ENABLED")
 }
 
-func loadRestorePreviewRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
-	return loadJVSOperationRecoveryConfig(source, "AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED")
-}
-
-func loadRestorePreviewDiscardRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
-	return loadJVSOperationRecoveryConfig(source, "AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED")
-}
-
-func loadRestoreRunRecoveryConfig(source Source) (WorkerRepoCreateRecoveryConfig, error) {
-	return loadJVSOperationRecoveryConfig(source, "AFSCP_RESTORE_RUN_RECOVERY_ENABLED")
-}
-
 func loadJVSOperationRecoveryConfig(source Source, gateKey string) (WorkerRepoCreateRecoveryConfig, error) {
 	return loadJVSOperationRecoveryConfigWithPin(source, gateKey, false)
 }
@@ -1012,7 +983,7 @@ func validatePinnedOrDirectRestoreJVSBinarySHA256(source Source, value string) (
 		return false, "", fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must be a sha256 hex digest")
 	}
 	if value == JVSAcceptedLinuxAMD64SHA256 {
-		return false, "", nil
+		return true, JVSAcceptedSourceRef, nil
 	}
 	sourceRef, err := validateDirectRestoreJVSBinarySHA256(source, value)
 	if err != nil {
@@ -1026,7 +997,7 @@ func validateDirectRestoreJVSBinarySHA256(source Source, value string) (string, 
 		return "", fmt.Errorf("AFSCP_JVS_BINARY_SHA256 must be a sha256 hex digest")
 	}
 	if value == JVSAcceptedLinuxAMD64SHA256 {
-		return "", fmt.Errorf("AFSCP_RESTORE_RECOVERY_ENABLED requires JVS restore --direct capability; pinned JVS %s %s does not declare restore --direct support", JVSAcceptedReleaseVersion, JVSAcceptedLinuxAMD64AssetName)
+		return JVSAcceptedSourceRef, nil
 	}
 	directSHA := strings.ToLower(valueOrDefault(source, "AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256", ""))
 	if !validSHA256Hex(directSHA) {

@@ -21,7 +21,7 @@ primitives:
 - shared JuiceFS-backed volume support for new repos
 - repo path allocation under AFSCP-controlled namespace roots
 - repo archive, restore-archived, delete, restore-tombstoned, and purge lifecycle operations
-- JVS init/save/history/restore execution through a pinned runner contract
+- JVS init/save point history/direct restore execution through a pinned runner contract
 - WebDAV export without JuiceFS credentials
 - workload mount binding generation and orchestrator-only mount plans after the orchestrator contract is accepted
 - mount binding status, heartbeat, release, revoke, expiry, and stale-lease reconciliation
@@ -29,7 +29,7 @@ primitives:
 - same-namespace template clone into an independent repo
 - cross-namespace template clone rejection by default
 - JVS control metadata protection gate for WebDAV and workload mounts
-- restore-run writer-session fencing that blocks new read-write sessions and rejects active or uncertain read-write sessions
+- direct restore writer-session fencing that blocks new read-write sessions and rejects active or uncertain read-write sessions
 - low-level audit event emission and operator inspection
 
 ## GA Non-Scope

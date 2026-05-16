@@ -12,9 +12,8 @@ Required repo-local runbook coverage:
 
 - failed repo create
 - failed save point create
-- failed restore preview
-- failed restore-run
-- restore-run blocked by active or uncertain writer sessions
+- failed direct restore to a save point
+- direct restore blocked by active or uncertain writer sessions
 - writer-session fence stuck or leaked
 - JVS doctor failure
 - failed template create

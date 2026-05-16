@@ -13,7 +13,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 )
 
-func TestRestoreHandlerRequiresDiscardConfirmation(t *testing.T) {
+func TestRestoreHandlerRejectsLegacyDiscardConfirmationField(t *testing.T) {
 	now := namespaceBindingHandlerTestNow()
 	store := newFakeRestoreHTTPStore(now)
 	handler := restoreHandlerForTest(store, func() string { return "op_restore" }, func() time.Time { return now })
@@ -25,21 +25,21 @@ func TestRestoreHandlerRequiresDiscardConfirmation(t *testing.T) {
 		t.Fatalf("status = %d body = %s, want 400", rec.Code, rec.Body.String())
 	}
 	env := decodeErrorEnvelope(t, rec.Body.Bytes())
-	if env.Error.Code != CodeRestoreConfirmationRequired {
-		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeRestoreConfirmationRequired)
+	if env.Error.Code != CodeInvalidID {
+		t.Fatalf("error code = %s, want %s", env.Error.Code, CodeInvalidID)
 	}
 	if store.createCalls != 0 || store.restoreIntakeCalls != 0 || store.jvsMutationCalls != 0 {
 		t.Fatalf("create/restore/gate calls = %d/%d/%d, want rejected before mutable gates", store.createCalls, store.restoreIntakeCalls, store.jvsMutationCalls)
 	}
 }
 
-func TestRestoreHandlerCreatesQueuedOperationForConfirmedDirectRestore(t *testing.T) {
+func TestRestoreHandlerCreatesQueuedOperationForDirectRestore(t *testing.T) {
 	now := namespaceBindingHandlerTestNow()
 	store := newFakeRestoreHTTPStore(now)
 	handler := restoreHandlerForTest(store, func() string { return "op_restore" }, func() time.Time { return now })
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001","discard_unsaved_changes_confirmed":true}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
+	handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001"}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
@@ -55,31 +55,29 @@ func TestRestoreHandlerCreatesQueuedOperationForConfirmedDirectRestore(t *testin
 	if store.restoreIntakeCalls != 1 || store.genericCreateCalls != 0 || store.previewIntakeCalls != 0 || store.runIntakeCalls != 0 {
 		t.Fatalf("intake calls restore/generic/preview/run = %d/%d/%d/%d, want restore-only intake", store.restoreIntakeCalls, store.genericCreateCalls, store.previewIntakeCalls, store.runIntakeCalls)
 	}
-	if spec.NamespaceID != "ns_alpha01" || spec.RepoID != "repo_alpha01" || len(spec.InputSummary) != 2 || spec.InputSummary["save_point_id"] != "sp_001" || spec.InputSummary["discard_unsaved_changes_confirmed"] != true {
-		t.Fatalf("spec namespace/repo/input = %q/%q/%#v, want save point and confirmation only", spec.NamespaceID, spec.RepoID, spec.InputSummary)
+	if spec.NamespaceID != "ns_alpha01" || spec.RepoID != "repo_alpha01" || len(spec.InputSummary) != 1 || spec.InputSummary["save_point_id"] != "sp_001" {
+		t.Fatalf("spec namespace/repo/input = %q/%q/%#v, want save point only", spec.NamespaceID, spec.RepoID, spec.InputSummary)
 	}
 	assertRestoreHTTPNoRawCommand(t, spec.InputSummary)
 }
 
-func TestRestoreHandlerReusesExistingIdempotentOperationBeforeActivePlanAndMutationGate(t *testing.T) {
+func TestRestoreHandlerReusesExistingIdempotentOperationBeforeMutationGate(t *testing.T) {
 	now := namespaceBindingHandlerTestNow()
 	existing := apiRestoreQueuedOperation(now)
 	store := newFakeRestoreHTTPStore(now)
 	store.existing = existing
 	store.jvsMutation = true
-	store.activePlanErr = nil
-	store.activePlan = apiRestorePreviewPendingPlan(now)
 	handler := restoreHandlerForTest(store, func() string { return "op_new" }, func() time.Time { return now })
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001","discard_unsaved_changes_confirmed":true}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
+	handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001"}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
 	}
 	env := decodeOperationEnvelope(t, rec.Body.Bytes())
-	if env.OperationID != existing.ID || store.createCalls != 0 || store.restoreIntakeCalls != 0 || store.jvsMutationCalls != 0 || store.activePlanCalls != 0 {
-		t.Fatalf("envelope/create/gates = %#v/%d/%d/%d/%d, want existing operation reused before mutable gates", env, store.createCalls, store.restoreIntakeCalls, store.jvsMutationCalls, store.activePlanCalls)
+	if env.OperationID != existing.ID || store.createCalls != 0 || store.restoreIntakeCalls != 0 || store.jvsMutationCalls != 0 {
+		t.Fatalf("envelope/create/gates = %#v/%d/%d/%d, want existing operation reused before mutable gates", env, store.createCalls, store.restoreIntakeCalls, store.jvsMutationCalls)
 	}
 }
 
@@ -91,7 +89,6 @@ func TestRestoreHandlerMapsAtomicIntakeGateFailures(t *testing.T) {
 		wantCode ErrorCode
 	}{
 		{name: "same repo jvs mutation", err: operations.ErrRepoJVSMutationInProgress, wantCode: CodeRepoJVSMutationInProgress},
-		{name: "active restore plan", err: operations.ErrActiveRestorePlan, wantCode: CodeOperationRecoveryRequired},
 		{name: "different idempotency body", err: operations.ErrIdempotencyConflict, wantCode: CodeIdempotencyConflict},
 	}
 	for _, tt := range tests {
@@ -101,7 +98,7 @@ func TestRestoreHandlerMapsAtomicIntakeGateFailures(t *testing.T) {
 			handler := restoreHandlerForTest(store, func() string { return "op_restore" }, func() time.Time { return now })
 			rec := httptest.NewRecorder()
 
-			handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001","discard_unsaved_changes_confirmed":true}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
+			handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001"}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
 
 			if rec.Code != http.StatusConflict {
 				t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
@@ -132,7 +129,7 @@ func TestInternalAPIShellServesRestore(t *testing.T) {
 	})
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001","discard_unsaved_changes_confirmed":true}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
+	handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001"}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
@@ -146,8 +143,11 @@ func TestRestoreHandlerSourceDoesNotCallPreviewOrRunHandlers(t *testing.T) {
 	assertGoFileDoesNotContain(t, "restore_handler.go", []string{
 		"RestorePreviewHandler(",
 		"RestoreRunHandler(",
+		"RestoreAdmitHandler(",
 		"restorePreview",
 		"restoreRun",
+		"restoreAdmit",
+		"RestoreAdmitResponse",
 	})
 }
 
@@ -172,7 +172,6 @@ func restoreHandlerForTest(store *fakeRestoreHTTPStore, generate OperationIDGene
 		BindingReader:     store,
 		FenceReader:       store,
 		MutationGate:      store,
-		RestorePlanReader: store,
 		IntakeStore:       store,
 		IntakeLookupStore: store,
 		PrincipalResolver: namespaceBindingPrincipalResolver(),
@@ -195,9 +194,9 @@ func restoreRequest(body, repoID, namespaceID, idempotencyKey string) *http.Requ
 }
 
 func apiRestoreQueuedOperation(now time.Time) operations.OperationRecord {
-	hash, err := operations.HashRequest(restoreCanonicalRequest{RepoID: "repo_alpha01", SavePointID: "sp_001", DiscardUnsavedChangesConfirmed: true})
+	hash, err := operations.HashRequest(restoreCanonicalRequest{RepoID: "repo_alpha01", SavePointID: "sp_001"})
 	if err != nil {
 		panic(err)
 	}
-	return operations.OperationRecord{ID: "op_restore_existing", Type: operations.OperationRestore, State: operations.OperationStateQueued, Phase: operations.OperationPhaseRestoreValidate, IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestore, "idem_restore").String(), IdempotencyKey: "idem_restore", RequestHash: hash, CorrelationID: "corr_restore", CallerService: "product-caller", AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"}, Resource: operations.ResourceRef{Type: "repo", ID: "repo_alpha01"}, NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", InputSummary: map[string]any{"save_point_id": "sp_001", "discard_unsaved_changes_confirmed": true}, ExternalResourceIDs: map[string]string{}, CreatedAt: now}
+	return operations.OperationRecord{ID: "op_restore_existing", Type: operations.OperationRestore, State: operations.OperationStateQueued, Phase: operations.OperationPhaseRestoreValidate, IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestore, "idem_restore").String(), IdempotencyKey: "idem_restore", RequestHash: hash, CorrelationID: "corr_restore", CallerService: "product-caller", AuthorizedActor: operations.Actor{Type: "system", ID: "svc-alpha"}, Resource: operations.ResourceRef{Type: "repo", ID: "repo_alpha01"}, NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", InputSummary: map[string]any{"save_point_id": "sp_001"}, ExternalResourceIDs: map[string]string{}, CreatedAt: now}
 }

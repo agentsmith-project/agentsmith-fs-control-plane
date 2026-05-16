@@ -25,8 +25,9 @@ namespace/repo/export/mount/operation IDs, and audit event IDs.
   `operator_intervention_required` and keep the relevant fence held.
 - Do not release a writer or lifecycle fence until the corresponding session,
   JVS, storage, and audit state is known.
-- Do not manually delete JVS private restore-plan files. Pending preview cleanup
-  uses the restore preview discard API, which invokes `jvs restore discard`.
+- Do not manually edit JVS private metadata. Direct restore recovery must use
+  the durable operation phase, save point ID, writer-session fence, redacted
+  direct JVS evidence, and explicit diagnostic commands.
 - Purged storage must not be restored from backups into ordinary service without
   a new reviewed incident decision.
 
@@ -68,135 +69,78 @@ Terminal evidence:
 
 - save point visible in history or operation failed with stable error.
 
-## Failed Restore Preview
+## Failed Direct Restore
 
 Symptoms:
 
-- restore preview failed or returned unexpected JVS shape.
-- same-repo save, restore, template, or clone is blocked by an active pending
-  restore plan.
-- recovery status reports `pending_restore_preview` or `stale_restore_preview`.
+- `restore` operation failed, timed out, or returned unexpected direct JVS
+  shape.
+- same-repo save, restore, template, or clone is blocked by a durable operation
+  lease, writer-session fence, or JVS lock.
+- direct JVS status or doctor reports metadata/recovery ambiguity.
 
 Actions:
 
 - Confirm repo is active and no lifecycle fence is held.
-- Inspect save point ID, preview operation phase, durable `RestorePlan`
-  `restore_plan_id`, `source_save_point_id`, restore plan status, and redacted
-  JVS output.
-- Verify whether the worker persisted the preflight idle marker before JVS
-  preview.
-- Adopt a single pending JVS plan only if AFSCP-exclusive-control assumptions
-  hold and the preview operation is the earliest same-repo non-terminal restore
-  preview or JVS mutation; otherwise move the plan or operation to
+- Inspect operation phase, requested save point ID, writer-session fence owner,
+  active/uncertain read-write sessions, and redacted direct JVS output.
+- If the operation failed before the writer-session fence, confirm no direct JVS
+  mutation was invoked before retrying from the durable phase.
+- If the operation holds the writer-session fence, keep it held until direct JVS
+  status, doctor, operation state, and audit evidence prove a terminal result.
+- If direct JVS output is malformed, contains forbidden internal fields, or
+  cannot prove the requested save point was restored, move the operation to
   `operator_intervention_required`.
-- Treat `stale_restore_preview` during preview recovery as intervention unless
-  a caller explicitly invokes restore preview discard. During restore-run for
-  the matching pending plan, expect typed `RESTORE_PREVIEW_STALE`, durable
-  `RestorePlan.stale=true`, and a `restore_preview_stale` blocker.
-- Do not create restore-run operation without a valid preview operation and
-  durable plan.
+- Do not infer success from filesystem contents alone; use durable operation
+  state plus redacted direct JVS evidence.
 
 Terminal evidence:
 
-- preview operation succeeded with durable `status=pending` plan, preview
-  operation failed with no active JVS plan, plan discarded through the discard
-  flow, or intervention record with owner.
+- operation terminal succeeded with restored save point, previous/new head IDs
+  when available, audit emitted, and writer-session fence released; or
+  intervention record with owner and fence retained when safety is uncertain.
 
-## Discard Restore Preview
+## Direct Restore Blocked By Writers
 
 Symptoms:
 
-- caller cancelled preview or no longer wants to run the pending plan.
-- repo JVS mutations are blocked by a pending restore plan that should not be
-  consumed.
+- `ACTIVE_WRITER_SESSIONS`, `STALE_WRITER_SESSION_UNCERTAIN`, or
+  `WRITER_SESSION_FENCE_HELD`.
 
 Actions:
 
-- Call `POST /internal/v1/repos/{repoId}/restore-preview:discard` with the
-  matching `preview_operation_id`.
-- Confirm namespace, repo, preview operation type, succeeded preview state,
-  `restore_plan_id`, `source_save_point_id`, and plan `status=pending`.
-- Let the worker mark the plan `discarding` and run `jvs restore discard
-  <plan_id>` through the runner.
-- If JVS discard confirmation or recovery status is ambiguous, move the plan or
-  operation to `operator_intervention_required`.
-- Do not delete `.jvs` private files.
+- List active read-write WebDAV exports and workload mount bindings.
+- Revoke, release, or wait for expiry/reconciliation according to caller
+  policy.
+- Treat stale or uncertain writer evidence as active until reconciliation marks
+  it terminal.
+- Retry direct restore with the same idempotency key only when the request body
+  is unchanged and writer evidence is terminal.
 
 Terminal evidence:
 
-- plan `discarded` with audit event, or intervention record with owner.
-
-## Failed Restore-Run
-
-Symptoms:
-
-- restore-run failed, doctor failed, or JVS recovery state is ambiguous.
-
-Actions:
-
-- Keep writer-session fence held.
-- Inspect active/uncertain read-write sessions.
-- Validate the referenced preview operation and durable plan: same
-  namespace/repo/resource, type `restore_preview`, preview succeeded,
-  `restore_plan_id` and `source_save_point_id` present, plan `pending`, and not
-  referenced by a succeeded or non-terminal restore-run.
-- Run `jvs recovery status` through the runner contract only.
-- Before JVS restore-run, require exactly one pending JVS plan matching the
-  stored plan ID.
-- If the durable plan already has `stale=true` or JVS reports matching
-  `stale_restore_preview`, confirm restore-run failed with
-  `RESTORE_PREVIEW_STALE`, no writer fence was acquired, and the plan remains
-  pending for discard with stale/blockers persisted.
-- If writer/session gating denies the run before JVS is invoked, release the
-  writer-session fence and leave the plan `pending`.
-- After writer/session gating passes, confirm the plan was marked `consuming`
-  before JVS restore-run.
-- After JVS restore-run, require `jvs doctor --strict` success and recovery
-  status idle before marking the plan `consumed`.
-- If recovery cannot prove safe terminal state, mark
-  `operator_intervention_required` and keep the writer-session fence held.
-- Do not manually delete JVS private restore-plan files.
-
-Terminal evidence:
-
-- repo doctor ok, recovery status idle, plan `consumed`, audit emitted, and
-  fence released; or intervention record with runbook owner and fence retained.
-
-## Restore-Run Blocked By Writers
-
-Symptoms:
-
-- `ACTIVE_WRITER_SESSIONS` or `STALE_WRITER_SESSION_UNCERTAIN`.
-
-Actions:
-
-- List active read-write exports and workload mount bindings.
-- Revoke or wait for expiry/reconciliation according to caller policy.
-- Retry restore-run with same idempotency key only when request body is
-  unchanged.
-
-Terminal evidence:
-
-- restore-run rejected with stable error, or retried after sessions terminal.
+- direct restore rejected with stable error, or retried after sessions are
+  terminal.
 
 ## Writer-Session Fence Stuck
 
 Symptoms:
 
 - new read-write sessions rejected with `WRITER_SESSION_FENCE_HELD`.
-- no running restore-run appears healthy.
+- no running direct restore operation appears healthy.
 
 Actions:
 
-- Inspect operation store for owning operation and lease.
+- Inspect operation store for owning restore operation and lease.
 - Reconcile process restart state.
-- Release fence only after restore operation terminal state is proven.
+- Release fence only after restore operation terminal state, direct JVS status,
+  session state, and audit evidence are proven.
 
 Terminal evidence:
 
 - fence released with audit reason, or intervention remains non-terminal.
 
-## JVS Doctor Failure
+## JVS Direct Diagnostics Failure
 
 Symptoms:
 
@@ -204,10 +148,10 @@ Symptoms:
 
 Actions:
 
-- Capture redacted JVS JSON.
-- Block restore-run, template clone, lifecycle reactivation, and purge until
+- Capture redacted direct JVS JSON.
+- Block direct restore, template clone, lifecycle reactivation, and purge until
   operator decision.
-- Escalate to JVS owner when doctor output conflicts with recovery status.
+- Escalate to JVS owner when doctor output conflicts with direct status.
 
 Terminal evidence:
 

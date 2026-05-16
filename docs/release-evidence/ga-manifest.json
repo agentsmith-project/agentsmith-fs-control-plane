@@ -582,7 +582,7 @@
         "./internal/api",
         "./internal/apiapp",
         "-run",
-        "^Test(CapabilityMatrixV1(RowsMatchHandoffVocabulary|DecisionRowsCoverP2aSurfaceContract|CoversEveryRouteMutationOperation|IncludesDirectRestoreAndPreviewAsDurableJVSMutations|ClassifiesVolumeEnsureAdmission|ExcludesLegacyCoarseCapabilities|SplitsJVSAndWebDAVProjectionFacets|SplitsWorkloadBindingDiscoveryAndTeardownPlanFacets|WebDAVExportAdmissionIncludesCreateAndRevoke|TeardownOnlyPlanDoesNotBypassNewMutationDenial)|AdmissionCapabilityForOperationTypeCoversEveryMatrixAdmissionOperation|NeutralReadinessHandlerReportsNotReadyAndDisabledGates|ReadinessFromCapabilityMatrixSerializesWorkloadMountSplitCapabilities|NeutralShellFallbackReportsSplitWorkloadCapabilities|InternalRuntimeReadinessIsNotNeutralAndDoesNotAdvertiseUnimplementedHandlersReady|InternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated|InternalRuntimeReadinessRuntimeProfileRequiresOptedInWorkloadMountFacets)$"
+        "^Test(CapabilityMatrixV1(RowsMatchHandoffVocabulary|DecisionRowsCoverP2aSurfaceContract|CoversEveryRouteMutationOperation|IncludesDirectRestoreAsDurableJVSMutation|ClassifiesVolumeEnsureAdmission|ExcludesLegacyCoarseCapabilities|SplitsJVSAndWebDAVProjectionFacets|SplitsWorkloadBindingDiscoveryAndTeardownPlanFacets|WebDAVExportAdmissionIncludesCreateAndRevoke|TeardownOnlyPlanDoesNotBypassNewMutationDenial)|AdmissionCapabilityForOperationTypeCoversEveryMatrixAdmissionOperation|NeutralReadinessHandlerReportsNotReadyAndDisabledGates|ReadinessFromCapabilityMatrixSerializesWorkloadMountSplitCapabilities|NeutralShellFallbackReportsSplitWorkloadCapabilities|InternalRuntimeReadinessIsNotNeutralAndDoesNotAdvertiseUnimplementedHandlersReady|InternalRuntimeReadinessGAProfileTreatsWorkloadMountAsOptionalGated|InternalRuntimeReadinessRuntimeProfileRequiresOptedInWorkloadMountFacets)$"
       ],
       "anchors": [
         "internal/capability/matrix.go",
@@ -679,7 +679,7 @@
         "./internal/capability",
         "./internal/contractcheck",
         "-run",
-        "^Test(CapabilityMatrixV1(DecisionRowsCoverP2aSurfaceContract|CoversEveryRouteMutationOperation|IncludesDirectRestoreAndPreviewAsDurableJVSMutations|ClassifiesVolumeEnsureAdmission)|Operation(StateMachineContractCoversEveryOperationType|TerminalizationContractRequiresSideEffectReplayAndTerminalDecision))$"
+        "^Test(CapabilityMatrixV1(DecisionRowsCoverP2aSurfaceContract|CoversEveryRouteMutationOperation|IncludesDirectRestoreAsDurableJVSMutation|ClassifiesVolumeEnsureAdmission)|Operation(StateMachineContractCoversEveryOperationType|TerminalizationContractRequiresSideEffectReplayAndTerminalDecision))$"
       ],
       "anchors": [
         "internal/capability/matrix.go",
@@ -722,7 +722,7 @@
         "-count=1",
         "./internal/workerapp",
         "-run",
-        "^Test(WorkerCapabilityMatrix(ExecutorRegistryMatchesDecisionRows|RecoveryRegistryMatchesDecisionRows|UnsupportedTerminalizationRegistryIncludesDisabledOperations)|RunOnceExportSessionReconcileOnlyRunsWhenExplicitlyEnabled|RunOnceClaimsQueued(VolumeEnsure|NamespaceUpsert|NamespaceDisable)ThroughDefaultRunner|RunOnceClaimsQueuedNamespaceUpsertAndBindingPutThroughDefaultRunner|RunOnceRepoCreate(DisabledScansAndPersistsUnsupportedIntervention|EnabledButJVSUnavailableScansAndPersistsUnsupportedIntervention)|RunOnceWorkloadMountBinding(Create|StatusUpdate|Heartbeat|Release|Revoke)ClaimsThroughMountBindingExecutor|RunOnceRepoLifecycleDisabledScansAndPersistsUnsupportedInterventions|RunOnceRepoPurgeDisabledScansAndPersistsUnsupportedIntervention|RunOnceSavePointCreateDisabledScansAndPersistsUnsupportedIntervention|RunOnceTemplate(Create|Clone)DisabledScansAndPersistsUnsupportedIntervention|RunOnceRestore(PreviewDisabledScansAndPersistsUnsupportedIntervention|PreviewDiscardDisabledScansAndPersistsUnsupportedIntervention|RunDisabledScansAndPersistsUnsupportedIntervention))$"
+        "^Test(WorkerCapabilityMatrix(ExecutorRegistryMatchesDecisionRows|RecoveryRegistryMatchesDecisionRows|UnsupportedTerminalizationRegistryIncludesDisabledOperations)|RunOnceExportSessionReconcileOnlyRunsWhenExplicitlyEnabled|RunOnceClaimsQueued(VolumeEnsure|NamespaceUpsert|NamespaceDisable)ThroughDefaultRunner|RunOnceClaimsQueuedNamespaceUpsertAndBindingPutThroughDefaultRunner|RunOnceRepoCreate(DisabledScansAndPersistsUnsupportedIntervention|EnabledButJVSUnavailableScansAndPersistsUnsupportedIntervention)|RunOnceWorkloadMountBinding(Create|StatusUpdate|Heartbeat|Release|Revoke)ClaimsThroughMountBindingExecutor|RunOnceRepoLifecycleDisabledScansAndPersistsUnsupportedInterventions|RunOnceRepoPurgeDisabledScansAndPersistsUnsupportedIntervention|RunOnceSavePointCreateDisabledScansAndPersistsUnsupportedIntervention|RunOnceTemplate(Create|Clone)DisabledScansAndPersistsUnsupportedIntervention|RunOnceRestoreDisabledScansAndPersistsUnsupportedIntervention)$"
       ],
       "anchors": [
         "internal/capability/matrix.go",
@@ -1015,44 +1015,36 @@
         "go",
         "test",
         "-count=1",
+        "./internal/jvsrunner",
         "./internal/api",
         "./internal/repoexec",
         "./internal/workerapp",
         "./internal/store/postgres",
         "-run",
-        "^Test(SavePointCreate(ValidatesMessageAndCreatesQueuedOperation|IdempotentReuseBeforeRepoStateChecks|RejectsSecretShapedMessage|RejectsDisabledNamespaceBeforeIntakeAndAudits)|SavePointList(ReturnsHistoryAndFailsClosed|GateConflictDoesNotReadHistory|DeniesArchivedAndLifecycleFenceBeforeHistory)|JVSBackedSavePointHistoryReader(ResolvesRootAndReturnsSafeHistoryInJVSOrder|FailsClosedWithoutLeakingRawPaths)|RestorePreviewHandler(CreatesQueuedPreviewForSavePoint|FailsClosedForActivePlanOrJVSMutation|ReusesExistingIdempotentOperationBeforePlanState|RejectsDisabledNamespacePolicy)|RestoreRunHandler(CreatesQueuedRunForPendingPlan|RejectsDisabledNamespaceBeforeIntake|RejectsLifecycleFenceBeforeIntake|RejectsPreviewMetadataMismatch|ReusesExistingIdempotentOperationBeforePlanStateAndRunGate)|RestorePreviewDiscardHandler(CreatesQueuedDiscardForPendingPlan|RejectsCleanupAdmissionRisksBeforePreviewPlanAndIntake|ReusesExistingIdempotentOperationBeforePlanState|AllowsDisabledNamespaceCleanupForPendingPlan)|SavePointExecutor(PersistsPreSaveMarkerThenSavesAndCommits|AdoptsCrashAfterSaveWithoutCallingSaveAgain|RejectsSecretShapedMessageBeforeJVS)|RestorePreviewExecutor(PersistsIdleMarkerBeforePreviewAndCommitsPlan|NonIdleRecoveryStatusRequiresOperatorIntervention)|RestorePreviewDiscardExecutor(MarksPlanDiscardingBeforeJVSAndCommitsDiscarded|AllowsDisabledNamespaceCleanupAndCommitsDiscarded)|RestoreRunExecutor(FencesWriterRunsDoctorChecksIdleAndCommitsConsumed|PreJVSWriterSessionDenialReleasesFenceAndKeepsPlanPending)|RunOnce(SavePointCreateEnabledClaimsThroughSavePointExecutor|RestorePreviewEnabledClaimsThroughRestorePreviewExecutor|RestorePreviewDiscardEnabledClaimsThroughDiscardExecutor|RestoreRunEnabledClaimsThroughRestoreRunExecutor|RestorePreviewEnabledRejectsUnpinnedJVSChecksum)|NewJVSRunnerFromConfigVerifiesFileAgainstAcceptedPin|AcquireSavePointCreateOperationLeaseSerializesEarlierLifecycleAndJVSMutations|CommitSavePointCreateSucceededRequiresPreparedStoredMarkerBoundary|CreateOrReuseRestore(PreviewOperationUsesAtomicGateAfterIdempotency|RunOperationUsesAtomicPlanAndDuplicateGatesAfterIdempotency|PreviewDiscardOperationUsesAtomicPlanGateAfterIdempotency)|CommitRestore(PreviewSucceededWithLeaseInsertsPlanAuditAndOperationAtomically|PreviewDiscardSucceededWithLeaseDiscardsPlanAuditAndOperationAtomically|RunSucceededWithLeaseConsumesPlanAuditAndReleasesFenceAtomically))$"
+        "^Test(RunnerPublicSurfaceExcludesLegacySaveHistoryAndStrictDoctor|AFSCPDirectRejectsForbiddenInternalFields|JVSRunnerInterfaceIsDirectOnly|SavePointCreate(ValidatesMessageAndCreatesQueuedOperation|IdempotentReuseBeforeRepoStateChecks|RejectsSecretShapedMessage|RejectsDisabledNamespaceBeforeIntakeAndAudits)|SavePointList(ReturnsHistoryAndFailsClosed|GateConflictDoesNotReadHistory|DeniesArchivedAndLifecycleFenceBeforeHistory)|JVSBackedSavePointHistoryReader(ResolvesRootAndReturnsSafeHistoryInJVSOrder|FailsClosedWithoutLeakingRawPaths)|RestoreHandler(RejectsLegacyDiscardConfirmationField|CreatesQueuedOperationForDirectRestore|ReusesExistingIdempotentOperationBeforeMutationGate|MapsAtomicIntakeGateFailures|SourceDoesNotCallPreviewOrRunHandlers)|SavePointExecutor(PersistsPreSaveMarkerThenSavesAndCommits|AdoptsCrashAfterSaveWithoutCallingSaveAgain|RejectsSecretShapedMessageBeforeJVS)|RestoreExecutor(FencesWriterCallsDirectRestoreAndCommitsSucceeded|BlocksActiveWriterSessionsBeforeJVSRestore|JVSFailureCommitsFailedWithoutPreviewOrRun|SourceDoesNotCallPreviewRunOrPlanExecutors)|RunOnce(SavePointCreateEnabledClaimsThroughSavePointExecutor|RestoreEnabledClaimsThroughDirectRestoreExecutor|RestoreDisabledScansAndPersistsUnsupportedIntervention)|NewJVSRunnerFromConfig(VerifiesFileAgainstAcceptedPin|DirectRestorePreflightsCLIHelp|DirectRestoreRejectsMissingCLIFlag)|AcquireSavePointCreateOperationLeaseSerializesEarlierLifecycleAndJVSMutations|AcquireRestoreOperationLeaseSerializesMutationsForDirectRestore|CommitSavePointCreateSucceededRequiresPreparedStoredMarkerBoundary|CreateOrReuseRestoreOperation(UsesAtomicGateAfterIdempotency|ReusesExistingBeforeGates|MapsAtomicGateFailures|MapsJVSUniqueIndexViolation)|CommitRestore(SucceededWithLeaseAuditsAndReleasesFenceWithoutPlan|FailedWithLeaseAllowsValidateOrWriterFenced)|RestoreCommitsRejectRawCommandsBeforeSQL)$"
       ],
       "anchors": [
+        "internal/jvsrunner/runner.go",
+        "internal/jvsrunner/runner_test.go",
         "internal/api/save_point_handler.go",
         "internal/api/save_point_handler_test.go",
         "internal/api/save_point_history_reader.go",
         "internal/api/save_point_history_reader_test.go",
-        "internal/api/restore_preview_handler.go",
-        "internal/api/restore_preview_handler_test.go",
-        "internal/api/restore_run_handler.go",
-        "internal/api/restore_run_handler_test.go",
-        "internal/api/restore_preview_discard_handler.go",
-        "internal/api/restore_preview_discard_handler_test.go",
+        "internal/api/restore_handler.go",
+        "internal/api/restore_handler_test.go",
         "internal/repoexec/executor.go",
         "internal/repoexec/executor_test.go",
-        "internal/repoexec/restore_preview_executor.go",
-        "internal/repoexec/restore_preview_executor_test.go",
-        "internal/repoexec/restore_preview_discard_executor.go",
-        "internal/repoexec/restore_preview_discard_executor_test.go",
-        "internal/repoexec/restore_run_executor.go",
-        "internal/repoexec/restore_run_executor_test.go",
+        "internal/repoexec/jvs_runner_contract_test.go",
+        "internal/repoexec/restore_executor.go",
+        "internal/repoexec/restore_executor_test.go",
         "internal/workerapp/run_once.go",
         "internal/workerapp/run_once_test.go",
         "internal/store/postgres/operations.go",
         "internal/store/postgres/operations_test.go",
         "internal/store/postgres/save_point_operations.go",
         "internal/store/postgres/save_point_operations_test.go",
-        "internal/store/postgres/restore_preview_operations.go",
-        "internal/store/postgres/restore_preview_operations_test.go",
-        "internal/store/postgres/restore_preview_discard_operations.go",
-        "internal/store/postgres/restore_preview_discard_operations_test.go",
-        "internal/store/postgres/restore_run_operations.go",
-        "internal/store/postgres/restore_run_operations_test.go"
+        "internal/store/postgres/restore_operations.go",
+        "internal/store/postgres/restore_operations_test.go"
       ],
       "doc_only_allowed": false,
       "optional_gated": false,
@@ -1062,8 +1054,8 @@
         "assertions": [
           "savepoint create validates messages, preserves idempotency precedence, denies disabled namespace before intake, and redacts secret-shaped messages",
           "savepoint history returns safe JVS-ordered projections and fails closed without leaking raw paths",
-          "restore preview, restore run, and restore discard API paths queue or replay only after plan, namespace, lifecycle, and mutation gates pass",
-          "JVS executors persist markers, handle crash recovery, gate unsafe sessions, and commit plans through atomic store boundaries",
+          "direct restore API paths queue, admit, reject legacy request fields, and replay idempotently after namespace, lifecycle, and mutation gates pass",
+          "JVS executors gate unsafe writer sessions, invoke direct restore, and commit operation/audit/fence state through atomic store boundaries",
           "RunOnce claims savepoint and restore operations through the real executors with pinned JVS checksum validation"
         ]
       },

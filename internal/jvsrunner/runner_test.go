@@ -15,9 +15,26 @@ import (
 const (
 	testPayloadRoot       = "/srv/afscp/volumes/vol_default/afscp/namespaces/ns_alpha/repos/repo_alpha/payload"
 	testControlRoot       = "/srv/afscp/volumes/vol_default/afscp/namespaces/ns_alpha/repos/repo_alpha/control"
+	testDirectHome        = "/home/afscp/runtime/ns_alpha/repo_alpha"
 	testTargetPayloadRoot = "/srv/afscp/volumes/vol_default/afscp/namespaces/ns_alpha/repos/repo_clone/payload"
 	testTargetControlRoot = "/srv/afscp/volumes/vol_default/afscp/namespaces/ns_alpha/repos/repo_clone/control"
 )
+
+func TestRunnerPublicSurfaceExcludesLegacySaveHistoryAndStrictDoctor(t *testing.T) {
+	t.Parallel()
+
+	runnerType := reflect.TypeOf((*Runner)(nil))
+	for _, method := range []string{"DoctorStrict", "Save", "History"} {
+		if _, ok := runnerType.MethodByName(method); ok {
+			t.Fatalf("Runner exposes legacy public JVS method %s; active AFSCP calls must use direct afscp methods", method)
+		}
+	}
+	for _, method := range []string{"DirectSave", "DirectList", "DirectRestore", "DirectStatus", "DirectDoctor"} {
+		if _, ok := runnerType.MethodByName(method); !ok {
+			t.Fatalf("Runner is missing direct AFSCP method %s", method)
+		}
+	}
+}
 
 func TestInitUsesFixedCommandAndParsesEnvelope(t *testing.T) {
 	t.Parallel()
@@ -57,518 +74,383 @@ func TestInitUsesFixedCommandAndParsesEnvelope(t *testing.T) {
 	assertSummaryDoesNotLeakPaths(t, summary)
 }
 
-func TestDoctorStrictUsesFixedCommandAndParsesEnvelope(t *testing.T) {
+func TestAFSCPDirectMethodsUseTargetSelectorAndNoLegacyFlags(t *testing.T) {
 	t.Parallel()
 
-	commandRunner := &fakeCommandRunner{
-		result: CommandResult{
-			Stdout: doctorSuccessStdout(t),
-		},
-	}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.DoctorStrict(context.Background(), testControlRoot)
-	if err != nil {
-		t.Fatalf("DoctorStrict returned error: %v", err)
-	}
-	if summary != (DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}) {
-		t.Fatalf("summary = %#v", summary)
-	}
-
-	want := CommandSpec{
-		Path: "/opt/afscp/bin/jvs",
-		Args: []string{
-			"--control-root",
-			testControlRoot,
-			"--workspace",
-			"main",
-			"doctor",
-			"--strict",
-			"--json",
-		},
-		Dir: "/var/lib/afscp/jvs-cwd",
-	}
-	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
-		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
-	}
-	assertNoForbiddenJVSFlags(t, commandRunner.calls[0].Args)
-	assertSummaryDoesNotLeakPaths(t, summary)
-}
-
-func TestDoctorRepairRuntimeUsesExternalControlCommandAndParsesRepairs(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{
-		result: CommandResult{
-			Stdout: doctorRepairRuntimeSuccessStdout(t),
-		},
-	}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.DoctorRepairRuntime(context.Background(), testControlRoot)
-	if err != nil {
-		t.Fatalf("DoctorRepairRuntime returned error: %v", err)
-	}
-	if !summary.Healthy || summary.RepoID != "jvs_repo_alpha" || summary.Workspace != "main" {
-		t.Fatalf("summary = %#v, want healthy main repo summary", summary)
-	}
-	if !summary.CleanLocks.Success || summary.CleanLocks.Cleaned != 1 {
-		t.Fatalf("clean_locks summary = %#v, want successful stale lock cleanup", summary.CleanLocks)
-	}
-
-	want := CommandSpec{
-		Path: "/opt/afscp/bin/jvs",
-		Args: []string{
-			"--control-root",
-			testControlRoot,
-			"--workspace",
-			"main",
-			"doctor",
-			"--strict",
-			"--repair-runtime",
-			"--json",
-		},
-		Dir: "/var/lib/afscp/jvs-cwd",
-	}
-	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
-		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
-	}
-	assertSummaryDoesNotLeakPaths(t, summary)
-}
-
-func TestSaveUsesFixedCommandAndParsesEnvelope(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: saveSuccessStdout(t)}}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.Save(context.Background(), testControlRoot, " checkpoint before restore ")
-	if err != nil {
-		t.Fatalf("Save returned error: %v", err)
-	}
-	if summary.SavePointID != "sp_001" || summary.NewestSavePointID != "sp_001" || summary.Workspace != "main" || summary.UnsavedChanges {
-		t.Fatalf("summary = %#v", summary)
-	}
-	want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: []string{"--control-root", testControlRoot, "--workspace", "main", "save", "--message", "checkpoint before restore", "--json"}, Dir: "/var/lib/afscp/jvs-cwd"}
-	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
-		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
-	}
-	assertNoForbiddenJVSFlags(t, commandRunner.calls[0].Args)
-	assertSummaryDoesNotLeakPaths(t, summary)
-}
-
-func TestSaveReportsUnsavedChangesWithoutFailing(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: saveStdoutWith(t, func(env map[string]any) {
-		env["data"].(map[string]any)["unsaved_changes"] = true
-	})}}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.Save(context.Background(), testControlRoot, "checkpoint")
-	if err != nil {
-		t.Fatalf("Save returned error: %v", err)
-	}
-	if !summary.UnsavedChanges || summary.SavePointID != "sp_001" {
-		t.Fatalf("summary = %#v, want unsaved_changes reported", summary)
-	}
-}
-
-func TestHistoryUsesFixedCommandAndParsesEnvelope(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: historySuccessStdout(t)}}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.History(context.Background(), testControlRoot)
-	if err != nil {
-		t.Fatalf("History returned error: %v", err)
-	}
-	if summary.NewestSavePointID != "sp_002" || len(summary.SavePoints) != 2 {
-		t.Fatalf("summary = %#v", summary)
-	}
-	if summary.SavePoints[0].SavePointID != "sp_002" || summary.SavePoints[0].Message != "second" || summary.SavePoints[0].CreatedAt != "2026-05-05T12:01:00Z" {
-		t.Fatalf("first returned save point = %#v, want JVS newest-first sp_002", summary.SavePoints[0])
-	}
-	if summary.SavePoints[1].SavePointID != "sp_001" || summary.SavePoints[1].Message != "first" || summary.SavePoints[1].CreatedAt != "2026-05-05T12:00:00Z" {
-		t.Fatalf("summary = %#v", summary)
-	}
-	want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: []string{"--control-root", testControlRoot, "--workspace", "main", "history", "--limit", "0", "--json"}, Dir: "/var/lib/afscp/jvs-cwd"}
-	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
-		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
-	}
-	assertSummaryDoesNotLeakPaths(t, summary)
-}
-
-func TestHistoryFullRequestStillFailsClosedWhenTruncated(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: historyStdoutWith(t, func(env map[string]any) {
-		env["data"].(map[string]any)["truncated"] = true
-	})}}
-	runner := newTestRunner(t, commandRunner)
-
-	_, err := runner.History(context.Background(), testControlRoot)
-	if err == nil {
-		t.Fatal("History succeeded with truncated output, want fail closed")
-	}
-	assertErrorDoesNotLeak(t, err)
-
-	want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: []string{"--control-root", testControlRoot, "--workspace", "main", "history", "--limit", "0", "--json"}, Dir: "/var/lib/afscp/jvs-cwd"}
-	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
-		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
-	}
-}
-
-func TestHistoryAllowsEmptyHistory(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: historyStdoutWith(t, func(env map[string]any) {
-		data := env["data"].(map[string]any)
-		delete(data, "newest_save_point")
-		data["save_points"] = []map[string]any{}
-	})}}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.History(context.Background(), testControlRoot)
-	if err != nil {
-		t.Fatalf("History returned error: %v", err)
-	}
-	if summary.NewestSavePointID != "" || len(summary.SavePoints) != 0 {
-		t.Fatalf("summary = %#v, want empty history", summary)
-	}
-}
-
-func TestHistoryMessageAllowsNaturalLanguage(t *testing.T) {
-	t.Parallel()
-
-	wantMessage := "checkpoint before release (中文说明，保留空格!)"
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: historyStdoutWith(t, func(env map[string]any) {
-		savePoints := env["data"].(map[string]any)["save_points"].([]map[string]any)
-		savePoints[0]["message"] = wantMessage
-	})}}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.History(context.Background(), testControlRoot)
-	if err != nil {
-		t.Fatalf("History returned error: %v", err)
-	}
-	if got := summary.SavePoints[0].Message; got != wantMessage {
-		t.Fatalf("message = %q, want %q", got, wantMessage)
-	}
-}
-
-func TestHistoryMessageUsesUnicodeLengthLimit(t *testing.T) {
-	t.Parallel()
-
+	target := DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}
 	tests := []struct {
 		name    string
-		message string
-		want    string
-	}{
-		{name: "allows 512 CJK characters", message: strings.Repeat("界", 512), want: strings.Repeat("界", 512)},
-		{name: "redacts 513 CJK characters", message: strings.Repeat("界", 513), want: "redacted"},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: historyStdoutWith(t, func(env map[string]any) {
-				savePoints := env["data"].(map[string]any)["save_points"].([]map[string]any)
-				savePoints[0]["message"] = tt.message
-			})}}
-			runner := newTestRunner(t, commandRunner)
-
-			summary, err := runner.History(context.Background(), testControlRoot)
-			if err != nil {
-				t.Fatalf("History returned error: %v", err)
-			}
-			if got := summary.SavePoints[0].Message; got != tt.want {
-				t.Fatalf("message length/runes mismatch: got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestHistoryMessageRedactsDangerousContent(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		message string
-	}{
-		{name: "dot jvs", message: "look in .jvs/state.json"},
-		{name: "absolute path", message: "copied from /srv/afscp/volumes/secret"},
-		{name: "control root field", message: "control_root=/srv/afscp/control"},
-		{name: "payload root field", message: "payload_root=/srv/afscp/payload"},
-		{name: "raw path field", message: "raw_path=/srv/afscp/raw"},
-		{name: "shell fragment", message: "run rm -rf /srv/afscp/volumes"},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: historyStdoutWith(t, func(env map[string]any) {
-				savePoints := env["data"].(map[string]any)["save_points"].([]map[string]any)
-				savePoints[0]["message"] = tt.message
-			})}}
-			runner := newTestRunner(t, commandRunner)
-
-			summary, err := runner.History(context.Background(), testControlRoot)
-			if err != nil {
-				t.Fatalf("History returned error: %v", err)
-			}
-			if got := summary.SavePoints[0].Message; got != "redacted" {
-				t.Fatalf("message = %q, want redacted", got)
-			}
-			assertSummaryDoesNotLeakPaths(t, summary)
-		})
-	}
-}
-
-func TestRestorePreviewRunDiscardAndRecoveryStatusUseFixedCommandsAndParseEnvelope(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		call    func(*Runner) (any, error)
 		stdout  []byte
+		call    func(*Runner) (any, error)
 		wantArg []string
 		check   func(t *testing.T, summary any)
 	}{
 		{
-			name:    "preview",
-			stdout:  restorePreviewSuccessStdout(t),
-			wantArg: []string{"--control-root", testControlRoot, "--workspace", "main", "restore", "sp_001", "--json"},
+			name:    "save",
+			stdout:  directSaveSuccessStdout(t),
+			wantArg: []string{"afscp", "--control-root", testControlRoot, "--home", testDirectHome, "save", "--message", "checkpoint before restore", "--json"},
 			call: func(r *Runner) (any, error) {
-				return r.RestorePreview(context.Background(), testControlRoot, "sp_001")
+				return r.DirectSave(context.Background(), target, " checkpoint before restore ")
 			},
 			check: func(t *testing.T, summary any) {
-				got := summary.(RestorePreviewSummary)
-				if got.PlanID != "plan_001" || got.SourceSavePointID != "sp_001" || !got.RunCommandPresent {
-					t.Fatalf("summary = %#v", got)
-				}
-				if got.BaseRevision != "sp_002" || got.HeadRevision != "sp_002" || got.Generation != "sha256:preview-base" {
-					t.Fatalf("preview revision metadata = %#v, want base/head/generation", got)
-				}
-				if got.ManagedFiles.Changed.Count != 1 || got.ManagedFiles.Removed.Count != 1 || got.ManagedFiles.Added.Count != 1 || !got.ManagedFiles.Destructive {
-					t.Fatalf("managed files summary = %#v, want redacted changed/removed/added summary", got.ManagedFiles)
-				}
-				if got.ManagedFiles.Changed.Samples[0] != "docs/readme.md" || got.ManagedFiles.Removed.Samples[0] != "tmp/cache.txt" || got.ManagedFiles.Added.Samples[0] != "src/new.ts" {
-					t.Fatalf("managed files samples = %#v, want display-safe relative paths", got.ManagedFiles)
-				}
-			},
-		},
-		{
-			name:    "run",
-			stdout:  restoreRunSuccessStdout(t),
-			wantArg: []string{"--control-root", testControlRoot, "--workspace", "main", "restore", "--run", "plan_001", "--json"},
-			call: func(r *Runner) (any, error) {
-				return r.RestoreRun(context.Background(), testControlRoot, "plan_001")
-			},
-			check: func(t *testing.T, summary any) {
-				got := summary.(RestoreRunSummary)
-				if got.PlanID != "plan_001" || got.RestoredSavePointID != "sp_001" {
+				got := summary.(DirectSaveSummary)
+				if got.SavePointID != "sp_001" || got.HistoryHeadID != "sp_001" || got.Message != "checkpoint before restore" || got.CreatedAt != "2026-05-05T12:00:00Z" {
 					t.Fatalf("summary = %#v", got)
 				}
 			},
 		},
 		{
-			name:    "discard",
-			stdout:  restoreDiscardSuccessStdout(t),
-			wantArg: []string{"--control-root", testControlRoot, "--workspace", "main", "restore", "discard", "plan_001", "--json"},
+			name:    "list",
+			stdout:  directListSuccessStdout(t),
+			wantArg: []string{"afscp", "--control-root", testControlRoot, "--home", testDirectHome, "list", "--json"},
 			call: func(r *Runner) (any, error) {
-				return r.RestoreDiscard(context.Background(), testControlRoot, "plan_001")
+				return r.DirectList(context.Background(), target)
 			},
 			check: func(t *testing.T, summary any) {
-				got := summary.(RestoreDiscardSummary)
-				if got.PlanID != "plan_001" || !got.PlanDiscarded {
+				got := summary.(DirectListSummary)
+				if got.HistoryHeadID != "sp_002" || len(got.SavePoints) != 2 || got.SavePoints[0].SavePointID != "sp_002" || !got.SavePoints[0].HistoryHead || got.SavePoints[1].Message != "first" {
 					t.Fatalf("summary = %#v", got)
 				}
 			},
 		},
 		{
-			name:    "recovery status",
-			stdout:  recoveryStatusSuccessStdout(t),
-			wantArg: []string{"--control-root", testControlRoot, "--workspace", "main", "recovery", "status", "--json"},
+			name:    "restore",
+			stdout:  directRestoreSuccessStdout(t),
+			wantArg: []string{"afscp", "--control-root", testControlRoot, "--home", testDirectHome, "restore", "--save-point", "sp_001", "--json"},
 			call: func(r *Runner) (any, error) {
-				return r.RecoveryStatus(context.Background(), testControlRoot)
+				return r.DirectRestore(context.Background(), target, "sp_001")
 			},
 			check: func(t *testing.T, summary any) {
-				got := summary.(RecoveryStatusSummary)
-				if got.RestoreState != "pending_restore_preview" || got.ActivePlanID != "plan_001" || !got.Blocking || got.ActiveRecoveryPlanID != "recovery_001" {
+				got := summary.(DirectRestoreSummary)
+				if got.RestoredSavePointID != "sp_001" || got.PreviousHeadID != "sp_002" || got.NewHeadID != "sp_001" {
+					t.Fatalf("summary = %#v", got)
+				}
+			},
+		},
+		{
+			name:    "status",
+			stdout:  directStatusSuccessStdout(t),
+			wantArg: []string{"afscp", "--control-root", testControlRoot, "--home", testDirectHome, "status", "--json"},
+			call: func(r *Runner) (any, error) {
+				return r.DirectStatus(context.Background(), target)
+			},
+			check: func(t *testing.T, summary any) {
+				got := summary.(DirectStatusSummary)
+				if got.HistoryHeadID != "sp_002" || got.MetadataState != "clean" || got.ActiveOperation != "none" || got.Recovery != "none" {
+					t.Fatalf("summary = %#v", got)
+				}
+			},
+		},
+		{
+			name:    "doctor",
+			stdout:  directDoctorSuccessStdout(t),
+			wantArg: []string{"afscp", "--control-root", testControlRoot, "--home", testDirectHome, "doctor", "--json"},
+			call: func(r *Runner) (any, error) {
+				return r.DirectDoctor(context.Background(), target)
+			},
+			check: func(t *testing.T, summary any) {
+				got := summary.(DirectDoctorSummary)
+				if got.RepoID != "jvs_repo_alpha" || !got.Healthy || got.FindingCount != 0 || got.MetadataState != "clean" || got.Journal != "clean" || got.Recovery != "none" {
 					t.Fatalf("summary = %#v", got)
 				}
 			},
 		},
 	}
+
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+
 			commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: tt.stdout}}
 			runner := newTestRunner(t, commandRunner)
 			summary, err := tt.call(runner)
 			if err != nil {
-				t.Fatalf("call returned error: %v", err)
+				t.Fatalf("direct call returned error: %v", err)
 			}
 			tt.check(t, summary)
+
 			want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: tt.wantArg, Dir: "/var/lib/afscp/jvs-cwd"}
 			if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
 				t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
 			}
-			assertNoForbiddenJVSFlags(t, commandRunner.calls[0].Args)
+			assertAFSCPDirectArgvHasNoLegacyTokens(t, commandRunner.calls[0].Args)
 			assertSummaryDoesNotLeakPaths(t, summary)
 		})
 	}
 }
 
-func TestRestoreUsesDirectDiscardCommandAndParsesEnvelope(t *testing.T) {
+func TestAFSCPDirectRejectsUnsafeTargetsAndArguments(t *testing.T) {
 	t.Parallel()
 
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: restoreSuccessStdout(t)}}
-	runner := newTestRunner(t, commandRunner)
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{Stdout: directSaveSuccessStdout(t)}})
+	goodTarget := DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "missing control", call: func() error {
+			_, err := runner.DirectSave(context.Background(), DirectTarget{Home: testDirectHome}, "checkpoint")
+			return err
+		}},
+		{name: "relative control", call: func() error {
+			_, err := runner.DirectList(context.Background(), DirectTarget{ControlRoot: "control", Home: testDirectHome})
+			return err
+		}},
+		{name: "unclean control", call: func() error {
+			_, err := runner.DirectStatus(context.Background(), DirectTarget{ControlRoot: "/srv/afscp/../afscp/control", Home: testDirectHome})
+			return err
+		}},
+		{name: "root control", call: func() error {
+			_, err := runner.DirectDoctor(context.Background(), DirectTarget{ControlRoot: "/", Home: testDirectHome})
+			return err
+		}},
+		{name: "missing home", call: func() error {
+			_, err := runner.DirectSave(context.Background(), DirectTarget{ControlRoot: testControlRoot}, "checkpoint")
+			return err
+		}},
+		{name: "relative home", call: func() error {
+			_, err := runner.DirectList(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: "home"})
+			return err
+		}},
+		{name: "unclean home", call: func() error {
+			_, err := runner.DirectStatus(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: "/srv/afscp/../home"})
+			return err
+		}},
+		{name: "root home", call: func() error {
+			_, err := runner.DirectDoctor(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: "/"})
+			return err
+		}},
+		{name: "same control and home", call: func() error {
+			_, err := runner.DirectSave(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testControlRoot}, "checkpoint")
+			return err
+		}},
+		{name: "home inside control", call: func() error {
+			_, err := runner.DirectList(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testControlRoot + "/home"})
+			return err
+		}},
+		{name: "control inside home", call: func() error {
+			_, err := runner.DirectStatus(context.Background(), DirectTarget{ControlRoot: testDirectHome + "/control", Home: testDirectHome})
+			return err
+		}},
+		{name: "empty save message", call: func() error {
+			_, err := runner.DirectSave(context.Background(), goodTarget, " \t")
+			return err
+		}},
+		{name: "unsafe restore save point", call: func() error {
+			_, err := runner.DirectRestore(context.Background(), goodTarget, "sp/secret")
+			return err
+		}},
+	}
 
-	summary, err := runner.Restore(context.Background(), testControlRoot, "sp_001")
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := tt.call(); err == nil {
+				t.Fatal("direct call succeeded, want error")
+			}
+		})
+	}
+}
+
+func TestAFSCPDirectFailsClosedForMalformedJSONAndOldEnvelopeFields(t *testing.T) {
+	t.Parallel()
+
+	target := DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}
+	tests := []struct {
+		name   string
+		stdout []byte
+	}{
+		{name: "malformed json", stdout: []byte(`{"contract":`)},
+		{name: "trailing garbage", stdout: append(directSaveSuccessStdout(t), []byte(" /srv/afscp/secret")...)},
+		{name: "multiple json values", stdout: append(directSaveSuccessStdout(t), directSaveSuccessStdout(t)...)},
+		{name: "old envelope", stdout: saveSuccessStdout(t)},
+		{name: "old envelope ok false", stdout: jvsErrorStdout(t, "save", testControlRoot, "E_SOURCE_DIRTY")},
+		{name: "missing contract", stdout: directSaveStdoutWith(t, func(env map[string]any) { delete(env, "contract") })},
+		{name: "wrong contract", stdout: directSaveStdoutWith(t, func(env map[string]any) { env["contract"] = "jvs.afscp.preview.v1" })},
+		{name: "wrong command", stdout: directSaveStdoutWith(t, func(env map[string]any) { env["command"] = "list" })},
+		{name: "unknown status", stdout: directSaveStdoutWith(t, func(env map[string]any) { env["status"] = "partial" })},
+		{name: "accepted success not final", stdout: directSaveStdoutWith(t, func(env map[string]any) { env["status"] = "accepted" })},
+		{name: "running success not final", stdout: directSaveStdoutWith(t, func(env map[string]any) { env["status"] = "running" })},
+		{name: "recovery required success not final", stdout: directSaveStdoutWith(t, func(env map[string]any) { env["status"] = "recovery_required" })},
+		{name: "succeeded with ok false", stdout: directSaveStdoutWith(t, func(env map[string]any) { env["ok"] = false })},
+		{name: "ok status with error object", stdout: directSaveStdoutWith(t, func(env map[string]any) { env["error"] = map[string]any{"code": "E_SOURCE_DIRTY"} })},
+		{name: "missing data", stdout: directSaveStdoutWith(t, func(env map[string]any) { delete(env, "data") })},
+		{name: "save missing history head", stdout: directSaveStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "history_head") })},
+		{name: "save history head mismatch", stdout: directSaveStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["history_head"] = "sp_other" })},
+		{name: "old operation result status ok envelope", stdout: oldDirectSaveStdout(t)},
+		{name: "error status missing code", stdout: directErrorStdoutWith(t, "save", func(env map[string]any) { env["error"] = map[string]any{"message": "/srv/afscp/secret"} })},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{Stdout: tt.stdout}})
+			_, err := runner.DirectSave(context.Background(), target, "checkpoint")
+			if err == nil {
+				t.Fatal("DirectSave succeeded, want fail closed")
+			}
+			assertErrorDoesNotLeak(t, err)
+		})
+	}
+}
+
+func TestAFSCPDirectRejectsForbiddenInternalFields(t *testing.T) {
+	t.Parallel()
+
+	target := DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}
+	forbiddenFields := []string{
+		"checksum",
+		"checksum_sha256",
+		"digest",
+		"content_digest",
+		"capacity",
+		"capacity_bytes",
+		"tree_scan",
+		"tree_scan_result",
+		"file_count",
+		"payload_tree",
+		"payload_tree_scan",
+		"payload_file_count",
+		"sync",
+		"sync_state",
+		"hash",
+		"proof",
+		"internal_path",
+		"internal_paths",
+		"payload_root_hash",
+		"content_root_hash",
+		"control_root",
+		"control-root",
+		"control_root_path",
+		"home",
+		"home_path",
+		"raw_command",
+		"raw command",
+		"command",
+		"save_profile",
+		"expected_folder_evidence",
+	}
+
+	for _, field := range forbiddenFields {
+		field := field
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+
+			stdout := directSaveStdoutWith(t, func(env map[string]any) {
+				env["data"].(map[string]any)[field] = "/srv/afscp/secret"
+			})
+			runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{Stdout: stdout}})
+			_, err := runner.DirectSave(context.Background(), target, "checkpoint")
+			if err == nil {
+				t.Fatal("DirectSave accepted forbidden internal field, want error")
+			}
+			assertErrorDoesNotLeak(t, err)
+		})
+	}
+
+	t.Run("nested control root", func(t *testing.T) {
+		t.Parallel()
+
+		stdout := directListStdoutWith(t, func(env map[string]any) {
+			savePoints := env["data"].(map[string]any)["save_points"].([]map[string]any)
+			savePoints[0]["control_root"] = testControlRoot
+		})
+		runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{Stdout: stdout}})
+		_, err := runner.DirectList(context.Background(), target)
+		if err == nil {
+			t.Fatal("DirectList accepted nested forbidden internal field, want error")
+		}
+		assertErrorDoesNotLeak(t, err)
+	})
+
+	t.Run("restore plan lifecycle fields", func(t *testing.T) {
+		t.Parallel()
+
+		stdout := directRestoreStdoutWith(t, func(env map[string]any) {
+			data := env["data"].(map[string]any)
+			data["plan_id"] = "plan_legacy"
+			data["restore_plan_id"] = "plan_legacy"
+			data["run_command"] = "jvs restore --run plan_legacy"
+		})
+		runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{Stdout: stdout}})
+		_, err := runner.DirectRestore(context.Background(), target, "sp_001")
+		if err == nil {
+			t.Fatal("DirectRestore accepted legacy restore plan fields, want error")
+		}
+		assertErrorDoesNotLeak(t, err)
+	})
+}
+
+func TestAFSCPDirectCommandErrorsMapCodeAndRedactDetails(t *testing.T) {
+	t.Parallel()
+
+	target := DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
+		ExitCode: 37,
+		Stdout:   directErrorStdout(t, "save", "E_RECOVERY_BLOCKING"),
+		Stderr:   []byte("token=secret /srv/afscp/raw"),
+	}})
+
+	_, err := runner.DirectSave(context.Background(), target, "checkpoint")
+	assertJVSCommandError(t, err, "afscp save", 37, "E_RECOVERY_BLOCKING")
+
+	exitZeroRunner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
+		Stdout: directErrorStdout(t, "doctor", "E_REPO_BUSY"),
+	}})
+	_, err = exitZeroRunner.DirectDoctor(context.Background(), target)
+	assertJVSCommandError(t, err, "afscp doctor", 0, "E_REPO_BUSY")
+}
+
+func TestAFSCPDirectListRedactsPathLikeMessages(t *testing.T) {
+	t.Parallel()
+
+	target := DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}
+	stdout := directListStdoutWith(t, func(env map[string]any) {
+		savePoints := env["data"].(map[string]any)["save_points"].([]map[string]any)
+		savePoints[0]["message"] = "copied from /srv/afscp/secret"
+	})
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{Stdout: stdout}})
+
+	summary, err := runner.DirectList(context.Background(), target)
 	if err != nil {
-		t.Fatalf("Restore returned error: %v", err)
+		t.Fatalf("DirectList returned error: %v", err)
 	}
-	if summary.SourceSavePointID != "sp_001" || summary.RestoredSavePointID != "sp_001" || summary.Workspace != "main" || !summary.FilesChanged || summary.HistoryChanged || summary.UnsavedChanges {
-		t.Fatalf("summary = %#v, want direct restore summary", summary)
+	if got := summary.SavePoints[0].Message; got != "redacted" {
+		t.Fatalf("message = %q, want redacted", got)
 	}
-	want := CommandSpec{
-		Path: "/opt/afscp/bin/jvs",
-		Args: []string{"--json", "--control-root", testControlRoot, "--workspace", "main", "restore", "sp_001", "--direct", "--discard-unsaved"},
-		Dir:  "/var/lib/afscp/jvs-cwd",
-	}
-	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
-		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
-	}
-	assertNoForbiddenJVSFlags(t, commandRunner.calls[0].Args)
 	assertSummaryDoesNotLeakPaths(t, summary)
 }
 
-func TestVerifyRestoreDirectCapabilityUsesHelpAndRequiresDirectFlags(t *testing.T) {
+func TestVerifyAFSCPDirectCapabilityUsesAFSCPHelpAndRequiresDirectContract(t *testing.T) {
 	t.Parallel()
 
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: []byte("Usage:\n  jvs restore <save>\nFlags:\n      --direct\n      --discard-unsaved\n")}}
+	help := "Usage:\n  jvs afscp --control-root <control> --home <home> save --message <message> --json\n  jvs afscp --control-root <control> --home <home> list --json\n  jvs afscp --control-root <control> --home <home> restore --save-point <id> --json\n  jvs afscp --control-root <control> --home <home> status --json\n  jvs afscp --control-root <control> --home <home> doctor --json\n"
+	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: []byte(help)}}
 	runner := newTestRunner(t, commandRunner)
 
-	if err := runner.VerifyRestoreDirectCapability(context.Background()); err != nil {
-		t.Fatalf("VerifyRestoreDirectCapability returned error: %v", err)
+	if err := runner.VerifyAFSCPDirectCapability(context.Background()); err != nil {
+		t.Fatalf("VerifyAFSCPDirectCapability returned error: %v", err)
 	}
-	want := CommandSpec{Path: "/opt/afscp/bin/jvs", Args: []string{"restore", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"}
-	if !reflect.DeepEqual(commandRunner.calls, []CommandSpec{want}) {
-		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, []CommandSpec{want})
+	want := []CommandSpec{
+		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
+		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "save", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
+		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "list", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
+		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "restore", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
+		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "status", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
+		{Path: "/opt/afscp/bin/jvs", Args: []string{"afscp", "doctor", "--help"}, Dir: "/var/lib/afscp/jvs-cwd"},
+	}
+	if !reflect.DeepEqual(commandRunner.calls, want) {
+		t.Fatalf("calls mismatch:\n got: %#v\nwant: %#v", commandRunner.calls, want)
 	}
 
-	missingDirect := &fakeCommandRunner{result: CommandResult{Stdout: []byte("Usage:\n  jvs restore <save>\nFlags:\n      --discard-unsaved\n")}}
-	if err := newTestRunner(t, missingDirect).VerifyRestoreDirectCapability(context.Background()); err == nil {
-		t.Fatal("VerifyRestoreDirectCapability succeeded without --direct, want fail-closed error")
-	}
-}
-
-func TestRestorePreviewParsesRealJVSZeroCountBucketsWithoutSamples(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: restorePreviewStdoutWith(t, func(env map[string]any) {
-		data := env["data"].(map[string]any)
-		data["plan_id"] = "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7"
-		data["source_save_point"] = "1778482397674-64d97186"
-		data["newest_save_point"] = "1778482397734-bc8dc9ff"
-		data["history_head"] = "1778482397734-bc8dc9ff"
-		data["expected_newest_save_point"] = "1778482397734-bc8dc9ff"
-		data["expected_folder_evidence"] = "4395c73549f237da40314869dd1d0f86db76bd4855d79d3df7b3a31075788abd"
-		data["run_command"] = "jvs --control-root /tmp/afscp/control --workspace main restore --run 1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7"
-		data["managed_files"] = map[string]any{
-			"create":    map[string]any{"count": 0},
-			"delete":    map[string]any{"count": 0},
-			"overwrite": map[string]any{"count": 1, "samples": []string{"file.txt"}},
-		}
-	})}}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.RestorePreview(context.Background(), testControlRoot, "1778482397674-64d97186")
-	if err != nil {
-		t.Fatalf("RestorePreview returned error for real JVS preview shape: %v", err)
-	}
-	if summary.PlanID != "1fa7ce01-3b2a-48fc-8c56-d1ff4959a2a7" || summary.SourceSavePointID != "1778482397674-64d97186" {
-		t.Fatalf("summary IDs = %#v, want real JVS plan/source IDs", summary)
-	}
-	if summary.ManagedFiles.Added.Count != 0 || len(summary.ManagedFiles.Added.Samples) != 0 || summary.ManagedFiles.Removed.Count != 0 || len(summary.ManagedFiles.Removed.Samples) != 0 {
-		t.Fatalf("zero-count buckets = %#v, want empty sample lists", summary.ManagedFiles)
-	}
-	if summary.ManagedFiles.Changed.Count != 1 || summary.ManagedFiles.Changed.Samples[0] != "file.txt" {
-		t.Fatalf("changed bucket = %#v, want real JVS overwrite sample", summary.ManagedFiles.Changed)
-	}
-}
-
-func TestRecoveryStatusAllowsIdleWithoutRestoreState(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: recoveryStatusStdoutWith(t, func(env map[string]any) {
-		data := env["data"].(map[string]any)
-		delete(data, "restore_state")
-		data["plans"] = []map[string]any{}
-	})}}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.RecoveryStatus(context.Background(), testControlRoot)
-	if err != nil {
-		t.Fatalf("RecoveryStatus returned error: %v", err)
-	}
-	if summary.RestoreState != "idle" || summary.ActivePlanID != "" || summary.ActiveRecoveryPlanID != "" {
-		t.Fatalf("summary = %#v, want idle", summary)
-	}
-}
-
-func TestRecoveryStatusParsesSingleActiveRecoveryPlan(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: recoveryStatusStdoutWith(t, func(env map[string]any) {
-		data := env["data"].(map[string]any)
-		delete(data, "restore_state")
-		data["plans"] = []map[string]any{{
-			"plan_id":         "recovery_003",
-			"restore_plan_id": "plan_003",
-			"status":          "active",
-			"operation":       "resume",
-			"source":          "/srv/afscp/secret/source",
-		}}
-	})}}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.RecoveryStatus(context.Background(), testControlRoot)
-	if err != nil {
-		t.Fatalf("RecoveryStatus returned error: %v", err)
-	}
-	if summary.RestoreState != "active_recovery" || !summary.Blocking || summary.ActiveRecoveryPlanID != "recovery_003" || summary.ActivePlanID != "plan_003" || summary.Workspace != "main" {
-		t.Fatalf("summary = %#v", summary)
-	}
-	assertSummaryDoesNotLeakPaths(t, summary)
-}
-
-func TestRecoveryStatusParsesStaleRestorePreview(t *testing.T) {
-	t.Parallel()
-
-	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: recoveryStatusStdoutWith(t, func(env map[string]any) {
-		env["data"].(map[string]any)["restore_state"] = map[string]any{
-			"state":            "stale_restore_preview",
-			"blocking":         true,
-			"plan_id":          "plan_002",
-			"recovery_plan_id": "recovery_002",
-		}
-	})}}
-	runner := newTestRunner(t, commandRunner)
-
-	summary, err := runner.RecoveryStatus(context.Background(), testControlRoot)
-	if err != nil {
-		t.Fatalf("RecoveryStatus returned error: %v", err)
-	}
-	if summary.RestoreState != "stale_restore_preview" || summary.ActivePlanID != "plan_002" || summary.ActiveRecoveryPlanID != "recovery_002" || !summary.Blocking {
-		t.Fatalf("summary = %#v", summary)
+	missingHome := &fakeCommandRunner{result: CommandResult{Stdout: []byte("Usage:\n  jvs afscp --control-root <control> list --json\n")}}
+	if err := newTestRunner(t, missingHome).VerifyAFSCPDirectCapability(context.Background()); err == nil {
+		t.Fatal("VerifyAFSCPDirectCapability succeeded without paired selector help, want fail-closed error")
 	}
 }
 
@@ -596,19 +478,6 @@ func TestRepoCloneUsesFixedCommandAndParsesEnvelope(t *testing.T) {
 	assertSummaryDoesNotLeakPaths(t, summary)
 }
 
-func TestCommandErrorEnvelopeFromNonZeroStdoutOnSharedPath(t *testing.T) {
-	t.Parallel()
-
-	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
-		ExitCode: 17,
-		Stdout:   jvsErrorStdout(t, "save", testControlRoot, "E_RECOVERY_BLOCKING"),
-		Stderr:   []byte("token=secret /srv/afscp/raw"),
-	}})
-
-	_, err := runner.Save(context.Background(), testControlRoot, "checkpoint")
-	assertJVSCommandError(t, err, "save", 17, "E_RECOVERY_BLOCKING")
-}
-
 func TestRepoCloneCommandErrorEnvelopeFromNonZeroStdoutSourceRoot(t *testing.T) {
 	t.Parallel()
 
@@ -619,18 +488,6 @@ func TestRepoCloneCommandErrorEnvelopeFromNonZeroStdoutSourceRoot(t *testing.T) 
 
 	_, err := runner.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
 	assertJVSCommandError(t, err, "repo clone", 31, "E_SOURCE_DIRTY")
-}
-
-func TestRestoreDiscardCommandErrorEnvelopeUsesRestoreDiscardCommand(t *testing.T) {
-	t.Parallel()
-
-	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
-		ExitCode: 29,
-		Stdout:   jvsErrorStdout(t, "restore discard", testControlRoot, "E_RECOVERY_BLOCKING"),
-	}})
-
-	_, err := runner.RestoreDiscard(context.Background(), testControlRoot, "plan_001")
-	assertJVSCommandError(t, err, "restore discard", 29, "E_RECOVERY_BLOCKING")
 }
 
 func TestInitCommandErrorEnvelopeFromNonZeroStdout(t *testing.T) {
@@ -646,54 +503,17 @@ func TestInitCommandErrorEnvelopeFromNonZeroStdout(t *testing.T) {
 	assertJVSCommandError(t, err, "init", 19, "E_SOURCE_DIRTY")
 }
 
-func TestDoctorStrictCommandErrorEnvelopeFromNonZeroStderr(t *testing.T) {
-	t.Parallel()
-
-	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
-		ExitCode: 23,
-		Stdout:   []byte("not-json token=secret"),
-		Stderr:   jvsErrorStdout(t, "doctor", testControlRoot, "E_RECOVERY_BLOCKING"),
-	}})
-
-	_, err := runner.DoctorStrict(context.Background(), testControlRoot)
-	assertJVSCommandError(t, err, "doctor", 23, "E_RECOVERY_BLOCKING")
-}
-
-func TestDoctorRepairRuntimeCommandErrorEnvelopeFromNonZeroStdout(t *testing.T) {
-	t.Parallel()
-
-	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
-		ExitCode: 24,
-		Stdout:   jvsErrorStdout(t, "doctor", testControlRoot, "E_ACTIVE_OPERATION_BLOCKING"),
-		Stderr:   []byte("control_root=/srv/afscp/secret"),
-	}})
-
-	_, err := runner.DoctorRepairRuntime(context.Background(), testControlRoot)
-	assertJVSCommandError(t, err, "doctor", 24, "E_ACTIVE_OPERATION_BLOCKING")
-}
-
-func TestCommandErrorEnvelopeFromExitZeroOKFalse(t *testing.T) {
-	t.Parallel()
-
-	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{
-		Stdout: jvsErrorStdout(t, "save", testControlRoot, "E_SOURCE_DIRTY"),
-	}})
-
-	_, err := runner.Save(context.Background(), testControlRoot, "checkpoint")
-	assertJVSCommandError(t, err, "save", 0, "E_SOURCE_DIRTY")
-}
-
-func TestRunControlJSONPropagatesContextDeadlineWithoutLeakingRunnerError(t *testing.T) {
+func TestAFSCPDirectPropagatesContextDeadlineWithoutLeakingRunnerError(t *testing.T) {
 	t.Parallel()
 
 	runner := newTestRunner(t, &fakeCommandRunner{err: errors.Join(context.DeadlineExceeded, errors.New("token=secret /srv/afscp/raw"))})
 
-	_, err := runner.RecoveryStatus(context.Background(), testControlRoot)
+	_, err := runner.DirectSave(context.Background(), DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}, "checkpoint")
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("RecoveryStatus error = %v, want context deadline", err)
+		t.Fatalf("DirectSave error = %v, want context deadline", err)
 	}
 	if !errors.Is(err, ErrCommandFailed) {
-		t.Fatalf("RecoveryStatus error = %v, want command failed wrapper", err)
+		t.Fatalf("DirectSave error = %v, want command failed wrapper", err)
 	}
 	assertErrorDoesNotLeak(t, err)
 }
@@ -882,149 +702,6 @@ func TestInitAcceptsSchemaAlignedRepoIDs(t *testing.T) {
 	}
 }
 
-func TestDoctorStrictFailsClosedForInvalidEnvelope(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		stdout func(t *testing.T) []byte
-		result CommandResult
-	}{
-		{name: "nonzero", result: CommandResult{ExitCode: 1, Stderr: []byte("credential_ref=secret /srv/afscp/raw")}},
-		{name: "malformed json", result: CommandResult{Stdout: []byte(`{"ok":`)}},
-		{name: "trailing garbage", stdout: func(t *testing.T) []byte { return append(doctorSuccessStdout(t), []byte(" /srv/afscp/secret")...) }},
-		{name: "multiple json", stdout: func(t *testing.T) []byte { return append(doctorSuccessStdout(t), doctorSuccessStdout(t)...) }},
-		{name: "ok false", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["ok"] = false; env["error"] = map[string]any{"message": "secret raw"} })
-		}},
-		{name: "missing schema version", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { delete(env, "schema_version") })
-		}},
-		{name: "wrong schema version", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["schema_version"] = 2 })
-		}},
-		{name: "string schema version", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["schema_version"] = "jvs/current" })
-		}},
-		{name: "unhealthy", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["healthy"] = false })
-		}},
-		{name: "missing healthy", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "healthy") })
-		}},
-		{name: "missing repo id", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "repo_id") })
-		}},
-		{name: "unsafe repo id semicolon", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "jvs;repo" })
-		}},
-		{name: "unsafe repo id equals", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "bad=id" })
-		}},
-		{name: "unsafe repo id slash", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "bad/id" })
-		}},
-		{name: "unsafe repo id backslash", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = `bad\id` })
-		}},
-		{name: "unsafe repo id whitespace", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "bad id" })
-		}},
-		{name: "unsafe repo id control", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["repo_id"] = "bad\nid" })
-		}},
-		{name: "wrong workspace", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["workspace"] = "dev" })
-		}},
-		{name: "missing top-level workspace", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { delete(env, "workspace") })
-		}},
-		{name: "wrong top-level workspace", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["workspace"] = "dev" })
-		}},
-		{name: "missing command", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { delete(env, "command") })
-		}},
-		{name: "command mismatch", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["command"] = "init" })
-		}},
-		{name: "missing repo root", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { delete(env, "repo_root") })
-		}},
-		{name: "wrong repo root", stdout: func(t *testing.T) []byte {
-			return doctorStdoutWith(t, func(env map[string]any) { env["repo_root"] = "/srv/afscp/volumes/vol_default/other/control" })
-		}},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			if tt.stdout != nil {
-				tt.result.Stdout = tt.stdout(t)
-			}
-			runner := newTestRunner(t, &fakeCommandRunner{result: tt.result})
-			_, err := runner.DoctorStrict(context.Background(), testControlRoot)
-			if err == nil {
-				t.Fatal("DoctorStrict succeeded, want error")
-			}
-			assertErrorDoesNotLeak(t, err)
-		})
-	}
-}
-
-func TestDoctorRepairRuntimeFailsClosedForInvalidEnvelope(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		stdout func(t *testing.T) []byte
-		result CommandResult
-	}{
-		{name: "nonzero", result: CommandResult{ExitCode: 1, Stderr: []byte("credential_ref=secret /srv/afscp/raw")}},
-		{name: "malformed json", result: CommandResult{Stdout: []byte(`{"ok":`)}},
-		{name: "healthy false", stdout: func(t *testing.T) []byte {
-			return doctorRepairRuntimeStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["healthy"] = false })
-		}},
-		{name: "missing repairs", stdout: func(t *testing.T) []byte {
-			return doctorRepairRuntimeStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "repairs") })
-		}},
-		{name: "missing clean locks", stdout: func(t *testing.T) []byte {
-			return doctorRepairRuntimeStdoutWith(t, func(env map[string]any) {
-				env["data"].(map[string]any)["repairs"] = []map[string]any{{"action": "clean_runtime_tmp", "success": true}}
-			})
-		}},
-		{name: "failed clean locks", stdout: func(t *testing.T) []byte {
-			return doctorRepairRuntimeStdoutWith(t, func(env map[string]any) {
-				env["data"].(map[string]any)["repairs"] = []map[string]any{{"action": "clean_locks", "success": false, "cleaned": 0}}
-			})
-		}},
-		{name: "unsafe cleaned count", stdout: func(t *testing.T) []byte {
-			return doctorRepairRuntimeStdoutWith(t, func(env map[string]any) {
-				env["data"].(map[string]any)["repairs"] = []map[string]any{{"action": "clean_locks", "success": true, "cleaned": -1}}
-			})
-		}},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			if tt.stdout != nil {
-				tt.result.Stdout = tt.stdout(t)
-			}
-			runner := newTestRunner(t, &fakeCommandRunner{result: tt.result})
-			_, err := runner.DoctorRepairRuntime(context.Background(), testControlRoot)
-			if err == nil {
-				t.Fatal("DoctorRepairRuntime succeeded, want error")
-			}
-			assertErrorDoesNotLeak(t, err)
-		})
-	}
-}
-
 func TestRunnerRejectsRawPathArguments(t *testing.T) {
 	t.Parallel()
 
@@ -1051,26 +728,6 @@ func TestRunnerRejectsRawPathArguments(t *testing.T) {
 		}},
 		{name: "init control inside payload", call: func() error {
 			_, err := runner.Init(context.Background(), "/srv/afscp/repo/payload", "/srv/afscp/repo/payload/control")
-			return err
-		}},
-		{name: "doctor relative control", call: func() error {
-			_, err := runner.DoctorStrict(context.Background(), "control")
-			return err
-		}},
-		{name: "doctor repair runtime relative control", call: func() error {
-			_, err := runner.DoctorRepairRuntime(context.Background(), "control")
-			return err
-		}},
-		{name: "save empty message", call: func() error {
-			_, err := runner.Save(context.Background(), testControlRoot, " \t")
-			return err
-		}},
-		{name: "restore preview empty save point", call: func() error {
-			_, err := runner.RestorePreview(context.Background(), testControlRoot, "")
-			return err
-		}},
-		{name: "restore run unsafe plan id", call: func() error {
-			_, err := runner.RestoreRun(context.Background(), testControlRoot, "plan/id")
 			return err
 		}},
 		{name: "repo clone target payload inside source control", call: func() error {
@@ -1103,145 +760,6 @@ func TestNewJVSPrimitivesFailClosedForInvalidEnvelope(t *testing.T) {
 		stdout []byte
 		call   func(*Runner) error
 	}{
-		{name: "save missing id", stdout: saveStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "save_point_id") }), call: func(r *Runner) error {
-			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
-			return err
-		}},
-		{name: "save missing newest", stdout: saveStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "newest_save_point") }), call: func(r *Runner) error {
-			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
-			return err
-		}},
-		{name: "save newest mismatch", stdout: saveStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["newest_save_point"] = "sp_other" }), call: func(r *Runner) error {
-			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
-			return err
-		}},
-		{name: "save missing unsaved changes", stdout: saveStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "unsaved_changes") }), call: func(r *Runner) error {
-			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
-			return err
-		}},
-		{name: "save invalid unsaved changes", stdout: saveStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["unsaved_changes"] = "false" }), call: func(r *Runner) error {
-			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
-			return err
-		}},
-		{name: "save missing created at", stdout: saveStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "created_at") }), call: func(r *Runner) error {
-			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
-			return err
-		}},
-		{name: "save empty created at", stdout: saveStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["created_at"] = " \t" }), call: func(r *Runner) error {
-			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
-			return err
-		}},
-		{name: "history truncated", stdout: historyStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["truncated"] = true }), call: func(r *Runner) error {
-			_, err := r.History(context.Background(), testControlRoot)
-			return err
-		}},
-		{name: "history unsafe save point id", stdout: historyStdoutWith(t, func(env map[string]any) {
-			env["data"].(map[string]any)["save_points"] = []map[string]any{{"save_point_id": "sp/secret"}}
-		}), call: func(r *Runner) error {
-			_, err := r.History(context.Background(), testControlRoot)
-			return err
-		}},
-		{name: "history missing message", stdout: historyStdoutWith(t, func(env map[string]any) {
-			env["data"].(map[string]any)["save_points"] = []map[string]any{{"save_point_id": "sp_001", "created_at": "2026-05-05T12:00:00Z"}}
-		}), call: func(r *Runner) error {
-			_, err := r.History(context.Background(), testControlRoot)
-			return err
-		}},
-		{name: "history missing created at", stdout: historyStdoutWith(t, func(env map[string]any) {
-			env["data"].(map[string]any)["save_points"] = []map[string]any{{"save_point_id": "sp_001", "message": "first"}}
-		}), call: func(r *Runner) error {
-			_, err := r.History(context.Background(), testControlRoot)
-			return err
-		}},
-		{name: "history newest mismatch", stdout: historyStdoutWith(t, func(env map[string]any) {
-			env["data"].(map[string]any)["newest_save_point"] = "sp_001"
-		}), call: func(r *Runner) error {
-			_, err := r.History(context.Background(), testControlRoot)
-			return err
-		}},
-		{name: "history item wrong workspace", stdout: historyStdoutWith(t, func(env map[string]any) {
-			savePoints := env["data"].(map[string]any)["save_points"].([]map[string]any)
-			savePoints[0]["workspace"] = "dev"
-		}), call: func(r *Runner) error {
-			_, err := r.History(context.Background(), testControlRoot)
-			return err
-		}},
-		{name: "preview changed files", stdout: restorePreviewStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["files_changed"] = true }), call: func(r *Runner) error {
-			_, err := r.RestorePreview(context.Background(), testControlRoot, "sp_001")
-			return err
-		}},
-		{name: "preview missing files changed", stdout: restorePreviewStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "files_changed") }), call: func(r *Runner) error {
-			_, err := r.RestorePreview(context.Background(), testControlRoot, "sp_001")
-			return err
-		}},
-		{name: "preview missing history changed", stdout: restorePreviewStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "history_changed") }), call: func(r *Runner) error {
-			_, err := r.RestorePreview(context.Background(), testControlRoot, "sp_001")
-			return err
-		}},
-		{name: "preview missing run command", stdout: restorePreviewStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "run_command") }), call: func(r *Runner) error {
-			_, err := r.RestorePreview(context.Background(), testControlRoot, "sp_001")
-			return err
-		}},
-		{name: "run unsaved changes", stdout: restoreRunStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["unsaved_changes"] = true }), call: func(r *Runner) error {
-			_, err := r.RestoreRun(context.Background(), testControlRoot, "plan_001")
-			return err
-		}},
-		{name: "run missing files changed", stdout: restoreRunStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "files_changed") }), call: func(r *Runner) error {
-			_, err := r.RestoreRun(context.Background(), testControlRoot, "plan_001")
-			return err
-		}},
-		{name: "run missing history changed", stdout: restoreRunStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "history_changed") }), call: func(r *Runner) error {
-			_, err := r.RestoreRun(context.Background(), testControlRoot, "plan_001")
-			return err
-		}},
-		{name: "run missing unsaved changes", stdout: restoreRunStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "unsaved_changes") }), call: func(r *Runner) error {
-			_, err := r.RestoreRun(context.Background(), testControlRoot, "plan_001")
-			return err
-		}},
-		{name: "run missing source and restored save point", stdout: restoreRunStdoutWith(t, func(env map[string]any) {
-			data := env["data"].(map[string]any)
-			delete(data, "source_save_point")
-			delete(data, "restored_save_point")
-		}), call: func(r *Runner) error {
-			_, err := r.RestoreRun(context.Background(), testControlRoot, "plan_001")
-			return err
-		}},
-		{name: "discard changed history", stdout: restoreDiscardStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["history_changed"] = true }), call: func(r *Runner) error {
-			_, err := r.RestoreDiscard(context.Background(), testControlRoot, "plan_001")
-			return err
-		}},
-		{name: "discard missing files changed", stdout: restoreDiscardStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "files_changed") }), call: func(r *Runner) error {
-			_, err := r.RestoreDiscard(context.Background(), testControlRoot, "plan_001")
-			return err
-		}},
-		{name: "discard missing history changed", stdout: restoreDiscardStdoutWith(t, func(env map[string]any) { delete(env["data"].(map[string]any), "history_changed") }), call: func(r *Runner) error {
-			_, err := r.RestoreDiscard(context.Background(), testControlRoot, "plan_001")
-			return err
-		}},
-		{name: "recovery unknown state", stdout: recoveryStatusStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["restore_state"] = "mystery" }), call: func(r *Runner) error {
-			_, err := r.RecoveryStatus(context.Background(), testControlRoot)
-			return err
-		}},
-		{name: "recovery unsafe active plan", stdout: recoveryStatusStdoutWith(t, func(env map[string]any) {
-			env["data"].(map[string]any)["restore_state"] = map[string]any{"state": "pending_restore_preview", "plan_id": "plan/secret"}
-		}), call: func(r *Runner) error {
-			_, err := r.RecoveryStatus(context.Background(), testControlRoot)
-			return err
-		}},
-		{name: "recovery pending missing restore plan id", stdout: recoveryStatusStdoutWith(t, func(env map[string]any) {
-			env["data"].(map[string]any)["restore_state"] = map[string]any{"state": "pending_restore_preview", "blocking": true}
-		}), call: func(r *Runner) error {
-			_, err := r.RecoveryStatus(context.Background(), testControlRoot)
-			return err
-		}},
-		{name: "recovery multiple active plans", stdout: recoveryStatusStdoutWith(t, func(env map[string]any) {
-			data := env["data"].(map[string]any)
-			delete(data, "restore_state")
-			data["plans"] = []map[string]any{{"plan_id": "recovery_1", "status": "active"}, {"plan_id": "recovery_2", "status": "active"}}
-		}), call: func(r *Runner) error {
-			_, err := r.RecoveryStatus(context.Background(), testControlRoot)
-			return err
-		}},
 		{name: "clone runtime copied", stdout: repoCloneStdoutWith(t, func(env map[string]any) { env["data"].(map[string]any)["runtime_state_copied"] = true }), call: func(r *Runner) error {
 			_, err := r.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
 			return err
@@ -1286,24 +804,6 @@ func TestNewJVSPrimitivesFailClosedForCommandAndJSONFailures(t *testing.T) {
 		name string
 		call func(*Runner) error
 	}{
-		{name: "save", call: func(r *Runner) error {
-			_, err := r.Save(context.Background(), testControlRoot, "checkpoint")
-			return err
-		}},
-		{name: "history", call: func(r *Runner) error { _, err := r.History(context.Background(), testControlRoot); return err }},
-		{name: "restore preview", call: func(r *Runner) error {
-			_, err := r.RestorePreview(context.Background(), testControlRoot, "sp_001")
-			return err
-		}},
-		{name: "restore run", call: func(r *Runner) error {
-			_, err := r.RestoreRun(context.Background(), testControlRoot, "plan_001")
-			return err
-		}},
-		{name: "restore discard", call: func(r *Runner) error {
-			_, err := r.RestoreDiscard(context.Background(), testControlRoot, "plan_001")
-			return err
-		}},
-		{name: "recovery status", call: func(r *Runner) error { _, err := r.RecoveryStatus(context.Background(), testControlRoot); return err }},
 		{name: "repo clone", call: func(r *Runner) error {
 			_, err := r.RepoClone(context.Background(), testControlRoot, testTargetPayloadRoot, testTargetControlRoot)
 			return err
@@ -1316,7 +816,7 @@ func TestNewJVSPrimitivesFailClosedForCommandAndJSONFailures(t *testing.T) {
 	}{
 		{name: "nonzero", result: CommandResult{ExitCode: 1, Stderr: []byte("password=secret /srv/afscp/raw")}},
 		{name: "malformed", result: CommandResult{Stdout: []byte(`{"ok":`)}},
-		{name: "ok false", result: CommandResult{Stdout: mustJSON(t, map[string]any{"schema_version": 1, "command": "save", "repo_root": testControlRoot, "workspace": "main", "ok": false, "data": map[string]any{}, "error": map[string]any{"message": "token=secret"}})}},
+		{name: "ok false", result: CommandResult{Stdout: mustJSON(t, map[string]any{"schema_version": 1, "command": "repo clone", "repo_root": testTargetControlRoot, "workspace": "main", "ok": false, "data": map[string]any{}, "error": map[string]any{"message": "token=secret"}})}},
 		{name: "runner error", err: errors.New("exec failed token=secret /srv/afscp/raw")},
 	}
 	for _, c := range cases {
@@ -1373,6 +873,33 @@ func assertNoForbiddenJVSFlags(t *testing.T, args []string) {
 		if forbidden[arg] {
 			t.Fatalf("args contain forbidden flag %q: %#v", arg, args)
 		}
+	}
+}
+
+func assertAFSCPDirectArgvHasNoLegacyTokens(t *testing.T, args []string) {
+	t.Helper()
+
+	forbiddenArgs := map[string]bool{
+		"--workspace":           true,
+		"--direct":              true,
+		"--discard-unsaved":     true,
+		"--strict":              true,
+		"--repair-runtime":      true,
+		"--target-control-root": true,
+		"history":               true,
+		"recovery":              true,
+		"discard":               true,
+	}
+	for i, arg := range args {
+		if forbiddenArgs[arg] {
+			t.Fatalf("direct argv contains forbidden legacy token %q: %#v", arg, args)
+		}
+		if arg == "restore" && i+1 < len(args) && args[i+1] == "--run" {
+			t.Fatalf("direct argv contains forbidden legacy restore --run shape: %#v", args)
+		}
+	}
+	if len(args) < 6 || args[0] != "afscp" || args[1] != "--control-root" || args[3] != "--home" {
+		t.Fatalf("direct argv missing paired afscp control/home selector: %#v", args)
 	}
 }
 
@@ -1452,21 +979,43 @@ func doctorStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	return mustJSON(t, env)
 }
 
-func doctorRepairRuntimeSuccessStdout(t *testing.T) []byte {
+func saveSuccessStdout(t *testing.T) []byte {
 	t.Helper()
-	return doctorRepairRuntimeStdoutWith(t, nil)
+	return saveStdoutWith(t, nil)
 }
 
-func doctorRepairRuntimeStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
+func directSaveSuccessStdout(t *testing.T) []byte {
 	t.Helper()
-	env := baseEnvelope("doctor")
+	return directSaveStdoutWith(t, nil)
+}
+
+func directSaveStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
+	t.Helper()
+	env := directEnvelope("save")
 	data := env["data"].(map[string]any)
-	data["repo_id"] = "jvs_repo_alpha"
-	data["healthy"] = true
-	data["findings"] = []map[string]any{}
-	data["repairs"] = []map[string]any{
-		{"action": "clean_locks", "success": true, "cleaned": 1, "message": "cleaned 1 stale repository lock"},
-		{"action": "clean_runtime_tmp", "success": true, "cleaned": 0, "message": "cleaned 0 tmp files/directories"},
+	data["save_point_id"] = "sp_001"
+	data["created_at"] = "2026-05-05T12:00:00Z"
+	data["message"] = "checkpoint before restore"
+	data["history_head"] = "sp_001"
+	if mutate != nil {
+		mutate(env)
+	}
+	return mustJSON(t, env)
+}
+
+func directListSuccessStdout(t *testing.T) []byte {
+	t.Helper()
+	return directListStdoutWith(t, nil)
+}
+
+func directListStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
+	t.Helper()
+	env := directEnvelope("list")
+	data := env["data"].(map[string]any)
+	data["history_head"] = "sp_002"
+	data["save_points"] = []map[string]any{
+		{"save_point_id": "sp_002", "message": "second", "created_at": "2026-05-05T12:01:00Z", "history_head": true},
+		{"save_point_id": "sp_001", "message": "first", "created_at": "2026-05-05T12:00:00Z"},
 	}
 	if mutate != nil {
 		mutate(env)
@@ -1474,9 +1023,89 @@ func doctorRepairRuntimeStdoutWith(t *testing.T, mutate func(map[string]any)) []
 	return mustJSON(t, env)
 }
 
-func saveSuccessStdout(t *testing.T) []byte {
+func directRestoreSuccessStdout(t *testing.T) []byte {
 	t.Helper()
-	return saveStdoutWith(t, nil)
+	return directRestoreStdoutWith(t, nil)
+}
+
+func directRestoreStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
+	t.Helper()
+	env := directEnvelope("restore")
+	data := env["data"].(map[string]any)
+	data["restored_save_point_id"] = "sp_001"
+	data["previous_head"] = "sp_002"
+	data["new_head"] = "sp_001"
+	if mutate != nil {
+		mutate(env)
+	}
+	return mustJSON(t, env)
+}
+
+func directStatusSuccessStdout(t *testing.T) []byte {
+	t.Helper()
+	return directStatusStdoutWith(t, nil)
+}
+
+func directStatusStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
+	t.Helper()
+	env := directEnvelope("status")
+	data := env["data"].(map[string]any)
+	data["history_head"] = "sp_002"
+	data["metadata_state"] = "clean"
+	data["active_operation"] = "none"
+	data["recovery"] = "none"
+	if mutate != nil {
+		mutate(env)
+	}
+	return mustJSON(t, env)
+}
+
+func directDoctorSuccessStdout(t *testing.T) []byte {
+	t.Helper()
+	return directDoctorStdoutWith(t, nil)
+}
+
+func directDoctorStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
+	t.Helper()
+	env := directEnvelope("doctor")
+	data := env["data"].(map[string]any)
+	data["repo_id"] = "jvs_repo_alpha"
+	data["healthy"] = true
+	data["findings"] = []map[string]any{}
+	data["metadata_state"] = "clean"
+	data["journal"] = "clean"
+	data["recovery"] = "none"
+	if mutate != nil {
+		mutate(env)
+	}
+	return mustJSON(t, env)
+}
+
+func directErrorStdout(t *testing.T, operation, code string) []byte {
+	t.Helper()
+	return directErrorStdoutWith(t, operation, func(env map[string]any) {
+		env["retryable"] = true
+		env["error"] = map[string]any{
+			"code":      code,
+			"message":   "raw message mentions /srv/afscp/secret and token=secret",
+			"retryable": true,
+		}
+	})
+}
+
+func directErrorStdoutWith(t *testing.T, operation string, mutate func(map[string]any)) []byte {
+	t.Helper()
+	env := map[string]any{
+		"contract": "jvs.afscp.direct.v1",
+		"command":  operation,
+		"ok":       false,
+		"status":   "failed",
+		"data":     nil,
+	}
+	if mutate != nil {
+		mutate(env)
+	}
+	return mustJSON(t, env)
 }
 
 func saveStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
@@ -1519,127 +1148,6 @@ func historyStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	return mustJSON(t, env)
 }
 
-func restorePreviewSuccessStdout(t *testing.T) []byte {
-	t.Helper()
-	return restorePreviewStdoutWith(t, nil)
-}
-
-func restorePreviewStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
-	t.Helper()
-	env := baseEnvelope("restore")
-	data := env["data"].(map[string]any)
-	data["workspace"] = "main"
-	data["mode"] = "preview"
-	data["plan_id"] = "plan_001"
-	data["source_save_point"] = "sp_001"
-	data["newest_save_point"] = "sp_002"
-	data["history_head"] = "sp_002"
-	data["expected_newest_save_point"] = "sp_002"
-	data["expected_folder_evidence"] = "sha256:preview-base"
-	data["managed_files"] = map[string]any{
-		"overwrite": map[string]any{"count": 1, "samples": []string{"docs/readme.md"}},
-		"delete":    map[string]any{"count": 1, "samples": []string{"tmp/cache.txt"}},
-		"create":    map[string]any{"count": 1, "samples": []string{"src/new.ts"}},
-	}
-	data["run_command"] = "jvs restore --run plan_001"
-	data["files_changed"] = false
-	data["history_changed"] = false
-	if mutate != nil {
-		mutate(env)
-	}
-	return mustJSON(t, env)
-}
-
-func restoreRunSuccessStdout(t *testing.T) []byte {
-	t.Helper()
-	return restoreRunStdoutWith(t, nil)
-}
-
-func restoreSuccessStdout(t *testing.T) []byte {
-	t.Helper()
-	return restoreStdoutWith(t, nil)
-}
-
-func restoreStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
-	t.Helper()
-	env := baseEnvelope("restore")
-	data := env["data"].(map[string]any)
-	data["workspace"] = "main"
-	data["mode"] = "direct_restore"
-	data["source_save_point"] = "sp_001"
-	data["restored_save_point"] = "sp_001"
-	data["files_changed"] = true
-	data["history_changed"] = false
-	data["unsaved_changes"] = false
-	if mutate != nil {
-		mutate(env)
-	}
-	return mustJSON(t, env)
-}
-
-func restoreRunStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
-	t.Helper()
-	env := baseEnvelope("restore")
-	data := env["data"].(map[string]any)
-	data["workspace"] = "main"
-	data["mode"] = "run"
-	data["plan_id"] = "plan_001"
-	data["restored_save_point"] = "sp_001"
-	data["files_changed"] = true
-	data["history_changed"] = false
-	data["unsaved_changes"] = false
-	if mutate != nil {
-		mutate(env)
-	}
-	return mustJSON(t, env)
-}
-
-func restoreDiscardSuccessStdout(t *testing.T) []byte {
-	t.Helper()
-	return restoreDiscardStdoutWith(t, nil)
-}
-
-func restoreDiscardStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
-	t.Helper()
-	env := baseEnvelope("restore discard")
-	data := env["data"].(map[string]any)
-	data["workspace"] = "main"
-	data["mode"] = "discard"
-	data["plan_id"] = "plan_001"
-	data["plan_discarded"] = true
-	data["files_changed"] = false
-	data["history_changed"] = false
-	if mutate != nil {
-		mutate(env)
-	}
-	return mustJSON(t, env)
-}
-
-func recoveryStatusSuccessStdout(t *testing.T) []byte {
-	t.Helper()
-	return recoveryStatusStdoutWith(t, nil)
-}
-
-func recoveryStatusStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
-	t.Helper()
-	env := baseEnvelope("recovery status")
-	data := env["data"].(map[string]any)
-	data["workspace"] = "main"
-	data["restore_state"] = map[string]any{
-		"state":                    "pending_restore_preview",
-		"blocking":                 true,
-		"plan_id":                  "plan_001",
-		"recovery_plan_id":         "recovery_001",
-		"message":                  "pending preview",
-		"recommended_next_command": "/srv/afscp/secret/run",
-	}
-	data["plans"] = []map[string]any{}
-	if mutate != nil {
-		mutate(env)
-	}
-	return mustJSON(t, env)
-}
-
 func repoCloneSuccessStdout(t *testing.T) []byte {
 	t.Helper()
 	return repoCloneStdoutWith(t, nil)
@@ -1676,6 +1184,33 @@ func baseEnvelope(command string) map[string]any {
 		},
 		"error": nil,
 	}
+}
+
+func directEnvelope(operation string) map[string]any {
+	return map[string]any{
+		"contract": "jvs.afscp.direct.v1",
+		"command":  operation,
+		"ok":       true,
+		"status":   "succeeded",
+		"data":     map[string]any{},
+		"error":    nil,
+	}
+}
+
+func oldDirectSaveStdout(t *testing.T) []byte {
+	t.Helper()
+	env := map[string]any{
+		"contract":  "jvs.afscp.direct.v1",
+		"operation": "save",
+		"status":    "ok",
+		"result": map[string]any{
+			"save_point_id":     "sp_001",
+			"created_at":        "2026-05-05T12:00:00Z",
+			"newest_save_point": "sp_001",
+			"unsaved_changes":   false,
+		},
+	}
+	return mustJSON(t, env)
 }
 
 func jvsErrorStdout(t *testing.T, command, repoRoot, code string) []byte {

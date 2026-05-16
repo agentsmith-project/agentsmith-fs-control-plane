@@ -25,8 +25,8 @@ Path resolver rules:
 
 Fences:
 
-- writer-session fence protects version restore-run versus read-write export and
-  read-write workload mount issuance
+- writer-session fence protects direct restore to a save point versus
+  read-write export and read-write workload mount issuance
 - repo lifecycle fence protects archive, restore-archived, delete,
   restore-tombstoned, and purge versus all export/mount issuance and repo
   storage mutations
@@ -47,4 +47,3 @@ Tradeoffs:
 - Operation recovery must understand held fences.
 - Read-only sessions do not block version restore, but do block lifecycle drain
   when no further access is allowed.
-

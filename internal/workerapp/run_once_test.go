@@ -24,7 +24,6 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restorereconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
@@ -32,10 +31,10 @@ import (
 )
 
 const (
-	acceptedJVSBinarySHA256           = "0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944"
-	directRestoreLocalJVSBinaryPath   = "/home/percy/works/mbos-v1/jvs/bin/jvs-direct-restore"
-	directRestoreLocalJVSBinarySHA256 = "c88553bb18bdd70e1399bf562fcb853bd200798498bd24bc25458196fb568902"
-	directRestoreLocalJVSSourceRef    = "/home/percy/works/mbos-v1/jvs@agentsmith-direct-restore-operation:c65b418f58d6e39e91199c1d55783e2ec91be9a1"
+	acceptedJVSBinarySHA256           = "affa86a08dbb2195f594be0be01e9c3f128806f75d04826030afbe4ba283f2e2"
+	directRestoreLocalJVSBinaryPath   = "/tmp/afscp-jvs-direct-local"
+	directRestoreLocalJVSBinarySHA256 = "affa86a08dbb2195f594be0be01e9c3f128806f75d04826030afbe4ba283f2e2"
+	directRestoreLocalJVSSourceRef    = "jvs@main:eb026cc48efb57ef64c9f3e482f0011b9232701b"
 )
 
 func TestNewRunOnceRunnerDisabledFailsBeforeOpeningStore(t *testing.T) {
@@ -168,9 +167,6 @@ func TestWorkerCapabilityMatrixUnsupportedTerminalizationRegistryIncludesDisable
 		operations.OperationTemplateCreate,
 		operations.OperationTemplateClone,
 		operations.OperationRestore,
-		operations.OperationRestorePreview,
-		operations.OperationRestorePreviewDiscard,
-		operations.OperationRestoreRun,
 	} {
 		if !terminalized[operationType] {
 			t.Fatalf("%s disabled or missing handler recovery must persist operator intervention and audit through matrix terminalization registry", operationType)
@@ -832,8 +828,8 @@ func TestRunOnceRepoCreateEnabledClaimsThroughRepoExecutor(t *testing.T) {
 	if store.repo.ID != "repo_alpha01" || store.operation.Type != operations.OperationRepoCreate || store.operation.State != operations.OperationStateSucceeded || len(store.auditEvents) != 1 {
 		t.Fatalf("repo/operation/audit = %#v/%#v/%#v", store.repo, store.operation, store.auditEvents)
 	}
-	if strings.Join(jvs.calls, ",") != "init,doctor" {
-		t.Fatalf("jvs calls = %#v, want init,doctor", jvs.calls)
+	if strings.Join(jvs.calls, ",") != "init,direct_doctor" {
+		t.Fatalf("jvs calls = %#v, want init,direct_doctor", jvs.calls)
 	}
 }
 
@@ -1250,12 +1246,15 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	store := newWorkerAppStore(record)
 	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
 	jvs := &workerAppFakeJVSRunner{
-		historySummary: jvsrunner.HistorySummary{
-			Workspace:         "main",
-			NewestSavePointID: "sp_before",
-			SavePoints:        []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}},
+		directListSummary: jvsrunner.DirectListSummary{
+			HistoryHeadID: "sp_before",
+			SavePoints:    []jvsrunner.DirectSavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z", HistoryHead: true}},
 		},
-		saveSummary: jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"},
+		directSaveSummary: jvsrunner.DirectSaveSummary{
+			SavePointID:   "sp_after",
+			HistoryHeadID: "sp_after",
+			CreatedAt:     "2026-05-05T12:00:00Z",
+		},
 	}
 	runner, err := NewRunOnceRunner(Options{
 		Source: workerAppSavePointConfigSource(nil),
@@ -1283,8 +1282,8 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	if store.savePointListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_savepoint" {
 		t.Fatalf("list/acquire = %d/%#v, want save_point_create listed and acquired", store.savePointListCalls, store.acquireIDs)
 	}
-	if strings.Join(jvs.calls, ",") != "history,save" {
-		t.Fatalf("jvs calls = %#v, want history,save", jvs.calls)
+	if strings.Join(jvs.calls, ",") != "direct_list,direct_save" {
+		t.Fatalf("jvs calls = %#v, want direct_list,direct_save", jvs.calls)
 	}
 	if store.operation.ID != record.ID || store.operation.Type != operations.OperationSavePointCreate || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseSavePointCreateCommitted {
 		t.Fatalf("operation = %#v, want succeeded save_point_create_committed", store.operation)
@@ -1312,51 +1311,6 @@ func TestRunOnceTemplateCreateDisabledScansAndPersistsUnsupportedIntervention(t 
 		t.Fatalf("generic update calls = %d, want unsupported intervention committed through audit boundary", store.genericUpdateCalls)
 	}
 	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeTemplateCreate)
-}
-
-func TestRunOnceTemplateCreateEnabledBlocksActiveRestorePlanWithoutManualOrFence(t *testing.T) {
-	now := workerAppNow()
-	record := workerAppTemplateCreateOperationRecord("op_template_create", now)
-	store := newWorkerAppStore(record)
-	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
-	store.restorePlan = workerAppRestorePreviewPendingPlan(now)
-	jvs := &workerAppFakeJVSRunner{}
-	runner, err := NewRunOnceRunner(Options{
-		Source: workerAppTemplateCreateConfigSource(nil),
-		StoreFactory: func(context.Context, string) (StoreHandle, error) {
-			return StoreHandle{Store: store}, nil
-		},
-		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
-			return jvs, nil
-		},
-		Clock:        func() time.Time { return now },
-		AuditEventID: func() string { return "evt_template_create" },
-	})
-	if err != nil {
-		t.Fatalf("NewRunOnceRunner: %v", err)
-	}
-
-	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	summary := result.Summary().Operation
-	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
-		t.Fatalf("summary = %#v, want claimed business-blocked template_create without manual recovery", summary)
-	}
-	if store.templateCreateListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
-		t.Fatalf("list/acquire = %d/%#v, want template_create listed and acquired", store.templateCreateListCalls, store.acquireIDs)
-	}
-	if len(jvs.calls) != 0 || len(store.fences) != 0 {
-		t.Fatalf("jvs/fences = %#v/%#v, want active restore plan blocked before fence and JVS", jvs.calls, store.fences)
-	}
-	got := store.records[record.ID]
-	if got.State != operations.OperationStateFailed || got.Phase != operations.OperationPhaseTemplateCreateValidate || got.Error == nil || got.Error.Code != "TEMPLATE_CREATE_RESTORE_BLOCKED" || !got.Error.Retryable {
-		t.Fatalf("operation = %#v, want retryable restore-blocked failed operation", got)
-	}
-	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeTemplateCreate || store.auditEvents[0].Outcome != audit.OutcomeFailed || store.auditEvents[0].Reason != "template_create_restore_blocked" {
-		t.Fatalf("audit events = %#v, want template_create_restore_blocked failed audit", store.auditEvents)
-	}
 }
 
 func TestRunOnceTemplateCloneDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
@@ -1402,15 +1356,11 @@ func TestRunOnceRestoreEnabledClaimsThroughDirectRestoreExecutor(t *testing.T) {
 	store := newWorkerAppStore(record)
 	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
 	jvs := &workerAppFakeJVSRunner{
-		restoreSummary: jvsrunner.RestoreSummary{
-			SourceSavePointID:   "sp_001",
+		directRestoreSummary: jvsrunner.DirectRestoreSummary{
 			RestoredSavePointID: "sp_001",
-			Workspace:           "main",
-			FilesChanged:        true,
-			HistoryChanged:      false,
-			UnsavedChanges:      false,
+			PreviousHeadID:      "sp_before",
+			NewHeadID:           "sp_001",
 		},
-		doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
 	}
 	runner, err := NewRunOnceRunner(Options{
 		Source: workerAppRestoreConfigSource(nil),
@@ -1438,277 +1388,14 @@ func TestRunOnceRestoreEnabledClaimsThroughDirectRestoreExecutor(t *testing.T) {
 	if store.restoreListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_restore" {
 		t.Fatalf("list/acquire = %d/%#v, want restore listed and acquired", store.restoreListCalls, store.acquireIDs)
 	}
-	if strings.Join(jvs.calls, ",") != "restore,doctor" {
-		t.Fatalf("jvs calls = %#v, want direct restore,doctor only", jvs.calls)
+	if strings.Join(jvs.calls, ",") != "direct_restore" {
+		t.Fatalf("jvs calls = %#v, want direct_restore only", jvs.calls)
 	}
 	if store.operation.Type != operations.OperationRestore || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestoreCommitted {
 		t.Fatalf("operation = %#v, want succeeded direct restore", store.operation)
 	}
-	if store.restorePlan.ID != "" {
-		t.Fatalf("restore plan = %#v, want direct restore not to create or consume a plan", store.restorePlan)
-	}
 	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestore || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
 		t.Fatalf("audit events = %#v, want direct restore success", store.auditEvents)
-	}
-}
-
-func TestRunOnceRestorePreviewDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
-	now := workerAppNow()
-	record := workerAppRestorePreviewOperationRecord("op_preview", now)
-	store := newWorkerAppStore(record)
-	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
-	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
-
-	result, err := runner.RunOnce(context.Background())
-	if err == nil {
-		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
-	}
-	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || store.restorePreviewListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
-		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want disabled restore_preview audited unsupported intervention", summary, store.restorePreviewListCalls, store.acquireIDs)
-	}
-	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeRestorePreview)
-}
-
-func TestRunOnceRestorePreviewEnabledClaimsThroughRestorePreviewExecutor(t *testing.T) {
-	now := workerAppNow()
-	record := workerAppRestorePreviewOperationRecord("op_preview", now)
-	store := newWorkerAppStore(record)
-	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
-	jvs := &workerAppFakeJVSRunner{
-		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "idle", Workspace: "main"},
-		restorePreviewSummary: jvsrunner.RestorePreviewSummary{
-			PlanID:            "plan_001",
-			SourceSavePointID: "sp_001",
-			BaseRevision:      "sp_002",
-			HeadRevision:      "sp_002",
-			Generation:        "sha256:preview-base",
-			ManagedFiles: jvsrunner.RestorePreviewManagedFilesSummary{
-				Changed: jvsrunner.RestorePreviewChangeSummary{Count: 1, Samples: []string{"docs/readme.md"}},
-			},
-			Workspace:         "main",
-			RunCommandPresent: true,
-		},
-	}
-	runner, err := NewRunOnceRunner(Options{
-		Source: workerAppRestorePreviewConfigSource(nil),
-		StoreFactory: func(context.Context, string) (StoreHandle, error) {
-			return StoreHandle{Store: store}, nil
-		},
-		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
-			return jvs, nil
-		},
-		Clock:        func() time.Time { return now },
-		AuditEventID: func() string { return "evt_restore_preview" },
-	})
-	if err != nil {
-		t.Fatalf("NewRunOnceRunner: %v", err)
-	}
-
-	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	summary := result.Summary().Operation
-	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
-		t.Fatalf("summary = %#v, want restore_preview claimed", summary)
-	}
-	if store.restorePreviewListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_preview" {
-		t.Fatalf("list/acquire = %d/%#v, want restore_preview listed and acquired", store.restorePreviewListCalls, store.acquireIDs)
-	}
-	if strings.Join(jvs.calls, ",") != "recovery_status,restore_preview" {
-		t.Fatalf("jvs calls = %#v, want recovery_status,restore_preview", jvs.calls)
-	}
-	if store.restorePlan.ID != "plan_001" || store.operation.Type != operations.OperationRestorePreview || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestorePreviewCommitted {
-		t.Fatalf("plan/operation = %#v/%#v, want pending restore plan and succeeded preview operation", store.restorePlan, store.operation)
-	}
-	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestorePreview || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
-		t.Fatalf("audit events = %#v, want restore preview success", store.auditEvents)
-	}
-}
-
-func TestRunOnceRestorePreviewNoSideEffectFailureDoesNotCountManual(t *testing.T) {
-	now := workerAppNow()
-	record := workerAppRestorePreviewOperationRecord("op_preview", now)
-	store := newWorkerAppStore(record)
-	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
-	jvs := &workerAppFakeJVSRunner{
-		recoveryStatusSummaries: []jvsrunner.RecoveryStatusSummary{
-			{RestoreState: "idle", Workspace: "main"},
-			{RestoreState: "idle", Workspace: "main"},
-		},
-		restorePreviewErr: &jvsrunner.CommandError{Command: "restore", ExitCode: 7, Code: "E_REPO_BUSY"},
-	}
-	runner, err := NewRunOnceRunner(Options{
-		Source: workerAppRestorePreviewConfigSource(nil),
-		StoreFactory: func(context.Context, string) (StoreHandle, error) {
-			return StoreHandle{Store: store}, nil
-		},
-		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
-			return jvs, nil
-		},
-		Clock:        func() time.Time { return now },
-		AuditEventID: func() string { return "evt_restore_preview" },
-	})
-	if err != nil {
-		t.Fatalf("NewRunOnceRunner: %v", err)
-	}
-
-	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	summary := result.Summary().Operation
-	if summary.Scanned != 1 || summary.Claimed != 1 || summary.Manual != 0 || summary.Failed != 0 || summary.Unsupported != 0 {
-		t.Fatalf("summary = %#v, want claimed retryable failed restore_preview without worker manual count", summary)
-	}
-	if strings.Join(jvs.calls, ",") != "recovery_status,restore_preview,recovery_status" {
-		t.Fatalf("jvs calls = %#v, want post-error recovery status check", jvs.calls)
-	}
-	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "RESTORE_PREVIEW_NO_SIDE_EFFECT_RETRYABLE" || !store.operation.Error.Retryable {
-		t.Fatalf("operation = %#v, want retryable no-side-effect failed preview", store.operation)
-	}
-	if store.restorePlan.ID != "" {
-		t.Fatalf("restore plan = %#v, want no durable pending plan", store.restorePlan)
-	}
-	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestorePreview || store.auditEvents[0].Outcome != audit.OutcomeFailed {
-		t.Fatalf("audit events = %#v, want failed restore preview audit", store.auditEvents)
-	}
-}
-
-func TestRunOnceRestorePreviewDiscardDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
-	now := workerAppNow()
-	record := workerAppRestorePreviewDiscardOperationRecord("op_discard", now)
-	store := newWorkerAppStore(record)
-	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
-	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
-
-	result, err := runner.RunOnce(context.Background())
-	if err == nil {
-		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
-	}
-	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || store.restorePreviewDiscardListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
-		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want disabled restore_preview_discard audited unsupported intervention", summary, store.restorePreviewDiscardListCalls, store.acquireIDs)
-	}
-	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeRestorePreviewDiscard)
-}
-
-func TestRunOnceRestorePreviewDiscardEnabledClaimsThroughDiscardExecutor(t *testing.T) {
-	now := workerAppNow()
-	record := workerAppRestorePreviewDiscardOperationRecord("op_discard", now)
-	store := newWorkerAppStore(record)
-	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
-	store.previewOperation = workerAppRestorePreviewSucceededOperationRecord("op_preview01", now)
-	store.restorePlan = workerAppRestorePreviewPendingPlan(now)
-	jvs := &workerAppFakeJVSRunner{
-		recoveryStatusSummary: jvsrunner.RecoveryStatusSummary{RestoreState: "pending_restore_preview", ActivePlanID: "plan_001", Blocking: true, Workspace: "main"},
-		restoreDiscardSummary: jvsrunner.RestoreDiscardSummary{PlanID: "plan_001", PlanDiscarded: true, Workspace: "main"},
-	}
-	runner, err := NewRunOnceRunner(Options{
-		Source: workerAppRestorePreviewDiscardConfigSource(nil),
-		StoreFactory: func(context.Context, string) (StoreHandle, error) {
-			return StoreHandle{Store: store}, nil
-		},
-		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
-			return jvs, nil
-		},
-		Clock:        func() time.Time { return now },
-		AuditEventID: func() string { return "evt_restore_preview_discard" },
-	})
-	if err != nil {
-		t.Fatalf("NewRunOnceRunner: %v", err)
-	}
-
-	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	summary := result.Summary().Operation
-	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
-		t.Fatalf("summary = %#v, want restore_preview_discard claimed", summary)
-	}
-	if store.restorePreviewDiscardListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_discard" {
-		t.Fatalf("list/acquire = %d/%#v, want restore_preview_discard listed and acquired", store.restorePreviewDiscardListCalls, store.acquireIDs)
-	}
-	if strings.Join(jvs.calls, ",") != "recovery_status,restore_discard" {
-		t.Fatalf("jvs calls = %#v, want recovery_status,restore_discard", jvs.calls)
-	}
-	if store.restorePlan.ID != "plan_001" || store.restorePlan.Status != restoreplan.StatusDiscarded || store.operation.Type != operations.OperationRestorePreviewDiscard || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestorePreviewDiscardCommitted {
-		t.Fatalf("plan/operation = %#v/%#v, want discarded restore plan and succeeded discard operation", store.restorePlan, store.operation)
-	}
-	if active, err := store.GetActiveRestorePlanByRepo(context.Background(), "repo_alpha01"); !errors.Is(err, sql.ErrNoRows) || active.ID != "" {
-		t.Fatalf("active restore plan after discard = %#v/%v, want no active blocker", active, err)
-	}
-	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestorePreviewDiscard || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
-		t.Fatalf("audit events = %#v, want restore preview discard success", store.auditEvents)
-	}
-}
-
-func TestRunOnceRestoreRunDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
-	now := workerAppNow()
-	record := workerAppRestoreRunOperationRecord("op_run", now)
-	store := newWorkerAppStore(record)
-	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
-	runner := newWorkerAppRunner(t, store, workerAppConfigSource(nil), now, nil)
-
-	result, err := runner.RunOnce(context.Background())
-	if err == nil {
-		t.Fatal("RunOnce succeeded, want unsupported operation recovery count error")
-	}
-	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Unsupported != 1 || summary.Claimed != 0 || store.restoreRunListCalls != 1 || strings.Join(store.acquireIDs, ",") != record.ID {
-		t.Fatalf("summary/list/acquire = %#v/%d/%#v, want disabled restore_run audited unsupported intervention", summary, store.restoreRunListCalls, store.acquireIDs)
-	}
-	assertWorkerAppUnsupportedAudit(t, store, record, audit.EventTypeRestoreRun)
-}
-
-func TestRunOnceRestoreRunEnabledClaimsThroughRestoreRunExecutor(t *testing.T) {
-	now := workerAppNow()
-	record := workerAppRestoreRunOperationRecord("op_run", now)
-	store := newWorkerAppStore(record)
-	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
-	store.previewOperation = workerAppRestorePreviewSucceededOperationRecord("op_preview01", now)
-	store.restorePlan = workerAppRestorePreviewPendingPlan(now)
-	jvs := &workerAppFakeJVSRunner{
-		recoveryStatusSummaries: []jvsrunner.RecoveryStatusSummary{
-			{RestoreState: "pending_restore_preview", ActivePlanID: "plan_001", Blocking: true, Workspace: "main"},
-			{RestoreState: "idle", Workspace: "main"},
-		},
-		restoreRunSummary: jvsrunner.RestoreRunSummary{PlanID: "plan_001", SourceSavePointID: "sp_001", RestoredSavePointID: "sp_restored", Workspace: "main"},
-		doctorSummary:     jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
-	}
-	runner, err := NewRunOnceRunner(Options{
-		Source: workerAppRestoreRunConfigSource(nil),
-		StoreFactory: func(context.Context, string) (StoreHandle, error) {
-			return StoreHandle{Store: store}, nil
-		},
-		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
-			return jvs, nil
-		},
-		Clock:        func() time.Time { return now },
-		AuditEventID: func() string { return "evt_restore_run" },
-	})
-	if err != nil {
-		t.Fatalf("NewRunOnceRunner: %v", err)
-	}
-
-	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	summary := result.Summary().Operation
-	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
-		t.Fatalf("summary = %#v, want restore_run claimed", summary)
-	}
-	if store.restoreRunListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_run" {
-		t.Fatalf("list/acquire = %d/%#v, want restore_run listed and acquired", store.restoreRunListCalls, store.acquireIDs)
-	}
-	if strings.Join(jvs.calls, ",") != "recovery_status,restore_run,doctor,recovery_status" {
-		t.Fatalf("jvs calls = %#v, want recovery_status,restore_run,doctor,recovery_status", jvs.calls)
-	}
-	if store.restorePlan.ID != "plan_001" || store.restorePlan.Status != restoreplan.StatusConsumed || store.operation.Type != operations.OperationRestoreRun || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestoreRunCommitted {
-		t.Fatalf("plan/operation = %#v/%#v, want consumed restore plan and succeeded restore_run operation", store.restorePlan, store.operation)
-	}
-	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestoreRun || store.auditEvents[0].Outcome != audit.OutcomeSucceeded {
-		t.Fatalf("audit events = %#v, want restore run success", store.auditEvents)
 	}
 }
 
@@ -1764,35 +1451,6 @@ func TestRunOnceRepoLifecycleEnabledMissingJVSConfigFailsClosed(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "postgres://") || strings.Contains(err.Error(), "/srv/") {
 		t.Fatalf("error leaked config detail: %v", err)
-	}
-}
-
-func TestRunOnceRestorePreviewEnabledRejectsUnpinnedJVSChecksum(t *testing.T) {
-	now := workerAppNow()
-	store := newWorkerAppStore(workerAppRestorePreviewOperationRecord("op_restore_preview", now))
-	jvsFactoryCalls := 0
-
-	_, err := NewRunOnceRunner(Options{
-		Source: workerAppRestorePreviewConfigSource(config.MapSource{
-			"AFSCP_JVS_BINARY_SHA256": strings.Repeat("a", 64),
-		}),
-		StoreFactory: func(context.Context, string) (StoreHandle, error) {
-			return StoreHandle{Store: store}, nil
-		},
-		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
-			jvsFactoryCalls++
-			return &workerAppFakeJVSRunner{}, nil
-		},
-		Clock: func() time.Time { return now },
-	})
-	if err == nil {
-		t.Fatal("NewRunOnceRunner succeeded, want pinned JVS checksum error")
-	}
-	if !strings.Contains(err.Error(), "pinned JVS") {
-		t.Fatalf("error = %q, want pinned JVS checksum context", err)
-	}
-	if jvsFactoryCalls != 0 {
-		t.Fatalf("jvs factory calls = %d, want config rejection before runner construction", jvsFactoryCalls)
 	}
 }
 
@@ -2031,7 +1689,7 @@ func TestNewJVSRunnerFromConfigVerifiesFileAgainstAcceptedPin(t *testing.T) {
 }
 
 func TestNewJVSRunnerFromConfigDirectRestorePreflightsCLIHelp(t *testing.T) {
-	path, sha := writeWorkerAppJVSHelpFixture(t, "Usage:\n  jvs restore <save>\nFlags:\n      --direct\n      --discard-unsaved\n")
+	path, sha := writeWorkerAppJVSHelpFixture(t, "Usage:\n  jvs afscp --control-root <control> --home <home> save --message <message> --json\n  jvs afscp --control-root <control> --home <home> list --json\n  jvs afscp --control-root <control> --home <home> restore --save-point <id> --json\n  jvs afscp --control-root <control> --home <home> status --json\n  jvs afscp --control-root <control> --home <home> doctor --json\n")
 
 	_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
 		Enabled:                   true,
@@ -2048,7 +1706,7 @@ func TestNewJVSRunnerFromConfigDirectRestorePreflightsCLIHelp(t *testing.T) {
 }
 
 func TestNewJVSRunnerFromConfigDirectRestoreRejectsMissingCLIFlag(t *testing.T) {
-	path, sha := writeWorkerAppJVSHelpFixture(t, "Usage:\n  jvs restore <save>\nFlags:\n      --discard-unsaved\n")
+	path, sha := writeWorkerAppJVSHelpFixture(t, "Usage:\n  jvs afscp --control-root <control> list --json\n  jvs afscp --control-root <control> status --json\n")
 
 	_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
 		Enabled:                   true,
@@ -2060,10 +1718,10 @@ func TestNewJVSRunnerFromConfigDirectRestoreRejectsMissingCLIFlag(t *testing.T) 
 		VolumeRoots:               map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
 	})
 	if err == nil {
-		t.Fatal("NewJVSRunnerFromConfig succeeded without --direct help, want fail-closed preflight error")
+		t.Fatal("NewJVSRunnerFromConfig succeeded without afscp direct help, want fail-closed preflight error")
 	}
-	if !errors.Is(err, ErrJVSRuntimeUnavailable) || !strings.Contains(err.Error(), "restore --direct preflight") {
-		t.Fatalf("error = %v, want runtime-unavailable direct restore preflight failure", err)
+	if !errors.Is(err, ErrJVSRuntimeUnavailable) || !strings.Contains(err.Error(), "afscp direct preflight") {
+		t.Fatalf("error = %v, want runtime-unavailable afscp direct preflight failure", err)
 	}
 }
 
@@ -2072,7 +1730,7 @@ func writeWorkerAppJVSHelpFixture(t *testing.T, help string) (string, string) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "jvs")
-	content := []byte("#!/bin/sh\nif [ \"$1\" = \"restore\" ] && [ \"$2\" = \"--help\" ]; then\n  cat <<'EOF'\n" + help + "EOF\n  exit 0\nfi\nexit 7\n")
+	content := []byte("#!/bin/sh\nif [ \"$1\" = \"afscp\" ]; then\n  case \"$2:$3\" in\n    \"--help:\"|\"save:--help\"|\"list:--help\"|\"restore:--help\"|\"status:--help\"|\"doctor:--help\")\n      cat <<'EOF'\n" + help + "EOF\n      exit 0\n      ;;\n  esac\nfi\nexit 7\n")
 	if err := os.WriteFile(path, content, 0o755); err != nil {
 		t.Fatalf("write fake jvs binary: %v", err)
 	}
@@ -2527,20 +2185,6 @@ func workerAppTemplateCreateConfigSource(overrides config.MapSource) config.MapS
 	return source
 }
 
-func workerAppRestorePreviewConfigSource(overrides config.MapSource) config.MapSource {
-	source := workerAppConfigSource(config.MapSource{
-		"AFSCP_RESTORE_PREVIEW_RECOVERY_ENABLED": "true",
-		"AFSCP_JVS_BINARY_PATH":                  "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                acceptedJVSBinarySHA256,
-		"AFSCP_JVS_CWD":                          "/var/lib/afscp/jvs-cwd",
-		"AFSCP_VOLUME_ROOTS":                     "vol_123=/srv/afscp/volumes/vol_123",
-	})
-	for key, value := range overrides {
-		source[key] = value
-	}
-	return source
-}
-
 func workerAppRestoreConfigSource(overrides config.MapSource) config.MapSource {
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_RESTORE_RECOVERY_ENABLED":         "true",
@@ -2550,34 +2194,6 @@ func workerAppRestoreConfigSource(overrides config.MapSource) config.MapSource {
 		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":    directRestoreLocalJVSSourceRef,
 		"AFSCP_JVS_CWD":                          "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                     "vol_123=/srv/afscp/volumes/vol_123",
-	})
-	for key, value := range overrides {
-		source[key] = value
-	}
-	return source
-}
-
-func workerAppRestorePreviewDiscardConfigSource(overrides config.MapSource) config.MapSource {
-	source := workerAppConfigSource(config.MapSource{
-		"AFSCP_RESTORE_PREVIEW_DISCARD_RECOVERY_ENABLED": "true",
-		"AFSCP_JVS_BINARY_PATH":                          "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":                        acceptedJVSBinarySHA256,
-		"AFSCP_JVS_CWD":                                  "/var/lib/afscp/jvs-cwd",
-		"AFSCP_VOLUME_ROOTS":                             "vol_123=/srv/afscp/volumes/vol_123",
-	})
-	for key, value := range overrides {
-		source[key] = value
-	}
-	return source
-}
-
-func workerAppRestoreRunConfigSource(overrides config.MapSource) config.MapSource {
-	source := workerAppConfigSource(config.MapSource{
-		"AFSCP_RESTORE_RUN_RECOVERY_ENABLED": "true",
-		"AFSCP_JVS_BINARY_PATH":              "/opt/afscp/bin/jvs",
-		"AFSCP_JVS_BINARY_SHA256":            acceptedJVSBinarySHA256,
-		"AFSCP_JVS_CWD":                      "/var/lib/afscp/jvs-cwd",
-		"AFSCP_VOLUME_ROOTS":                 "vol_123=/srv/afscp/volumes/vol_123",
 	})
 	for key, value := range overrides {
 		source[key] = value
@@ -2745,15 +2361,15 @@ func workerAppTemplateCloneOperationRecord(operationID string, now time.Time) op
 	}
 }
 
-func workerAppRestorePreviewOperationRecord(operationID string, now time.Time) operations.OperationRecord {
+func workerAppRestoreOperationRecord(operationID string, now time.Time) operations.OperationRecord {
 	return operations.OperationRecord{
 		ID:               operationID,
-		Type:             operations.OperationRestorePreview,
+		Type:             operations.OperationRestore,
 		State:            operations.OperationStateQueued,
-		Phase:            operations.OperationPhaseRestorePreviewValidate,
-		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreview, "idem_preview").String(),
-		IdempotencyKey:   "idem_preview",
-		RequestHash:      operations.RequestHash("sha256:restore-preview"),
+		Phase:            operations.OperationPhaseRestoreValidate,
+		IdempotencyScope: operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestore, "idem_restore").String(),
+		IdempotencyKey:   "idem_restore",
+		RequestHash:      operations.RequestHash("sha256:restore"),
 		CorrelationID:    "corr-alpha",
 		CallerService:    "product-caller",
 		AuthorizedActor:  operations.Actor{Type: "system", ID: "svc-alpha"},
@@ -2762,72 +2378,6 @@ func workerAppRestorePreviewOperationRecord(operationID string, now time.Time) o
 		RepoID:           "repo_alpha01",
 		InputSummary:     map[string]any{"save_point_id": "sp_001"},
 		CreatedAt:        now.Add(-time.Hour),
-	}
-}
-
-func workerAppRestoreOperationRecord(operationID string, now time.Time) operations.OperationRecord {
-	record := workerAppRestorePreviewOperationRecord(operationID, now)
-	record.Type = operations.OperationRestore
-	record.Phase = operations.OperationPhaseRestoreValidate
-	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestore, "idem_restore").String()
-	record.IdempotencyKey = "idem_restore"
-	record.RequestHash = operations.RequestHash("sha256:restore")
-	record.InputSummary = map[string]any{"save_point_id": "sp_001", "discard_unsaved_changes_confirmed": true}
-	return record
-}
-
-func workerAppRestorePreviewDiscardOperationRecord(operationID string, now time.Time) operations.OperationRecord {
-	record := workerAppRestorePreviewOperationRecord(operationID, now)
-	record.Type = operations.OperationRestorePreviewDiscard
-	record.Phase = operations.OperationPhaseRestorePreviewDiscardValidate
-	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestorePreviewDiscard, "idem_discard").String()
-	record.IdempotencyKey = "idem_discard"
-	record.RequestHash = operations.RequestHash("sha256:restore-preview-discard")
-	record.InputSummary = map[string]any{"preview_operation_id": "op_preview01"}
-	return record
-}
-
-func workerAppRestoreRunOperationRecord(operationID string, now time.Time) operations.OperationRecord {
-	record := workerAppRestorePreviewOperationRecord(operationID, now)
-	record.Type = operations.OperationRestoreRun
-	record.Phase = operations.OperationPhaseRestoreRunValidate
-	record.IdempotencyScope = operations.NewIdempotencyScope("product-caller", "ns_alpha01", operations.OperationRestoreRun, "idem_run").String()
-	record.IdempotencyKey = "idem_run"
-	record.RequestHash = operations.RequestHash("sha256:restore-run")
-	record.InputSummary = map[string]any{"preview_operation_id": "op_preview01"}
-	return record
-}
-
-func workerAppRestorePreviewSucceededOperationRecord(operationID string, now time.Time) operations.OperationRecord {
-	record := workerAppRestorePreviewOperationRecord(operationID, now)
-	record.State = operations.OperationStateSucceeded
-	record.Phase = operations.OperationPhaseRestorePreviewCommitted
-	record.ExternalResourceIDs = map[string]string{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001"}
-	record.JVSJSONOutput = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "base_revision": "sp_002", "head_revision": "sp_002", "generation": "sha256:preview-base", "fence_marker": "preview_fence_op_preview01"}
-	record.VerificationResult = map[string]any{"restore_plan_id": "plan_001", "source_save_point_id": "sp_001", "base_revision": "sp_002", "head_revision": "sp_002", "generation": "sha256:preview-base", "fence_marker": "preview_fence_op_preview01", "restore_plan_status": "pending"}
-	record.FinishedAt = &now
-	return record
-}
-
-func workerAppRestorePreviewPendingPlan(now time.Time) restoreplan.Plan {
-	return restoreplan.Plan{
-		ID:                 "plan_001",
-		NamespaceID:        "ns_alpha01",
-		RepoID:             "repo_alpha01",
-		PreviewOperationID: "op_preview01",
-		SourceSavePointID:  "sp_001",
-		BaseRevision:       "sp_002",
-		HeadRevision:       "sp_002",
-		Generation:         "sha256:preview-base",
-		FenceMarker:        "preview_fence_op_preview01",
-		Summary: restoreplan.Summary{
-			Changed: restoreplan.ChangeSummary{Count: 1, Samples: []string{"docs/readme.md"}},
-		},
-		Blockers:  []restoreplan.Blocker{},
-		Stale:     false,
-		Status:    restoreplan.StatusPending,
-		CreatedAt: now.Add(-time.Minute),
-		UpdatedAt: now.Add(-time.Minute),
 	}
 }
 
@@ -3046,8 +2596,6 @@ type fakeWorkerAppStore struct {
 	exports                              []sessionstate.ExportSession
 	mounts                               []sessionstate.WorkloadMountBinding
 	operation                            operations.OperationRecord
-	previewOperation                     operations.OperationRecord
-	restorePlan                          restoreplan.Plan
 	auditEvents                          []audit.Event
 	fences                               []fences.Fence
 	releasedFenceID                      string
@@ -3069,9 +2617,6 @@ type fakeWorkerAppStore struct {
 	templateCreateListCalls              int
 	templateCloneListCalls               int
 	restoreListCalls                     int
-	restorePreviewListCalls              int
-	restorePreviewDiscardListCalls       int
-	restoreRunListCalls                  int
 	workloadMountBindingListCalls        int
 	auditDelivered                       []string
 	auditFailed                          []workerAppAuditFailedCall
@@ -3600,33 +3145,6 @@ func (store *fakeWorkerAppStore) listTemplateOperationsForRecovery(now time.Time
 	return out, nil
 }
 
-func (store *fakeWorkerAppStore) ListRestorePreviewOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
-	store.restorePreviewListCalls++
-	var out []operations.OperationRecord
-	for _, operationID := range store.order {
-		record := store.records[operationID]
-		if len(out) >= limit {
-			break
-		}
-		if record.Type != operations.OperationRestorePreview || (record.Phase != operations.OperationPhaseRestorePreviewValidate && record.Phase != operations.OperationPhaseRestorePreviewPreflightIdle) {
-			continue
-		}
-		switch record.State {
-		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
-			out = append(out, record)
-		case operations.OperationStateRunning:
-			if namespaceRecoveryLeaseDue(record, now) {
-				out = append(out, record)
-			}
-		case operations.OperationStateCancelRequested:
-			if record.Phase == operations.OperationPhaseRestorePreviewValidate && namespaceRecoveryLeaseDue(record, now) {
-				out = append(out, record)
-			}
-		}
-	}
-	return out, nil
-}
-
 func (store *fakeWorkerAppStore) ListRestoreOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
 	store.restoreListCalls++
 	var out []operations.OperationRecord
@@ -3647,60 +3165,6 @@ func (store *fakeWorkerAppStore) ListRestoreOperationsForRecovery(ctx context.Co
 			}
 		case operations.OperationStateCancelRequested:
 			if record.Phase == operations.OperationPhaseRestoreValidate && namespaceRecoveryLeaseDue(record, now) {
-				out = append(out, record)
-			}
-		}
-	}
-	return out, nil
-}
-
-func (store *fakeWorkerAppStore) ListRestorePreviewDiscardOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
-	store.restorePreviewDiscardListCalls++
-	var out []operations.OperationRecord
-	for _, operationID := range store.order {
-		record := store.records[operationID]
-		if len(out) >= limit {
-			break
-		}
-		if record.Type != operations.OperationRestorePreviewDiscard || (record.Phase != operations.OperationPhaseRestorePreviewDiscardValidate && record.Phase != operations.OperationPhaseRestorePreviewDiscarding) {
-			continue
-		}
-		switch record.State {
-		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
-			out = append(out, record)
-		case operations.OperationStateRunning:
-			if namespaceRecoveryLeaseDue(record, now) {
-				out = append(out, record)
-			}
-		case operations.OperationStateCancelRequested:
-			if record.Phase == operations.OperationPhaseRestorePreviewDiscardValidate && namespaceRecoveryLeaseDue(record, now) {
-				out = append(out, record)
-			}
-		}
-	}
-	return out, nil
-}
-
-func (store *fakeWorkerAppStore) ListRestoreRunOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
-	store.restoreRunListCalls++
-	var out []operations.OperationRecord
-	for _, operationID := range store.order {
-		record := store.records[operationID]
-		if len(out) >= limit {
-			break
-		}
-		if record.Type != operations.OperationRestoreRun || (record.Phase != operations.OperationPhaseRestoreRunValidate && record.Phase != operations.OperationPhaseRestoreRunWriterFenced && record.Phase != operations.OperationPhaseRestoreRunConsuming) {
-			continue
-		}
-		switch record.State {
-		case operations.OperationStateQueued, operations.OperationStateOperatorInterventionRequired:
-			out = append(out, record)
-		case operations.OperationStateRunning:
-			if namespaceRecoveryLeaseDue(record, now) {
-				out = append(out, record)
-			}
-		case operations.OperationStateCancelRequested:
-			if record.Phase == operations.OperationPhaseRestoreRunValidate && namespaceRecoveryLeaseDue(record, now) {
 				out = append(out, record)
 			}
 		}
@@ -3830,27 +3294,6 @@ func (store *fakeWorkerAppStore) acquireTemplateOperationLease(operationID strin
 	return decision.Record, nil
 }
 
-func (store *fakeWorkerAppStore) AcquireRestorePreviewOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
-	record, ok := store.records[operationID]
-	if !ok {
-		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
-	}
-	if record.Type != operations.OperationRestorePreview || (record.Phase != operations.OperationPhaseRestorePreviewValidate && record.Phase != operations.OperationPhaseRestorePreviewPreflightIdle) {
-		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
-	}
-	if request.CancelPolicy == operations.LeaseCancelPolicyFinalize && record.Phase != operations.OperationPhaseRestorePreviewValidate {
-		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
-	}
-	store.acquireIDs = append(store.acquireIDs, operationID)
-	store.acquirePolicies[operationID] = request.CancelPolicy
-	decision := operations.AcquireLease(record, request)
-	if !decision.Allowed {
-		return operations.OperationRecord{}, decision.Error
-	}
-	store.records[operationID] = decision.Record
-	return decision.Record, nil
-}
-
 func (store *fakeWorkerAppStore) AcquireRestoreOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
 	record, ok := store.records[operationID]
 	if !ok {
@@ -3860,48 +3303,6 @@ func (store *fakeWorkerAppStore) AcquireRestoreOperationLease(_ context.Context,
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	if request.CancelPolicy == operations.LeaseCancelPolicyFinalize && record.Phase != operations.OperationPhaseRestoreValidate {
-		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
-	}
-	store.acquireIDs = append(store.acquireIDs, operationID)
-	store.acquirePolicies[operationID] = request.CancelPolicy
-	decision := operations.AcquireLease(record, request)
-	if !decision.Allowed {
-		return operations.OperationRecord{}, decision.Error
-	}
-	store.records[operationID] = decision.Record
-	return decision.Record, nil
-}
-
-func (store *fakeWorkerAppStore) AcquireRestorePreviewDiscardOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
-	record, ok := store.records[operationID]
-	if !ok {
-		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
-	}
-	if record.Type != operations.OperationRestorePreviewDiscard || (record.Phase != operations.OperationPhaseRestorePreviewDiscardValidate && record.Phase != operations.OperationPhaseRestorePreviewDiscarding) {
-		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
-	}
-	if request.CancelPolicy == operations.LeaseCancelPolicyFinalize && record.Phase != operations.OperationPhaseRestorePreviewDiscardValidate {
-		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
-	}
-	store.acquireIDs = append(store.acquireIDs, operationID)
-	store.acquirePolicies[operationID] = request.CancelPolicy
-	decision := operations.AcquireLease(record, request)
-	if !decision.Allowed {
-		return operations.OperationRecord{}, decision.Error
-	}
-	store.records[operationID] = decision.Record
-	return decision.Record, nil
-}
-
-func (store *fakeWorkerAppStore) AcquireRestoreRunOperationLease(_ context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
-	record, ok := store.records[operationID]
-	if !ok {
-		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
-	}
-	if record.Type != operations.OperationRestoreRun || (record.Phase != operations.OperationPhaseRestoreRunValidate && record.Phase != operations.OperationPhaseRestoreRunWriterFenced && record.Phase != operations.OperationPhaseRestoreRunConsuming) {
-		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
-	}
-	if request.CancelPolicy == operations.LeaseCancelPolicyFinalize && record.Phase != operations.OperationPhaseRestoreRunValidate {
 		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 	}
 	store.acquireIDs = append(store.acquireIDs, operationID)
@@ -4233,70 +3634,6 @@ func (store *fakeWorkerAppStore) commitTemplateFailed(record operations.Sanitize
 	return operation, nil
 }
 
-func (store *fakeWorkerAppStore) UpdateRestorePreviewPreflightWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time) (operations.OperationRecord, error) {
-	operation := record.Record()
-	store.records[operation.ID] = operation
-	store.operation = operation
-	return operation, nil
-}
-
-func (store *fakeWorkerAppStore) CommitRestorePreviewSucceededWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	operation := record.Record()
-	operation.LeaseOwner = ""
-	operation.LeaseExpiresAt = nil
-	store.records[operation.ID] = operation
-	store.restorePlan = plan
-	store.operation = operation
-	store.auditEvents = append(store.auditEvents, event)
-	return plan, operation, nil
-}
-
-func (store *fakeWorkerAppStore) CommitRestorePreviewFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
-	operation := record.Record()
-	operation.LeaseOwner = ""
-	operation.LeaseExpiresAt = nil
-	store.records[operation.ID] = operation
-	store.operation = operation
-	store.auditEvents = append(store.auditEvents, event)
-	return operation, nil
-}
-
-func (store *fakeWorkerAppStore) MarkRestorePreviewDiscardingWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
-	operation := record.Record()
-	store.records[operation.ID] = operation
-	plan.Status = restoreplan.StatusDiscarding
-	plan.UpdatedAt = now
-	store.restorePlan = plan
-	store.operation = operation
-	return plan, operation, nil
-}
-
-func (store *fakeWorkerAppStore) CommitRestorePreviewDiscardSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	operation := record.Record()
-	operation.LeaseOwner = ""
-	operation.LeaseExpiresAt = nil
-	store.records[operation.ID] = operation
-	store.restorePlan.Status = restoreplan.StatusDiscarded
-	store.restorePlan.UpdatedAt = now
-	store.operation = operation
-	store.auditEvents = append(store.auditEvents, event)
-	return store.restorePlan, operation, nil
-}
-
-func (store *fakeWorkerAppStore) CommitRestorePreviewDiscardFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
-	operation := record.Record()
-	operation.LeaseOwner = ""
-	operation.LeaseExpiresAt = nil
-	store.records[operation.ID] = operation
-	if operation.Phase == operations.OperationPhaseRestorePreviewDiscarding {
-		store.restorePlan.Status = restoreplan.StatusOperatorInterventionRequired
-		store.restorePlan.UpdatedAt = now
-	}
-	store.operation = operation
-	store.auditEvents = append(store.auditEvents, event)
-	return operation, nil
-}
-
 func (store *fakeWorkerAppStore) MarkRestoreWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
 	operation := record.Record()
 	store.records[operation.ID] = operation
@@ -4334,71 +3671,6 @@ func (store *fakeWorkerAppStore) CommitRestoreFailedWithLease(_ context.Context,
 	return operation, nil
 }
 
-func (store *fakeWorkerAppStore) MarkRestoreRunWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
-	operation := record.Record()
-	store.records[operation.ID] = operation
-	store.operation = operation
-	for _, existing := range store.fences {
-		if existing.ID == fence.ID && existing.Kind == fences.KindWriterSession && existing.HolderOperationID == operation.ID && existing.Status == fences.StatusActive && existing.ReleasedAt == nil && existing.RecoveredAt == nil {
-			return existing, operation, nil
-		}
-	}
-	store.fences = append(store.fences, fence)
-	return fence, operation, nil
-}
-
-func (store *fakeWorkerAppStore) MarkRestoreRunConsumingWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
-	operation := record.Record()
-	store.records[operation.ID] = operation
-	store.restorePlan.Status = restoreplan.StatusConsuming
-	store.restorePlan.UpdatedAt = now
-	store.operation = operation
-	return store.restorePlan, operation, nil
-}
-
-func (store *fakeWorkerAppStore) CommitRestoreRunSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	operation := record.Record()
-	operation.LeaseOwner = ""
-	operation.LeaseExpiresAt = nil
-	store.records[operation.ID] = operation
-	store.restorePlan.Status = restoreplan.StatusConsumed
-	store.restorePlan.UpdatedAt = now
-	store.releaseWorkerAppWriterFence(operation.SessionFenceID, now)
-	store.operation = operation
-	store.auditEvents = append(store.auditEvents, event)
-	return store.restorePlan, operation, nil
-}
-
-func (store *fakeWorkerAppStore) CommitRestoreRunStalePreviewWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	operation := record.Record()
-	operation.LeaseOwner = ""
-	operation.LeaseExpiresAt = nil
-	store.records[operation.ID] = operation
-	store.restorePlan.Stale = plan.Stale
-	store.restorePlan.Blockers = append([]restoreplan.Blocker(nil), plan.Blockers...)
-	store.restorePlan.UpdatedAt = now
-	store.operation = operation
-	store.auditEvents = append(store.auditEvents, event)
-	return store.restorePlan, operation, nil
-}
-
-func (store *fakeWorkerAppStore) CommitRestoreRunFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
-	operation := record.Record()
-	operation.LeaseOwner = ""
-	operation.LeaseExpiresAt = nil
-	store.records[operation.ID] = operation
-	switch operation.Phase {
-	case operations.OperationPhaseRestoreRunWriterFenced:
-		store.releaseWorkerAppWriterFence(operation.SessionFenceID, now)
-	case operations.OperationPhaseRestoreRunConsuming:
-		store.restorePlan.Status = restoreplan.StatusOperatorInterventionRequired
-		store.restorePlan.UpdatedAt = now
-	}
-	store.operation = operation
-	store.auditEvents = append(store.auditEvents, event)
-	return operation, nil
-}
-
 func (store *fakeWorkerAppStore) releaseWorkerAppWriterFence(fenceID string, now time.Time) {
 	for idx, fence := range store.fences {
 		if fence.ID == fenceID && fence.Kind == fences.KindWriterSession && fence.Status == fences.StatusActive && fence.ReleasedAt == nil && fence.RecoveredAt == nil {
@@ -4413,38 +3685,10 @@ func (store *fakeWorkerAppStore) releaseWorkerAppWriterFence(fenceID string, now
 }
 
 func (store *fakeWorkerAppStore) GetOperation(_ context.Context, operationID string) (operations.OperationRecord, error) {
-	if store.previewOperation.ID == operationID {
-		return store.previewOperation, nil
-	}
 	if record, ok := store.records[operationID]; ok {
 		return record, nil
 	}
 	return operations.OperationRecord{}, errors.New("operation not found")
-}
-
-func (store *fakeWorkerAppStore) GetRestorePlanByPreviewOperation(_ context.Context, previewOperationID string) (restoreplan.Plan, error) {
-	if store.restorePlan.PreviewOperationID == previewOperationID {
-		return store.restorePlan, nil
-	}
-	return restoreplan.Plan{}, errors.New("restore plan not found")
-}
-
-func (store *fakeWorkerAppStore) GetActiveRestorePlanByRepo(_ context.Context, repoID string) (restoreplan.Plan, error) {
-	if store.restorePlan.ID == "" || store.restorePlan.RepoID != repoID || !store.restorePlan.Active() {
-		return restoreplan.Plan{}, sql.ErrNoRows
-	}
-	return store.restorePlan, nil
-}
-
-func (store *fakeWorkerAppStore) CreatePendingRestorePlan(_ context.Context, plan restoreplan.Plan) error {
-	store.restorePlan = plan
-	return nil
-}
-
-func (store *fakeWorkerAppStore) TransitionRestorePlanStatus(_ context.Context, _ string, _, to restoreplan.Status, now time.Time) (restoreplan.Plan, error) {
-	store.restorePlan.Status = to
-	store.restorePlan.UpdatedAt = now
-	return store.restorePlan, nil
 }
 
 func (store *fakeWorkerAppStore) GetRepoInNamespace(context.Context, string, string) (resources.Repo, error) {
@@ -4555,21 +3799,28 @@ func (store *fakeWorkerAppAuditStore) MarkAuditOutboxDeliveryFailed(context.Cont
 }
 
 type workerAppFakeJVSRunner struct {
-	calls                   []string
-	beforeInit              func(context.Context) error
-	initSummary             jvsrunner.InitSummary
-	doctorSummary           jvsrunner.DoctorSummary
-	saveSummary             jvsrunner.SaveSummary
-	historySummary          jvsrunner.HistorySummary
-	recoveryStatusSummary   jvsrunner.RecoveryStatusSummary
-	recoveryStatusSummaries []jvsrunner.RecoveryStatusSummary
-	restorePreviewSummary   jvsrunner.RestorePreviewSummary
-	restorePreviewErr       error
-	restoreSummary          jvsrunner.RestoreSummary
-	restoreErr              error
-	restoreRunSummary       jvsrunner.RestoreRunSummary
-	restoreDiscardSummary   jvsrunner.RestoreDiscardSummary
-	repoCloneSummary        jvsrunner.RepoCloneSummary
+	calls                []string
+	beforeInit           func(context.Context) error
+	initSummary          jvsrunner.InitSummary
+	doctorSummary        jvsrunner.DoctorSummary
+	saveSummary          jvsrunner.SaveSummary
+	historySummary       jvsrunner.HistorySummary
+	directTarget         jvsrunner.DirectTarget
+	directSaveSummary    jvsrunner.DirectSaveSummary
+	directListSummary    jvsrunner.DirectListSummary
+	directRestoreSummary jvsrunner.DirectRestoreSummary
+	directStatusSummary  jvsrunner.DirectStatusSummary
+	directDoctorSummary  jvsrunner.DirectDoctorSummary
+	directSaveErr        error
+	directListErr        error
+	directRestoreErr     error
+	directStatusErr      error
+	directDoctorErr      error
+	repoCloneSummary     jvsrunner.RepoCloneSummary
+	controlRoot          string
+	payloadRoot          string
+	saveMessage          string
+	restoreSavePointID   string
 }
 
 type workerAppFakeStoragePurger struct {
@@ -4597,24 +3848,6 @@ func (runner *workerAppFakeJVSRunner) Init(ctx context.Context, _, _ string) (jv
 	return runner.initSummary, nil
 }
 
-func (runner *workerAppFakeJVSRunner) DoctorStrict(context.Context, string) (jvsrunner.DoctorSummary, error) {
-	runner.calls = append(runner.calls, "doctor")
-	return runner.doctorSummary, nil
-}
-
-func (runner *workerAppFakeJVSRunner) DoctorRepairRuntime(context.Context, string) (jvsrunner.DoctorRepairRuntimeSummary, error) {
-	runner.calls = append(runner.calls, "doctor_repair")
-	return jvsrunner.DoctorRepairRuntimeSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main", CleanLocks: jvsrunner.RepairActionSummary{Action: "clean_locks", Success: true}}, nil
-}
-
-func (runner *workerAppFakeJVSRunner) Save(context.Context, string, string) (jvsrunner.SaveSummary, error) {
-	runner.calls = append(runner.calls, "save")
-	if runner.saveSummary.SavePointID == "" {
-		runner.saveSummary = jvsrunner.SaveSummary{SavePointID: "sp_001", NewestSavePointID: "sp_001", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z"}
-	}
-	return runner.saveSummary, nil
-}
-
 func (runner *workerAppFakeJVSRunner) RepoClone(context.Context, string, string, string) (jvsrunner.RepoCloneSummary, error) {
 	runner.calls = append(runner.calls, "repo_clone")
 	if runner.repoCloneSummary.SourceRepoID == "" {
@@ -4623,45 +3856,76 @@ func (runner *workerAppFakeJVSRunner) RepoClone(context.Context, string, string,
 	return runner.repoCloneSummary, nil
 }
 
-func (runner *workerAppFakeJVSRunner) History(context.Context, string) (jvsrunner.HistorySummary, error) {
-	runner.calls = append(runner.calls, "history")
-	return runner.historySummary, nil
-}
-
-func (runner *workerAppFakeJVSRunner) RecoveryStatus(context.Context, string) (jvsrunner.RecoveryStatusSummary, error) {
-	runner.calls = append(runner.calls, "recovery_status")
-	if len(runner.recoveryStatusSummaries) > 0 {
-		summary := runner.recoveryStatusSummaries[0]
-		runner.recoveryStatusSummaries = runner.recoveryStatusSummaries[1:]
-		return summary, nil
+func (runner *workerAppFakeJVSRunner) DirectSave(_ context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error) {
+	runner.calls = append(runner.calls, "direct_save")
+	runner.directTarget = target
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	runner.saveMessage = message
+	if runner.directSaveSummary.SavePointID == "" && runner.saveSummary.SavePointID != "" {
+		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, CreatedAt: runner.saveSummary.CreatedAt}
 	}
-	return runner.recoveryStatusSummary, nil
-}
-
-func (runner *workerAppFakeJVSRunner) RestorePreview(context.Context, string, string) (jvsrunner.RestorePreviewSummary, error) {
-	runner.calls = append(runner.calls, "restore_preview")
-	if runner.restorePreviewErr != nil {
-		return jvsrunner.RestorePreviewSummary{}, runner.restorePreviewErr
+	if runner.directSaveSummary.SavePointID == "" {
+		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: "sp_001", HistoryHeadID: "sp_001", Message: message, CreatedAt: "2026-05-05T12:00:00Z"}
 	}
-	return runner.restorePreviewSummary, nil
+	return runner.directSaveSummary, runner.directSaveErr
 }
 
-func (runner *workerAppFakeJVSRunner) Restore(context.Context, string, string) (jvsrunner.RestoreSummary, error) {
-	runner.calls = append(runner.calls, "restore")
-	if runner.restoreErr != nil {
-		return jvsrunner.RestoreSummary{}, runner.restoreErr
+func (runner *workerAppFakeJVSRunner) DirectList(_ context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error) {
+	runner.calls = append(runner.calls, "direct_list")
+	runner.directTarget = target
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	if runner.directListSummary.HistoryHeadID == "" && len(runner.directListSummary.SavePoints) == 0 {
+		savePoints := make([]jvsrunner.DirectSavePointSummary, 0, len(runner.historySummary.SavePoints))
+		for _, savePoint := range runner.historySummary.SavePoints {
+			savePoints = append(savePoints, jvsrunner.DirectSavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, CreatedAt: savePoint.CreatedAt, HistoryHead: savePoint.SavePointID == runner.historySummary.NewestSavePointID})
+		}
+		runner.directListSummary = jvsrunner.DirectListSummary{HistoryHeadID: runner.historySummary.NewestSavePointID, SavePoints: savePoints}
 	}
-	return runner.restoreSummary, nil
+	return runner.directListSummary, runner.directListErr
 }
 
-func (runner *workerAppFakeJVSRunner) RestoreRun(context.Context, string, string) (jvsrunner.RestoreRunSummary, error) {
-	runner.calls = append(runner.calls, "restore_run")
-	return runner.restoreRunSummary, nil
+func (runner *workerAppFakeJVSRunner) DirectRestore(_ context.Context, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectRestoreSummary, error) {
+	runner.calls = append(runner.calls, "direct_restore")
+	runner.directTarget = target
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	runner.restoreSavePointID = savePointID
+	if runner.directRestoreSummary.RestoredSavePointID == "" {
+		runner.directRestoreSummary = jvsrunner.DirectRestoreSummary{RestoredSavePointID: savePointID, NewHeadID: savePointID}
+	}
+	return runner.directRestoreSummary, runner.directRestoreErr
 }
 
-func (runner *workerAppFakeJVSRunner) RestoreDiscard(context.Context, string, string) (jvsrunner.RestoreDiscardSummary, error) {
-	runner.calls = append(runner.calls, "restore_discard")
-	return runner.restoreDiscardSummary, nil
+func (runner *workerAppFakeJVSRunner) DirectStatus(_ context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectStatusSummary, error) {
+	runner.calls = append(runner.calls, "direct_status")
+	runner.directTarget = target
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	if runner.directStatusSummary.HistoryHeadID == "" {
+		runner.directStatusSummary = jvsrunner.DirectStatusSummary{HistoryHeadID: runner.restoreSavePointID, MetadataState: "clean", ActiveOperation: "none", Recovery: "none"}
+	}
+	return runner.directStatusSummary, runner.directStatusErr
+}
+
+func (runner *workerAppFakeJVSRunner) DirectDoctor(_ context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectDoctorSummary, error) {
+	runner.calls = append(runner.calls, "direct_doctor")
+	runner.directTarget = target
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	if runner.directDoctorSummary == (jvsrunner.DirectDoctorSummary{}) {
+		repoID := runner.doctorSummary.RepoID
+		if repoID == "" {
+			repoID = "jvs_repo_alpha"
+		}
+		healthy := runner.doctorSummary.Healthy
+		if runner.doctorSummary == (jvsrunner.DoctorSummary{}) {
+			healthy = true
+		}
+		runner.directDoctorSummary = jvsrunner.DirectDoctorSummary{RepoID: repoID, Healthy: healthy, FindingCount: 0, MetadataState: "clean", Journal: "clean", Recovery: "none"}
+	}
+	return runner.directDoctorSummary, runner.directDoctorErr
 }
 
 func workerAppAuditRecord(eventID string, payload []byte) audit.OutboxRecord {

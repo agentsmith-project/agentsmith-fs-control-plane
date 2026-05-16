@@ -64,7 +64,7 @@ AFSCP:
 - ensures the repo uses JVS external control root mode before enabling workload mounts
 - audits mount binding and orchestrator plan issuance
 - tracks lease/status for active read-write mount sessions
-- blocks new read-write bindings when a repo restore fence is held
+- blocks new read-write bindings when a direct restore writer-session fence is held
 
 External orchestrator:
 
@@ -102,12 +102,12 @@ Rules:
 - The orchestrator updates status when it starts, completes, releases, or fails a runtime mount.
 - The orchestrator heartbeats before `lease_expires_at`.
 - A read-write binding in `issued`, `pending`, `active`, or `releasing` with a live lease counts as an active writer session.
-- A terminal read-write binding blocks restore-run until current GA durable evidence shows the runtime mount is unmounted or otherwise non-accessing. `released`/`revoked` set that evidence; `terminal_observed_at` alone is not sufficient.
+- A terminal read-write binding blocks direct restore to a save point until current GA durable evidence shows the runtime mount is unmounted or otherwise non-accessing. `released`/`revoked` set that evidence; `terminal_observed_at` alone is not sufficient.
 - Any binding, read-only or read-write, blocks repo archive/delete/purge lifecycle drain until AFSCP has a confirmed terminal non-accessing state.
 - AFSCP can revoke a binding; the orchestrator must unmount or stop using it and report final status.
-- `released`/`revoked` are terminal only after the orchestrator confirms that the runtime mount is unmounted or otherwise non-accessing, which also proves unable-to-write. A revoke request waiting for runtime teardown remains `releasing` and continues to block restore-run.
-- `expired`/`failed` are observed or uncertain terminal statuses. They do not prove unmounted, non-accessing, or unable-to-write, and they do not unblock restore-run or lifecycle by themselves.
-- Future support for unable-to-write-but-still-mounted/readable as restore-run evidence requires an explicit evidence field or status; it must not reuse `released`/`revoked`.
+- `released`/`revoked` are terminal only after the orchestrator confirms that the runtime mount is unmounted or otherwise non-accessing, which also proves unable-to-write. A revoke request waiting for runtime teardown remains `releasing` and continues to block direct restore.
+- `expired`/`failed` are observed or uncertain terminal statuses. They do not prove unmounted, non-accessing, or unable-to-write, and they do not unblock direct restore or lifecycle by themselves.
+- Future support for unable-to-write-but-still-mounted/readable as direct restore evidence requires an explicit evidence field or status; it must not reuse `released`/`revoked`.
 
 ## JVS Control Metadata Protection
 

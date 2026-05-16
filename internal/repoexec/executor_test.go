@@ -2,7 +2,6 @@ package repoexec
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -17,7 +16,6 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
@@ -31,8 +29,8 @@ func TestExecutorFirstAttemptInitializesDoctorsAndCommitsRepo(t *testing.T) {
 	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "init,doctor" {
-		t.Fatalf("JVS calls = %#v, want init then doctor", runner.calls)
+	if strings.Join(runner.calls, ",") != "init,direct_doctor" {
+		t.Fatalf("JVS calls = %#v, want init then direct doctor", runner.calls)
 	}
 	if !strings.HasSuffix(runner.payloadRoot, "/afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload") || !strings.HasSuffix(runner.controlRoot, "/afscp/namespaces/ns_alpha01/repos/repo_alpha01/control") {
 		t.Fatalf("roots = payload %q control %q", runner.payloadRoot, runner.controlRoot)
@@ -93,8 +91,8 @@ func TestSavePointExecutorPersistsPreSaveMarkerThenSavesAndCommits(t *testing.T)
 	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "history,save" {
-		t.Fatalf("JVS calls = %#v, want history then save", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct_list then direct_save", runner.calls)
 	}
 	if store.progressUpdates != 1 {
 		t.Fatalf("progress updates = %d, want pre-save marker persisted", store.progressUpdates)
@@ -103,10 +101,70 @@ func TestSavePointExecutorPersistsPreSaveMarkerThenSavesAndCommits(t *testing.T)
 		t.Fatalf("operation = %#v, want succeeded committed", store.operation)
 	}
 	result := store.operation.VerificationResult.(map[string]any)
-	if result["pre_save_newest_save_point_id"] != "sp_before" || result["save_point_id"] != "sp_after" || result["unsaved_changes"] != false {
+	if result["pre_save_newest_save_point_id"] != "sp_before" || result["save_point_id"] != "sp_after" || result["unsaved_changes_known"] != false {
 		t.Fatalf("verification = %#v, want pre marker and save result", result)
 	}
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
+func TestSavePointExecutorUsesDirectListAndDirectSaveTarget(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		directListSummary: jvsrunner.DirectListSummary{
+			HistoryHeadID: "sp_before",
+			SavePoints:    []jvsrunner.DirectSavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z", HistoryHead: true}},
+		},
+		directSaveSummary: jvsrunner.DirectSaveSummary{SavePointID: "sp_after", HistoryHeadID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct_list,direct_save", runner.calls)
+	}
+	if !strings.HasSuffix(runner.directTarget.ControlRoot, "/afscp/namespaces/ns_alpha01/repos/repo_alpha01/control") ||
+		!strings.HasSuffix(runner.directTarget.Home, "/afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload") {
+		t.Fatalf("direct target = %#v, want resolved control and payload roots", runner.directTarget)
+	}
+	if runner.saveMessage != "checkpoint" {
+		t.Fatalf("direct save message = %q, want durable normalized message", runner.saveMessage)
+	}
+	verification := store.operation.VerificationResult.(map[string]any)
+	if verification["pre_save_newest_save_point_id"] != "sp_before" || verification["save_point_id"] != "sp_after" {
+		t.Fatalf("verification = %#v, want direct pre marker and save result", verification)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
+func TestSavePointExecutorDirectSaveRepoBusyFailsWithoutLegacyRepair(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		directListSummary: jvsrunner.DirectListSummary{
+			HistoryHeadID: "sp_before",
+			SavePoints:    []jvsrunner.DirectSavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z", HistoryHead: true}},
+		},
+		directSaveErr: &jvsrunner.CommandError{Command: "afscp save", ExitCode: 1, Code: "E_REPO_BUSY"},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct list/save without doctor repair runtime", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "JVS_COMMAND_FAILED" || !store.operation.Error.Retryable {
+		t.Fatalf("operation = %#v, want retryable failed JVS_COMMAND_FAILED", store.operation)
+	}
+	if _, exists := store.operation.VerificationResult.(map[string]any)["jvs_repair_attempted"]; exists {
+		t.Fatalf("verification = %#v, direct save must not record repair runtime attempt", store.operation.VerificationResult)
+	}
 }
 
 func TestSavePointExecutorUsesFreshTerminalTimestampAfterSlowJVSSave(t *testing.T) {
@@ -159,11 +217,6 @@ func TestSavePointExecutorRepoBusyFailsTerminallyWithoutManualIntervention(t *te
 	runner := &fakeJVSRunner{
 		historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
 		saveErr:        &jvsrunner.CommandError{Command: "save", ExitCode: 1, Code: "E_REPO_BUSY"},
-		doctorRepairErr: &jvsrunner.CommandError{
-			Command:  "doctor",
-			ExitCode: 24,
-			Code:     "E_ACTIVE_OPERATION_BLOCKING",
-		},
 	}
 	executor := newTestSavePointExecutor(t, store, runner, now)
 
@@ -171,8 +224,8 @@ func TestSavePointExecutorRepoBusyFailsTerminallyWithoutManualIntervention(t *te
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
 
-	if strings.Join(runner.calls, ",") != "history,save,doctor_repair" {
-		t.Fatalf("JVS calls = %#v, want repo-busy repair attempt without raw lock mutation", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct list/save without repair runtime", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateFailed {
 		t.Fatalf("operation state = %s, want failed terminal state", store.operation.State)
@@ -183,14 +236,14 @@ func TestSavePointExecutorRepoBusyFailsTerminallyWithoutManualIntervention(t *te
 	if store.operation.Error.Details["jvs_error_code"] != "E_REPO_BUSY" || store.operation.Error.Details["repo_id"] != "repo_alpha01" {
 		t.Fatalf("operation error details = %#v, want safe repo-busy details", store.operation.Error.Details)
 	}
-	if store.operation.Error.Details["jvs_repair_attempted"] != true || store.operation.Error.Details["jvs_repair_succeeded"] != false {
-		t.Fatalf("operation error details = %#v, want failed repair evidence", store.operation.Error.Details)
+	if _, exists := store.operation.Error.Details["jvs_repair_attempted"]; exists {
+		t.Fatalf("operation error details = %#v, direct save must not attempt repair runtime", store.operation.Error.Details)
 	}
 	if store.operation.VerificationResult.(map[string]any)["jvs_error_code"] != "E_REPO_BUSY" {
 		t.Fatalf("verification = %#v, want repo-busy marker for product projection", store.operation.VerificationResult)
 	}
-	if store.operation.VerificationResult.(map[string]any)["jvs_repair_error_code"] != "E_ACTIVE_OPERATION_BLOCKING" {
-		t.Fatalf("verification = %#v, want repair failure marker", store.operation.VerificationResult)
+	if _, exists := store.operation.VerificationResult.(map[string]any)["jvs_repair_error_code"]; exists {
+		t.Fatalf("verification = %#v, direct save must not record repair failure marker", store.operation.VerificationResult)
 	}
 	if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_failed" {
 		t.Fatalf("audit events = %#v, want ordinary failed save point audit", store.auditEvents)
@@ -198,15 +251,14 @@ func TestSavePointExecutorRepoBusyFailsTerminallyWithoutManualIntervention(t *te
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
-func TestSavePointExecutorRetriesTransientRepoBusySave(t *testing.T) {
+func TestSavePointExecutorDoesNotRepairRetryTransientRepoBusySave(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
-		historySummary:      jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
-		saveSummary:         jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z", UnsavedChanges: true},
-		saveErrs:            []error{&jvsrunner.CommandError{Command: "save", ExitCode: 1, Code: "E_REPO_BUSY"}, nil},
-		doctorRepairSummary: jvsrunner.DoctorRepairRuntimeSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main", CleanLocks: jvsrunner.RepairActionSummary{Action: "clean_locks", Success: true, Cleaned: 1}},
+		historySummary: jvsrunner.HistorySummary{Workspace: "main", NewestSavePointID: "sp_before", SavePoints: []jvsrunner.SavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z"}}},
+		saveSummary:    jvsrunner.SaveSummary{SavePointID: "sp_after", NewestSavePointID: "sp_after", Workspace: "main", CreatedAt: "2026-05-05T12:00:00Z", UnsavedChanges: true},
+		saveErrs:       []error{&jvsrunner.CommandError{Command: "save", ExitCode: 1, Code: "E_REPO_BUSY"}, nil},
 	}
 	executor := newTestSavePointExecutor(t, store, runner, now)
 
@@ -214,18 +266,18 @@ func TestSavePointExecutorRetriesTransientRepoBusySave(t *testing.T) {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
 
-	if strings.Join(runner.calls, ",") != "history,save,doctor_repair,save" {
-		t.Fatalf("JVS calls = %#v, want repair-runtime between busy save and retry", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct list/save without repair retry", runner.calls)
 	}
-	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseSavePointCreateCommitted {
-		t.Fatalf("operation = %#v, want succeeded after transient busy retry", store.operation)
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "JVS_COMMAND_FAILED" {
+		t.Fatalf("operation = %#v, want failed JVS_COMMAND_FAILED without repair retry", store.operation)
 	}
 	result := store.operation.VerificationResult.(map[string]any)
-	if result["save_point_id"] != "sp_after" || result["unsaved_changes"] != true {
-		t.Fatalf("verification = %#v, want retried save point result", result)
+	if result["jvs_error_code"] != "E_REPO_BUSY" {
+		t.Fatalf("verification = %#v, want repo-busy marker", result)
 	}
-	if result["jvs_repair_attempted"] != true || result["jvs_repair_succeeded"] != true || result["jvs_repair_clean_locks_cleaned"] != 1 {
-		t.Fatalf("verification = %#v, want successful repair evidence", result)
+	if _, exists := result["jvs_repair_attempted"]; exists {
+		t.Fatalf("verification = %#v, direct save must not record repair evidence", result)
 	}
 }
 
@@ -295,8 +347,8 @@ func TestSavePointExecutorAdoptsCrashAfterSaveWithoutCallingSaveAgain(t *testing
 	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "history" {
-		t.Fatalf("JVS calls = %#v, want history only adoption", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_list" {
+		t.Fatalf("JVS calls = %#v, want direct list only adoption", runner.calls)
 	}
 	verification := store.operation.VerificationResult.(map[string]any)
 	if verification["adopted"] != true || verification["unsaved_changes_known"] != false {
@@ -355,15 +407,15 @@ func TestSavePointExecutorPreparedRetryWithNoNewerSavePointRunsSave(t *testing.T
 	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "history,save" {
-		t.Fatalf("JVS calls = %#v, want history then save", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_list,direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct list then save", runner.calls)
 	}
 	if runner.saveMessage != "rotate token docs" {
 		t.Fatalf("jvs save message = %q, want durable natural-language message", runner.saveMessage)
 	}
 	verification := store.operation.VerificationResult.(map[string]any)
-	if verification["save_point_id"] != "sp_after" || verification["unsaved_changes_known"] != true || verification["unsaved_changes"] != true {
-		t.Fatalf("verification = %#v, want fresh save with known unsaved_changes", verification)
+	if verification["save_point_id"] != "sp_after" || verification["unsaved_changes_known"] != false {
+		t.Fatalf("verification = %#v, want fresh direct save with unknown unsaved_changes", verification)
 	}
 }
 
@@ -381,8 +433,8 @@ func TestSavePointExecutorAdoptsWhenPreSaveHistoryWasEmpty(t *testing.T) {
 	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "history" {
-		t.Fatalf("JVS calls = %#v, want history only adoption", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_list" {
+		t.Fatalf("JVS calls = %#v, want direct list only adoption", runner.calls)
 	}
 	verification := store.operation.VerificationResult.(map[string]any)
 	if verification["save_point_id"] != "sp_after" || verification["adopted"] != true || verification["unsaved_changes_known"] != false {
@@ -422,8 +474,8 @@ func TestExecutorRetryWithSameOperationFenceAdoptsHealthyDoctorWithoutInit(t *te
 	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionRetry}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "doctor" {
-		t.Fatalf("JVS calls = %#v, want doctor-only adoption", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_doctor" {
+		t.Fatalf("JVS calls = %#v, want direct doctor-only adoption", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateSucceeded || store.operation.VerificationResult.(map[string]any)["adopted"] != true {
 		t.Fatalf("operation = %#v, want adopted success", store.operation)
@@ -685,8 +737,8 @@ func TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate(t *testin
 	if store.templateCreateWriterFenceMarks != 1 {
 		t.Fatalf("writer fence marks = %d, want 1 before JVS", store.templateCreateWriterFenceMarks)
 	}
-	if got := strings.Join(runner.calls, ","); got != "save,repo_clone,doctor" {
-		t.Fatalf("jvs calls = %s, want save,repo_clone,doctor", got)
+	if got := strings.Join(runner.calls, ","); got != "direct_save,repo_clone,direct_doctor" {
+		t.Fatalf("jvs calls = %s, want direct_save,repo_clone,direct_doctor", got)
 	}
 	verification := asStringAnyMap(store.operation.VerificationResult)
 	if store.repo.ID != "tmpl_base01" || store.repo.Kind != resources.RepoKindTemplate || verification["source_save_point_id"] != "sp_template01" {
@@ -771,8 +823,8 @@ func TestTemplateCreateExecutorPreparesCloneParentWithoutOccupyingTargetRoots(t 
 	if err := executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "save,repo_clone,doctor" {
-		t.Fatalf("jvs calls = %#v, want save,repo_clone,doctor", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save,repo_clone,direct_doctor" {
+		t.Fatalf("jvs calls = %#v, want direct_save,repo_clone,direct_doctor", runner.calls)
 	}
 }
 
@@ -838,40 +890,6 @@ func TestTemplateCreateExecutorPreJVSWriterSessionDenialReleasesFence(t *testing
 	}
 }
 
-func TestTemplateCreateExecutorActiveRestorePlanBlocksBeforeWriterFence(t *testing.T) {
-	now := repoExecNow()
-	store := newFakeStore()
-	store.volumeRoots = map[string]string{"vol_123": t.TempDir()}
-	store.repo = activeRepoResource(now)
-	store.restorePlan = templateCreateActiveRestorePlan(now)
-	runner := &fakeJVSRunner{}
-	executor, err := NewTemplateCreateExecutor(TemplateConfig{Store: store, JVSRunner: runner, Owner: "worker-a", Clock: func() time.Time { return now }, AuditEventID: func() string { return "audit_template_create" }, VolumeRoots: store.volumeRoots})
-	if err != nil {
-		t.Fatalf("NewTemplateCreateExecutor: %v", err)
-	}
-
-	if err := executor.ExecuteOperationRecovery(context.Background(), templateCreateLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
-		t.Fatalf("ExecuteOperationRecovery: %v", err)
-	}
-
-	if store.templateCreateWriterFenceMarks != 0 || len(runner.calls) != 0 {
-		t.Fatalf("writer fence/JVS calls = %d/%#v, want blocked before fence and JVS", store.templateCreateWriterFenceMarks, runner.calls)
-	}
-	if store.operation.State != operations.OperationStateFailed || store.operation.Phase != operations.OperationPhaseTemplateCreateValidate || store.operation.Error == nil || store.operation.Error.Code != "TEMPLATE_CREATE_RESTORE_BLOCKED" || !store.operation.Error.Retryable {
-		t.Fatalf("operation = %#v, want retryable restore-blocked failed operation", store.operation)
-	}
-	verification := asStringAnyMap(store.operation.VerificationResult)
-	if verification["active_restore_plan_present"] != true || verification["restore_plan_status"] != "pending" {
-		t.Fatalf("verification = %#v, want active restore blocker evidence without raw plan id", verification)
-	}
-	if _, ok := verification["restore_plan_id"]; ok {
-		t.Fatalf("verification leaked restore_plan_id: %#v", verification)
-	}
-	if activeWriterFenceCount(store.fences, "op_template_create") != 0 || store.releasedFenceID != "" {
-		t.Fatalf("released/active writer fence = %q/%#v, want no fence acquired", store.releasedFenceID, store.fences)
-	}
-}
-
 func TestTemplateCreateExecutorJVSRecoveryBlockingReleasesWriterFence(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
@@ -889,14 +907,14 @@ func TestTemplateCreateExecutorJVSRecoveryBlockingReleasesWriterFence(t *testing
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
 
-	if store.templateCreateWriterFenceMarks != 1 || strings.Join(runner.calls, ",") != "save" {
-		t.Fatalf("writer fence/JVS calls = %d/%#v, want fence then save only", store.templateCreateWriterFenceMarks, runner.calls)
+	if store.templateCreateWriterFenceMarks != 1 || strings.Join(runner.calls, ",") != "direct_save" {
+		t.Fatalf("writer fence/JVS calls = %d/%#v, want fence then direct save only", store.templateCreateWriterFenceMarks, runner.calls)
 	}
 	if store.operation.State != operations.OperationStateFailed || store.operation.Phase != operations.OperationPhaseTemplateCreateWriterFenced || store.operation.Error == nil || store.operation.Error.Code != "TEMPLATE_CREATE_RESTORE_BLOCKED" || !store.operation.Error.Retryable {
 		t.Fatalf("operation = %#v, want retryable restore-blocked failed operation", store.operation)
 	}
 	verification := asStringAnyMap(store.operation.VerificationResult)
-	if verification["jvs_recovery_blocking"] != true || verification["active_restore_plan_present"] != true {
+	if verification["jvs_recovery_blocking"] != true {
 		t.Fatalf("verification = %#v, want controlled JVS recovery-blocking evidence", verification)
 	}
 	if _, ok := verification["jvs_error_code"]; ok {
@@ -928,8 +946,8 @@ func TestTemplateCreateExecutorJVSFailureAfterSaveRetainsWriterFence(t *testing.
 	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
 		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
 	}
-	if strings.Join(runner.calls, ",") != "save,repo_clone" {
-		t.Fatalf("jvs calls = %#v, want save,repo_clone", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save,repo_clone" {
+		t.Fatalf("jvs calls = %#v, want direct_save,repo_clone", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.releasedFenceID != "" || activeWriterFenceCount(store.fences, "op_template_create") != 1 {
 		t.Fatalf("operation/release/fences = %#v/%q/%#v, want retained writer fence after uncertain JVS side effect", store.operation, store.releasedFenceID, store.fences)
@@ -954,8 +972,8 @@ func TestTemplateCloneExecutorClonesTemplateToRepoWithoutSave(t *testing.T) {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
 
-	if got := strings.Join(runner.calls, ","); got != "repo_clone,doctor" {
-		t.Fatalf("jvs calls = %s, want repo_clone,doctor", got)
+	if got := strings.Join(runner.calls, ","); got != "repo_clone,direct_doctor" {
+		t.Fatalf("jvs calls = %s, want repo_clone,direct_doctor", got)
 	}
 	if store.repo.ID != "repo_clone01" || store.repo.Kind != resources.RepoKindRepo || store.operation.Phase != operations.OperationPhaseTemplateCloneCommitted {
 		t.Fatalf("committed repo/operation = %#v %#v", store.repo, store.operation)
@@ -1022,8 +1040,8 @@ func TestTemplateCloneExecutorSuccessCommitFailurePreservesCause(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "template clone success commit failed") {
 		t.Fatalf("ExecuteOperationRecovery error = %v, want commit failure context", err)
 	}
-	if strings.Join(runner.calls, ",") != "repo_clone,doctor" {
-		t.Fatalf("jvs calls = %#v, want repo_clone,doctor before durable commit failure", runner.calls)
+	if strings.Join(runner.calls, ",") != "repo_clone,direct_doctor" {
+		t.Fatalf("jvs calls = %#v, want repo_clone,direct_doctor before durable commit failure", runner.calls)
 	}
 }
 
@@ -1094,23 +1112,6 @@ func templateCloneLeasedRecord(now time.Time) operations.OperationRecord {
 	record.TemplateID = "tmpl_base01"
 	record.InputSummary = map[string]any{"template_id": "tmpl_base01", "target_repo_id": "repo_clone01", "clone_history_mode": "main"}
 	return record
-}
-
-func templateCreateActiveRestorePlan(now time.Time) restoreplan.Plan {
-	return restoreplan.Plan{
-		ID:                 "7598f605-313b-4161-b0dd-7c24d9e8614e",
-		NamespaceID:        "ns_alpha01",
-		RepoID:             "repo_alpha01",
-		PreviewOperationID: "op_preview01",
-		SourceSavePointID:  "1778489560000-4d2e0211",
-		BaseRevision:       "rev_base01",
-		HeadRevision:       "rev_head01",
-		Generation:         "gen_1778489560",
-		FenceMarker:        "preview_fence_op_preview01",
-		Status:             restoreplan.StatusPending,
-		CreatedAt:          now.Add(-time.Minute),
-		UpdatedAt:          now.Add(-time.Minute),
-	}
 }
 
 func activeRepoResource(now time.Time) resources.Repo {
@@ -1184,37 +1185,30 @@ func newFakeStore() *fakeRepoCreateStore {
 }
 
 type fakeRepoCreateStore struct {
-	namespace                            resources.Namespace
-	binding                              resources.NamespaceVolumeBinding
-	volume                               resources.Volume
-	volumeRoots                          map[string]string
-	fences                               []fences.Fence
-	repo                                 resources.Repo
-	restorePlan                          restoreplan.Plan
-	previewOperation                     operations.OperationRecord
-	operation                            operations.OperationRecord
-	auditEvents                          []audit.Event
-	exports                              []sessionstate.ExportSession
-	mounts                               []sessionstate.WorkloadMountBinding
-	createFenceCalls                     int
-	progressUpdates                      int
-	restorePreviewProgressUpdates        int
-	restorePreviewDiscardProgressUpdates int
-	restoreWriterFenceMarks              int
-	restoreRunWriterFenceMarks           int
-	restoreRunConsumingMarks             int
-	templateCreateWriterFenceMarks       int
-	releasedFenceID                      string
-	successErr                           error
-	lifecycleSuccessErr                  error
-	templateCloneSuccessErr              error
-	restorePreviewSuccessErr             error
-	failOnCanceledCommitContext          bool
-	blockingLifecycle                    []operations.OperationRecord
-	savePointSuccessCommitAt             time.Time
-	templateCreateSuccessCommitAt        time.Time
-	templateCloneSuccessCommitAt         time.Time
-	beforeListSessions                   func()
+	namespace                      resources.Namespace
+	binding                        resources.NamespaceVolumeBinding
+	volume                         resources.Volume
+	volumeRoots                    map[string]string
+	fences                         []fences.Fence
+	repo                           resources.Repo
+	operation                      operations.OperationRecord
+	auditEvents                    []audit.Event
+	exports                        []sessionstate.ExportSession
+	mounts                         []sessionstate.WorkloadMountBinding
+	createFenceCalls               int
+	progressUpdates                int
+	restoreWriterFenceMarks        int
+	templateCreateWriterFenceMarks int
+	releasedFenceID                string
+	successErr                     error
+	lifecycleSuccessErr            error
+	templateCloneSuccessErr        error
+	failOnCanceledCommitContext    bool
+	blockingLifecycle              []operations.OperationRecord
+	savePointSuccessCommitAt       time.Time
+	templateCreateSuccessCommitAt  time.Time
+	templateCloneSuccessCommitAt   time.Time
+	beforeListSessions             func()
 }
 
 func (store *fakeRepoCreateStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
@@ -1375,92 +1369,6 @@ func (store *fakeRepoCreateStore) CommitTemplateCloneFailedWithLease(_ context.C
 	return store.operation, nil
 }
 
-func (store *fakeRepoCreateStore) UpdateRestorePreviewPreflightWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time) (operations.OperationRecord, error) {
-	store.restorePreviewProgressUpdates++
-	store.operation = record.Record()
-	return store.operation, nil
-}
-
-func (store *fakeRepoCreateStore) CommitRestorePreviewSucceededWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	if store.failOnCanceledCommitContext {
-		if err := ctx.Err(); err != nil {
-			return restoreplan.Plan{}, operations.OperationRecord{}, err
-		}
-	}
-	store.restorePlan = plan
-	store.operation = record.Record()
-	store.auditEvents = append(store.auditEvents, event)
-	if store.restorePreviewSuccessErr != nil {
-		return restoreplan.Plan{}, operations.OperationRecord{}, store.restorePreviewSuccessErr
-	}
-	return plan, store.operation, nil
-}
-
-func (store *fakeRepoCreateStore) CommitRestorePreviewFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (operations.OperationRecord, error) {
-	store.operation = record.Record()
-	store.auditEvents = append(store.auditEvents, event)
-	return store.operation, nil
-}
-
-func (store *fakeRepoCreateStore) GetOperation(_ context.Context, operationID string) (operations.OperationRecord, error) {
-	if store.previewOperation.ID == operationID {
-		return store.previewOperation, nil
-	}
-	return operations.OperationRecord{}, errors.New("operation not found")
-}
-
-func (store *fakeRepoCreateStore) GetRestorePlanByPreviewOperation(_ context.Context, previewOperationID string) (restoreplan.Plan, error) {
-	if store.restorePlan.PreviewOperationID == previewOperationID {
-		return store.restorePlan, nil
-	}
-	return restoreplan.Plan{}, errors.New("restore plan not found")
-}
-
-func (store *fakeRepoCreateStore) GetActiveRestorePlanByRepo(_ context.Context, repoID string) (restoreplan.Plan, error) {
-	if store.restorePlan.ID == "" || store.restorePlan.RepoID != repoID || !store.restorePlan.Active() {
-		return restoreplan.Plan{}, sql.ErrNoRows
-	}
-	return store.restorePlan, nil
-}
-
-func (store *fakeRepoCreateStore) CreatePendingRestorePlan(_ context.Context, plan restoreplan.Plan) error {
-	store.restorePlan = plan
-	return nil
-}
-
-func (store *fakeRepoCreateStore) TransitionRestorePlanStatus(_ context.Context, _ string, _, to restoreplan.Status, now time.Time) (restoreplan.Plan, error) {
-	store.restorePlan.Status = to
-	store.restorePlan.UpdatedAt = now
-	return store.restorePlan, nil
-}
-
-func (store *fakeRepoCreateStore) MarkRestorePreviewDiscardingWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
-	store.restorePreviewDiscardProgressUpdates++
-	plan.Status = restoreplan.StatusDiscarding
-	plan.UpdatedAt = now
-	store.restorePlan = plan
-	store.operation = record.Record()
-	return plan, store.operation, nil
-}
-
-func (store *fakeRepoCreateStore) CommitRestorePreviewDiscardSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	store.restorePlan.Status = restoreplan.StatusDiscarded
-	store.restorePlan.UpdatedAt = now
-	store.operation = record.Record()
-	store.auditEvents = append(store.auditEvents, event)
-	return store.restorePlan, store.operation, nil
-}
-
-func (store *fakeRepoCreateStore) CommitRestorePreviewDiscardFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
-	store.operation = record.Record()
-	if store.operation.Phase == operations.OperationPhaseRestorePreviewDiscarding {
-		store.restorePlan.Status = restoreplan.StatusOperatorInterventionRequired
-		store.restorePlan.UpdatedAt = now
-	}
-	store.auditEvents = append(store.auditEvents, event)
-	return store.operation, nil
-}
-
 func (store *fakeRepoCreateStore) MarkRestoreWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
 	store.restoreWriterFenceMarks++
 	store.operation = record.Record()
@@ -1489,58 +1397,14 @@ func (store *fakeRepoCreateStore) CommitRestoreFailedWithLease(_ context.Context
 	return store.operation, nil
 }
 
-func (store *fakeRepoCreateStore) MarkRestoreRunWriterFencedWithLease(_ context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, _ string, _ time.Time) (fences.Fence, operations.OperationRecord, error) {
-	store.restoreRunWriterFenceMarks++
-	store.operation = record.Record()
-	for _, existing := range store.fences {
-		if existing.ID == fence.ID && existing.Kind == fences.KindWriterSession && existing.HolderOperationID == store.operation.ID && existing.Status == fences.StatusActive && existing.ReleasedAt == nil && existing.RecoveredAt == nil {
-			return existing, store.operation, nil
+func activeWriterFenceCount(existing []fences.Fence, operationID string) int {
+	count := 0
+	for _, fence := range existing {
+		if fence.Kind == fences.KindWriterSession && fence.HolderOperationID == operationID && fence.Status == fences.StatusActive && fence.ReleasedAt == nil && fence.RecoveredAt == nil {
+			count++
 		}
 	}
-	store.fences = append(store.fences, fence)
-	return fence, store.operation, nil
-}
-
-func (store *fakeRepoCreateStore) MarkRestoreRunConsumingWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
-	store.restoreRunConsumingMarks++
-	if store.restorePlan.Stale {
-		return restoreplan.Plan{}, operations.OperationRecord{}, errors.New("stale restore plan cannot be consumed")
-	}
-	store.operation = record.Record()
-	store.restorePlan.Status = restoreplan.StatusConsuming
-	store.restorePlan.UpdatedAt = now
-	return store.restorePlan, store.operation, nil
-}
-
-func (store *fakeRepoCreateStore) CommitRestoreRunSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	store.operation = record.Record()
-	store.restorePlan.Status = restoreplan.StatusConsumed
-	store.restorePlan.UpdatedAt = now
-	store.releaseWriterFence(store.operation.SessionFenceID, now)
-	store.auditEvents = append(store.auditEvents, event)
-	return store.restorePlan, store.operation, nil
-}
-
-func (store *fakeRepoCreateStore) CommitRestoreRunStalePreviewWithLease(_ context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	store.operation = record.Record()
-	store.restorePlan.Stale = plan.Stale
-	store.restorePlan.Blockers = append([]restoreplan.Blocker(nil), plan.Blockers...)
-	store.restorePlan.UpdatedAt = now
-	store.auditEvents = append(store.auditEvents, event)
-	return store.restorePlan, store.operation, nil
-}
-
-func (store *fakeRepoCreateStore) CommitRestoreRunFailedWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
-	store.operation = record.Record()
-	switch store.operation.Phase {
-	case operations.OperationPhaseRestoreRunWriterFenced:
-		store.releaseWriterFence(store.operation.SessionFenceID, now)
-	case operations.OperationPhaseRestoreRunConsuming:
-		store.restorePlan.Status = restoreplan.StatusOperatorInterventionRequired
-		store.restorePlan.UpdatedAt = now
-	}
-	store.auditEvents = append(store.auditEvents, event)
-	return store.operation, nil
+	return count
 }
 
 func (store *fakeRepoCreateStore) releaseWriterFence(fenceID string, now time.Time) {
@@ -1557,45 +1421,38 @@ func (store *fakeRepoCreateStore) releaseWriterFence(fenceID string, now time.Ti
 }
 
 type fakeJVSRunner struct {
-	calls                               []string
-	payloadRoot                         string
-	controlRoot                         string
-	saveMessage                         string
-	initSummary                         jvsrunner.InitSummary
-	doctorSummary                       jvsrunner.DoctorSummary
-	doctorRepairSummary                 jvsrunner.DoctorRepairRuntimeSummary
-	saveSummary                         jvsrunner.SaveSummary
-	saveErrs                            []error
-	historySummary                      jvsrunner.HistorySummary
-	recoveryStatusSummary               jvsrunner.RecoveryStatusSummary
-	recoveryStatusSummaries             []jvsrunner.RecoveryStatusSummary
-	restorePreviewSummary               jvsrunner.RestorePreviewSummary
-	restoreSummary                      jvsrunner.RestoreSummary
-	restoreRunSummary                   jvsrunner.RestoreRunSummary
-	restoreDiscardSummary               jvsrunner.RestoreDiscardSummary
-	repoCloneSummary                    jvsrunner.RepoCloneSummary
-	beforeRepoClone                     func(sourceControlRoot, targetPayloadRoot, targetControlRoot string)
-	afterSave                           func()
-	afterRepoClone                      func()
-	beforeRestorePreview                func()
-	beforeRestore                       func()
-	beforeRestoreRun                    func()
-	beforeRestoreDiscard                func()
-	initErr                             error
-	doctorErr                           error
-	doctorRepairErr                     error
-	saveErr                             error
-	historyErr                          error
-	recoveryStatusErr                   error
-	restorePreviewErr                   error
-	restoreErr                          error
-	restoreRunErr                       error
-	restoreDiscardErr                   error
-	repoCloneErr                        error
-	restoreSavePointID                  string
-	afterDoctor                         func(context.Context)
-	failRecoveryStatusOnCanceledContext bool
-	failRestoreDiscardOnCanceledContext bool
+	calls                []string
+	payloadRoot          string
+	controlRoot          string
+	saveMessage          string
+	initSummary          jvsrunner.InitSummary
+	doctorSummary        jvsrunner.DoctorSummary
+	saveSummary          jvsrunner.SaveSummary
+	saveErrs             []error
+	historySummary       jvsrunner.HistorySummary
+	directTarget         jvsrunner.DirectTarget
+	directSaveSummary    jvsrunner.DirectSaveSummary
+	directListSummary    jvsrunner.DirectListSummary
+	directRestoreSummary jvsrunner.DirectRestoreSummary
+	directStatusSummary  jvsrunner.DirectStatusSummary
+	directDoctorSummary  jvsrunner.DirectDoctorSummary
+	repoCloneSummary     jvsrunner.RepoCloneSummary
+	beforeRepoClone      func(sourceControlRoot, targetPayloadRoot, targetControlRoot string)
+	afterSave            func()
+	afterRepoClone       func()
+	beforeRestore        func()
+	initErr              error
+	doctorErr            error
+	saveErr              error
+	directSaveErr        error
+	directListErr        error
+	directRestoreErr     error
+	directStatusErr      error
+	directDoctorErr      error
+	historyErr           error
+	repoCloneErr         error
+	restoreSavePointID   string
+	afterDoctor          func(context.Context)
 }
 
 func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot string) (jvsrunner.InitSummary, error) {
@@ -1604,40 +1461,96 @@ func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot st
 	runner.controlRoot = controlRoot
 	return runner.initSummary, runner.initErr
 }
-func (runner *fakeJVSRunner) DoctorStrict(ctx context.Context, controlRoot string) (jvsrunner.DoctorSummary, error) {
-	runner.calls = append(runner.calls, "doctor")
-	runner.controlRoot = controlRoot
-	if runner.afterDoctor != nil {
-		runner.afterDoctor(ctx)
-	}
-	return runner.doctorSummary, runner.doctorErr
-}
-
-func (runner *fakeJVSRunner) DoctorRepairRuntime(_ context.Context, controlRoot string) (jvsrunner.DoctorRepairRuntimeSummary, error) {
-	runner.calls = append(runner.calls, "doctor_repair")
-	runner.controlRoot = controlRoot
-	return runner.doctorRepairSummary, runner.doctorRepairErr
-}
-
-func (runner *fakeJVSRunner) Save(_ context.Context, controlRoot, message string) (jvsrunner.SaveSummary, error) {
-	runner.calls = append(runner.calls, "save")
-	runner.controlRoot = controlRoot
+func (runner *fakeJVSRunner) DirectSave(_ context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error) {
+	runner.calls = append(runner.calls, "direct_save")
+	runner.directTarget = target
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
 	runner.saveMessage = message
 	if runner.afterSave != nil {
 		defer runner.afterSave()
 	}
+	if runner.directSaveSummary.SavePointID == "" && runner.saveSummary.SavePointID != "" {
+		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, CreatedAt: runner.saveSummary.CreatedAt}
+	}
 	if len(runner.saveErrs) > 0 {
 		err := runner.saveErrs[0]
 		runner.saveErrs = runner.saveErrs[1:]
-		return runner.saveSummary, err
+		return runner.directSaveSummary, err
 	}
-	return runner.saveSummary, runner.saveErr
+	if runner.directSaveErr != nil {
+		return runner.directSaveSummary, runner.directSaveErr
+	}
+	return runner.directSaveSummary, runner.saveErr
 }
 
-func (runner *fakeJVSRunner) History(_ context.Context, controlRoot string) (jvsrunner.HistorySummary, error) {
-	runner.calls = append(runner.calls, "history")
-	runner.controlRoot = controlRoot
-	return runner.historySummary, runner.historyErr
+func (runner *fakeJVSRunner) DirectList(_ context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error) {
+	runner.calls = append(runner.calls, "direct_list")
+	runner.directTarget = target
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	if runner.directListSummary.HistoryHeadID == "" && len(runner.directListSummary.SavePoints) == 0 {
+		savePoints := make([]jvsrunner.DirectSavePointSummary, 0, len(runner.historySummary.SavePoints))
+		for _, savePoint := range runner.historySummary.SavePoints {
+			savePoints = append(savePoints, jvsrunner.DirectSavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, CreatedAt: savePoint.CreatedAt, HistoryHead: savePoint.SavePointID == runner.historySummary.NewestSavePointID})
+		}
+		runner.directListSummary = jvsrunner.DirectListSummary{HistoryHeadID: runner.historySummary.NewestSavePointID, SavePoints: savePoints}
+	}
+	if runner.directListErr != nil {
+		return jvsrunner.DirectListSummary{}, runner.directListErr
+	}
+	return runner.directListSummary, runner.historyErr
+}
+
+func (runner *fakeJVSRunner) DirectRestore(_ context.Context, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectRestoreSummary, error) {
+	runner.calls = append(runner.calls, "direct_restore")
+	runner.directTarget = target
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	runner.restoreSavePointID = savePointID
+	if runner.beforeRestore != nil {
+		runner.beforeRestore()
+	}
+	if runner.directRestoreErr != nil {
+		return runner.directRestoreSummary, runner.directRestoreErr
+	}
+	return runner.directRestoreSummary, nil
+}
+
+func (runner *fakeJVSRunner) DirectStatus(_ context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectStatusSummary, error) {
+	runner.calls = append(runner.calls, "direct_status")
+	runner.directTarget = target
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	if runner.directStatusSummary.HistoryHeadID == "" {
+		runner.directStatusSummary = jvsrunner.DirectStatusSummary{HistoryHeadID: runner.restoreSavePointID, MetadataState: "clean", ActiveOperation: "none", Recovery: "none"}
+	}
+	return runner.directStatusSummary, runner.directStatusErr
+}
+
+func (runner *fakeJVSRunner) DirectDoctor(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectDoctorSummary, error) {
+	runner.calls = append(runner.calls, "direct_doctor")
+	runner.directTarget = target
+	runner.controlRoot = target.ControlRoot
+	runner.payloadRoot = target.Home
+	if runner.afterDoctor != nil {
+		runner.afterDoctor(ctx)
+	}
+	if runner.directDoctorSummary == (jvsrunner.DirectDoctorSummary{}) {
+		repoID := runner.doctorSummary.RepoID
+		if repoID == "" {
+			repoID = "jvs_repo_alpha"
+		}
+		healthy := runner.doctorSummary.Healthy
+		if runner.doctorSummary == (jvsrunner.DoctorSummary{}) {
+			healthy = true
+		}
+		runner.directDoctorSummary = jvsrunner.DirectDoctorSummary{RepoID: repoID, Healthy: healthy, FindingCount: 0, MetadataState: "clean", Journal: "clean", Recovery: "none"}
+	}
+	if runner.directDoctorErr != nil {
+		return runner.directDoctorSummary, runner.directDoctorErr
+	}
+	return runner.directDoctorSummary, runner.doctorErr
 }
 
 func (runner *fakeJVSRunner) RepoClone(_ context.Context, sourceControlRoot, targetPayloadRoot, targetControlRoot string) (jvsrunner.RepoCloneSummary, error) {
@@ -1655,64 +1568,6 @@ func (runner *fakeJVSRunner) RepoClone(_ context.Context, sourceControlRoot, tar
 	}
 	_ = sourceControlRoot
 	return runner.repoCloneSummary, runner.repoCloneErr
-}
-
-func (runner *fakeJVSRunner) RecoveryStatus(ctx context.Context, controlRoot string) (jvsrunner.RecoveryStatusSummary, error) {
-	runner.calls = append(runner.calls, "recovery_status")
-	runner.controlRoot = controlRoot
-	if runner.failRecoveryStatusOnCanceledContext {
-		if err := ctx.Err(); err != nil {
-			return jvsrunner.RecoveryStatusSummary{}, err
-		}
-	}
-	if len(runner.recoveryStatusSummaries) > 0 {
-		summary := runner.recoveryStatusSummaries[0]
-		runner.recoveryStatusSummaries = runner.recoveryStatusSummaries[1:]
-		return summary, runner.recoveryStatusErr
-	}
-	return runner.recoveryStatusSummary, runner.recoveryStatusErr
-}
-
-func (runner *fakeJVSRunner) RestorePreview(_ context.Context, controlRoot, savePointID string) (jvsrunner.RestorePreviewSummary, error) {
-	runner.calls = append(runner.calls, "restore_preview")
-	runner.controlRoot = controlRoot
-	if runner.beforeRestorePreview != nil {
-		runner.beforeRestorePreview()
-	}
-	return runner.restorePreviewSummary, runner.restorePreviewErr
-}
-
-func (runner *fakeJVSRunner) Restore(_ context.Context, controlRoot, savePointID string) (jvsrunner.RestoreSummary, error) {
-	runner.calls = append(runner.calls, "restore")
-	runner.controlRoot = controlRoot
-	runner.restoreSavePointID = savePointID
-	if runner.beforeRestore != nil {
-		runner.beforeRestore()
-	}
-	return runner.restoreSummary, runner.restoreErr
-}
-
-func (runner *fakeJVSRunner) RestoreRun(_ context.Context, controlRoot, planID string) (jvsrunner.RestoreRunSummary, error) {
-	runner.calls = append(runner.calls, "restore_run")
-	runner.controlRoot = controlRoot
-	if runner.beforeRestoreRun != nil {
-		runner.beforeRestoreRun()
-	}
-	return runner.restoreRunSummary, runner.restoreRunErr
-}
-
-func (runner *fakeJVSRunner) RestoreDiscard(ctx context.Context, controlRoot, planID string) (jvsrunner.RestoreDiscardSummary, error) {
-	runner.calls = append(runner.calls, "restore_discard")
-	runner.controlRoot = controlRoot
-	if runner.failRestoreDiscardOnCanceledContext {
-		if err := ctx.Err(); err != nil {
-			return jvsrunner.RestoreDiscardSummary{}, err
-		}
-	}
-	if runner.beforeRestoreDiscard != nil {
-		runner.beforeRestoreDiscard()
-	}
-	return runner.restoreDiscardSummary, runner.restoreDiscardErr
 }
 
 func repoCreateFence(now time.Time, fenceID, operationID string) fences.Fence {

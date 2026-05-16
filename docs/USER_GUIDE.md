@@ -50,7 +50,7 @@ Kubernetes Secret reference、raw mount command 或 `.jvs` 控制目录。
   脱敏。
 - JVS 外部控制：repo 的 JVS control root 与 workload/WebDAV 可见的 payload root 分开。
   普通访问只进入 payload，不暴露 `.jvs`。
-- 普通 IO 与控制面 mutation 区分：普通文件读写不由 AFSCP 串行化；save、restore-run、
+- 普通 IO 与控制面 mutation 区分：普通文件读写不由 AFSCP 串行化；save、direct restore、
   template create、lifecycle、export/mount issuance 等控制面 mutation 需要 operation、fence、
   policy 和 audit。template clone 通过 template read gate 和 target repo exclusive create 管理
   template 读取与目标 repo 创建冲突。
@@ -66,7 +66,7 @@ AFSCP 的主要边界如下：
 - Export gateway：AFSCP 控制的 WebDAV policy gateway。它负责短期访问、路径过滤、请求账本、
   revoke/drain 语义和审计边界；不能把裸 `juicefs webdav` 当作 GA policy boundary。
 - Postgres operation/audit store：保存 operation、resource metadata、idempotency、fence、
-  restore plan、export/mount session 和 audit outbox 等 durable 状态。
+  direct restore operation、export/mount session 和 audit outbox 等 durable 状态。
 - JVS runner：受控执行已 pin 的 JVS 命令，解析 JSON 输出，运行 doctor/recovery 检查，并避免
   把 raw command、raw path 或 secret 泄露给普通响应。
 - Managed volume/namespace/repo/path resolver：AFSCP 从结构化 ID 和 namespace context 解析受控
@@ -118,12 +118,12 @@ Lifecycle 操作会与 export、mount session、JVS mutation 和 lifecycle fence
 
 Save point 是 JVS 管理的版本标记。创建 save point 是 durable operation。
 
-Restore 分成 preview、run 和 discard。Preview 会创建 durable restore plan，不只是“读一下历史”。
-Restore-run 必须引用同 namespace、同 repo、同资源边界内有效的 preview/plan，并在执行前取得
-writer-session fence，拒绝 active 或 uncertain read-write export/workload mount session。
+Restore 是一次 direct restore durable operation。请求只引用同 namespace、同 repo 内的 save point ID，
+worker 在执行前取得 writer-session fence，并拒绝 active 或 uncertain read-write export/workload
+mount session。
 
-普通文件 IO 可以继续发生，但 same-repo JVS mutation 会被 active restore plan 或 JVS lock 阻挡。
-Dirty state 默认失败关闭。
+普通文件 IO 可以继续发生，但 same-repo JVS mutation 会被 durable operation lease、writer-session
+fence 或 JVS lock 阻挡。Dirty state 默认失败关闭。
 
 ### Templates
 
@@ -150,7 +150,7 @@ Orchestrator mount plan 是给专用 orchestrator 角色的特权视图，可能
 payload volume subdir。普通调用方和 workload 不应该看到该 plan。计划必须只指向 payload，不暴露
 control root。
 
-Read-write mount binding 在 live lease 或 uncertain 状态下会阻挡 restore-run。Revoke 只有在编排器
+Read-write mount binding 在 live lease 或 uncertain 状态下会阻挡 direct restore。Revoke 只有在编排器
 确认 runtime mount 已停止或无法写入后才真正 terminal。
 
 ### Operations
@@ -199,8 +199,9 @@ observability 或部署侧 operator tooling 执行。
   不应泄露 raw path、secret 或 backend 细节。
 
 当部署声明 `AFSCP_JVS_READY=true` 时，API 和 worker 都必须带有同一套 pinned JVS runtime 配置：
-`AFSCP_JVS_BINARY_PATH`、`AFSCP_JVS_BINARY_SHA256`、`AFSCP_JVS_CWD` 和 volume root mapping。API
-侧的 save-point history/list 也会调用 JVS，所以缺少二进制或 checksum 不是可降级开关，而是
+`AFSCP_JVS_BINARY_PATH`、`AFSCP_JVS_BINARY_SHA256`、`AFSCP_JVS_CWD` 和 volume root mapping。这里的
+SHA-256 只标识 JVS binary artifact，不是文件库内容 hash。API
+侧的 save-point list 也会调用 direct JVS，所以缺少二进制或 artifact SHA-256 不是可降级开关，而是
 startup/readiness 配置错误。
 
 Volume 本身的健康通过 `GET /internal/v1/volumes/{volumeId}/health` 读取。字段和状态值以 OpenAPI
@@ -265,23 +266,20 @@ bash scripts/verify-ga-release.sh
 
 注意：repo projection 不是业务目录。不要期望它返回业务展示名、业务对象、raw path 或 credential。
 
-### 2. 创建 save point 并执行 restore preview/run
+### 2. 创建 save point 并执行 direct restore
 
-前置条件：repo 处于可进行 JVS mutation 的状态；没有 active restore plan 阻挡；调用方具备相关角色。
+前置条件：repo 处于可进行 JVS mutation 的状态；调用方具备相关角色。
 
 1. 调用 `POST /internal/v1/repos/{repoId}/save-points` 创建 save point，请求体按 OpenAPI。
 2. 通过 operation inspection 等待 save point 创建成功。
-3. 调用 `POST /internal/v1/repos/{repoId}/restore-preview`，按 OpenAPI 请求体指定要预览的 save point。
-4. 等待 preview operation succeeded。Preview 成功代表 AFSCP 持久化了一个 pending restore plan。
-5. 若决定不恢复，调用 `POST /internal/v1/repos/{repoId}/restore-preview:discard`，请求体按 OpenAPI。
-6. 若决定恢复，调用 `POST /internal/v1/repos/{repoId}/restore-run`，请求体按 OpenAPI 引用有效的
-   preview operation。
-7. Restore-run 会取得 writer-session fence，并拒绝 active 或 uncertain read-write export/workload
+3. 调用 `POST /internal/v1/repos/{repoId}/restore`，请求体只包含 `save_point_id`。
+4. Direct restore 会取得 writer-session fence，并拒绝 active 或 uncertain read-write export/workload
    mount session。若收到 `ACTIVE_WRITER_SESSIONS`、`WRITER_SESSION_FENCE_HELD` 或相关稳定错误码，先按
-   runbook 处理 session，再重试或 discard。
+   runbook 处理 session，再用相同 idempotency key 或新请求重试。
 
-注意：restore-run 是控制面版本 mutation，不是普通文件读取。它会运行 JVS restore 和 doctor，并在状态
-不明确时失败关闭。
+注意：direct restore 是控制面版本 mutation，不是普通文件读取。Worker 只执行 durable
+`jvs afscp ... restore --save-point ... --json`；reconciliation 只从 operation phase、writer-session
+fence、save point ID 和 redacted direct JVS evidence 恢复。
 
 ### 3. 创建 WebDAV export 并 revoke
 

@@ -120,8 +120,6 @@
         "WRITER_SESSION_FENCE_HELD",
         "STALE_WRITER_SESSION_UNCERTAIN",
         "RESTORE_DIRTY_STATE",
-        "RESTORE_PREVIEW_STALE",
-        "RESTORE_CONFIRMATION_REQUIRED",
         "JVS_COMMAND_FAILED",
         "JVS_DOCTOR_FAILED",
         "SOURCE_DIRTY_AFTER_TEMPLATE_SAVE",
@@ -194,9 +192,6 @@
         "repo_purge",
         "save_point_create",
         "restore",
-        "restore_preview",
-        "restore_preview_discard",
-        "restore_run",
         "template_create",
         "template_clone",
         "export_create",
@@ -691,48 +686,12 @@
         "message": { "type": "string", "minLength": 1, "maxLength": 512 }
       }
     },
-    "RestorePreviewRequest": {
+    "RestoreRequest": {
       "type": "object",
       "additionalProperties": false,
       "required": ["save_point_id"],
       "properties": {
         "save_point_id": { "$ref": "#/$defs/SavePointId" }
-      }
-    },
-    "RestoreRequest": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["save_point_id", "discard_unsaved_changes_confirmed"],
-      "properties": {
-        "save_point_id": { "$ref": "#/$defs/SavePointId" },
-        "discard_unsaved_changes_confirmed": { "type": "boolean", "const": true }
-      }
-    },
-    "RestoreAdmitResponse": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["admitted", "repo_id", "save_point_id", "operation_type"],
-      "properties": {
-        "admitted": { "type": "boolean", "const": true },
-        "repo_id": { "$ref": "#/$defs/RepoId" },
-        "save_point_id": { "$ref": "#/$defs/SavePointId" },
-        "operation_type": { "const": "restore" }
-      }
-    },
-    "RestoreRunRequest": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["preview_operation_id"],
-      "properties": {
-        "preview_operation_id": { "$ref": "#/$defs/OperationId" }
-      }
-    },
-    "RestorePreviewDiscardRequest": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["preview_operation_id"],
-      "properties": {
-        "preview_operation_id": { "$ref": "#/$defs/OperationId" }
       }
     },
     "RepoTemplate": {

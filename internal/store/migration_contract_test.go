@@ -64,18 +64,17 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 			"on operations (repo_id)",
 			"where repo_id is not null",
 			"'save_point_create'",
-			"'restore_preview'",
-			"'restore_preview_discard'",
-			"'restore_run'",
+			"'restore'",
 			"'template_create'",
 			"'template_clone'",
 			"operation_state not in ('succeeded', 'failed', 'cancelled')",
-			"create unique index if not exists operations_restore_run_one_per_preview_idx",
-			"on operations (namespace_id, repo_id, (input_summary->>'preview_operation_id'))",
-			"where operation_type = 'restore_run'",
-			"operation_state not in ('failed', 'cancelled')",
-			"(input_summary->>'preview_operation_id') is not null",
-			"btrim(input_summary->>'preview_operation_id') <> ''",
+		)
+		contract.requireNoRawFragments(t,
+			"operations_restore_run_one_per_preview_idx",
+			"preview_operation_id",
+			"'restore_preview'",
+			"'restore_preview_discard'",
+			"'restore_run'",
 		)
 	})
 
@@ -86,7 +85,7 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 			"verification_result#>>'{jvs_error_code}' = 'e_repo_busy'",
 			"jvs_json_output#>>'{jvs_error_code}' = 'e_repo_busy'",
 			"'code', 'jvs_command_failed'",
-			"'message', 'jvs save blocked by active repo access'",
+			"'message', 'jvs direct save blocked by active repo access'",
 			"'retryable', true",
 			"'correlation_id', correlation_id",
 			"'operation_id', operation_id",
@@ -233,56 +232,15 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		)
 	})
 
-	t.Run("restore plans table", func(t *testing.T) {
-		table := contract.requireTable(t, "restore_plans")
-
-		table.requireColumn(t, "restore_plan_id", "text", "primary key")
-		table.requireColumn(t, "namespace_id", "text", "not null")
-		table.requireColumn(t, "repo_id", "text", "not null")
-		table.requireColumn(t, "preview_operation_id", "text", "not null", "references operations")
-		table.requireColumn(t, "source_save_point_id", "text", "not null")
-		table.requireColumn(t, "base_revision", "text", "not null")
-		table.requireColumn(t, "head_revision", "text", "not null")
-		table.requireColumn(t, "generation", "text", "not null")
-		table.requireColumn(t, "fence_marker", "text", "not null")
-		table.requireColumn(t, "summary_json", "jsonb", "not null")
-		table.requireColumn(t, "blockers_json", "jsonb", "not null")
-		table.requireColumn(t, "stale", "boolean", "not null", "default false")
-		table.requireColumn(t, "status", "text", "not null")
-		table.requireColumn(t, "created_at", "timestamp with time zone", "not null")
-		table.requireColumn(t, "updated_at", "timestamp with time zone", "not null")
-		table.requireUniqueColumns(t, "preview_operation_id")
-		table.requireCheckMentions(t, "status", expectedRestorePlanStatusValuesForMigrationContract()...)
-		table.requireBodyFragments(t,
-			"foreign key (namespace_id, repo_id) references repos (namespace_id, repo_id)",
-			"jsonb_typeof(summary_json) = 'object'",
-			"jsonb_typeof(blockers_json) = 'array'",
-		)
-		contract.requirePartialUniqueIndex(t, "restore_plans", []string{"repo_id"}, "status in ('pending', 'consuming', 'discarding', 'operator_intervention_required')")
-	})
-
-	t.Run("restore plan preview metadata has pre-GA upgrade guard", func(t *testing.T) {
-		contract.requireRawFragments(
-			t,
-			"alter table restore_plans add column if not exists base_revision text",
-			"alter table restore_plans add column if not exists head_revision text",
-			"alter table restore_plans add column if not exists generation text",
-			"alter table restore_plans add column if not exists fence_marker text",
-			"alter table restore_plans add column if not exists summary_json jsonb",
-			"alter table restore_plans add column if not exists blockers_json jsonb",
-			"alter table restore_plans add column if not exists stale boolean",
-			"update restore_plans p",
-			"from operations o",
-			"p.preview_operation_id = o.operation_id",
+	t.Run("direct restore schema does not create restore plans", func(t *testing.T) {
+		if _, ok := contract.tables["restore_plans"]; ok {
+			t.Fatal("active pre-GA schema must not create restore_plans")
+		}
+		contract.requireNoRawFragments(t,
+			"restore_plans",
+			"restore_plan_id",
+			"preview_operation_id",
 			"pre_ga_restore_plan_metadata_missing",
-			"alter table restore_plans alter column base_revision set not null",
-			"alter table restore_plans alter column head_revision set not null",
-			"alter table restore_plans alter column generation set not null",
-			"alter table restore_plans alter column fence_marker set not null",
-			"alter table restore_plans alter column summary_json set not null",
-			"alter table restore_plans alter column blockers_json set not null",
-			"alter table restore_plans alter column stale set default false",
-			"alter table restore_plans alter column stale set not null",
 		)
 	})
 
@@ -452,9 +410,7 @@ func expectedOperationTypeValuesForMigrationContract() []string {
 		"repo_restore_tombstoned",
 		"repo_purge",
 		"save_point_create",
-		"restore_preview",
-		"restore_preview_discard",
-		"restore_run",
+		"restore",
 		"template_create",
 		"template_clone",
 		"export_create",
@@ -480,17 +436,6 @@ func expectedRepoStatusValuesForMigrationContract() []string {
 		"restoring_tombstoned",
 		"purging",
 		"purged",
-		"operator_intervention_required",
-	}
-}
-
-func expectedRestorePlanStatusValuesForMigrationContract() []string {
-	return []string{
-		"pending",
-		"consuming",
-		"consumed",
-		"discarding",
-		"discarded",
 		"operator_intervention_required",
 	}
 }
@@ -594,6 +539,16 @@ func (contract migrationContract) requireRawFragments(t *testing.T, fragments ..
 	for _, fragment := range fragments {
 		if !strings.Contains(contract.raw, compactSpace(strings.ToLower(fragment))) {
 			t.Fatalf("migration SQL missing fragment %q", fragment)
+		}
+	}
+}
+
+func (contract migrationContract) requireNoRawFragments(t *testing.T, fragments ...string) {
+	t.Helper()
+
+	for _, fragment := range fragments {
+		if strings.Contains(contract.raw, compactSpace(strings.ToLower(fragment))) {
+			t.Fatalf("migration SQL contains forbidden fragment %q", fragment)
 		}
 	}
 }

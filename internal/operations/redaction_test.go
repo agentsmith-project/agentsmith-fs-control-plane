@@ -228,7 +228,7 @@ func TestSanitizedForPersistenceRedactsQueuedRecordBeforeStoreWrite(t *testing.T
 func TestSanitizedForPersistenceRedactsStorageInternalAndCommandFields(t *testing.T) {
 	record := OperationRecord{
 		ID:    "op-storage-internal",
-		Type:  OperationRestoreRun,
+		Type:  OperationRestore,
 		State: OperationStateRunning,
 		InputSummary: map[string]any{
 			"safe":                     "kept",
@@ -306,6 +306,88 @@ func TestSanitizedForPersistenceRedactsStorageInternalAndCommandFields(t *testin
 	}
 	if !sanitized.Redaction.Redacted {
 		t.Fatalf("expected persistence record to carry redaction report")
+	}
+}
+
+func TestOperationProjectionDropsJVSInternalFields(t *testing.T) {
+	record := OperationRecord{
+		ID:    "op-jvs-internal",
+		Type:  OperationRestore,
+		State: OperationStateFailed,
+		InputSummary: map[string]any{
+			"safe":           "kept",
+			"checksum":       "sha256:internal-checksum",
+			"digest":         "sha256:internal-digest",
+			"capacity_bytes": 123456,
+			"tree_scan":      "internal-tree-scan",
+			"file_count":     42,
+			"payload_tree":   map[string]any{"root": "internal-payload-tree"},
+			"sync_state":     "internal-sync-state",
+			"proof":          "internal-proof",
+			"internal_path":  "/srv/afscp/internal/path",
+			"control-root":   "/srv/afscp/control",
+			"home_path":      "/home/afscp/runtime/repo_123",
+			"raw command":    "jvs afscp --control-root raw-control --home raw-home restore",
+		},
+		JVSJSONOutput: map[string]any{
+			"restored_save_point_id": "sp_001",
+			"hash":                   "internal-output-hash",
+			"payload_file_count":     99,
+		},
+		VerificationResult: map[string]any{
+			"healthy":          true,
+			"payload_hash":     "internal-payload-hash",
+			"tree_scan_result": "internal-tree-scan-result",
+		},
+		Error: &OperationError{
+			Code:    "FAILED",
+			Message: "restore failed",
+			Details: map[string]any{
+				"repo_id":     "repo_123",
+				"raw_command": "jvs afscp --control-root error-control --home error-home doctor",
+				"proof":       "internal-error-proof",
+			},
+		},
+	}
+
+	sanitized := record.SanitizedForPersistence().Record()
+	rendered := strings.ToLower(toTestString(sanitized))
+
+	for _, forbidden := range []string{
+		"checksum",
+		"internal-checksum",
+		"digest",
+		"capacity_bytes",
+		"tree_scan",
+		"file_count",
+		"payload_tree",
+		"payload_file_count",
+		"payload_hash",
+		"sync_state",
+		"proof",
+		"internal_path",
+		"control-root",
+		"home_path",
+		"raw command",
+		"raw_command",
+		"internal-output-hash",
+		"/srv/afscp",
+		"/home/afscp",
+		"jvs afscp",
+	} {
+		if strings.Contains(rendered, strings.ToLower(forbidden)) {
+			t.Fatalf("JVS/internal field %q leaked into operation projection: %s", forbidden, rendered)
+		}
+	}
+	if got := sanitized.InputSummary["safe"]; got != "kept" {
+		t.Fatalf("safe input = %#v, want kept", got)
+	}
+	verify, ok := sanitized.VerificationResult.(map[string]any)
+	if !ok || verify["healthy"] != true {
+		t.Fatalf("safe verification field not preserved: %#v", sanitized.VerificationResult)
+	}
+	if sanitized.Error == nil || sanitized.Error.Details["repo_id"] != "repo_123" {
+		t.Fatalf("safe error detail not preserved: %#v", sanitized.Error)
 	}
 }
 

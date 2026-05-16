@@ -29,22 +29,19 @@ func TestAcquireSavePointCreateOperationLeaseSerializesEarlierLifecycleAndJVSMut
 		"phase IN ('validate_save_point_create','save_point_create_prepared')",
 		"earlier_jvs_mutation AS",
 		"o.operation_id <> e.operation_id",
-		"o.operation_type IN ('save_point_create', 'restore', 'restore_preview', 'restore_preview_discard', 'restore_run', 'template_create', 'template_clone')",
+		"o.operation_type IN ('save_point_create', 'restore', 'template_create', 'template_clone')",
 		"earlier_repo_lifecycle AS",
 		"o.operation_id <> e.operation_id",
 		"o.operation_type IN ('repo_archive', 'repo_restore_archived', 'repo_delete', 'repo_restore_tombstoned', 'repo_purge')",
 		"operation_state NOT IN ('succeeded','failed','cancelled')",
-		"active_restore_plan AS",
-		"FROM restore_plans p, eligible_operation e",
-		"p.repo_id = e.repo_id",
-		"p.status IN ('pending', 'consuming', 'discarding', 'operator_intervention_required')",
 		"NOT EXISTS (SELECT 1 FROM earlier_jvs_mutation)",
 		"NOT EXISTS (SELECT 1 FROM earlier_repo_lifecycle)",
-		"NOT EXISTS (SELECT 1 FROM active_restore_plan)",
 		"RETURNING",
 	)
-	if strings.Contains(exec.query, "repo_fences") {
-		t.Fatalf("save point acquire must not introduce a fence kind: %s", exec.query)
+	for _, forbidden := range []string{"repo_fences", "restore_plans", "active_restore_plan"} {
+		if strings.Contains(exec.query, forbidden) {
+			t.Fatalf("save point acquire must not include %q: %s", forbidden, exec.query)
+		}
 	}
 }
 

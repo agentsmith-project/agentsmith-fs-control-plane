@@ -56,7 +56,7 @@ Read in this order:
 9. `api/openapi/internal-v1.openapi.yaml`
 10. `api/schemas/afscp-internal-v1.schema.json`
 11. `docs/RISK_REGISTER.md`
-12. `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`
+12. `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`
 
 ## Runtime And Build
 
@@ -152,8 +152,8 @@ Completed:
 - minimal PostgreSQL repo fence adapter for held fence read, create, and active
   release, with focused tests
 - repo create intake for durable `repo_create` operations
-- JVS v0.4.9 runner foundations for fixed `init`, `doctor --strict`, and
-  `doctor --strict --repair-runtime` commands
+- JVS runner foundations for fixed repo `init`/`doctor --strict` and active
+  direct `jvs afscp` save/list/restore/status/doctor commands
 - opt-in `repo_create` recovery through `afscp-worker --run-once`, `repoexec`,
   JVS `init`/`doctor --strict`, dedicated PostgreSQL atomic commit, and fence
   release when the explicit repo create recovery gate is enabled
@@ -180,11 +180,11 @@ Completed:
   status, namespace/binding status, writer-session fences, lifecycle fences,
   and lifecycle source-status rules; it is wired to lifecycle intake/admission
 - session substrate pure model for export and workload-mount session state,
-  restore-run/template writer gating, and repo lifecycle drain gating; export
+  direct restore/template writer gating, and repo lifecycle drain gating; export
   sessions are wired into API create/get/revoke, WebDAV gateway admission and
   runtime request ledger accounting/recovery, terminal reconcile, and repo
   archive/delete recovery drain checks. Workload mount issuance, orchestrator
-  plans, stale mount scanning, restore-run execution, and template create
+  plans, stale mount scanning, direct restore execution, and template create
   source dirty-race gates are wired through durable operation and session/fence
   boundaries.
 - WebDAV export gateway serving through `afscp-export-gateway --serve`, with
@@ -214,13 +214,12 @@ Completed:
   Stale non-terminal workload mounts are scanned by an explicit worker runner;
   the scan reports kept-blocked bindings as operator-visible evidence rather
   than silently terminalizing uncertain sessions.
-- save point create, restore preview/discard/run, and namespace-scoped template
+- save point create, direct restore, and namespace-scoped template
   create/clone are implemented as operation-backed JVS worker paths using the
-  pinned v0.4.9 binary. Save point create can invoke strict runtime repair only
-  after JVS save returns `E_REPO_BUSY`, then retry after a proven `clean_locks`
-  repair. Template create creates a fresh save point inside the operation and
-  uses writer-session fencing plus active/stale export and mount checks before
-  cloning.
+  pinned pre-GA direct local binary. Save point create uses direct list/save and
+  does not invoke legacy runtime repair. Template create remains an explicit
+  non-direct helper path and uses writer-session fencing plus active/stale
+  export and mount checks before cloning.
 - writer-session fence acquisition for restore/template and read-write
   export/workload mount admission share the repo row as the durable
   serialization primitive before held-fence checks, closing the source dirty
@@ -311,15 +310,16 @@ Continue in dependency order:
 5. Continue from the implemented repo create, repo lifecycle, export/WebDAV,
    workload mount, save/restore, and template paths by closing remaining
    evidence through contracts, fences, session drain, operation leases, audit
-   behavior, focused tests, and runbook artifacts. G-005 is covered by JVS
-   v0.4.9 pin and runner contract evidence; it is not by itself GA release
-   evidence for storage mutation.
+   behavior, focused tests, and runbook artifacts. G-005 is covered for pre-GA
+   by local direct JVS pin and runner contract evidence; it is not by itself GA
+   release evidence for storage mutation.
 
 ## JVS Gate Status
 
-G-005 is auto-verified. JVS v0.4.9 is pinned in
-`docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`; the v0.4.8 smoke evidence and
-v0.4.7 blocker evidence remain historical in
+G-005 is auto-verified for pre-GA. The active local direct JVS pin is recorded
+in `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`; the v0.4.9/v0.4.8
+smoke evidence and v0.4.7 blocker evidence remain historical in
+`docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`,
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md` and
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
 
@@ -347,7 +347,7 @@ Current implementation includes opt-in worker execution for `archive`,
 Important behavior:
 
 - Archive/delete/purge acquire lifecycle fence.
-- Lifecycle fence blocks new exports, mounts, save, restore-run, template
+- Lifecycle fence blocks new exports, mounts, save, direct restore, template
   operations, and lifecycle mutations.
 - Archive/delete/purge drain existing read-only and read-write exports/mounts
   before storage state changes that require no further access.

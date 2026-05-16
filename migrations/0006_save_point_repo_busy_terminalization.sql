@@ -32,7 +32,7 @@ repo_busy_errors AS (
         operation_id,
         jsonb_build_object(
             'code', 'JVS_COMMAND_FAILED',
-            'message', 'jvs save blocked by active repo access',
+            'message', 'jvs direct save blocked by active repo access',
             'retryable', true,
             'correlation_id', correlation_id,
             'operation_id', operation_id,

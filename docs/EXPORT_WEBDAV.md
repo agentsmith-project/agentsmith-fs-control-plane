@@ -67,7 +67,7 @@ return JuiceFS metadata URL, bucket URL, access key, or secret key.
   namespace export policy `max_session_seconds`.
 - Credential secrets are returned only in the first successful create response;
   there is no reissue endpoint and idempotent replay omits `access`.
-- Define when read-write exports count as active writer sessions for restore-run.
+- Define when read-write exports count as active writer sessions for direct restore to a save point and the writer-session fence.
 - Store credential material hashed or encrypted according to the accepted security contract.
 
 ## Gateway Requirement
@@ -123,8 +123,8 @@ Denied mutating method attempts on read-only exports must be audited with export
   gateway credential lookup and active-count accounting.
 - Active write-capable requests after revoke must be closed or allowed to reach a terminal state before the export stops counting as an active or uncertain writer.
 - Read-write exports count as active or uncertain writer sessions until the gateway confirms no future writes are possible and any active write-capable requests are closed, expired and reconciled, or terminal.
-- A control-plane revoke record alone does not unblock restore-run.
-- Read-only exports do not block restore-run, but namespace disable and credential revoke/expiry still apply.
+- A control-plane revoke record alone does not unblock direct restore.
+- Read-only exports do not block direct restore, but namespace disable and credential revoke/expiry still apply.
 - Read-only exports do block repo archive/delete/purge lifecycle drain until gateway reconciliation confirms there is no ongoing or future access through that export.
 - Gateway runtime state is stored as aggregate active request/write counts plus
   a dedicated `export_runtime_requests` ledger. Each admitted WebDAV request

@@ -5,14 +5,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/build"
+	"go/parser"
+	"go/token"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/capability"
 )
@@ -1281,9 +1288,6 @@ func secretPathEvidenceStringUnsafe(value string) bool {
 		"jvs save",
 		"jvs history",
 		"jvs restore",
-		"jvs restore --run",
-		"restore --run",
-		"restore discard",
 		"jvs recovery status",
 		"recovery status",
 		"jvs init",
@@ -1883,9 +1887,9 @@ func validateGoTestRunSelector(item Item, repoRoot string, packages []string) []
 	}
 
 	for _, pkg := range packages {
-		result := goTestListPackage(repoRoot, pkg)
+		result := goTestStaticPackageNames(repoRoot, pkg)
 		if result.err != "" {
-			return []Finding{{ItemID: item.ID, Code: "item.command_run_selector_invalid", Message: fmt.Sprintf("go test -list failed for package %q: %s: %s", pkg, result.err, result.output)}}
+			return []Finding{{ItemID: item.ID, Code: "item.command_run_selector_invalid", Message: fmt.Sprintf("static test-name scan failed for package %q: %s: %s", pkg, result.err, result.output)}}
 		}
 		if !goTestNamesMatch(compiled, result.tests) {
 			if goTestNamesMatch(compiled, result.benchmarks) {
@@ -1897,43 +1901,207 @@ func validateGoTestRunSelector(item Item, repoRoot string, packages []string) []
 	return nil
 }
 
-var goTestListPackageCache sync.Map
+var goTestStaticPackageNamesCache sync.Map
 
-type goTestListPackageCacheKey struct {
+type goTestStaticPackageNamesCacheKey struct {
 	repoRoot string
 	pkg      string
 }
 
-type goTestListPackageCacheValue struct {
+type goTestStaticPackageNamesCacheValue struct {
 	tests      []string
 	benchmarks []string
 	err        string
 	output     string
 }
 
-func goTestListPackage(repoRoot, pkg string) goTestListPackageCacheValue {
+func goTestStaticPackageNames(repoRoot, pkg string) goTestStaticPackageNamesCacheValue {
 	absRepoRoot, err := filepath.Abs(repoRoot)
 	if err != nil {
 		absRepoRoot = repoRoot
 	}
-	key := goTestListPackageCacheKey{repoRoot: absRepoRoot, pkg: pkg}
-	if cached, ok := goTestListPackageCache.Load(key); ok {
-		return cached.(goTestListPackageCacheValue)
+	key := goTestStaticPackageNamesCacheKey{repoRoot: absRepoRoot, pkg: pkg}
+	if cached, ok := goTestStaticPackageNamesCache.Load(key); ok {
+		return cached.(goTestStaticPackageNamesCacheValue)
 	}
 
-	listCommand := exec.Command("go", "test", "-list", ".", pkg)
-	listCommand.Dir = repoRoot
-	output, runErr := listCommand.CombinedOutput()
-	value := goTestListPackageCacheValue{
-		tests:      goTestListOutputNames(output, goTestListNameTests),
-		benchmarks: goTestListOutputNames(output, goTestListNameBenchmarks),
-		output:     compactCommandOutput(output),
+	value := goTestStaticPackageNamesCacheValue{}
+	dirs, err := goTestStaticPackageDirs(absRepoRoot, pkg)
+	if err != nil {
+		value.err = err.Error()
+		goTestStaticPackageNamesCache.Store(key, value)
+		return value
 	}
-	if runErr != nil {
-		value.err = runErr.Error()
+	for _, dir := range dirs {
+		tests, benchmarks, err := goTestStaticNamesInDir(dir)
+		if err != nil {
+			value.err = err.Error()
+			value.output = filepath.ToSlash(dir)
+			goTestStaticPackageNamesCache.Store(key, value)
+			return value
+		}
+		value.tests = append(value.tests, tests...)
+		value.benchmarks = append(value.benchmarks, benchmarks...)
 	}
-	goTestListPackageCache.Store(key, value)
+	value.tests = uniqueSortedStrings(value.tests)
+	value.benchmarks = uniqueSortedStrings(value.benchmarks)
+	value.output = strings.Join(append(append([]string(nil), value.tests...), value.benchmarks...), "\n")
+	goTestStaticPackageNamesCache.Store(key, value)
 	return value
+}
+
+func goTestStaticPackageDirs(repoRoot, pkg string) ([]string, error) {
+	if pkg == "./..." {
+		return goTestStaticPackageDirsUnder(repoRoot, repoRoot)
+	}
+	trimmed := strings.TrimPrefix(pkg, "./")
+	if strings.HasSuffix(trimmed, "/...") {
+		baseDir := filepath.Join(repoRoot, filepath.FromSlash(strings.TrimSuffix(trimmed, "/...")))
+		return goTestStaticPackageDirsUnder(repoRoot, baseDir)
+	}
+	return []string{filepath.Join(repoRoot, filepath.FromSlash(trimmed))}, nil
+}
+
+func goTestStaticPackageDirsUnder(repoRoot, root string) ([]string, error) {
+	var dirs []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		if path != root && goTestStaticSkipDir(entry.Name()) {
+			return filepath.SkipDir
+		}
+		hasTestFile, err := dirHasGoTestFile(path)
+		if err != nil {
+			return err
+		}
+		if hasTestFile {
+			dirs = append(dirs, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk %s under %s: %w", filepath.ToSlash(root), filepath.ToSlash(repoRoot), err)
+	}
+	return dirs, nil
+}
+
+func goTestStaticSkipDir(name string) bool {
+	return name == ".git" ||
+		name == "vendor" ||
+		name == "testdata" ||
+		name == "node_modules" ||
+		name == ".artifacts"
+}
+
+func dirHasGoTestFile(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func goTestStaticNamesInDir(dir string) ([]string, []string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	var tests []string
+	var benchmarks []string
+	fileSet := token.NewFileSet()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		matchesBuild, err := build.Default.MatchFile(dir, entry.Name())
+		if err != nil {
+			return nil, nil, fmt.Errorf("match build constraints for %s: %w", filepath.ToSlash(filepath.Join(dir, entry.Name())), err)
+		}
+		if !matchesBuild {
+			continue
+		}
+		filePath := filepath.Join(dir, entry.Name())
+		file, err := parser.ParseFile(fileSet, filePath, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse %s: %w", filepath.ToSlash(filePath), err)
+		}
+		for _, decl := range file.Decls {
+			function, ok := decl.(*ast.FuncDecl)
+			if !ok || function.Recv != nil {
+				continue
+			}
+			name := function.Name.Name
+			switch {
+			case goTestStaticTestOrBenchmarkName(name, "Test") && goTestStaticOneTestingParam(function, "T"):
+				tests = append(tests, name)
+			case goTestStaticExampleName(name) && goTestStaticNoParamsOrResults(function):
+				tests = append(tests, name)
+			case goTestStaticTestOrBenchmarkName(name, "Benchmark") && goTestStaticOneTestingParam(function, "B"):
+				benchmarks = append(benchmarks, name)
+			}
+		}
+	}
+	return tests, benchmarks, nil
+}
+
+func goTestStaticTestOrBenchmarkName(name, prefix string) bool {
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	if len(name) == len(prefix) {
+		return true
+	}
+	for _, next := range name[len(prefix):] {
+		return !unicode.IsLower(next)
+	}
+	return true
+}
+
+func goTestStaticExampleName(name string) bool {
+	return strings.HasPrefix(name, "Example")
+}
+
+func goTestStaticOneTestingParam(function *ast.FuncDecl, selector string) bool {
+	if function.Type.Results != nil && len(function.Type.Results.List) > 0 {
+		return false
+	}
+	if function.Type.Params == nil || len(function.Type.Params.List) != 1 {
+		return false
+	}
+	star, ok := function.Type.Params.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	paramSelector, ok := star.X.(*ast.SelectorExpr)
+	return ok && paramSelector.Sel.Name == selector
+}
+
+func goTestStaticNoParamsOrResults(function *ast.FuncDecl) bool {
+	return (function.Type.Params == nil || len(function.Type.Params.List) == 0) &&
+		(function.Type.Results == nil || len(function.Type.Results.List) == 0)
+}
+
+func uniqueSortedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	sort.Strings(values)
+	unique := values[:0]
+	for _, value := range values {
+		if len(unique) == 0 || unique[len(unique)-1] != value {
+			unique = append(unique, value)
+		}
+	}
+	return unique
 }
 
 func goTestNamesMatch(compiled *regexp.Regexp, names []string) bool {
@@ -1981,39 +2149,6 @@ func skipNextGoTestFlagValue(arg string) bool {
 	default:
 		return false
 	}
-}
-
-func goTestListOutputHasTest(output []byte) bool {
-	return len(goTestListOutputNames(output, goTestListNameTests)) > 0
-}
-
-func goTestListOutputHasBenchmark(output []byte) bool {
-	return len(goTestListOutputNames(output, goTestListNameBenchmarks)) > 0
-}
-
-type goTestListNameKind string
-
-const (
-	goTestListNameTests      goTestListNameKind = "tests"
-	goTestListNameBenchmarks goTestListNameKind = "benchmarks"
-)
-
-func goTestListOutputNames(output []byte, kind goTestListNameKind) []string {
-	var names []string
-	for _, line := range strings.Split(string(output), "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case kind == goTestListNameTests && (strings.HasPrefix(trimmed, "Test") || strings.HasPrefix(trimmed, "Example")):
-			names = append(names, trimmed)
-		case kind == goTestListNameBenchmarks && strings.HasPrefix(trimmed, "Benchmark"):
-			names = append(names, trimmed)
-		}
-	}
-	return names
-}
-
-func compactCommandOutput(output []byte) string {
-	return strings.TrimSpace(strings.Join(strings.Fields(string(output)), " "))
 }
 
 func validateBashScriptTarget(item Item, repoRoot string) []Finding {

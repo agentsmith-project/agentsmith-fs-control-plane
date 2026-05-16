@@ -30,7 +30,7 @@ available and the runtime store health check passes.
 
 | Class | Examples | Page |
 | --- | --- | --- |
-| critical data risk | purge failure ambiguity, restore-run ambiguous state, lifecycle fence stuck during purge, credential leak | yes |
+| critical data risk | purge failure ambiguity, direct restore to a save point ambiguous state, writer-session fence stuck during restore, lifecycle fence stuck during purge, credential leak | yes |
 | security boundary risk | Secret reference exposed, raw JuiceFS credential in response/log, path traversal accepted | yes |
 | availability risk | volume unhealthy, operation worker stopped, audit outbox stuck, stale mount lease backlog | yes when sustained |
 | product degradation | export create failing, lifecycle drain waiting, template clone denied by capability | ticket/triage |

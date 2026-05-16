@@ -27,7 +27,6 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoexec"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restorereconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
@@ -52,9 +51,6 @@ type OperationRecoveryStore interface {
 	store.SavePointCreateOperationRecoveryStore
 	store.TemplateOperationRecoveryStore
 	store.RestoreOperationRecoveryStore
-	store.RestorePreviewOperationRecoveryStore
-	store.RestorePreviewDiscardOperationRecoveryStore
-	store.RestoreRunOperationRecoveryStore
 	store.WorkloadMountBindingOperationRecoveryStore
 }
 
@@ -332,9 +328,24 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 					return nil, err
 				}
 			} else {
+				if jvs == nil {
+					err = errors.New("repo create jvs runner is required")
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
+				}
+				repoCreateJVS, ok := jvs.(repoexec.RepoCreateJVSRunner)
+				if !ok {
+					err = errors.New("repo create jvs runner does not support direct doctor and init")
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
+				}
 				repoExecutor, err := repoexec.NewExecutor(repoexec.Config{
 					Store:        scopedStore,
-					JVSRunner:    jvs,
+					JVSRunner:    repoCreateJVS,
 					Owner:        opConfig.Owner,
 					Clock:        now,
 					AuditEventID: func() string { return eventID() },
@@ -561,120 +572,6 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			executors = append(executors, restoreExecutor)
 			scopedStore.restoreEnabled = true
 		}
-		if opConfig.RestorePreview.Enabled {
-			jvsFactory := options.JVSRunnerFactory
-			if jvsFactory == nil {
-				jvsFactory = NewJVSRunnerFromConfig
-			}
-			jvs, err := jvsFactory(opConfig.RestorePreview)
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
-				}
-				return nil, err
-			}
-			restorePreviewJVS, ok := jvs.(repoexec.RestorePreviewJVSRunner)
-			if !ok {
-				if handle.Close != nil {
-					err = errors.Join(errors.New("restore preview jvs runner does not support restore preview"), handle.Close())
-				} else {
-					err = errors.New("restore preview jvs runner does not support restore preview")
-				}
-				return nil, err
-			}
-			restorePreviewExecutor, err := repoexec.NewRestorePreviewExecutor(repoexec.RestorePreviewConfig{
-				Store:        scopedStore,
-				JVSRunner:    restorePreviewJVS,
-				Owner:        opConfig.Owner,
-				Clock:        now,
-				AuditEventID: func() string { return eventID() },
-				VolumeRoots:  opConfig.RestorePreview.VolumeRoots,
-			})
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
-				}
-				return nil, err
-			}
-			executors = append(executors, restorePreviewExecutor)
-			scopedStore.restorePreviewEnabled = true
-		}
-		if opConfig.RestorePreviewDiscard.Enabled {
-			jvsFactory := options.JVSRunnerFactory
-			if jvsFactory == nil {
-				jvsFactory = NewJVSRunnerFromConfig
-			}
-			jvs, err := jvsFactory(opConfig.RestorePreviewDiscard)
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
-				}
-				return nil, err
-			}
-			restorePreviewDiscardJVS, ok := jvs.(repoexec.RestorePreviewDiscardJVSRunner)
-			if !ok {
-				if handle.Close != nil {
-					err = errors.Join(errors.New("restore preview discard jvs runner does not support restore discard"), handle.Close())
-				} else {
-					err = errors.New("restore preview discard jvs runner does not support restore discard")
-				}
-				return nil, err
-			}
-			restorePreviewDiscardExecutor, err := repoexec.NewRestorePreviewDiscardExecutor(repoexec.RestorePreviewDiscardConfig{
-				Store:        scopedStore,
-				JVSRunner:    restorePreviewDiscardJVS,
-				Owner:        opConfig.Owner,
-				Clock:        now,
-				AuditEventID: func() string { return eventID() },
-				VolumeRoots:  opConfig.RestorePreviewDiscard.VolumeRoots,
-			})
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
-				}
-				return nil, err
-			}
-			executors = append(executors, restorePreviewDiscardExecutor)
-			scopedStore.restorePreviewDiscardEnabled = true
-		}
-		if opConfig.RestoreRun.Enabled {
-			jvsFactory := options.JVSRunnerFactory
-			if jvsFactory == nil {
-				jvsFactory = NewJVSRunnerFromConfig
-			}
-			jvs, err := jvsFactory(opConfig.RestoreRun)
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
-				}
-				return nil, err
-			}
-			restoreRunJVS, ok := jvs.(repoexec.RestoreRunJVSRunner)
-			if !ok {
-				if handle.Close != nil {
-					err = errors.Join(errors.New("restore run jvs runner does not support restore run"), handle.Close())
-				} else {
-					err = errors.New("restore run jvs runner does not support restore run")
-				}
-				return nil, err
-			}
-			restoreRunExecutor, err := repoexec.NewRestoreRunExecutor(repoexec.RestoreRunConfig{
-				Store:        scopedStore,
-				JVSRunner:    restoreRunJVS,
-				Owner:        opConfig.Owner,
-				Clock:        now,
-				AuditEventID: func() string { return eventID() },
-				VolumeRoots:  opConfig.RestoreRun.VolumeRoots,
-			})
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
-				}
-				return nil, err
-			}
-			executors = append(executors, restoreRunExecutor)
-			scopedStore.restoreRunEnabled = true
-		}
 		operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
 			Reader:        scopedStore,
 			LeaseStore:    scopedStore,
@@ -786,7 +683,7 @@ func NewAuditDelivererFromConfig(cfg config.WorkerAuditDeliveryConfig) (auditdel
 func NewJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
 	wantSHA256 := config.JVSAcceptedLinuxAMD64SHA256
 	if cfg.JVSDirectRestoreRequired {
-		if strings.TrimSpace(cfg.JVSDirectRestoreSourceRef) == "" || cfg.JVSBinarySHA256 == config.JVSAcceptedLinuxAMD64SHA256 {
+		if strings.TrimSpace(cfg.JVSDirectRestoreSourceRef) == "" {
 			return nil, errors.New("jvs direct restore artifact declaration is required")
 		}
 		wantSHA256 = cfg.JVSBinarySHA256
@@ -803,8 +700,8 @@ func NewJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (repoexec
 	if cfg.JVSDirectRestoreRequired {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if err := runner.VerifyRestoreDirectCapability(ctx); err != nil {
-			return nil, fmt.Errorf("%w: jvs restore --direct preflight failed", ErrJVSRuntimeUnavailable)
+		if err := runner.VerifyAFSCPDirectCapability(ctx); err != nil {
+			return nil, fmt.Errorf("%w: jvs afscp direct preflight failed", ErrJVSRuntimeUnavailable)
 		}
 	}
 	return runner, nil
@@ -899,9 +796,6 @@ func workerRuntimeOperationTypes() map[operations.OperationType]bool {
 		operations.OperationRepoPurge:                 true,
 		operations.OperationSavePointCreate:           true,
 		operations.OperationRestore:                   true,
-		operations.OperationRestorePreview:            true,
-		operations.OperationRestorePreviewDiscard:     true,
-		operations.OperationRestoreRun:                true,
 		operations.OperationTemplateCreate:            true,
 		operations.OperationTemplateClone:             true,
 		operations.OperationMountBindingCreate:        true,
@@ -921,17 +815,14 @@ func nowFunc(clock func() time.Time) func() time.Time {
 }
 
 type operationRecoveryStore struct {
-	store                        OperationRecoveryStore
-	repoCreateEnabled            bool
-	repoLifecycleEnabled         bool
-	repoPurgeEnabled             bool
-	savePointEnabled             bool
-	restoreEnabled               bool
-	restorePreviewEnabled        bool
-	restorePreviewDiscardEnabled bool
-	restoreRunEnabled            bool
-	templateCreateEnabled        bool
-	templateCloneEnabled         bool
+	store                 OperationRecoveryStore
+	repoCreateEnabled     bool
+	repoLifecycleEnabled  bool
+	repoPurgeEnabled      bool
+	savePointEnabled      bool
+	restoreEnabled        bool
+	templateCreateEnabled bool
+	templateCloneEnabled  bool
 }
 
 func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error) {
@@ -994,21 +885,6 @@ func (scoped operationRecoveryStore) ListOperationsForRecovery(ctx context.Conte
 		return nil, err
 	}
 	records = append(records, restoreRecords...)
-	restorePreviewRecords, err := scoped.store.ListRestorePreviewOperationsForRecovery(ctx, now, limit)
-	if err != nil {
-		return nil, err
-	}
-	records = append(records, restorePreviewRecords...)
-	restorePreviewDiscardRecords, err := scoped.store.ListRestorePreviewDiscardOperationsForRecovery(ctx, now, limit)
-	if err != nil {
-		return nil, err
-	}
-	records = append(records, restorePreviewDiscardRecords...)
-	restoreRunRecords, err := scoped.store.ListRestoreRunOperationsForRecovery(ctx, now, limit)
-	if err != nil {
-		return nil, err
-	}
-	records = append(records, restoreRunRecords...)
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
 			return records[i].ID < records[j].ID
@@ -1070,15 +946,7 @@ func (scoped operationRecoveryStore) AcquireOperationLease(ctx context.Context, 
 	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
 		return record, err
 	}
-	record, err = scoped.store.AcquireRestorePreviewOperationLease(ctx, operationID, request)
-	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
-		return record, err
-	}
-	record, err = scoped.store.AcquireRestorePreviewDiscardOperationLease(ctx, operationID, request)
-	if err == nil || !errors.Is(err, operations.ErrLeaseUnavailable) {
-		return record, err
-	}
-	return scoped.store.AcquireRestoreRunOperationLease(ctx, operationID, request)
+	return operations.OperationRecord{}, operations.ErrLeaseUnavailable
 }
 
 func (scoped operationRecoveryStore) RenewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error) {
@@ -1189,18 +1057,6 @@ func (scoped operationRecoveryStore) CommitTemplateCloneFailedWithLease(ctx cont
 	return scoped.store.CommitTemplateCloneFailedWithLease(ctx, record, owner, now, event)
 }
 
-func (scoped operationRecoveryStore) UpdateRestorePreviewPreflightWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
-	return scoped.store.UpdateRestorePreviewPreflightWithLease(ctx, record, owner, now)
-}
-
-func (scoped operationRecoveryStore) CommitRestorePreviewSucceededWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	return scoped.store.CommitRestorePreviewSucceededWithLease(ctx, plan, record, owner, now, event)
-}
-
-func (scoped operationRecoveryStore) CommitRestorePreviewFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
-	return scoped.store.CommitRestorePreviewFailedWithLease(ctx, record, owner, now, event)
-}
-
 func (scoped operationRecoveryStore) MarkRestoreWriterFencedWithLease(ctx context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error) {
 	return scoped.store.MarkRestoreWriterFencedWithLease(ctx, fence, record, owner, now)
 }
@@ -1211,50 +1067,6 @@ func (scoped operationRecoveryStore) CommitRestoreSucceededWithLease(ctx context
 
 func (scoped operationRecoveryStore) CommitRestoreFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	return scoped.store.CommitRestoreFailedWithLease(ctx, record, owner, now, event)
-}
-
-func (scoped operationRecoveryStore) MarkRestorePreviewDiscardingWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
-	return scoped.store.MarkRestorePreviewDiscardingWithLease(ctx, plan, record, owner, now)
-}
-
-func (scoped operationRecoveryStore) CommitRestorePreviewDiscardSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	return scoped.store.CommitRestorePreviewDiscardSucceededWithLease(ctx, record, owner, now, event)
-}
-
-func (scoped operationRecoveryStore) CommitRestorePreviewDiscardFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
-	return scoped.store.CommitRestorePreviewDiscardFailedWithLease(ctx, record, owner, now, event)
-}
-
-func (scoped operationRecoveryStore) MarkRestoreRunWriterFencedWithLease(ctx context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error) {
-	return scoped.store.MarkRestoreRunWriterFencedWithLease(ctx, fence, record, owner, now)
-}
-
-func (scoped operationRecoveryStore) MarkRestoreRunConsumingWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error) {
-	return scoped.store.MarkRestoreRunConsumingWithLease(ctx, record, owner, now)
-}
-
-func (scoped operationRecoveryStore) CommitRestoreRunSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	return scoped.store.CommitRestoreRunSucceededWithLease(ctx, record, owner, now, event)
-}
-
-func (scoped operationRecoveryStore) CommitRestoreRunStalePreviewWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error) {
-	return scoped.store.CommitRestoreRunStalePreviewWithLease(ctx, plan, record, owner, now, event)
-}
-
-func (scoped operationRecoveryStore) CommitRestoreRunFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
-	return scoped.store.CommitRestoreRunFailedWithLease(ctx, record, owner, now, event)
-}
-
-func (scoped operationRecoveryStore) GetOperation(ctx context.Context, operationID string) (operations.OperationRecord, error) {
-	return scoped.store.GetOperation(ctx, operationID)
-}
-
-func (scoped operationRecoveryStore) GetRestorePlanByPreviewOperation(ctx context.Context, previewOperationID string) (restoreplan.Plan, error) {
-	return scoped.store.GetRestorePlanByPreviewOperation(ctx, previewOperationID)
-}
-
-func (scoped operationRecoveryStore) GetActiveRestorePlanByRepo(ctx context.Context, repoID string) (restoreplan.Plan, error) {
-	return scoped.store.GetActiveRestorePlanByRepo(ctx, repoID)
 }
 
 func (scoped operationRecoveryStore) GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error) {
@@ -1372,8 +1184,6 @@ var (
 	_ store.RepoPurgeOperationCommitStore              = operationRecoveryStore{}
 	_ store.SavePointCreateOperationCommitStore        = operationRecoveryStore{}
 	_ store.TemplateOperationCommitStore               = operationRecoveryStore{}
-	_ store.RestorePreviewOperationCommitStore         = operationRecoveryStore{}
-	_ store.RestorePreviewDiscardOperationCommitStore  = operationRecoveryStore{}
-	_ store.RestoreRunOperationCommitStore             = operationRecoveryStore{}
+	_ store.RestoreOperationCommitStore                = operationRecoveryStore{}
 	_ recovery.OperationExecutor                       = multiExecutor{}
 )

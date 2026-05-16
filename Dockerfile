@@ -20,11 +20,15 @@ RUN export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" && \
 
 FROM scratch AS jvs
 
-ARG JVS_VERSION=v0.4.9
-ARG JVS_ASSET=jvs-linux-amd64
-ARG JVS_SHA256=0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944
+ARG JVS_VERSION=pre-ga-local-afscp-direct-2026-05-16
+ARG JVS_ASSET=afscp-jvs-direct-local-linux-amd64
+ARG JVS_SHA256=affa86a08dbb2195f594be0be01e9c3f128806f75d04826030afbe4ba283f2e2
+ARG JVS_SOURCE_REF=jvs@main:eb026cc48efb57ef64c9f3e482f0011b9232701b
+ARG JVS_LOCAL_BINARY=dist/jvs-linux-amd64
 
-ADD --checksum=sha256:0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944 https://github.com/agentsmith-project/jvs/releases/download/v0.4.9/jvs-linux-amd64 /jvs
+# Pre-GA direct AFSCP JVS has no formal release URL yet. Build pipelines must
+# place the verified local direct-capable binary in the Docker build context.
+COPY --chmod=0755 ${JVS_LOCAL_BINARY} /jvs
 
 # Pinned JVS is dynamically linked and needs the glibc loader in the final image.
 FROM gcr.io/distroless/base-debian12:nonroot
@@ -32,6 +36,8 @@ FROM gcr.io/distroless/base-debian12:nonroot
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG CREATED=unknown
+ARG JVS_SHA256=affa86a08dbb2195f594be0be01e9c3f128806f75d04826030afbe4ba283f2e2
+ARG JVS_SOURCE_REF=jvs@main:eb026cc48efb57ef64c9f3e482f0011b9232701b
 
 LABEL org.opencontainers.image.title="AFSCP" \
       org.opencontainers.image.description="Agentsmith filesystem control plane" \
@@ -42,7 +48,9 @@ LABEL org.opencontainers.image.title="AFSCP" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 ENV AFSCP_JVS_BINARY_PATH="/usr/local/bin/jvs" \
-    AFSCP_JVS_BINARY_SHA256="0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944"
+    AFSCP_JVS_BINARY_SHA256="${JVS_SHA256}" \
+    AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256="${JVS_SHA256}" \
+    AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF="${JVS_SOURCE_REF}"
 
 COPY --from=build /out/afscp-api /usr/local/bin/afscp-api
 COPY --from=build /out/afscp-worker /usr/local/bin/afscp-worker

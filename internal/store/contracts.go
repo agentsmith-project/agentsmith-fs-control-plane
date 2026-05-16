@@ -10,7 +10,6 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operatorrepair"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restoreplan"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/restorereconcile"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
@@ -174,37 +173,11 @@ type IdempotencyStore interface {
 	CreateOrReuseOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
-// RestorePreviewOperationIntakeStore owns the durable HTTP intake boundary for
-// restore_preview. Implementations must resolve idempotency first, and only for
-// brand-new requests atomically reject same-repo non-terminal JVS mutations and
-// active RestorePlan rows before inserting the queued operation.
-type RestorePreviewOperationIntakeStore interface {
-	CreateOrReuseRestorePreviewOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
-}
-
 // RestoreOperationIntakeStore owns direct restore HTTP intake. It resolves
-// idempotency before rejecting active same-repo JVS mutations or restore plans,
-// then inserts only a durable direct restore operation.
+// idempotency before rejecting active same-repo JVS mutations, then inserts only
+// a durable direct restore operation.
 type RestoreOperationIntakeStore interface {
 	CreateOrReuseRestoreOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
-}
-
-// RestorePreviewDiscardOperationIntakeStore owns the durable HTTP intake
-// boundary for restore_preview_discard. Implementations must resolve
-// idempotency first, and only for brand-new requests atomically lock and verify
-// the matching RestorePlan is still pending before inserting the queued cleanup
-// operation.
-type RestorePreviewDiscardOperationIntakeStore interface {
-	CreateOrReuseRestorePreviewDiscardOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
-}
-
-// RestoreRunOperationIntakeStore owns the durable HTTP intake boundary for
-// restore_run. Implementations must resolve idempotency first, and only for
-// brand-new requests atomically reject any existing non-failed/non-cancelled
-// restore_run for the same namespace/repo/preview_operation_id before inserting
-// the queued operation.
-type RestoreRunOperationIntakeStore interface {
-	CreateOrReuseRestoreRunOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error)
 }
 
 // OperationIdempotencyLookupStore is the read-only side of the operation
@@ -272,7 +245,6 @@ type TemplateOperationMetadataReader interface {
 	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
 	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
 	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
-	GetActiveRestorePlanByRepo(ctx context.Context, repoID string) (restoreplan.Plan, error)
 	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
 	ListExportSessionsByRepo(ctx context.Context, repoID string) ([]sessionstate.ExportSession, error)
 	ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error)
@@ -349,54 +321,6 @@ type SavePointCreateOperationMetadataReader interface {
 	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
 }
 
-// RestorePlanReader is the read side of the durable restore preview/run/discard
-// lifecycle source of truth. Callers must not infer active restore plan state
-// from operation terminal status.
-type RestorePlanReader interface {
-	GetRestorePlanByPreviewOperation(ctx context.Context, previewOperationID string) (restoreplan.Plan, error)
-	GetActiveRestorePlanByRepo(ctx context.Context, repoID string) (restoreplan.Plan, error)
-}
-
-// RestorePlanWriter is the write side of the durable restore plan lifecycle.
-// Status transitions must be conditional durable mutations so workers cannot
-// consume or discard a plan after another owner has moved it.
-type RestorePlanWriter interface {
-	CreatePendingRestorePlan(ctx context.Context, plan restoreplan.Plan) error
-	TransitionRestorePlanStatus(ctx context.Context, restorePlanID string, from, to restoreplan.Status, now time.Time) (restoreplan.Plan, error)
-}
-
-// RestorePlanStore is the complete durable restore plan boundary.
-type RestorePlanStore interface {
-	RestorePlanReader
-	RestorePlanWriter
-}
-
-type RestorePreviewOperationCommitStore interface {
-	UpdateRestorePreviewPreflightWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error)
-	CommitRestorePreviewSucceededWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error)
-	CommitRestorePreviewFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
-}
-
-type RestorePreviewOperationMetadataReader interface {
-	GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error)
-	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
-	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
-	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
-	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
-}
-
-// RestorePreviewOperationRecoveryStore owns the safe restore_preview worker
-// boundary. Success commits must atomically write the lease-fenced operation
-// terminal state, audit outbox event, and pending restore plan in one durable
-// SQL boundary; callers must not compose generic operation commits with
-// CreatePendingRestorePlan.
-type RestorePreviewOperationRecoveryStore interface {
-	ListRestorePreviewOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
-	AcquireRestorePreviewOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
-	RestorePreviewOperationCommitStore
-	RestorePreviewOperationMetadataReader
-}
-
 type RestoreOperationCommitStore interface {
 	MarkRestoreWriterFencedWithLease(ctx context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error)
 	CommitRestoreSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
@@ -404,7 +328,11 @@ type RestoreOperationCommitStore interface {
 }
 
 type RestoreOperationMetadataReader interface {
-	RestorePreviewOperationMetadataReader
+	GetRepoInNamespace(ctx context.Context, namespaceID, repoID string) (resources.Repo, error)
+	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
+	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
+	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
+	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
 	RepoSessionStateReader
 }
 
@@ -415,69 +343,11 @@ type RestoreOperationRecoveryStore interface {
 	RestoreOperationMetadataReader
 }
 
-type RestorePreviewDiscardOperationCommitStore interface {
-	MarkRestorePreviewDiscardingWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error)
-	CommitRestorePreviewDiscardSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error)
-	CommitRestorePreviewDiscardFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
-}
-
-type RestorePreviewDiscardOperationMetadataReader interface {
-	RestorePreviewOperationMetadataReader
-	OperationReader
-	RestorePlanReader
-}
-
-// RestorePreviewDiscardOperationRecoveryStore owns the durable recovery
-// boundary for restore_preview_discard. It may discard only the pending plan
-// linked to the referenced preview operation, and must not infer plan lifecycle
-// from terminal operation state.
-type RestorePreviewDiscardOperationRecoveryStore interface {
-	ListRestorePreviewDiscardOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
-	AcquireRestorePreviewDiscardOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
-	RestorePreviewDiscardOperationCommitStore
-	RestorePreviewDiscardOperationMetadataReader
-}
-
-type RestoreRunOperationCommitStore interface {
-	MarkRestoreRunWriterFencedWithLease(ctx context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error)
-	MarkRestoreRunConsumingWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (restoreplan.Plan, operations.OperationRecord, error)
-	CommitRestoreRunSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error)
-	CommitRestoreRunStalePreviewWithLease(ctx context.Context, plan restoreplan.Plan, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (restoreplan.Plan, operations.OperationRecord, error)
-	CommitRestoreRunFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
-}
-
-type RestoreRunOperationMetadataReader interface {
-	RestorePreviewOperationMetadataReader
-	RepoSessionStateReader
-	OperationReader
-	RestorePlanReader
-}
-
-// RestoreRunOperationRecoveryStore owns the durable restore_run state machine
-// boundary. It may consume only the pending plan linked by
-// input_summary.preview_operation_id, and its commits must atomically coordinate
-// the writer_session fence, durable restore plan, lease-fenced operation, and
-// audit outbox without invoking JVS.
-type RestoreRunOperationRecoveryStore interface {
-	ListRestoreRunOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
-	AcquireRestoreRunOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
-	RestoreRunOperationCommitStore
-	RestoreRunOperationMetadataReader
-}
-
 // RepoJVSMutationGateReader is the read-only durable gate for JVS history
-// readers. It observes operation-row non-terminal JVS mutations only; active
-// restore plan blocking for new mutations lives in mutation acquire SQL. It
+// readers. It observes operation-row non-terminal JVS mutations only. It
 // must not claim, fence, lease, or mutate operation state.
 type RepoJVSMutationGateReader interface {
 	RepoHasNonTerminalJVSMutation(ctx context.Context, repoID string) (bool, error)
-}
-
-// RestoreRunIntakeGateReader is the narrow HTTP intake gate that prevents
-// multiple restore_run operations from being queued for the same pending
-// restore plan under different idempotency keys.
-type RestoreRunIntakeGateReader interface {
-	RestoreRunExistsForPreviewOperation(ctx context.Context, namespaceID, repoID, previewOperationID string) (bool, error)
 }
 
 // SavePointCreateOperationRecoveryStore owns save_point_create recovery. It
@@ -537,7 +407,7 @@ type RepoRecoveryInspectionReader interface {
 }
 
 // RepoSessionStateReader is the read-only durable session substrate boundary
-// for restore-run writer gates and lifecycle drain gates. It returns only safe
+// for direct restore writer gates and lifecycle drain gates. It returns only safe
 // admission fields and must not expose credentials, raw paths, mount plans, or
 // gateway/orchestrator secrets.
 type RepoSessionStateReader interface {

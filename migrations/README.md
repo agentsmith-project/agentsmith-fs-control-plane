@@ -19,9 +19,6 @@ not implement a store adapter, endpoint handler, or storage-side action.
   request recovery without creating per-request operation rows.
 - `0004_restore_reconciliation.sql`: restore reconciliation run, target, and
   observation tables for operator-visible storage mismatch closure.
-- `0005_restore_plan_preview_metadata.sql`: upgrade guard for environments that
-  already applied an older `0001`; adds durable restore-plan preview metadata,
-  stale marker, and blockers source-of-truth columns.
 - `0006_save_point_repo_busy_terminalization.sql`: terminalizes legacy save
   point create operations that were left in operator intervention for JVS
   `E_REPO_BUSY`, preserving a complete retryable operation error envelope.

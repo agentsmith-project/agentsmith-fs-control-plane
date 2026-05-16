@@ -43,8 +43,9 @@ func TestJVSBackedSavePointHistoryReaderResolvesRootAndReturnsSafeHistoryInJVSOr
 	if repoReader.getInNamespaceCalls != 1 || volumeReader.calls != 1 || jvs.calls != 1 {
 		t.Fatalf("calls repo/volume/jvs = %d/%d/%d, want 1/1/1", repoReader.getInNamespaceCalls, volumeReader.calls, jvs.calls)
 	}
-	if !strings.HasSuffix(jvs.controlRoot, "/afscp/namespaces/ns_123/repos/repo_123/control") {
-		t.Fatalf("control root = %q, want resolved canonical control root", jvs.controlRoot)
+	if !strings.HasSuffix(jvs.directTarget.ControlRoot, "/afscp/namespaces/ns_123/repos/repo_123/control") ||
+		!strings.HasSuffix(jvs.directTarget.Home, "/afscp/namespaces/ns_123/repos/repo_123/payload") {
+		t.Fatalf("direct target = %#v, want resolved canonical control/payload roots", jvs.directTarget)
 	}
 	if len(history.SavePoints) != 2 || history.SavePoints[0].SavePointID != "sp_002" || history.SavePoints[0].Message != "second" || history.SavePoints[1].SavePointID != "sp_001" {
 		t.Fatalf("history = %#v, want JVS order preserved", history)
@@ -54,6 +55,44 @@ func TestJVSBackedSavePointHistoryReaderResolvesRootAndReturnsSafeHistoryInJVSOr
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("history response leaked %q: %#v", forbidden, history)
 		}
+	}
+}
+
+func TestJVSBackedSavePointHistoryReaderUsesDirectListTargetControlAndPayloadRoots(t *testing.T) {
+	now := fixedNamespaceNow()
+	repo := repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)
+	repo.CreatedAt = now.Add(-time.Hour)
+	repo.UpdatedAt = now
+	jvs := &fakeHistoryJVSRunner{directSummary: jvsrunner.DirectListSummary{
+		HistoryHeadID: "sp_002",
+		SavePoints: []jvsrunner.DirectSavePointSummary{
+			{SavePointID: "sp_002", Message: "second", CreatedAt: "2026-05-05T12:01:00Z", HistoryHead: true},
+			{SavePointID: "sp_001", Message: "first", CreatedAt: "2026-05-05T12:00:00Z"},
+		},
+	}}
+	reader, err := NewJVSBackedSavePointHistoryReader(JVSBackedSavePointHistoryReaderConfig{
+		RepoReader:   &fakeRepoReader{repos: []resources.Repo{repo}},
+		VolumeReader: &fakeVolumeReader{volume: savePointHistoryVolume(now)},
+		JVSRunner:    jvs,
+		VolumeRoots:  map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+	})
+	if err != nil {
+		t.Fatalf("NewJVSBackedSavePointHistoryReader: %v", err)
+	}
+
+	history, err := reader.ListSavePoints(context.Background(), "ns_123", "repo_123")
+	if err != nil {
+		t.Fatalf("ListSavePoints: %v", err)
+	}
+	if jvs.calls != 1 {
+		t.Fatalf("direct list calls = %d, want 1", jvs.calls)
+	}
+	if !strings.HasSuffix(jvs.directTarget.ControlRoot, "/afscp/namespaces/ns_123/repos/repo_123/control") ||
+		!strings.HasSuffix(jvs.directTarget.Home, "/afscp/namespaces/ns_123/repos/repo_123/payload") {
+		t.Fatalf("direct target = %#v, want resolved control/payload roots", jvs.directTarget)
+	}
+	if len(history.SavePoints) != 2 || history.SavePoints[0].SavePointID != "sp_002" || history.SavePoints[1].SavePointID != "sp_001" {
+		t.Fatalf("history = %#v, want direct list order preserved", history)
 	}
 }
 
@@ -138,17 +177,25 @@ func (reader *fakeVolumeReader) GetVolume(_ context.Context, _ string) (resource
 }
 
 type fakeHistoryJVSRunner struct {
-	calls       int
-	controlRoot string
-	summary     jvsrunner.HistorySummary
-	err         error
+	calls         int
+	directTarget  jvsrunner.DirectTarget
+	summary       jvsrunner.HistorySummary
+	directSummary jvsrunner.DirectListSummary
+	err           error
 }
 
-func (runner *fakeHistoryJVSRunner) History(_ context.Context, controlRoot string) (jvsrunner.HistorySummary, error) {
+func (runner *fakeHistoryJVSRunner) DirectList(_ context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error) {
 	runner.calls++
-	runner.controlRoot = controlRoot
+	runner.directTarget = target
 	if runner.err != nil {
-		return jvsrunner.HistorySummary{}, runner.err
+		return jvsrunner.DirectListSummary{}, runner.err
 	}
-	return runner.summary, nil
+	if runner.directSummary.HistoryHeadID != "" || len(runner.directSummary.SavePoints) > 0 {
+		return runner.directSummary, nil
+	}
+	savePoints := make([]jvsrunner.DirectSavePointSummary, 0, len(runner.summary.SavePoints))
+	for _, savePoint := range runner.summary.SavePoints {
+		savePoints = append(savePoints, jvsrunner.DirectSavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, CreatedAt: savePoint.CreatedAt, HistoryHead: savePoint.SavePointID == runner.summary.NewestSavePointID})
+	}
+	return jvsrunner.DirectListSummary{HistoryHeadID: runner.summary.NewestSavePointID, SavePoints: savePoints}, nil
 }

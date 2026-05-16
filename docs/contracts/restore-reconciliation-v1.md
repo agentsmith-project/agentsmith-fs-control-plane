@@ -4,7 +4,7 @@ Status: GA implementation-baseline contract. FINAL GA is governed by
 `docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and
 `scripts/verify-ga-release.sh`.
 
-This contract defines the AFSCP after-restore safety mode. It is not JVS restore-run, not a backup scheduler, not object-store restore orchestration, and not a production DR certification gate.
+This contract defines the AFSCP after-restore safety mode. It is not direct restore execution, not a backup scheduler, not object-store restore orchestration, and not a production DR certification gate.
 
 ## Modes
 
@@ -29,7 +29,7 @@ This contract defines the AFSCP after-restore safety mode. It is not JVS restore
 
 ## Non-Goals
 
-The contract does not define backup creation, snapshot scheduling, object-store restore, JVS restore-run behavior, production deployment state, manual release approval, purge positive behavior, or external project gates.
+The contract does not define backup creation, snapshot scheduling, object-store restore, direct restore behavior, production deployment state, manual release approval, purge positive behavior, or external project gates.
 
 ## Gate
 

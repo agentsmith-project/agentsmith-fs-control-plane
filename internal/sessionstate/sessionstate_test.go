@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestRestoreRunWriterGateExportSemantics(t *testing.T) {
+func TestRestoreWriterGateExportSemantics(t *testing.T) {
 	now := testNow()
 	tests := []struct {
 		name        string
@@ -26,7 +26,7 @@ func TestRestoreRunWriterGateExportSemantics(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decision := RestoreRunWriterGate(GateRequest{
+			decision := RestoreWriterGate(GateRequest{
 				NamespaceID:    "ns_123",
 				RepoID:         "repo_123",
 				Now:            now,
@@ -37,28 +37,28 @@ func TestRestoreRunWriterGateExportSemantics(t *testing.T) {
 	}
 }
 
-func TestRestoreRunWriterGateRequiresTerminalExportEvidence(t *testing.T) {
+func TestRestoreWriterGateRequiresTerminalExportEvidence(t *testing.T) {
 	now := testNow()
 	for _, status := range []ExportStatus{ExportStatusRevoked, ExportStatusExpired, ExportStatusFailed} {
 		t.Run(string(status)+" without terminal observed", func(t *testing.T) {
 			session := exportDrainedFixture(now, status)
 			session.StatusReason = "terminal_reconciled"
-			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{session}})
+			decision := RestoreWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{session}})
 			assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
 		})
 		t.Run(string(status)+" terminal observed", func(t *testing.T) {
-			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{exportTerminalFixture(now, status)}})
+			decision := RestoreWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{exportTerminalFixture(now, status)}})
 			assertDecision(t, decision, true, "")
 		})
 	}
 
 	failedWithoutReason := exportTerminalFixture(now, ExportStatusFailed)
 	failedWithoutReason.StatusReason = ""
-	decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{failedWithoutReason}})
+	decision := RestoreWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{failedWithoutReason}})
 	assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
 }
 
-func TestRestoreRunWriterGateStaleExportObservationFailsClosed(t *testing.T) {
+func TestRestoreWriterGateStaleExportObservationFailsClosed(t *testing.T) {
 	now := testNow()
 	staleHeartbeat := exportFixture(AccessModeReadWrite, ExportStatusActive, now.Add(time.Hour))
 	staleHeartbeat.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Second))
@@ -69,7 +69,7 @@ func TestRestoreRunWriterGateStaleExportObservationFailsClosed(t *testing.T) {
 	notDrained.GatewayHeartbeatExpiresAt = timePtr(now.Add(-time.Second))
 
 	for _, session := range []ExportSession{staleHeartbeat, staleObservation, notDrained} {
-		decision := RestoreRunWriterGate(GateRequest{
+		decision := RestoreWriterGate(GateRequest{
 			NamespaceID:    "ns_123",
 			RepoID:         "repo_123",
 			Now:            now,
@@ -79,7 +79,7 @@ func TestRestoreRunWriterGateStaleExportObservationFailsClosed(t *testing.T) {
 	}
 }
 
-func TestRestoreRunWriterGateAllowsExportDrainedWithExpiredHeartbeat(t *testing.T) {
+func TestRestoreWriterGateAllowsExportDrainedWithExpiredHeartbeat(t *testing.T) {
 	now := testNow()
 	tests := []struct {
 		name    string
@@ -105,7 +105,7 @@ func TestRestoreRunWriterGateAllowsExportDrainedWithExpiredHeartbeat(t *testing.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			restore := RestoreRunWriterGate(GateRequest{
+			restore := RestoreWriterGate(GateRequest{
 				NamespaceID:    "ns_123",
 				RepoID:         "repo_123",
 				Now:            now,
@@ -116,7 +116,7 @@ func TestRestoreRunWriterGateAllowsExportDrainedWithExpiredHeartbeat(t *testing.
 	}
 }
 
-func TestRestoreRunWriterGateRejectsWriteDrainedAtZeroWithExpiredHeartbeat(t *testing.T) {
+func TestRestoreWriterGateRejectsWriteDrainedAtZeroWithExpiredHeartbeat(t *testing.T) {
 	now := testNow()
 	zero := time.Time{}
 	tests := []struct {
@@ -145,7 +145,7 @@ func TestRestoreRunWriterGateRejectsWriteDrainedAtZeroWithExpiredHeartbeat(t *te
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decision := RestoreRunWriterGate(GateRequest{
+			decision := RestoreWriterGate(GateRequest{
 				NamespaceID:    "ns_123",
 				RepoID:         "repo_123",
 				Now:            now,
@@ -171,7 +171,7 @@ func TestLifecycleDrainGateBlocksDrainedNonTerminalExportWithExpiredHeartbeat(t 
 	assertDecision(t, decision, false, ErrorFamilyStaleSessionsBlockLifecycle)
 }
 
-func TestRestoreRunWriterGateMountSemantics(t *testing.T) {
+func TestRestoreWriterGateMountSemantics(t *testing.T) {
 	now := testNow()
 	tests := []struct {
 		name        string
@@ -195,7 +195,7 @@ func TestRestoreRunWriterGateMountSemantics(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decision := RestoreRunWriterGate(GateRequest{
+			decision := RestoreWriterGate(GateRequest{
 				NamespaceID: "ns_123",
 				RepoID:      "repo_123",
 				Now:         now,
@@ -206,21 +206,21 @@ func TestRestoreRunWriterGateMountSemantics(t *testing.T) {
 	}
 }
 
-func TestRestoreRunWriterGateTerminalMountEvidenceMatrix(t *testing.T) {
+func TestRestoreWriterGateTerminalMountEvidenceMatrix(t *testing.T) {
 	now := testNow()
 	for _, status := range []MountStatus{MountStatusReleased, MountStatusRevoked, MountStatusExpired, MountStatusFailed} {
 		t.Run(string(status)+" without evidence", func(t *testing.T) {
-			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mountFixture(false, status, now.Add(-time.Hour))}})
+			decision := RestoreWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mountFixture(false, status, now.Add(-time.Hour))}})
 			assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
 		})
 		t.Run(string(status)+" confirmed unmounted", func(t *testing.T) {
 			mount := mountWithEvidence(mountFixture(false, status, now.Add(-time.Hour)), timePtr(now.Add(-time.Minute)), nil, nil)
-			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
+			decision := RestoreWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
 			assertDecision(t, decision, true, "")
 		})
 		t.Run(string(status)+" unable to write", func(t *testing.T) {
 			mount := mountWithEvidence(mountFixture(false, status, now.Add(-time.Hour)), nil, timePtr(now.Add(-time.Minute)), nil)
-			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
+			decision := RestoreWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
 			switch status {
 			case MountStatusReleased, MountStatusRevoked:
 				assertDecision(t, decision, true, "")
@@ -232,7 +232,7 @@ func TestRestoreRunWriterGateTerminalMountEvidenceMatrix(t *testing.T) {
 		})
 		t.Run(string(status)+" terminal observed only", func(t *testing.T) {
 			mount := mountWithEvidence(mountFixture(false, status, now.Add(-time.Hour)), nil, nil, timePtr(now.Add(-time.Minute)))
-			decision := RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
+			decision := RestoreWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{mount}})
 			assertDecision(t, decision, false, ErrorFamilyStaleWriterSessionUncertain)
 		})
 	}
@@ -325,7 +325,7 @@ func TestLifecycleDrainGateRequiresTerminalExportNonAccessingEvidence(t *testing
 
 func TestGateAggregatesActiveBeforeStale(t *testing.T) {
 	now := testNow()
-	restore := RestoreRunWriterGate(GateRequest{
+	restore := RestoreWriterGate(GateRequest{
 		NamespaceID: "ns_123",
 		RepoID:      "repo_123",
 		Now:         now,
@@ -356,7 +356,7 @@ func TestGateIgnoresOtherRepoSessions(t *testing.T) {
 	otherRepoMount.RepoID = "repo_other"
 	otherRepoMount.NamespaceID = "ns_other"
 
-	restore := RestoreRunWriterGate(GateRequest{
+	restore := RestoreWriterGate(GateRequest{
 		NamespaceID:    "ns_123",
 		RepoID:         "repo_123",
 		Now:            now,
@@ -383,7 +383,7 @@ func TestGateFailsClosedForSameRepoNamespaceMismatch(t *testing.T) {
 	badMount.NamespaceID = "ns_other"
 
 	for _, decision := range []Decision{
-		RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
+		RestoreWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
 		LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{badMount}}),
 	} {
 		assertDecision(t, decision, false, ErrorFamilyInternalError)
@@ -402,7 +402,7 @@ func TestGateInvalidSameRepoSessionFailsClosedWithoutSecretLeak(t *testing.T) {
 	badMount := mountFixture(false, MountStatusActive, time.Time{})
 
 	for _, decision := range []Decision{
-		RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
+		RestoreWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
 		LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, Mounts: []WorkloadMountBinding{badMount}}),
 	} {
 		assertDecision(t, decision, false, ErrorFamilyInternalError)
@@ -421,7 +421,7 @@ func TestGateInvalidTerminalExportActiveCountsFailsClosed(t *testing.T) {
 	badExport.ActiveRequestCount = 1
 
 	for _, decision := range []Decision{
-		RestoreRunWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
+		RestoreWriterGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
 		LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123", Now: now, ExportSessions: []ExportSession{badExport}}),
 	} {
 		assertDecision(t, decision, false, ErrorFamilyInternalError)
@@ -432,7 +432,7 @@ func TestGateInvalidTerminalExportActiveCountsFailsClosed(t *testing.T) {
 }
 
 func TestGateInvalidTargetFailsClosed(t *testing.T) {
-	decision := RestoreRunWriterGate(GateRequest{NamespaceID: "namespace", RepoID: "repo_123", Now: testNow()})
+	decision := RestoreWriterGate(GateRequest{NamespaceID: "namespace", RepoID: "repo_123", Now: testNow()})
 	assertDecision(t, decision, false, ErrorFamilyInternalError)
 
 	decision = LifecycleDrainGate(GateRequest{NamespaceID: "ns_123", RepoID: "repo_123"})

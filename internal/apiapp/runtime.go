@@ -42,14 +42,7 @@ type InternalStore interface {
 	api.OperationIntakeStore
 	api.RepoCreateOperationIntakeStore
 	api.TemplateOperationIntakeStore
-	api.RestorePreviewOperationIntakeStore
-	api.RestorePreviewDiscardOperationIntakeStore
-	api.RestoreRunOperationIntakeStore
 	api.OperationIdempotencyLookupStore
-	api.RestorePreviewPlanGateReader
-	api.RestorePreviewDiscardMetadataReader
-	api.RestoreRunMetadataReader
-	api.RestoreRunIntakeGateReader
 	api.WorkloadMountBindingReader
 	api.WorkloadMountPlanReader
 	api.ExportStore
@@ -230,7 +223,6 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		WorkloadMountAdmissionDisabled: apiAdmissionCapabilityDisabled(disabledAdmission, capability.WorkloadMountBinding),
 		RepoTemplateAdmissionDisabled:  apiAdmissionCapabilityDisabled(disabledAdmission, capability.RepoTemplate),
 		RepoPurgeAdmissionDisabled:     apiAdmissionCapabilityDisabled(disabledAdmission, capability.RepoPurge),
-		DirectRestoreAdmissionDisabled: directRestoreAdmissionDisabled(cfg),
 	})
 
 	return &Runtime{Handler: handler, close: handle.Close}, nil
@@ -250,15 +242,6 @@ func apiAdmissionCapabilityDisabled(disabled map[capability.ID]bool, capabilityI
 		return false
 	}
 	return disabled[capabilityID]
-}
-
-func directRestoreAdmissionDisabled(cfg config.Config) bool {
-	restore := cfg.Worker.OperationRecovery.Restore
-	return !restore.Enabled ||
-		!restore.JVSDirectRestoreRequired ||
-		strings.TrimSpace(restore.JVSDirectRestoreSourceRef) == "" ||
-		strings.TrimSpace(restore.JVSBinarySHA256) == "" ||
-		restore.JVSBinarySHA256 == config.JVSAcceptedLinuxAMD64SHA256
 }
 
 type volumeRootBackendHealthProbe struct {
@@ -344,7 +327,7 @@ func NewSavePointHistoryJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryC
 
 func expectedJVSBinarySHA256(cfg config.WorkerRepoCreateRecoveryConfig) (string, error) {
 	if cfg.JVSDirectRestoreRequired {
-		if strings.TrimSpace(cfg.JVSDirectRestoreSourceRef) == "" || cfg.JVSBinarySHA256 == config.JVSAcceptedLinuxAMD64SHA256 {
+		if strings.TrimSpace(cfg.JVSDirectRestoreSourceRef) == "" {
 			return "", errors.New("jvs direct restore artifact declaration is required")
 		}
 		return cfg.JVSBinarySHA256, nil

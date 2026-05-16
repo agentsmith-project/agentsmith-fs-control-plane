@@ -15,9 +15,6 @@ var (
 	ErrRepoAlreadyExists         = errors.New("repo already exists")
 	ErrMissingOperationBoundary  = errors.New("missing durable operation boundary")
 	ErrRepoJVSMutationInProgress = errors.New("repo jvs mutation in progress")
-	ErrActiveRestorePlan         = errors.New("active restore plan")
-	ErrRestoreRunAlreadyExists   = errors.New("restore run already exists")
-	ErrRestorePlanNotPending     = errors.New("restore plan not pending")
 )
 
 type IdempotencyScope struct {

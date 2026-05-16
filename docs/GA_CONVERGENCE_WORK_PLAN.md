@@ -33,7 +33,7 @@ AFSCP 的职责是提供稳定的 storage control plane primitive：
 
 完成后的目标状态：
 
-- 默认 GA 闭环可证明：namespace/volume binding、repo create/get、save/history/restore-preview/restore-run/discard、WebDAV export/revoke、operation/audit/recovery。
+- 默认 GA 闭环可证明：namespace/volume binding、repo create/get、save/history/direct restore、WebDAV export/revoke、operation/audit/recovery。
 - 高风险能力可以保留在同一 GA 产品中，但必须 capability-gated：workload mount、template/clone、purge/break-glass、需要特定 runtime 的 mutation 只能在 capability ready 时接受请求。
 - 不满足 capability、lease、approval、fence、session drain 或 consistency 条件时，API 稳定拒绝，或 worker 将历史 operation 明确终态化。
 - operator 可以发现、定位、阻断、修复和审计最小必要问题，不依赖临时 SQL 作为唯一手段。
@@ -238,7 +238,7 @@ TDD 与自动化验收：
 方案：
 
 - 定义 restore consistency contract，覆盖 control-plane snapshot timestamp、storage generation 或等价 marker、tombstone/purge marker、restore reconciliation mode。
-- 恢复后进入 reconciliation mode，在一致性检查完成前禁止新 credential、mount plan、restore-run 和 purge。
+- 恢复后进入 reconciliation mode，在一致性检查完成前禁止新 credential、mount plan、direct restore 和 purge。
 - 不自动重发 WebDAV credential。
 - 不复活 purged repo。
 - metadata 与 storage 不一致时进入 operator intervention，而不是静默修复。
@@ -392,7 +392,7 @@ bash scripts/verify-ga-release.sh
 - operation terminalization/recovery tests。
 - Postgres migration/transaction/idempotency/lease/fence/audit outbox integration tests。
 - WebDAV gateway + ledger e2e。
-- JVS pinned public release binary + checksum + release-provided signature/bundle verification，以及 save/history/restore-preview/restore-run/discard/clone/doctor smoke。
+- JVS pinned public release binary + checksum + release-provided signature/bundle verification，以及 save/history/direct restore、clone、doctor smoke。
 - 如果 JVS 上游缺少某类 provenance 证明，evidence manifest 必须记录可自动验证的替代证据；不能用文字声明代替。
 - repo-local generated-client 最小 fixture 编译，不扩展成多语言兼容矩阵。
 - product-neutral conformance/smoke。

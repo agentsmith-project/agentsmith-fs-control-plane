@@ -254,8 +254,7 @@ func TestRestoreReconciliationModeDeniesRestoreSaveLifecycleBeforeOperationCreat
 		"createRepo",
 		"archiveRepo",
 		"createSavePoint",
-		"restorePreview",
-		"restoreRun",
+		"restore",
 		"createRepoTemplate",
 	} {
 		t.Run(operationID, func(t *testing.T) {

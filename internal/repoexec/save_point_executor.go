@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,7 +20,7 @@ import (
 
 type SavePointConfig struct {
 	Store        savePointCreateStore
-	JVSRunner    JVSRunner
+	JVSRunner    SavePointJVSRunner
 	Owner        string
 	Now          time.Time
 	Clock        func() time.Time
@@ -34,9 +33,14 @@ type savePointCreateStore interface {
 	store.SavePointCreateOperationMetadataReader
 }
 
+type SavePointJVSRunner interface {
+	DirectSave(ctx context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error)
+	DirectList(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error)
+}
+
 type SavePointExecutor struct {
 	store        savePointCreateStore
-	jvs          JVSRunner
+	jvs          SavePointJVSRunner
 	owner        string
 	now          time.Time
 	clock        func() time.Time
@@ -118,7 +122,7 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	if err := executor.validateMetadata(ctx, record, repo); err != nil {
 		return executor.commitSavePointFailed(ctx, record, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed")
 	}
-	controlRoot, err := executor.controlRoot(repo)
+	target, err := executor.directTarget(repo)
 	if err != nil {
 		return executor.commitSavePointIntervention(ctx, record, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed", nil)
 	}
@@ -127,9 +131,9 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	preSavePointer, hasMarker := preSavePointer(working)
 	var history jvsrunner.HistorySummary
 	if !hasMarker {
-		history, err = executor.jvs.History(ctx, controlRoot)
+		history, err = executor.directHistory(ctx, target)
 		if err != nil {
-			return executor.commitSavePointIntervention(ctx, record, "JVS_HISTORY_FAILED", "jvs history failed", withJVSErrorDetails(nil, err))
+			return executor.commitSavePointIntervention(ctx, record, "JVS_HISTORY_FAILED", "jvs direct list failed", withJVSErrorDetails(nil, err))
 		}
 		preSavePointer = history.NewestSavePointID
 		working = withPreSavePointer(working, preSavePointer)
@@ -141,9 +145,9 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 		}
 		working = updated
 	} else {
-		history, err = executor.jvs.History(ctx, controlRoot)
+		history, err = executor.directHistory(ctx, target)
 		if err != nil {
-			return executor.commitSavePointIntervention(ctx, working, "JVS_HISTORY_FAILED", "jvs history failed", withJVSErrorDetails(nil, err))
+			return executor.commitSavePointIntervention(ctx, working, "JVS_HISTORY_FAILED", "jvs direct list failed", withJVSErrorDetails(nil, err))
 		}
 	}
 
@@ -153,67 +157,15 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 		return executor.commitSavePointSuccess(ctx, working, adopted, message, false, false, true)
 	}
 
-	attempt := executor.saveWithRepoBusyRepairRetry(ctx, controlRoot, message)
-	if attempt.err != nil {
-		details := withJVSErrorDetails(map[string]any{"pre_save_newest_save_point_id": preSavePointer}, attempt.err)
-		details = withJVSRepairDetails(details, attempt.repair, attempt.repairErr)
-		if isJVSRepoBusyError(attempt.err) {
-			return executor.commitSavePointFailedWithDetails(ctx, working, "JVS_COMMAND_FAILED", "jvs save blocked by active repo access", true, details)
+	saved, err := executor.jvs.DirectSave(ctx, target, message)
+	if err != nil {
+		details := withJVSErrorDetails(map[string]any{"pre_save_newest_save_point_id": preSavePointer}, err)
+		if isJVSRepoBusyError(err) {
+			return executor.commitSavePointFailedWithDetails(ctx, working, "JVS_COMMAND_FAILED", "jvs direct save blocked by active repo access", true, details)
 		}
-		return executor.commitSavePointIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs save failed", details)
+		return executor.commitSavePointIntervention(ctx, working, "JVS_COMMAND_FAILED", "jvs direct save failed", details)
 	}
-	working = withJVSRepairVerification(working, attempt.repair)
-	return executor.commitSavePointSuccess(ctx, working, savePointFromSaveSummary(attempt.saved, message), message, attempt.saved.UnsavedChanges, true, false)
-}
-
-type savePointSaveAttempt struct {
-	saved     jvsrunner.SaveSummary
-	repair    *jvsrunner.DoctorRepairRuntimeSummary
-	err       error
-	repairErr error
-}
-
-func (executor *SavePointExecutor) saveWithRepoBusyRepairRetry(ctx context.Context, controlRoot, message string) savePointSaveAttempt {
-	saved, err := executor.jvs.Save(ctx, controlRoot, message)
-	if err == nil || !isJVSRepoBusyError(err) {
-		return savePointSaveAttempt{saved: saved, err: err}
-	}
-
-	repair, repairErr := executor.jvs.DoctorRepairRuntime(ctx, controlRoot)
-	if repairErr != nil {
-		return savePointSaveAttempt{saved: saved, err: err, repairErr: repairErr}
-	}
-
-	attempt := savePointSaveAttempt{repair: &repair}
-	attempt.saved, attempt.err = executor.saveWithTransientRepoBusyRetry(ctx, controlRoot, message)
-	return attempt
-}
-
-func (executor *SavePointExecutor) saveWithTransientRepoBusyRetry(ctx context.Context, controlRoot, message string) (jvsrunner.SaveSummary, error) {
-	const maxAttempts = 2
-	const retryDelay = 100 * time.Millisecond
-
-	var saved jvsrunner.SaveSummary
-	var err error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		saved, err = executor.jvs.Save(ctx, controlRoot, message)
-		if err == nil || !isJVSRepoBusyError(err) || attempt == maxAttempts-1 {
-			return saved, err
-		}
-		timer := time.NewTimer(retryDelay)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return jvsrunner.SaveSummary{}, ctx.Err()
-		case <-timer.C:
-		}
-	}
-	return saved, err
+	return executor.commitSavePointSuccess(ctx, working, savePointFromDirectSaveSummary(saved, message), message, false, false, false)
 }
 
 func (executor *SavePointExecutor) validateMetadata(ctx context.Context, record operations.OperationRecord, repo resources.Repo) error {
@@ -240,20 +192,24 @@ func (executor *SavePointExecutor) validateMetadata(ctx context.Context, record 
 	return nil
 }
 
-func (executor *SavePointExecutor) controlRoot(repo resources.Repo) (string, error) {
+func (executor *SavePointExecutor) directTarget(repo resources.Repo) (jvsrunner.DirectTarget, error) {
 	root, ok := executor.volumeRoots[repo.VolumeID]
 	if !ok {
-		return "", errors.New("missing volume root")
+		return jvsrunner.DirectTarget{}, errors.New("missing volume root")
 	}
-	cleanSubdir := filepath.Clean(repo.ControlVolumeSubdir)
-	if cleanSubdir == "." || filepath.IsAbs(cleanSubdir) || strings.HasPrefix(cleanSubdir, ".."+string(filepath.Separator)) || cleanSubdir == ".." {
-		return "", errors.New("invalid control subdir")
+	roots, err := pathresolver.ResolveRepoRootPaths(root, repo.NamespaceID, repo.ID)
+	if err != nil || roots.ControlVolumeSubdir != repo.ControlVolumeSubdir || roots.PayloadVolumeSubdir != repo.PayloadVolumeSubdir {
+		return jvsrunner.DirectTarget{}, errors.New("invalid repo roots")
 	}
-	controlRoot := filepath.Join(root, cleanSubdir)
-	if !strings.HasPrefix(controlRoot, root+string(filepath.Separator)) {
-		return "", errors.New("invalid control root")
+	return jvsrunner.DirectTarget{ControlRoot: roots.ControlRootPath, Home: roots.PayloadRootPath}, nil
+}
+
+func (executor *SavePointExecutor) directHistory(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.HistorySummary, error) {
+	direct, err := executor.jvs.DirectList(ctx, target)
+	if err != nil {
+		return jvsrunner.HistorySummary{}, err
 	}
-	return controlRoot, nil
+	return historySummaryFromDirectList(direct), nil
 }
 
 func (executor *SavePointExecutor) currentTime() time.Time {
@@ -315,7 +271,6 @@ func (executor *SavePointExecutor) commitSavePointFailedWithDetails(ctx context.
 	operation := savePointFailedOperation(record, now, operations.OperationStateFailed, code, message, retryable)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
 	attachJVSErrorDetails(&operation, details)
-	attachJVSRepairDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "save_point_create_failed", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err
@@ -334,7 +289,6 @@ func (executor *SavePointExecutor) commitSavePointIntervention(ctx context.Conte
 	operation := savePointFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message, false)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
 	attachJVSErrorDetails(&operation, details)
-	attachJVSRepairDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "save_point_create_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
 		return err
@@ -412,18 +366,6 @@ func withPreSavePointer(record operations.OperationRecord, pointer string) opera
 	return record
 }
 
-func withJVSRepairVerification(record operations.OperationRecord, repair *jvsrunner.DoctorRepairRuntimeSummary) operations.OperationRecord {
-	if repair == nil {
-		return record
-	}
-	verification := asStringAnyMap(record.VerificationResult)
-	verification[jvsRepairAttemptedDetail] = true
-	verification[jvsRepairSucceededDetail] = true
-	verification[jvsRepairCleanLocksCleanedDetail] = repair.CleanLocks.Cleaned
-	record.VerificationResult = verification
-	return record
-}
-
 func savePointCreatedAfter(history jvsrunner.HistorySummary, preSavePointer string) (jvsrunner.SavePointSummary, bool, bool) {
 	if preSavePointer != "" {
 		for idx, savePoint := range history.SavePoints {
@@ -446,8 +388,20 @@ func exactlyOneSavePoint(created []jvsrunner.SavePointSummary) (jvsrunner.SavePo
 	return created[0], true, false
 }
 
-func savePointFromSaveSummary(summary jvsrunner.SaveSummary, message string) jvsrunner.SavePointSummary {
+func savePointFromDirectSaveSummary(summary jvsrunner.DirectSaveSummary, fallbackMessage string) jvsrunner.SavePointSummary {
+	message := summary.Message
+	if strings.TrimSpace(message) == "" {
+		message = fallbackMessage
+	}
 	return jvsrunner.SavePointSummary{SavePointID: summary.SavePointID, Message: message, CreatedAt: summary.CreatedAt}
+}
+
+func historySummaryFromDirectList(summary jvsrunner.DirectListSummary) jvsrunner.HistorySummary {
+	savePoints := make([]jvsrunner.SavePointSummary, 0, len(summary.SavePoints))
+	for _, savePoint := range summary.SavePoints {
+		savePoints = append(savePoints, jvsrunner.SavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, CreatedAt: savePoint.CreatedAt})
+	}
+	return jvsrunner.HistorySummary{NewestSavePointID: summary.HistoryHeadID, SavePoints: savePoints}
 }
 
 func savePointRepoAccessFencesFromStore(existing []fences.Fence) []repoaccess.Fence {

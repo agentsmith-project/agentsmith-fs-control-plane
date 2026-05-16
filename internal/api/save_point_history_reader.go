@@ -18,7 +18,7 @@ type VolumeReader interface {
 }
 
 type JVSHistoryRunner interface {
-	History(ctx context.Context, controlRoot string) (jvsrunner.HistorySummary, error)
+	DirectList(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error)
 }
 
 type JVSBackedSavePointHistoryReaderConfig struct {
@@ -88,14 +88,22 @@ func (reader *JVSBackedSavePointHistoryReader) ListSavePoints(ctx context.Contex
 		return SavePointHistory{}, errSavePointHistoryUnavailable
 	}
 	roots, err := pathresolver.ResolveRepoRootPaths(volumeRoot, namespaceID, repoID)
-	if err != nil || roots.ControlVolumeSubdir != repo.ControlVolumeSubdir {
+	if err != nil || roots.ControlVolumeSubdir != repo.ControlVolumeSubdir || roots.PayloadVolumeSubdir != repo.PayloadVolumeSubdir {
 		return SavePointHistory{}, errSavePointHistoryUnavailable
 	}
-	history, err := reader.jvs.History(ctx, roots.ControlRootPath)
+	history, err := reader.jvs.DirectList(ctx, jvsrunner.DirectTarget{ControlRoot: roots.ControlRootPath, Home: roots.PayloadRootPath})
 	if err != nil {
 		return SavePointHistory{}, errSavePointHistoryUnavailable
 	}
-	return savePointHistoryFromJVSSummary(repoID, history)
+	return savePointHistoryFromJVSSummary(repoID, historySummaryFromDirectList(history))
+}
+
+func historySummaryFromDirectList(history jvsrunner.DirectListSummary) jvsrunner.HistorySummary {
+	savePoints := make([]jvsrunner.SavePointSummary, 0, len(history.SavePoints))
+	for _, savePoint := range history.SavePoints {
+		savePoints = append(savePoints, jvsrunner.SavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, CreatedAt: savePoint.CreatedAt})
+	}
+	return jvsrunner.HistorySummary{NewestSavePointID: history.HistoryHeadID, SavePoints: savePoints}
 }
 
 func savePointHistoryFromJVSSummary(repoID string, history jvsrunner.HistorySummary) (SavePointHistory, error) {

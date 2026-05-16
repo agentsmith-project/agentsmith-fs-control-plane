@@ -9,8 +9,7 @@ import (
 )
 
 const (
-	directRestoreLocalJVSBinarySHA256 = "c88553bb18bdd70e1399bf562fcb853bd200798498bd24bc25458196fb568902"
-	directRestoreJVSSourceRef         = "jvs@c65b418f58d6e39e91199c1d55783e2ec91be9a1"
+	directRestoreEvidencePath = "docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md"
 )
 
 func TestDockerfilePackagesPinnedJVSLinuxAMD64Binary(t *testing.T) {
@@ -24,8 +23,11 @@ func TestDockerfilePackagesPinnedJVSLinuxAMD64Binary(t *testing.T) {
 		"ARG JVS_VERSION=" + config.JVSAcceptedReleaseVersion,
 		"ARG JVS_ASSET=" + config.JVSAcceptedLinuxAMD64AssetName,
 		"ARG JVS_SHA256=" + config.JVSAcceptedLinuxAMD64SHA256,
-		"ADD --checksum=sha256:" + config.JVSAcceptedLinuxAMD64SHA256,
-		"https://github.com/agentsmith-project/jvs/releases/download/" + config.JVSAcceptedReleaseVersion + "/" + config.JVSAcceptedLinuxAMD64AssetName,
+		"ARG JVS_SOURCE_REF=" + config.JVSAcceptedSourceRef,
+		"ARG JVS_LOCAL_BINARY=dist/jvs-linux-amd64",
+		"COPY --chmod=0755 ${JVS_LOCAL_BINARY} /jvs",
+		"AFSCP_JVS_BINARY_SHA256=\"${JVS_SHA256}\"",
+		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF=\"${JVS_SOURCE_REF}\"",
 		"COPY --from=jvs --chmod=0755 /jvs /usr/local/bin/jvs",
 	} {
 		if !strings.Contains(dockerfile, want) {
@@ -64,29 +66,29 @@ func TestDockerfileFinalImageSupportsPinnedDynamicJVSBinary(t *testing.T) {
 	}
 }
 
-func TestJVSPinEvidenceDeclaresDirectRestoreGapAndOverride(t *testing.T) {
-	path := "docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md"
-	data, err := os.ReadFile(path)
+func TestCurrentJVSDirectLocalEvidenceMatchesPinnedBinary(t *testing.T) {
+	data, err := os.ReadFile(directRestoreEvidencePath)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		t.Fatalf("read %s: %v", directRestoreEvidencePath, err)
 	}
 	doc := string(data)
 	for _, want := range []string{
-		"restore --direct",
-		"does not declare",
-		"AFSCP_JVS_BINARY_PATH=<absolute path to direct-capable local JVS artifact>",
-		"AFSCP_JVS_BINARY_SHA256=" + directRestoreLocalJVSBinarySHA256,
-		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256=" + directRestoreLocalJVSBinarySHA256,
-		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF=" + directRestoreJVSSourceRef,
-		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256",
-		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF",
-		"vcs.revision=c65b418f58d6e39e91199c1d55783e2ec91be9a1",
-		"vcs.modified=false",
-		"--discard-unsaved",
+		"Status: current pre-GA AFSCP JVS implementation pin evidence.",
+		"version: " + config.JVSAcceptedReleaseVersion,
+		"artifact: " + config.JVSAcceptedLinuxAMD64AssetName,
+		"JVS binary artifact SHA-256: " + config.JVSAcceptedLinuxAMD64SHA256,
+		"source ref: " + config.JVSAcceptedSourceRef,
+		"jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json",
+		"restore preview",
+		"restore run",
+		"`--direct --discard-unsaved`",
 	} {
 		if !strings.Contains(doc, want) {
-			t.Fatalf("%s missing direct restore pin evidence marker %q", path, want)
+			t.Fatalf("%s missing direct restore pin evidence marker %q", directRestoreEvidencePath, want)
 		}
+	}
+	if strings.Contains(doc, "dirty") {
+		t.Fatalf("%s still describes the active source ref as dirty", directRestoreEvidencePath)
 	}
 }
 

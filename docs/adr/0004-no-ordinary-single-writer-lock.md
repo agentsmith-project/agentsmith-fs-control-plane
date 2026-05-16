@@ -10,9 +10,9 @@ The same repo may be accessed by clients, file APIs, and workloads. The product 
 
 AFSCP will not enforce a single-writer model for ordinary file IO. JuiceFS is responsible for filesystem-level consistency and locking semantics.
 
-AFSCP will serialize mutating JVS operations per repo, including save, restore-run, and clone.
+AFSCP will serialize mutating JVS operations per repo, including save, direct restore, and clone.
 
-Restore-run is not ordinary file IO. For GA it must acquire a per-repo writer-session fence, block new read-write export/workload mount issuance, and reject active or uncertain read-write export or workload mount sessions by default. A future operator break-glass flow may revoke/drain active sessions with explicit audit, but ordinary restore-run should not race active writers.
+Direct restore to a save point is not ordinary file IO. For GA it must acquire a per-repo writer-session fence, block new read-write export/workload mount issuance, and reject active or uncertain read-write export or workload mount sessions by default. A future operator break-glass flow may revoke/drain active sessions with explicit audit, but ordinary direct restore should not race active writers.
 
 Version merge and conflict resolution are out of scope.
 
@@ -28,4 +28,4 @@ Tradeoffs:
 
 - Last-writer-wins behavior may occur at file level.
 - Save points can capture partially written files.
-- Restore-run may be rejected while active read-write sessions exist; callers must surface this as a storage safety condition, not as a merge/conflict feature.
+- Direct restore may be rejected while active read-write sessions exist; callers must surface this as a storage safety condition, not as a merge/conflict feature.

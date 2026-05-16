@@ -31,7 +31,7 @@ Product-facing mapping:
 
 - `active`: ordinary repo operations may proceed when policy permits.
 - `archiving`: lifecycle fence is held and sessions are draining.
-- `archived`: retained storage is unavailable for ordinary export, mount, save, restore-run, template create, or clone target use.
+- `archived`: retained storage is unavailable for ordinary export, mount, save, direct restore, template create, or clone target use.
 - `restoring_archived`: archive reversal is running.
 - `deleting`: lifecycle fence is held, new sessions are blocked, existing sessions are draining, and tombstone is in progress.
 - `tombstoned`: caller-visible deleted state; retained storage may be restored only while retention policy allows.
@@ -61,11 +61,11 @@ runtime request ledger accounting, repo lifecycle worker drain checks,
 restore/template writer-fence admission, and read-write export/workload
 admission through shared repo-row serialization. Remaining endpoint coverage
 must stay covered by repo-local evidence.
-The session substrate pure model also exists for restore-run writer gating and
+The session substrate pure model also exists for direct restore writer gating and
 lifecycle drain gating over export and workload-mount sessions. Export sessions
 are wired to the API create/get/revoke boundary, WebDAV gateway admission and
 runtime request ledger accounting/recovery, terminal reconcile, and repo
-lifecycle worker drain checks. Workload-mount plan issuance and restore-run
+lifecycle worker drain checks. Workload-mount plan issuance and direct restore
 execution remain separate.
 
 ## Lifecycle Fence
@@ -78,7 +78,7 @@ While held, AFSCP rejects:
 - new exports
 - new workload mount bindings
 - save point creation
-- restore-run
+- direct restore
 - template creation from the repo
 - template clone into the repo
 - additional lifecycle operations unless the operation is an idempotent retry

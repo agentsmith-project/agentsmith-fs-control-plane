@@ -54,7 +54,7 @@ no row.
 
 The repair surface must not expose arbitrary SQL, generic state rewrite,
 generic JSON patch, arbitrary operation-state transitions, fence release,
-session mutation, restore plan mutation, repo/storage/JVS mutation, workload
+session mutation, restore mutation, repo/storage/JVS mutation, workload
 mutation, export session mutation, or purge/break-glass behavior.
 
 Additional repair actions require a new allowlist entry, preconditions,

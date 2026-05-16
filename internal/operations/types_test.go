@@ -21,9 +21,6 @@ func TestOperationTypesAreStableAndComplete(t *testing.T) {
 		"repo_purge",
 		"save_point_create",
 		"restore",
-		"restore_preview",
-		"restore_preview_discard",
-		"restore_run",
 		"template_create",
 		"template_clone",
 		"export_create",
@@ -98,45 +95,6 @@ func TestRestorePhasesAreStable(t *testing.T) {
 	}
 }
 
-func TestRestorePreviewPhasesAreStable(t *testing.T) {
-	if OperationPhaseRestorePreviewValidate != "validate_restore_preview" {
-		t.Fatalf("validate phase = %q, want validate_restore_preview", OperationPhaseRestorePreviewValidate)
-	}
-	if OperationPhaseRestorePreviewPreflightIdle != "restore_preview_preflight_idle" {
-		t.Fatalf("preflight phase = %q, want restore_preview_preflight_idle", OperationPhaseRestorePreviewPreflightIdle)
-	}
-	if OperationPhaseRestorePreviewCommitted != "restore_preview_committed" {
-		t.Fatalf("committed phase = %q, want restore_preview_committed", OperationPhaseRestorePreviewCommitted)
-	}
-}
-
-func TestRestorePreviewDiscardPhasesAreStable(t *testing.T) {
-	if OperationPhaseRestorePreviewDiscardValidate != "validate_restore_preview_discard" {
-		t.Fatalf("validate phase = %q, want validate_restore_preview_discard", OperationPhaseRestorePreviewDiscardValidate)
-	}
-	if OperationPhaseRestorePreviewDiscarding != "restore_preview_discarding" {
-		t.Fatalf("discarding phase = %q, want restore_preview_discarding", OperationPhaseRestorePreviewDiscarding)
-	}
-	if OperationPhaseRestorePreviewDiscardCommitted != "restore_preview_discard_committed" {
-		t.Fatalf("committed phase = %q, want restore_preview_discard_committed", OperationPhaseRestorePreviewDiscardCommitted)
-	}
-}
-
-func TestRestoreRunPhasesAreStable(t *testing.T) {
-	if OperationPhaseRestoreRunValidate != "validate_restore_run" {
-		t.Fatalf("validate phase = %q, want validate_restore_run", OperationPhaseRestoreRunValidate)
-	}
-	if OperationPhaseRestoreRunWriterFenced != "restore_run_writer_fenced" {
-		t.Fatalf("writer-fenced phase = %q, want restore_run_writer_fenced", OperationPhaseRestoreRunWriterFenced)
-	}
-	if OperationPhaseRestoreRunConsuming != "restore_run_consuming" {
-		t.Fatalf("consuming phase = %q, want restore_run_consuming", OperationPhaseRestoreRunConsuming)
-	}
-	if OperationPhaseRestoreRunCommitted != "restore_run_committed" {
-		t.Fatalf("committed phase = %q, want restore_run_committed", OperationPhaseRestoreRunCommitted)
-	}
-}
-
 func TestRouteOperationTypesReturnsDefensiveCopy(t *testing.T) {
 	mapped := RouteOperationTypes()
 	mapped["createRepo"] = OperationMigrationCutover
@@ -147,6 +105,25 @@ func TestRouteOperationTypesReturnsDefensiveCopy(t *testing.T) {
 	}
 	if got != OperationRepoCreate {
 		t.Fatalf("createRepo route operation type = %q, want %q", got, OperationRepoCreate)
+	}
+}
+
+func TestOperationModelDoesNotExposeLegacyRestorePlanOperations(t *testing.T) {
+	for _, typ := range OperationTypes() {
+		switch typ.String() {
+		case "restore_preview", "restore_preview_discard", "restore_run":
+			t.Fatalf("OperationTypes() includes legacy restore plan operation %q", typ)
+		}
+	}
+	for operationID, typ := range RouteOperationTypes() {
+		switch operationID {
+		case "restorePreview", "restorePreviewDiscard", "restoreRun":
+			t.Fatalf("RouteOperationTypes() exposes legacy route operation %q", operationID)
+		}
+		switch typ.String() {
+		case "restore_preview", "restore_preview_discard", "restore_run":
+			t.Fatalf("route operation %q maps to legacy restore plan operation %q", operationID, typ)
+		}
 	}
 }
 

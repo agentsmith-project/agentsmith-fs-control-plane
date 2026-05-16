@@ -57,7 +57,7 @@ func TestAdmitDeniesInactiveNamespaceAndBinding(t *testing.T) {
 	}
 }
 
-func TestAdmitRestorePreviewDiscardCleanupIntentMatrix(t *testing.T) {
+func TestAdmitRestoreIntentRequiresActiveNamespaceBinding(t *testing.T) {
 	disabledNamespace := namespaceFixture(resources.NamespaceStatusDisabled)
 	activeBinding := bindingFixture(resources.NamespaceStatusActive)
 	disabledBinding := bindingFixture(resources.NamespaceStatusDisabled)
@@ -69,51 +69,40 @@ func TestAdmitRestorePreviewDiscardCleanupIntentMatrix(t *testing.T) {
 		wantFamily ErrorFamily
 	}{
 		{
-			name: "disabled namespace active binding allows discard cleanup",
+			name: "disabled namespace active binding denies restore",
 			request: Request{
 				Repo:      repoFixture(resources.RepoStatusActive),
 				Namespace: disabledNamespace,
 				Binding:   activeBinding,
-				Intent:    IntentRestorePreviewDiscard,
-				Mode:      ModeReadOnly,
-			},
-			wantAllow: true,
-		},
-		{
-			name: "disabled namespace active binding does not allow ordinary restore-run",
-			request: Request{
-				Repo:      repoFixture(resources.RepoStatusActive),
-				Namespace: disabledNamespace,
-				Binding:   activeBinding,
-				Intent:    IntentRestoreRun,
+				Intent:    IntentRestore,
 				Mode:      ModeReadWrite,
 			},
 			wantFamily: ErrorFamilyNamespaceDisabled,
 		},
 		{
-			name: "disabled binding denies discard cleanup",
+			name: "disabled binding denies restore",
 			request: Request{
 				Repo:      repoFixture(resources.RepoStatusActive),
 				Namespace: namespaceFixture(resources.NamespaceStatusActive),
 				Binding:   disabledBinding,
-				Intent:    IntentRestorePreviewDiscard,
-				Mode:      ModeReadOnly,
+				Intent:    IntentRestore,
+				Mode:      ModeReadWrite,
 			},
 			wantFamily: ErrorFamilyNamespaceDisabled,
 		},
 		{
-			name:       "inactive repo denies discard cleanup",
-			request:    activeRequest(IntentRestorePreviewDiscard, ModeReadOnly, resources.RepoStatusArchiving, nil),
+			name:       "inactive repo denies restore",
+			request:    activeRequest(IntentRestore, ModeReadWrite, resources.RepoStatusArchiving, nil),
 			wantFamily: ErrorFamilyOperationRecoveryRequired,
 		},
 		{
-			name:       "archived repo denies discard cleanup",
-			request:    activeRequest(IntentRestorePreviewDiscard, ModeReadOnly, resources.RepoStatusArchived, nil),
+			name:       "archived repo denies restore",
+			request:    activeRequest(IntentRestore, ModeReadWrite, resources.RepoStatusArchived, nil),
 			wantFamily: ErrorFamilyRepoArchived,
 		},
 		{
-			name:       "lifecycle fence denies discard cleanup",
-			request:    activeRequest(IntentRestorePreviewDiscard, ModeReadOnly, resources.RepoStatusActive, []Fence{fenceFixture(FenceKindLifecycle, FenceStatusActive)}),
+			name:       "lifecycle fence denies restore",
+			request:    activeRequest(IntentRestore, ModeReadWrite, resources.RepoStatusActive, []Fence{fenceFixture(FenceKindLifecycle, FenceStatusActive)}),
 			wantFamily: ErrorFamilyRepoLifecycleFenceHeld,
 		},
 	}
@@ -200,7 +189,7 @@ func TestAdmitLifecycleFenceBlocksRepoAccessIntents(t *testing.T) {
 		IntentExportCreate,
 		IntentWorkloadMount,
 		IntentSavePointCreate,
-		IntentRestoreRun,
+		IntentRestore,
 		IntentTemplateCreateFromRepo,
 		IntentTemplateCloneIntoRepo,
 		IntentStorageMutation,
@@ -235,14 +224,14 @@ func TestAdmitWriterFenceBlocksReadWriteExportsAndMountsOnly(t *testing.T) {
 	}
 }
 
-func TestAdmitWriterFenceBlocksLifecycleOperationAndRestoreRun(t *testing.T) {
+func TestAdmitWriterFenceBlocksLifecycleOperationAndRestore(t *testing.T) {
 	tests := []struct {
 		name   string
 		intent Intent
 		mode   Mode
 	}{
 		{name: "lifecycle delete", intent: IntentLifecycleDelete, mode: ModeReadWrite},
-		{name: "restore run", intent: IntentRestoreRun, mode: ModeReadWrite},
+		{name: "restore", intent: IntentRestore, mode: ModeReadWrite},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

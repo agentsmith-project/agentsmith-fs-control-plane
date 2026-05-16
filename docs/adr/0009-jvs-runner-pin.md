@@ -1,92 +1,85 @@
-# ADR 0009: Pin Released JVS Runner Binary Before Storage Mutations
+# ADR 0009: Pin Direct-Capable JVS Before Storage Mutations
 
-Status: accepted for development handoff; active pin is JVS v0.4.9
+Status: accepted for pre-GA convergence; active pin is a local
+direct-capable JVS build
 
 ## Context
 
-AFSCP executes JVS for repo init, save, history, restore preview/run, clone, and
-doctor. Storage mutation handlers must not depend on an unpinned JVS binary or
-undocumented JSON shape.
+AFSCP executes JVS for repo init, save point operations, direct restore, clone,
+and metadata diagnostics. The active save/list/restore/status/doctor contract
+has been reset to direct `jvs afscp ...` commands. The old public save/history,
+strict doctor, restore preview/run/discard lifecycle, and
+`restore --direct --discard-unsaved` adapter are not active contract.
 
-JVS is published as GitHub release binaries. AFSCP should consume a verified
-release asset; it should not require rebuilding JVS locally during GA handoff.
+The previously recorded `v0.4.9` release does not contain the direct
+`jvs.afscp.direct.v1` surface. There is not yet a formal release artifact for
+the direct-capable JVS build, so pre-GA AFSCP pins a local binary plus source
+ref as explicit evidence instead of continuing to claim `v0.4.9` as active.
 
-Pinned release for the AFSCP runner contract:
+Pinned pre-GA local artifact:
 
 ```text
-release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.9
-version: v0.4.9
-asset: jvs-linux-amd64
-sha256: 0a1c6896cecf85ec2ac4e15e1c29f6e3f8cf09b9a4db48a516559604f0e7e944
-signature bundle: jvs-linux-amd64.bundle
+version: pre-ga-local-afscp-direct-2026-05-16
+artifact: afscp-jvs-direct-local-linux-amd64
+JVS binary artifact SHA-256: affa86a08dbb2195f594be0be01e9c3f128806f75d04826030afbe4ba283f2e2
+source ref: jvs@main:eb026cc48efb57ef64c9f3e482f0011b9232701b
+binary evidence path: /tmp/afscp-jvs-direct-local
 ```
 
 ## Decision
 
-Pin the AFSCP JVS runner contract to the GitHub release asset above for
-development handoff. Before storage mutation implementation, the development
-team must:
+Pin AFSCP's active direct JVS runtime to the local artifact above for pre-GA
+convergence. The AFSCP Dockerfile expects build pipelines to provide this
+verified direct-capable binary in the build context; it no longer downloads the
+old `v0.4.9` release asset.
 
-- package or download the verified release binary for each target platform,
-- verify `SHA256SUMS` and the matching cosign bundle where the deployment
-  pipeline supports Sigstore verification,
-- record the asset name, version, checksum, and smoke evidence in this ADR or
-  the runner contract, and
-- update this ADR and `docs/contracts/jvs-runner-contract-v1.md` before moving
-  to any newer JVS release.
+AFSCP direct commands must use:
 
-The release page's source revision is informational for traceability. It is not
-the AFSCP supply-chain pin, and developers should not compile JVS from source as
-the GA handoff path.
+```text
+jvs afscp --control-root <control> --home <home> save --message <message> --json
+jvs afscp --control-root <control> --home <home> list --json
+jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json
+jvs afscp --control-root <control> --home <home> status --json
+jvs afscp --control-root <control> --home <home> doctor --json
+```
 
-Required smoke surface:
+Save and restore hot paths do not call doctor/status by default. Status and
+doctor are explicit metadata-only diagnostics, recovery aids, or smoke checks.
 
-- external control root `init`
-- `save`
-- `history`
-- restore preview
-- restore-run
-- restore discard
-- recovery status for pending preview and post-discard/post-run idle states
-- `repo clone --target-control-root --save-points main`
-- `doctor --strict`
-- `doctor --strict --repair-runtime` for stale repository mutation lock cleanup
-  after save `E_REPO_BUSY`
-- clean controlled CWD behavior for post-init commands with explicit
-  `--control-root <control> --workspace main --json`
-- redacted JSON capture
+Non-direct JVS commands remain only for explicitly scoped repo init and repo
+clone paths until JVS provides direct AFSCP equivalents. They are not
+compatibility adapters for active direct save or restore, and they must not
+reintroduce public save/history or strict doctor validation.
 
-Accepted evidence:
+## Required Evidence
 
-JVS v0.4.9 release pin evidence records the active release URL, asset, and
-SHA-256 from the official `SHA256SUMS`. AFSCP runner tests pin the argv shape,
-JSON parsing, and fail-closed behavior for the external-control
-`doctor --strict --repair-runtime --json` stale repository mutation lock cleanup
-contract.
-
-Earlier pre-dev smoke with the pinned `v0.4.8` release binary passed the
-required external control-root, save/history, restore preview/run, post-restore
-recovery status, doctor, and clone-after-restore checks. That artifact remains
-historical context and is not the active pin.
-
-Evidence:
-
-- active pin: `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`
-- historical smoke: `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`
-- historical blocker: `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`
+- Record source ref, JVS binary artifact SHA-256, and help-surface evidence in
+  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`.
+- Keep `docs/contracts/jvs-runner-contract-v1.md` aligned with direct argv and
+  JSON fail-closed parsing.
+- Replace this local pin with a formal JVS release URL, JVS binary artifact
+  SHA-256, and signature bundle before GA/release packaging.
 
 ## Consequences
 
 Positive:
 
-- Prevents implementing restore-run or clone against ambiguous JVS recovery
-  state.
-- Records the current v0.4.9 runner pin and stale repository mutation lock
-  repair contract.
-- Keeps AFSCP storage mutation handlers behind evidence instead of hope.
+- Prevents AFSCP from advertising old `v0.4.9` or restore-preview behavior as
+  active.
+- Makes the pre-GA local artifact explicit and auditable.
+- Keeps active save/list/restore/status/doctor paths on the fast direct
+  contract.
 
 Tradeoffs:
 
-- G-005 is closed. This only closes the JVS gate.
-- Real repo/JVS/storage handlers may proceed only through accepted contracts,
-  fences, session drain, operation leases, audit behavior, and focused tests.
+- The pin is local and dirty-source pre-GA evidence, not a production release
+  supply-chain artifact.
+- Docker builds must inject the verified local direct JVS binary until a formal
+  JVS release exists.
+
+Evidence:
+
+- active local pin:
+  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`
+- historical release context:
+  `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`

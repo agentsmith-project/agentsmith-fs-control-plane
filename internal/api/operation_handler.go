@@ -12,6 +12,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operationinspect"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/projectionguard"
 )
 
 type OperationInspectionReader interface {
@@ -259,7 +260,7 @@ func pruneSensitiveAnyMap(values map[string]any) map[string]any {
 }
 
 func operationInspectionSensitiveKey(key string) bool {
-	if credentialLikeKey(key) {
+	if credentialLikeKey(key) || projectionguard.ForbiddenJVSInternalField(key) {
 		return true
 	}
 	normalized := normalizeSensitiveKey(key)

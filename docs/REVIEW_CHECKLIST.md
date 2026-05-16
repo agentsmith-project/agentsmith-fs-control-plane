@@ -26,7 +26,7 @@ for GA.
 - [ ] Direct and indirect caller model is documented and test guarded.
 - [ ] Cross-namespace template clone remains rejected by default.
 - [ ] Ordinary concurrent read/write behavior is documented without merge semantics.
-- [ ] Restore-run is treated as a version mutation, blocks new read-write sessions, and rejects active or uncertain read-write sessions.
+- [ ] Direct restore to a save point is treated as a version mutation, blocks new read-write sessions through the writer-session fence, and rejects active or uncertain read-write sessions.
 - [ ] Ordinary client access uses controlled exports rather than raw JuiceFS.
 - [ ] Product deletion/archive/restore/purge behavior maps to AFSCP repo lifecycle APIs when storage state changes.
 - [ ] Calling product catalog keeps repo ID mappings while tombstoned storage remains restorable.
@@ -55,7 +55,7 @@ for GA.
 - [ ] WebDAV is served by an AFSCP-controlled policy gateway or equivalent wrapper; stock `juicefs webdav` alone is not the policy boundary.
 - [ ] WebDAV exposes only payload roots, never JVS control roots, and rejects root-level `.jvs` access/creation attempts.
 - [ ] Workload mounts expose only `payload_volume_subdir`; embedded-control repos are rejected until migrated or protected by a verified filtered view.
-- [ ] Mount binding lease/status lifecycle defines revoke-request versus confirmed-unmounted terminal states and is integrated with restore-run.
+- [ ] Mount binding lease/status lifecycle defines revoke-request versus confirmed-unmounted terminal states and is integrated with direct restore writer-session fencing.
 - [ ] Path resolver rejects traversal and namespace mismatch.
 - [ ] Template clone is checked by namespace, resource, and volume rules in AFSCP.
 - [ ] Mutating JVS operations use durable operation records, phases, and resource locks.

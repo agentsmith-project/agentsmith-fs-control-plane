@@ -45,7 +45,6 @@ func RequiredTables() []string {
 		"namespaces",
 		"namespace_volume_bindings",
 		"repos",
-		"restore_plans",
 		"export_sessions",
 		"export_runtime_requests",
 		"workload_mount_bindings",

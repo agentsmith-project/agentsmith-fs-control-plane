@@ -74,7 +74,7 @@ func TestOperatorRepairRejectsAmbiguousOrFencedIntervention(t *testing.T) {
 		}},
 		{name: "session fence", edit: func(record *operations.OperationRecord) { record.SessionFenceID = "fence_123" }},
 		{name: "restore ambiguity", edit: func(record *operations.OperationRecord) {
-			record.Phase = operations.OperationPhaseRestoreRunWriterFenced
+			record.Phase = operations.OperationPhaseRestoreWriterFenced
 		}},
 		{name: "missing unsupported marker", edit: func(record *operations.OperationRecord) {
 			record.Error.Details["reason"] = "manual_investigation_required"

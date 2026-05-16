@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/projectionguard"
 )
 
 const (
@@ -37,8 +39,6 @@ const (
 	CodeWriterSessionFenceHeld      ErrorCode = "WRITER_SESSION_FENCE_HELD"
 	CodeStaleWriterSessionUncertain ErrorCode = "STALE_WRITER_SESSION_UNCERTAIN"
 	CodeRestoreDirtyState           ErrorCode = "RESTORE_DIRTY_STATE"
-	CodeRestorePreviewStale         ErrorCode = "RESTORE_PREVIEW_STALE"
-	CodeRestoreConfirmationRequired ErrorCode = "RESTORE_CONFIRMATION_REQUIRED"
 
 	CodeJVSCommandFailed              ErrorCode = "JVS_COMMAND_FAILED"
 	CodeJVSDoctorFailed               ErrorCode = "JVS_DOCTOR_FAILED"
@@ -83,8 +83,6 @@ var allErrorCodes = []ErrorCode{
 	CodeWriterSessionFenceHeld,
 	CodeStaleWriterSessionUncertain,
 	CodeRestoreDirtyState,
-	CodeRestorePreviewStale,
-	CodeRestoreConfirmationRequired,
 	CodeJVSCommandFailed,
 	CodeJVSDoctorFailed,
 	CodeSourceDirtyAfterTemplateSave,
@@ -173,6 +171,9 @@ func CorrelationIDFromRequest(r *http.Request) string {
 func RedactDetails(details map[string]any) map[string]any {
 	redacted := make(map[string]any)
 	for key, value := range details {
+		if projectionguard.ForbiddenJVSInternalField(key) {
+			continue
+		}
 		if credentialLikeKey(key) {
 			redacted[key] = redactedDetailValue
 			continue
@@ -189,6 +190,9 @@ func redactValue(value any) any {
 	case map[string]string:
 		redacted := make(map[string]any, len(typed))
 		for key, value := range typed {
+			if projectionguard.ForbiddenJVSInternalField(key) {
+				continue
+			}
 			if credentialLikeKey(key) || bearerLikeValue(value) {
 				redacted[key] = redactedDetailValue
 				continue
@@ -211,7 +215,7 @@ func redactValue(value any) any {
 	case []string:
 		redacted := make([]string, len(typed))
 		for i, item := range typed {
-			if bearerLikeValue(item) {
+			if bearerLikeValue(item) || projectionguard.ContainsForbiddenJVSInternalText(item) {
 				redacted[i] = redactedDetailValue
 				continue
 			}
@@ -219,7 +223,7 @@ func redactValue(value any) any {
 		}
 		return redacted
 	case string:
-		if bearerLikeValue(typed) {
+		if bearerLikeValue(typed) || projectionguard.ContainsForbiddenJVSInternalText(typed) {
 			return redactedDetailValue
 		}
 		return typed

@@ -52,7 +52,7 @@ AFSCP also validates whether the calling service principal is allowed to operate
 - Template clone creates an independent repo, not a shared collaborative directory.
 - Ordinary file reads and writes can happen concurrently.
 - AFSCP does not provide version merge or conflict resolution.
-- JVS save, restore-run, and clone operations must be serialized per repo.
+- JVS save, direct restore, and clone operations must be serialized per repo.
 - Restore-run rejects active or uncertain read-write export/workload sessions.
 - Repo lifecycle operations are storage-control operations in GA. Archive, restore-from-archive, delete request, restore-from-tombstone, and purge are owned by AFSCP because they affect storage availability and retention.
 - Repo lifecycle operations must drain or revoke all existing export and workload mount sessions, read-only or read-write, before tombstone or purge.

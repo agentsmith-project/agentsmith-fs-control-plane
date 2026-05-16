@@ -32,7 +32,7 @@ The gateway must:
 Positive:
 
 - Keeps ordinary client access away from JuiceFS root credentials.
-- Makes restore-run and lifecycle drain enforceable.
+- Makes direct restore to a save point and lifecycle drain enforceable through the writer-session fence.
 - Gives product clients stable TTL/revoke semantics.
 
 Tradeoffs:
@@ -40,4 +40,3 @@ Tradeoffs:
 - More work than shelling out to `juicefs webdav`.
 - Gateway tests must cover every WebDAV method and destination path.
 - Export session reconciliation is part of correctness, not optional telemetry.
-

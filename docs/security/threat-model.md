@@ -82,12 +82,12 @@ Controls:
 
 ### Restore Racing Active Writers
 
-Risk: restore-run changes version state while a read-write export or workload mount keeps writing.
+Risk: direct restore to a save point changes version state while a read-write export or workload mount keeps writing.
 
 Controls:
 
 - active session registry
-- per-repo writer-session fence blocks new read-write sessions during restore-run
-- restore-run rejects active or uncertain read-write sessions for GA
+- per-repo writer-session fence blocks new read-write sessions during direct restore
+- direct restore rejects active or uncertain read-write sessions for GA
 - repo JVS exclusive lock
 - doctor verification

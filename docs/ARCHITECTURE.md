@@ -121,9 +121,9 @@ Workload mounts use the payload subdir only. They do not mount the repo containe
 
 ## Concurrency Model
 
-Ordinary file reads and writes are not serialized by AFSCP. JuiceFS provides filesystem-level consistency and locking semantics. AFSCP must serialize mutating JVS operations per repo, such as save, restore-run, and clone.
+Ordinary file reads and writes are not serialized by AFSCP. JuiceFS provides filesystem-level consistency and locking semantics. AFSCP must serialize mutating JVS operations per repo, such as save, direct restore, and clone.
 
-Restore-run is not ordinary file IO. GA restore-run must acquire a per-repo writer-session fence, block new read-write export or workload mount issuance, and reject existing active or uncertain read-write sessions by default. This preserves ordinary concurrent file access while preventing version mutations from racing active writers.
+Direct restore is not ordinary file IO. GA direct restore must acquire a per-repo writer-session fence, block new read-write export or workload mount issuance, and reject existing active or uncertain read-write sessions by default. This preserves ordinary concurrent file access while preventing version mutations from racing active writers.
 
 No version merge behavior should be added in GA.
 

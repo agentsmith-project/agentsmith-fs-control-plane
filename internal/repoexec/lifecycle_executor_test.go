@@ -48,8 +48,8 @@ func TestLifecycleExecutorRestoresArchivedRepoAfterDoctor(t *testing.T) {
 	if err := executor.ExecuteOperationRecovery(context.Background(), repoLifecycleLeasedRecord(now, operations.OperationRepoRestoreArchived, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "doctor" {
-		t.Fatalf("jvs calls = %#v, want doctor", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_doctor" {
+		t.Fatalf("jvs calls = %#v, want direct doctor", runner.calls)
 	}
 	if store.repo.Status != resources.RepoStatusActive || store.operation.Type != operations.OperationRepoRestoreArchived || store.auditEvents[0].Type != audit.EventTypeRepoRestoreArchived {
 		t.Fatalf("repo/operation/audit = %#v/%#v/%#v", store.repo, store.operation, store.auditEvents)
@@ -200,8 +200,8 @@ func TestLifecycleExecutorRestoresTombstonedRepoToPreDeleteStatusAfterDoctor(t *
 			if err := executor.ExecuteOperationRecovery(context.Background(), repoLifecycleRestoreTombstonedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 				t.Fatalf("ExecuteOperationRecovery: %v", err)
 			}
-			if strings.Join(runner.calls, ",") != "doctor" {
-				t.Fatalf("jvs calls = %#v, want doctor", runner.calls)
+			if strings.Join(runner.calls, ",") != "direct_doctor" {
+				t.Fatalf("jvs calls = %#v, want direct doctor", runner.calls)
 			}
 			if store.repo.Status != tt.preDelete || store.repo.Lifecycle.Status != tt.preDelete || store.repo.Lifecycle.RetentionExpiresAt != nil || store.repo.Lifecycle.PreDeleteStatus != "" {
 				t.Fatalf("repo lifecycle = %#v, want restored to %s with tombstone metadata cleared", store.repo.Lifecycle, tt.preDelete)
@@ -227,7 +227,7 @@ func TestLifecycleExecutorRestoreTombstonedUsesOperationCreatedAtForRetentionEli
 	if err := executor.ExecuteOperationRecovery(context.Background(), record, recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if store.repo.Status != resources.RepoStatusActive || strings.Join(runner.calls, ",") != "doctor" {
+	if store.repo.Status != resources.RepoStatusActive || strings.Join(runner.calls, ",") != "direct_doctor" {
 		t.Fatalf("repo/calls = %#v/%#v, want restore accepted by operation created_at within retention", store.repo, runner.calls)
 	}
 }

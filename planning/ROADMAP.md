@@ -14,13 +14,13 @@ AFSCP is planned directly toward GA. The work is not split into product stages.
 - Implement namespace volume binding and caller-service authorization.
 - Implement repo create and canonical path resolver.
 - Implement repo archive, restore-archived, delete, restore-tombstoned, and purge lifecycle operations.
-- Integrate pinned JVS init/save/history/restore/clone/doctor behavior.
+- Integrate pinned JVS init/save point list/direct restore/clone/doctor behavior.
 - Implement WebDAV export flow and policy gateway.
 - Implement workload mount binding and orchestrator-only mount plan after the orchestrator contract is accepted.
 - Implement mount binding status, heartbeat, release, revoke, and stale-lease reconciliation.
 - Implement namespace-scoped repo template create and clone.
 - Add security and conformance tests for credentials, path traversal, namespace mismatch, `.jvs`, idempotency, stable errors, and audit.
-- Add restore-run writer-session fence and active/uncertain read-write session rejection.
+- Add direct restore writer-session fence and active/uncertain read-write session rejection.
 - Complete GA runbooks, observability, backup/restore, and risk closure.
 
 ## Future Candidates Outside GA

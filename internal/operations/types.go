@@ -20,9 +20,6 @@ const (
 	OperationRepoPurge                 OperationType = "repo_purge"
 	OperationSavePointCreate           OperationType = "save_point_create"
 	OperationRestore                   OperationType = "restore"
-	OperationRestorePreview            OperationType = "restore_preview"
-	OperationRestorePreviewDiscard     OperationType = "restore_preview_discard"
-	OperationRestoreRun                OperationType = "restore_run"
 	OperationTemplateCreate            OperationType = "template_create"
 	OperationTemplateClone             OperationType = "template_clone"
 	OperationExportCreate              OperationType = "export_create"
@@ -63,19 +60,6 @@ const (
 	OperationPhaseRestoreWriterFenced = "restore_writer_fenced"
 	OperationPhaseRestoreCommitted    = "restore_committed"
 
-	OperationPhaseRestorePreviewValidate      = "validate_restore_preview"
-	OperationPhaseRestorePreviewPreflightIdle = "restore_preview_preflight_idle"
-	OperationPhaseRestorePreviewCommitted     = "restore_preview_committed"
-
-	OperationPhaseRestorePreviewDiscardValidate  = "validate_restore_preview_discard"
-	OperationPhaseRestorePreviewDiscarding       = "restore_preview_discarding"
-	OperationPhaseRestorePreviewDiscardCommitted = "restore_preview_discard_committed"
-
-	OperationPhaseRestoreRunValidate     = "validate_restore_run"
-	OperationPhaseRestoreRunWriterFenced = "restore_run_writer_fenced"
-	OperationPhaseRestoreRunConsuming    = "restore_run_consuming"
-	OperationPhaseRestoreRunCommitted    = "restore_run_committed"
-
 	OperationPhaseTemplateCreateValidate     = "validate_template_create"
 	OperationPhaseTemplateCreateWriterFenced = "template_create_writer_fenced"
 	OperationPhaseTemplateCreateCommitted    = "template_create_committed"
@@ -111,9 +95,6 @@ var operationTypes = []OperationType{
 	OperationRepoPurge,
 	OperationSavePointCreate,
 	OperationRestore,
-	OperationRestorePreview,
-	OperationRestorePreviewDiscard,
-	OperationRestoreRun,
 	OperationTemplateCreate,
 	OperationTemplateClone,
 	OperationExportCreate,
@@ -140,9 +121,6 @@ var routeOperationTypes = map[string]OperationType{
 	"purgeRepo":                        OperationRepoPurge,
 	"createSavePoint":                  OperationSavePointCreate,
 	"restore":                          OperationRestore,
-	"restorePreview":                   OperationRestorePreview,
-	"restorePreviewDiscard":            OperationRestorePreviewDiscard,
-	"restoreRun":                       OperationRestoreRun,
 	"createRepoTemplate":               OperationTemplateCreate,
 	"cloneRepoTemplate":                OperationTemplateClone,
 	"createExport":                     OperationExportCreate,
