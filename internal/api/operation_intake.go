@@ -247,11 +247,51 @@ func isNilOperationIntakeValue(value any) bool {
 
 func operationEnvelopeFromRecord(record operations.OperationRecord) OperationEnvelope {
 	record = record.Sanitized()
+	if !validDownstreamOperationProjection(record) {
+		return invalidDownstreamOperationProjectionEnvelope(record)
+	}
 	return NewOperationEnvelope(OperationEnvelopeSpec{
 		OperationID:    record.ID,
 		OperationState: OperationState(record.State),
 		Resource:       ResourceRef{Type: record.Resource.Type, ID: record.Resource.ID},
 		Error:          standardErrorFromOperationError(record.Error),
+	})
+}
+
+func validDownstreamOperationProjection(record operations.OperationRecord) bool {
+	if strings.TrimSpace(record.ID) == "" {
+		return false
+	}
+	switch record.State {
+	case operations.OperationStateQueued,
+		operations.OperationStateRunning,
+		operations.OperationStateSucceeded,
+		operations.OperationStateFailed,
+		operations.OperationStateCancelRequested,
+		operations.OperationStateCancelled,
+		operations.OperationStateOperatorInterventionRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func invalidDownstreamOperationProjectionEnvelope(record operations.OperationRecord) OperationEnvelope {
+	correlationID := strings.TrimSpace(record.CorrelationID)
+	if correlationID == "" {
+		correlationID = "missing"
+	}
+	return NewOperationEnvelope(OperationEnvelopeSpec{
+		OperationID:    strings.TrimSpace(record.ID),
+		OperationState: OperationStateFailed,
+		Resource:       ResourceRef{Type: record.Resource.Type, ID: record.Resource.ID},
+		Error: &StandardError{
+			Code:          CodeInternalError,
+			Message:       "invalid operation projection",
+			Retryable:     false,
+			CorrelationID: correlationID,
+			Details:       map[string]any{"projection_invalid": true},
+		},
 	})
 }
 

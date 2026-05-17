@@ -230,6 +230,76 @@ func TestCreateOrReuseOperationIntakeReusesFailedOperationWithFlatError(t *testi
 	assertOperationEnvelopeDoesNotLeakInternalFields(t, envelope)
 }
 
+func TestCreateOrReuseOperationIntakeHistoricalAFSCPOperationIDNullDoesNotProjectAsProgressOrSuccess(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	route, _ := RouteMetadataByOperationID("createRepo")
+	request := OperationIntakeRequest{
+		RequestContext: auth.RequestContext{
+			IdempotencyKey: "idem_123",
+			CorrelationID:  "corr_123",
+			NamespaceID:    "ns_123",
+			Actor:          auth.Actor{Type: "user", ID: "user_123"},
+			CallerService:  "product-caller",
+		},
+		Route:               route,
+		NamespaceID:         "ns_123",
+		RepoID:              "repo_123",
+		Resource:            operations.ResourceRef{Type: "repo", ID: "repo_123"},
+		CanonicalRequest:    map[string]any{"repo_id": "repo_123"},
+		InputSummary:        map[string]any{"repo_id": "repo_123"},
+		Phase:               "allocate_repo_path",
+		GenerateOperationID: func() string { return "op_new" },
+		Now:                 func() time.Time { return now },
+	}
+
+	tests := []struct {
+		name  string
+		id    string
+		state operations.OperationState
+	}{
+		{name: "empty operation_id with running state", state: operations.OperationStateRunning},
+		{name: "missing operation_id with succeeded state", state: operations.OperationStateSucceeded},
+		{name: "valid operation_id with downstream accepted state", id: "op_downstream", state: operations.OperationState("accepted")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeOperationIntakeStore{
+				reusedRecord: &operations.OperationRecord{
+					ID:               tt.id,
+					Type:             operations.OperationRepoCreate,
+					State:            tt.state,
+					Phase:            "allocate_repo_path",
+					IdempotencyScope: "product-caller:ns_123:repo_create:idem_123",
+					IdempotencyKey:   "idem_123",
+					RequestHash:      operations.RequestHash("sha256:repo"),
+					CorrelationID:    "corr_123",
+					CallerService:    "product-caller",
+					AuthorizedActor:  operations.Actor{Type: "user", ID: "user_123"},
+					Resource:         operations.ResourceRef{Type: "repo", ID: "repo_123"},
+					NamespaceID:      "ns_123",
+					RepoID:           "repo_123",
+					CreatedAt:        now,
+				},
+			}
+
+			envelope, err := CreateOrReuseOperationIntake(context.Background(), OperationIntakeConfig{Store: store}, request)
+			if err != nil {
+				t.Fatalf("CreateOrReuseOperationIntake returned error: %v", err)
+			}
+			if envelope.OperationState == OperationState("accepted") || envelope.OperationState == OperationStateRunning || envelope.OperationState == OperationStateSucceeded {
+				t.Fatalf("envelope projected invalid downstream operation as progress/success: %#v", envelope)
+			}
+			if envelope.OperationState != OperationStateFailed || envelope.Error == nil || envelope.Error.Code != CodeInternalError {
+				t.Fatalf("envelope = %#v, want typed INTERNAL_ERROR failed projection", envelope)
+			}
+			if got, ok := envelope.Error.Details["projection_invalid"].(bool); !ok || !got {
+				t.Fatalf("error details = %#v, want projection_invalid=true", envelope.Error.Details)
+			}
+			assertOperationEnvelopeDoesNotLeakInternalFields(t, envelope)
+		})
+	}
+}
+
 func TestRouteOperationTypesCoverMutatingInternalV1Routes(t *testing.T) {
 	for _, route := range InternalV1RouteMetadata() {
 		got, ok := operations.OperationTypeForRouteOperationID(route.OperationID)

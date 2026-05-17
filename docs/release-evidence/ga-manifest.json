@@ -410,6 +410,45 @@
       "scope": "package"
     },
     {
+      "id": "repo_template_lifecycle_positive_unit",
+      "evidence_status": "implemented",
+      "capability_id": "repo_template",
+      "evidence_type": "unit",
+      "required": true,
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/repoexec",
+        "-run",
+        "^TestTemplate(CreateExecutorSavesSourceThenClonesAndCommitsTemplate|CloneExecutorClonesTemplateToRepoWithoutSave)$"
+      ],
+      "anchors": [
+        "internal/repoexec/executor_test.go",
+        "internal/repoexec/template_executor.go"
+      ],
+      "doc_only_allowed": false,
+      "optional_gated": true,
+      "default_ga_required": false,
+      "claim_id": "CLAIM_TEMPLATE_QUOTA_BOUNDARY",
+      "subclaim_id": "repo_template_create_clone_lifecycle_focused",
+      "acceptance_id": "P1_TEMPLATE_CREATE_CLONE_LIFECYCLE_FOCUSED",
+      "risk_id": "F16",
+      "fixture_id": "repo_template_fast_path",
+      "evidence_profile": "repo-local-fixture-enabled",
+      "default_mode": false,
+      "fixture_enabled_mode": true,
+      "negative_or_positive": "positive",
+      "pass_criteria": {
+        "kind": "positive_path",
+        "assertions": [
+          "repo template create and clone lifecycle fast-path tests are focused release evidence without closing the selected fixture seed gap"
+        ]
+      },
+      "expected_runtime": "fast",
+      "scope": "package"
+    },
+    {
       "id": "repo_purge_disabled_worker_recovery_unit",
       "evidence_status": "implemented",
       "capability_id": "repo_purge",

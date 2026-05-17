@@ -460,6 +460,53 @@ func TestCurrentRepoManifestContainsOptionalCapabilityDisabledAdmissionEvidence(
 	}
 }
 
+func TestCurrentRepoManifestContainsRepoTemplateLifecycleFocusedEvidence(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
+
+	manifest, findings, err := LoadAndValidateFile(manifestPath, Options{Mode: ManifestModeSeed, RepoRoot: repoRoot})
+	if err != nil {
+		t.Fatalf("LoadAndValidateFile returned error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("current manifest findings: %+v", findings)
+	}
+
+	item, ok := manifestItemByID(manifest, "repo_template_lifecycle_positive_unit")
+	if !ok {
+		t.Fatal("manifest missing repo_template_lifecycle_positive_unit")
+	}
+	if item.EvidenceStatus != "implemented" ||
+		item.ClaimID != "CLAIM_TEMPLATE_QUOTA_BOUNDARY" ||
+		item.SubclaimID != "repo_template_create_clone_lifecycle_focused" ||
+		item.CapabilityID != "repo_template" ||
+		item.EvidenceProfile != "repo-local-fixture-enabled" ||
+		item.DefaultMode ||
+		!item.FixtureEnabledMode ||
+		item.NegativeOrPositive != "positive" ||
+		item.EvidenceType != "unit" ||
+		!item.Required ||
+		item.DocOnlyAllowed ||
+		!item.OptionalGated ||
+		item.DefaultGARequired ||
+		item.PassCriteria.Kind != "positive_path" {
+		t.Fatalf("%s shape = %+v, want optional repo template positive focused evidence", item.ID, item)
+	}
+	if packages := goTestPackageArgs(item.Command); !stringSlicesEqual(packages, []string{"./internal/repoexec"}) {
+		t.Fatalf("%s command packages = %#v, want repoexec only", item.ID, packages)
+	}
+	selector, ok := goTestRunSelector(item.Command)
+	if !ok {
+		t.Fatalf("%s command has no go test -run selector: %#v", item.ID, item.Command)
+	}
+	for _, testName := range []string{
+		"TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate",
+		"TestTemplateCloneExecutorClonesTemplateToRepoWithoutSave",
+	} {
+		assertStaticTestNameScanIncludesTest(t, repoRoot, item.ID, selector, "./internal/repoexec", testName)
+	}
+}
+
 func TestCurrentRepoManifestRepoCreateJVSEvidenceRunSelectorCoversRecoveryTests(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	manifestPath := filepath.Join(repoRoot, "docs", "release-evidence", "ga-manifest.json")
@@ -1074,9 +1121,9 @@ func TestCurrentRepoManifestContainsP1cJVSSaveRestoreEvidence(t *testing.T) {
 		"TestNewJVSRunnerFromConfigVerifiesFileAgainstAcceptedPin",
 		"TestNewJVSRunnerFromConfigDirectRestorePreflightsCLIHelp",
 		"TestNewJVSRunnerFromConfigDirectRestoreRejectsMissingCLIFlag",
-			"TestAcquireSavePointCreateOperationLeaseSerializesEarlierLifecycleAndJVSMutations",
-			"TestAcquireRestoreOperationLeaseSerializesMutationsForDirectRestore",
-			"TestCommitSavePointCreateSucceededAllowsValidatePhaseWithoutPreSaveMarker",
+		"TestAcquireSavePointCreateOperationLeaseSerializesEarlierLifecycleAndJVSMutations",
+		"TestAcquireRestoreOperationLeaseSerializesMutationsForDirectRestore",
+		"TestCommitSavePointCreateSucceededAllowsValidatePhaseWithoutPreSaveMarker",
 		"TestCreateOrReuseRestoreOperationUsesAtomicGateAfterIdempotency",
 		"TestCreateOrReuseRestoreOperationReusesExistingBeforeGates",
 		"TestCreateOrReuseRestoreOperationMapsAtomicGateFailures",
