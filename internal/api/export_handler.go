@@ -269,7 +269,11 @@ func (handler exportLeafHandler) create(w http.ResponseWriter, r *http.Request, 
 		handler.writeStoreError(w, r, err)
 		return
 	}
-	envelope := operationEnvelopeFromRecord(result.Operation)
+	envelope, projectionErr := operationEnvelopeFromRecord(result.Operation)
+	if projectionErr != nil {
+		writeOperationIntakeHTTPError(w, r, projectionErr)
+		return
+	}
 	envelope.Result = map[string]any{"export": result.Session}
 	if !result.Reused {
 		envelope.Result["access"] = exportaccess.Access{
@@ -344,7 +348,11 @@ func (handler exportLeafHandler) writeExistingIdempotentExport(w http.ResponseWr
 		writeExportReplayConflict(w, r)
 		return true
 	}
-	envelope := operationEnvelopeFromRecord(record)
+	envelope, projectionErr := operationEnvelopeFromRecord(record)
+	if projectionErr != nil {
+		writeOperationIntakeHTTPError(w, r, projectionErr)
+		return true
+	}
 	envelope.Result = map[string]any{"export": session}
 	_ = writeJSON(w, http.StatusAccepted, envelope)
 	return true
@@ -462,7 +470,11 @@ func (handler exportLeafHandler) revoke(w http.ResponseWriter, r *http.Request, 
 		handler.writeStoreError(w, r, err)
 		return
 	}
-	envelope := operationEnvelopeFromRecord(result.Operation)
+	envelope, projectionErr := operationEnvelopeFromRecord(result.Operation)
+	if projectionErr != nil {
+		writeOperationIntakeHTTPError(w, r, projectionErr)
+		return
+	}
 	envelope.Result = map[string]any{"export": result.Session}
 	_ = writeJSON(w, http.StatusAccepted, envelope)
 }

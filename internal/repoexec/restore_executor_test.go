@@ -136,13 +136,13 @@ func TestRestoreExecutorJVSRecoveryRequiredCommitsOperatorIntervention(t *testin
 	}
 }
 
-func TestRestoreExecutorStatusAllowsNonBlockingCleanupEvidence(t *testing.T) {
+func TestRestoreExecutorStatusAllowsRealJVSCleanupPendingRecoveryAsNonBlockingEvidence(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
 	store.repo = activeRepoResource(now)
 	runner := &fakeJVSRunner{
 		directRestoreSummary: jvsrunner.DirectRestoreSummary{RestoredSavePointID: "sp_001", PreviousHeadID: "sp_002", NewHeadID: "sp_001"},
-		directStatusSummary:  jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "cleanup_pending", Recovery: "none"},
+		directStatusSummary:  jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "ready", ActiveOperation: "none", Recovery: "cleanup_pending"},
 	}
 	executor := newTestRestoreExecutor(t, store, runner, now)
 
@@ -167,9 +167,11 @@ func TestRestoreExecutorStatusRecoveryRetainsWriterFence(t *testing.T) {
 		name   string
 		status jvsrunner.DirectStatusSummary
 	}{
-		{name: "journal recovery", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "none", Recovery: "journal_recovery_required"}},
-		{name: "operator intervention", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "none", Recovery: "operator_intervention_required"}},
-		{name: "blocking cleanup", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "cleanup_blocking", Recovery: "none"}},
+		{name: "journal recovery", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "ready", ActiveOperation: "none", Recovery: "journal_recovery_required"}},
+		{name: "operator intervention", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "ready", ActiveOperation: "none", Recovery: "operator_intervention_required"}},
+		{name: "blocking cleanup", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "ready", ActiveOperation: "cleanup_blocking", Recovery: "none"}},
+		{name: "legacy recovery cleanup token", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "ready", ActiveOperation: "none", Recovery: "cleanup_non_blocking"}},
+		{name: "legacy active cleanup token", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "ready", ActiveOperation: "cleanup_non_blocking", Recovery: "none"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			store := newFakeStore()

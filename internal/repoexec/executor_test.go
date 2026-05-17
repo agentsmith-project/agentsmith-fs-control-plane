@@ -634,6 +634,9 @@ func TestTemplateCreateExecutorSavesSourceThenClonesAndCommitsTemplate(t *testin
 	if runner.cloneSavePointID != "sp_template01" {
 		t.Fatalf("direct clone save point = %q, want fresh template source save point", runner.cloneSavePointID)
 	}
+	if runner.savePurpose != "template_source" {
+		t.Fatalf("direct save purpose = %q, want template_source", runner.savePurpose)
+	}
 	verification := asStringAnyMap(store.operation.VerificationResult)
 	if store.repo.ID != "tmpl_base01" || store.repo.Kind != resources.RepoKindTemplate || verification["source_save_point_id"] != "sp_template01" {
 		t.Fatalf("committed template/operation = %#v %#v", store.repo, store.operation)
@@ -1318,6 +1321,7 @@ type fakeJVSRunner struct {
 	payloadRoot          string
 	controlRoot          string
 	saveMessage          string
+	savePurpose          string
 	initSummary          jvsrunner.InitSummary
 	doctorSummary        jvsrunner.DoctorSummary
 	saveSummary          jvsrunner.SaveSummary
@@ -1355,17 +1359,22 @@ func (runner *fakeJVSRunner) Init(_ context.Context, payloadRoot, controlRoot st
 	runner.controlRoot = controlRoot
 	return runner.initSummary, runner.initErr
 }
-func (runner *fakeJVSRunner) DirectSave(_ context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error) {
+func (runner *fakeJVSRunner) DirectSave(ctx context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error) {
+	return runner.DirectSaveWithPurpose(ctx, target, message, "")
+}
+
+func (runner *fakeJVSRunner) DirectSaveWithPurpose(_ context.Context, target jvsrunner.DirectTarget, message string, purpose string) (jvsrunner.DirectSaveSummary, error) {
 	runner.calls = append(runner.calls, "direct_save")
 	runner.directTarget = target
 	runner.controlRoot = target.ControlRoot
 	runner.payloadRoot = target.Home
 	runner.saveMessage = message
+	runner.savePurpose = purpose
 	if runner.afterSave != nil {
 		defer runner.afterSave()
 	}
 	if runner.directSaveSummary.SavePointID == "" && runner.saveSummary.SavePointID != "" {
-		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, CreatedAt: runner.saveSummary.CreatedAt}
+		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, Purpose: purpose, CreatedAt: runner.saveSummary.CreatedAt}
 	}
 	if runner.directSaveSummary.SavePointID != "" && len(runner.directSaveSummary.CloneEvidence) == 0 {
 		runner.directSaveSummary.CloneEvidence = fakeCloneEvidence("save", "save_point_payload", 42)
@@ -1389,7 +1398,7 @@ func (runner *fakeJVSRunner) DirectList(_ context.Context, target jvsrunner.Dire
 	if runner.directListSummary.HistoryHeadID == "" && len(runner.directListSummary.SavePoints) == 0 {
 		savePoints := make([]jvsrunner.DirectSavePointSummary, 0, len(runner.historySummary.SavePoints))
 		for _, savePoint := range runner.historySummary.SavePoints {
-			savePoints = append(savePoints, jvsrunner.DirectSavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, CreatedAt: savePoint.CreatedAt, HistoryHead: savePoint.SavePointID == runner.historySummary.NewestSavePointID})
+			savePoints = append(savePoints, jvsrunner.DirectSavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, Purpose: savePoint.Purpose, CreatedAt: savePoint.CreatedAt, HistoryHead: savePoint.SavePointID == runner.historySummary.NewestSavePointID})
 		}
 		runner.directListSummary = jvsrunner.DirectListSummary{HistoryHeadID: runner.historySummary.NewestSavePointID, SavePoints: savePoints}
 	}
@@ -1423,7 +1432,7 @@ func (runner *fakeJVSRunner) DirectStatus(_ context.Context, target jvsrunner.Di
 	runner.controlRoot = target.ControlRoot
 	runner.payloadRoot = target.Home
 	if runner.directStatusSummary.HistoryHeadID == "" {
-		runner.directStatusSummary = jvsrunner.DirectStatusSummary{HistoryHeadID: runner.restoreSavePointID, MetadataState: "clean", ActiveOperation: "none", Recovery: "none"}
+		runner.directStatusSummary = jvsrunner.DirectStatusSummary{HistoryHeadID: runner.restoreSavePointID, MetadataState: "ready", ActiveOperation: "none", Recovery: "none"}
 	}
 	return runner.directStatusSummary, runner.directStatusErr
 }
@@ -1436,7 +1445,7 @@ func (runner *fakeJVSRunner) DirectDoctor(ctx context.Context, target jvsrunner.
 	if runner.afterDoctor != nil {
 		runner.afterDoctor(ctx)
 	}
-	if runner.directDoctorSummary == (jvsrunner.DirectDoctorSummary{}) {
+	if runner.directDoctorSummary.RepoID == "" && runner.directDoctorSummary.MetadataState == "" {
 		repoID := runner.doctorSummary.RepoID
 		if repoID == "" {
 			repoID = "jvs_repo_alpha"
@@ -1445,7 +1454,7 @@ func (runner *fakeJVSRunner) DirectDoctor(ctx context.Context, target jvsrunner.
 		if runner.doctorSummary == (jvsrunner.DoctorSummary{}) {
 			healthy = true
 		}
-		runner.directDoctorSummary = jvsrunner.DirectDoctorSummary{RepoID: repoID, Healthy: healthy, FindingCount: 0, MetadataState: "clean", Journal: "clean", Recovery: "none"}
+		runner.directDoctorSummary = jvsrunner.DirectDoctorSummary{RepoID: repoID, Healthy: healthy, FindingCount: 0, MetadataState: "ready", Journal: "clean", Recovery: "none"}
 	}
 	if runner.directDoctorErr != nil {
 		return runner.directDoctorSummary, runner.directDoctorErr

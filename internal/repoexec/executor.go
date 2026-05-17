@@ -172,7 +172,7 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 	directTarget := jvsrunner.DirectTarget{ControlRoot: roots.ControlRootPath, Home: roots.PayloadRootPath}
 	if adoptionAllowed {
 		doctor, err := executor.jvs.DirectDoctor(ctx, directTarget)
-		if err != nil {
+		if err != nil || !directDoctorAllowsMutation(doctor) {
 			return executor.commitIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, withJVSErrorDetails(nil, err))
 		}
 		jvsRepoID = doctor.RepoID
@@ -183,7 +183,7 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 			return executor.commitIntervention(ctx, record, now, "JVS_COMMAND_FAILED", "jvs init failed", fenceID, withJVSErrorDetails(nil, err))
 		}
 		doctor, err := executor.jvs.DirectDoctor(ctx, directTarget)
-		if err != nil {
+		if err != nil || !directDoctorAllowsMutation(doctor) {
 			return executor.commitIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, withJVSErrorDetails(map[string]any{"repo_id": initSummary.RepoID, "workspace": initSummary.Workspace}, err))
 		}
 		if initSummary.RepoID != doctor.RepoID {

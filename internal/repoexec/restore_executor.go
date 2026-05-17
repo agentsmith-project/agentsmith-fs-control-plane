@@ -420,6 +420,15 @@ type directRestoreStatusProjection struct {
 	evidence         map[string]any
 }
 
+type directRestoreStatusSignal int
+
+const (
+	directRestoreStatusNone directRestoreStatusSignal = iota
+	directRestoreStatusCleanupEvidence
+	directRestoreStatusBlockingRecovery
+	directRestoreStatusBlockingMutation
+)
+
 func projectDirectRestoreStatus(status jvsrunner.DirectStatusSummary, savePointID string) directRestoreStatusProjection {
 	evidence := map[string]any{"restore_status_checked": true, "recovery_required": false}
 	if status.HistoryHeadID != savePointID {
@@ -428,33 +437,63 @@ func projectDirectRestoreStatus(status jvsrunner.DirectStatusSummary, savePointI
 			evidence:         map[string]any{"restore_status_checked": true, "recovery_required": true, "restore_status_mismatch": true},
 		}
 	}
-	if strings.TrimSpace(status.MetadataState) != "clean" {
+	if !directRestoreMetadataReady(status.MetadataState) {
 		return directRestoreStatusProjection{
 			recoveryRequired: true,
 			evidence:         map[string]any{"restore_status_checked": true, "recovery_required": true, "metadata_recovery_required": true},
 		}
 	}
 
-	switch strings.TrimSpace(status.Recovery) {
-	case "", "none":
-	default:
+	switch classifyDirectRestoreRecovery(status.Recovery) {
+	case directRestoreStatusNone:
+	case directRestoreStatusCleanupEvidence:
+		evidence["cleanup_pending"] = true
+	case directRestoreStatusBlockingRecovery:
 		return directRestoreStatusProjection{
 			recoveryRequired: true,
 			evidence:         map[string]any{"restore_status_checked": true, "recovery_required": true, "journal_recovery_required": true},
 		}
 	}
 
-	switch strings.TrimSpace(status.ActiveOperation) {
-	case "", "none":
+	switch classifyDirectRestoreActiveOperation(status.ActiveOperation) {
+	case directRestoreStatusNone:
 		return directRestoreStatusProjection{evidence: evidence}
-	case "cleanup_pending", "cleanup_non_blocking":
+	case directRestoreStatusCleanupEvidence:
 		evidence["cleanup_pending"] = true
 		return directRestoreStatusProjection{evidence: evidence}
-	default:
+	case directRestoreStatusBlockingMutation:
 		return directRestoreStatusProjection{
 			recoveryRequired: true,
 			evidence:         map[string]any{"restore_status_checked": true, "recovery_required": true, "cleanup_blocking": true},
 		}
+	default:
+		return directRestoreStatusProjection{evidence: evidence}
+	}
+}
+
+func directRestoreMetadataReady(metadataState string) bool {
+	return strings.TrimSpace(metadataState) == "ready"
+}
+
+func classifyDirectRestoreRecovery(recovery string) directRestoreStatusSignal {
+	switch strings.TrimSpace(recovery) {
+	case "", "none":
+		return directRestoreStatusNone
+	case "cleanup_pending":
+		return directRestoreStatusCleanupEvidence
+	default:
+		return directRestoreStatusBlockingRecovery
+	}
+}
+
+func classifyDirectRestoreActiveOperation(activeOperation string) directRestoreStatusSignal {
+	switch strings.TrimSpace(activeOperation) {
+	case "", "none":
+		return directRestoreStatusNone
+	case "cleanup_pending":
+		return directRestoreStatusCleanupEvidence
+	default:
+		return directRestoreStatusBlockingMutation
 	}
 }
 

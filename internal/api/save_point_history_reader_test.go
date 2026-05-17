@@ -96,6 +96,41 @@ func TestJVSBackedSavePointHistoryReaderUsesDirectListTargetControlAndPayloadRoo
 	}
 }
 
+func TestJVSBackedSavePointHistoryReaderFiltersTemplateSourceSavePoints(t *testing.T) {
+	now := fixedNamespaceNow()
+	repo := repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)
+	repo.CreatedAt = now.Add(-time.Hour)
+	repo.UpdatedAt = now
+	jvs := &fakeHistoryJVSRunner{directSummary: jvsrunner.DirectListSummary{
+		HistoryHeadID: "sp_template_source",
+		SavePoints: []jvsrunner.DirectSavePointSummary{
+			{SavePointID: "sp_template_source", Message: "Template source: Release starter", CreatedAt: "2026-05-05T12:01:00Z", Purpose: "template_source", HistoryHead: true},
+			{SavePointID: "sp_user", Message: "Before release edits", CreatedAt: "2026-05-05T12:00:00Z", Purpose: "user"},
+		},
+	}}
+	reader, err := NewJVSBackedSavePointHistoryReader(JVSBackedSavePointHistoryReaderConfig{
+		RepoReader:   &fakeRepoReader{repos: []resources.Repo{repo}},
+		VolumeReader: &fakeVolumeReader{volume: savePointHistoryVolume(now)},
+		JVSRunner:    jvs,
+		VolumeRoots:  map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
+	})
+	if err != nil {
+		t.Fatalf("NewJVSBackedSavePointHistoryReader: %v", err)
+	}
+
+	history, err := reader.ListSavePoints(context.Background(), "ns_123", "repo_123")
+	if err != nil {
+		t.Fatalf("ListSavePoints: %v", err)
+	}
+
+	if len(history.SavePoints) != 1 || history.SavePoints[0].SavePointID != "sp_user" {
+		t.Fatalf("history = %#v, want only user save point", history)
+	}
+	if strings.Contains(history.SavePoints[0].Message, "Template source") {
+		t.Fatalf("template source save point leaked through message: %#v", history.SavePoints[0])
+	}
+}
+
 func TestJVSBackedSavePointHistoryReaderFailsClosedWithoutLeakingRawPaths(t *testing.T) {
 	now := fixedNamespaceNow()
 	repo := repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)

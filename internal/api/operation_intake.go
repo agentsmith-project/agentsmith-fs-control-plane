@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 )
 
 type OperationIDGenerator func() string
@@ -86,7 +87,7 @@ func CreateOrReuseOperationIntake(ctx context.Context, config OperationIntakeCon
 	if err != nil {
 		return OperationEnvelope{}, mapOperationIntakeError(err)
 	}
-	return operationEnvelopeFromRecord(resolution.Operation), nil
+	return operationEnvelopeFromRecord(resolution.Operation)
 }
 
 func CreateOrReuseRestoreOperationIntake(ctx context.Context, store RestoreOperationIntakeStore, request OperationIntakeRequest) (OperationEnvelope, error) {
@@ -107,7 +108,7 @@ func CreateOrReuseRestoreOperationIntake(ctx context.Context, store RestoreOpera
 	if err != nil {
 		return OperationEnvelope{}, mapOperationIntakeError(err)
 	}
-	return operationEnvelopeFromRecord(resolution.Operation), nil
+	return operationEnvelopeFromRecord(resolution.Operation)
 }
 
 func checkRestoreReconciliationIntakeGate(ctx context.Context, store any, gate RestoreReconciliationWriteGate, request OperationIntakeRequest) error {
@@ -245,24 +246,28 @@ func isNilOperationIntakeValue(value any) bool {
 	}
 }
 
-func operationEnvelopeFromRecord(record operations.OperationRecord) OperationEnvelope {
+func operationEnvelopeFromRecord(record operations.OperationRecord) (OperationEnvelope, error) {
 	record = record.Sanitized()
-	if !validDownstreamOperationProjection(record) {
-		return invalidDownstreamOperationProjectionEnvelope(record)
+	if !validOperationEnvelopeID(record.ID) {
+		return OperationEnvelope{}, invalidDownstreamOperationProjectionError(record)
+	}
+	if !validDownstreamOperationProjectionState(record.State) {
+		return invalidDownstreamOperationProjectionEnvelope(record), nil
 	}
 	return NewOperationEnvelope(OperationEnvelopeSpec{
 		OperationID:    record.ID,
 		OperationState: OperationState(record.State),
 		Resource:       ResourceRef{Type: record.Resource.Type, ID: record.Resource.ID},
 		Error:          standardErrorFromOperationError(record.Error),
-	})
+	}), nil
 }
 
-func validDownstreamOperationProjection(record operations.OperationRecord) bool {
-	if strings.TrimSpace(record.ID) == "" {
-		return false
-	}
-	switch record.State {
+func validOperationEnvelopeID(operationID string) bool {
+	return pathresolver.ValidateID(pathresolver.OperationID, strings.TrimSpace(operationID)) == nil
+}
+
+func validDownstreamOperationProjectionState(state operations.OperationState) bool {
+	switch state {
 	case operations.OperationStateQueued,
 		operations.OperationStateRunning,
 		operations.OperationStateSucceeded,
@@ -273,6 +278,16 @@ func validDownstreamOperationProjection(record operations.OperationRecord) bool 
 		return true
 	default:
 		return false
+	}
+}
+
+func invalidDownstreamOperationProjectionError(record operations.OperationRecord) *OperationIntakeError {
+	return &OperationIntakeError{
+		Code:      CodeInternalError,
+		Status:    http.StatusInternalServerError,
+		Retryable: false,
+		Message:   "invalid operation projection",
+		Details:   invalidDownstreamOperationProjectionDetails(record),
 	}
 }
 
@@ -290,9 +305,16 @@ func invalidDownstreamOperationProjectionEnvelope(record operations.OperationRec
 			Message:       "invalid operation projection",
 			Retryable:     false,
 			CorrelationID: correlationID,
-			Details:       map[string]any{"projection_invalid": true},
+			Details:       invalidDownstreamOperationProjectionDetails(record),
 		},
 	})
+}
+
+func invalidDownstreamOperationProjectionDetails(record operations.OperationRecord) map[string]any {
+	return map[string]any{
+		"projection_invalid": true,
+		"operation_id_valid": validOperationEnvelopeID(record.ID),
+	}
 }
 
 func standardErrorFromOperationError(operationError *operations.OperationError) *StandardError {

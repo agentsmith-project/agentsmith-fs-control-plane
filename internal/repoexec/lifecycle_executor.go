@@ -177,7 +177,7 @@ func (executor *LifecycleExecutor) ExecuteOperationRecovery(ctx context.Context,
 			return executor.commitLifecycleIntervention(ctx, record, now, "REPO_LIFECYCLE_VALIDATION_FAILED", "repo lifecycle validation failed", fenceID, nil)
 		}
 		doctor, err := executor.jvs.DirectDoctor(ctx, target)
-		if err != nil || !doctor.Healthy || doctor.RepoID != repo.JVSRepoID {
+		if err != nil || !directDoctorAllowsMutation(doctor) || doctor.RepoID != repo.JVSRepoID {
 			return executor.commitLifecycleIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", fenceID, withJVSErrorDetails(map[string]any{"repo_id": repo.JVSRepoID}, err))
 		}
 	}

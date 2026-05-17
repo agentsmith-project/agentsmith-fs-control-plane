@@ -359,7 +359,12 @@ func (handler repoTemplateLeafHandler) writeExistingIdempotentOperation(w http.R
 		writeOperationIntakeHTTPError(w, r, &OperationIntakeError{Code: CodeIdempotencyConflict, Status: http.StatusConflict, Retryable: false, Message: "idempotency key conflicts with a different request"})
 		return true
 	}
-	_ = writeJSON(w, http.StatusAccepted, operationEnvelopeFromRecord(record))
+	envelope, projectionErr := operationEnvelopeFromRecord(record)
+	if projectionErr != nil {
+		writeOperationIntakeHTTPError(w, r, projectionErr)
+		return true
+	}
+	_ = writeJSON(w, http.StatusAccepted, envelope)
 	return true
 }
 
@@ -415,7 +420,7 @@ func createOrReuseTemplateOperationIntake(ctx context.Context, create func(conte
 	if err != nil {
 		return OperationEnvelope{}, mapOperationIntakeError(err)
 	}
-	return operationEnvelopeFromRecord(resolution.Operation), nil
+	return operationEnvelopeFromRecord(resolution.Operation)
 }
 
 func (handler repoTemplateLeafHandler) loadOrdinaryRepoMetadata(w http.ResponseWriter, r *http.Request, namespaceID, repoID string) (resources.Repo, resources.Namespace, resources.NamespaceVolumeBinding, []repoaccess.Fence, bool) {

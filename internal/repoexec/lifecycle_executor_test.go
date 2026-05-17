@@ -56,6 +56,34 @@ func TestLifecycleExecutorRestoresArchivedRepoAfterDoctor(t *testing.T) {
 	}
 }
 
+func TestLifecycleExecutorAllowsCleanupPendingDoctorWarning(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = repoLifecycleResource(now, resources.RepoStatusArchived)
+	runner := &fakeJVSRunner{
+		directDoctorSummary: jvsrunner.DirectDoctorSummary{
+			RepoID:        "jvs_repo_alpha",
+			Healthy:       false,
+			FindingCount:  1,
+			Findings:      []jvsrunner.DirectDoctorFindingSummary{{Severity: "warning", Message: "direct restore cleanup pending"}},
+			MetadataState: "ready",
+			Journal:       "clean",
+			Recovery:      "cleanup_pending",
+		},
+	}
+	executor := newTestLifecycleExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), repoLifecycleLeasedRecord(now, operations.OperationRepoRestoreArchived, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "direct_doctor" {
+		t.Fatalf("jvs calls = %#v, want direct doctor", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateSucceeded || store.repo.Status != resources.RepoStatusActive {
+		t.Fatalf("operation/repo = %#v/%#v, want lifecycle success despite cleanup warning", store.operation, store.repo)
+	}
+}
+
 func TestLifecycleExecutorDeletesActiveAndArchivedReposToTombstone(t *testing.T) {
 	now := repoExecNow()
 	tests := []struct {

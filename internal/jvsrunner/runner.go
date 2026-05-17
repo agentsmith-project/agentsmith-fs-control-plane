@@ -18,12 +18,13 @@ import (
 )
 
 const (
-	workspaceMain          = "main"
-	schemaVersionV048      = 1
-	directContractV1       = "jvs.afscp.direct.v1"
-	defaultMaxOutputBytes  = 64 * 1024
-	maxSafeRepoIDLength    = 128
-	maxHistoryMessageRunes = 512
+	workspaceMain               = "main"
+	schemaVersionV048           = 1
+	directContractV1            = "jvs.afscp.direct.v1"
+	defaultMaxOutputBytes       = 64 * 1024
+	maxSafeRepoIDLength         = 128
+	maxHistoryMessageRunes      = 512
+	directPurposeTemplateSource = "template_source"
 )
 
 var (
@@ -105,6 +106,7 @@ type SaveSummary struct {
 type SavePointSummary struct {
 	SavePointID string
 	Message     string
+	Purpose     string
 	CreatedAt   string
 }
 
@@ -123,6 +125,7 @@ type DirectSaveSummary struct {
 	SavePointID   string
 	HistoryHeadID string
 	Message       string
+	Purpose       string
 	CreatedAt     string
 	CloneEvidence []CloneEvidence
 }
@@ -144,6 +147,7 @@ func (evidence CloneEvidence) String() string {
 type DirectSavePointSummary struct {
 	SavePointID string
 	Message     string
+	Purpose     string
 	CreatedAt   string
 	HistoryHead bool
 }
@@ -182,9 +186,17 @@ type DirectDoctorSummary struct {
 	RepoID        string
 	Healthy       bool
 	FindingCount  int
+	Findings      []DirectDoctorFindingSummary
 	MetadataState string
 	Journal       string
 	Recovery      string
+}
+
+type DirectDoctorFindingSummary struct {
+	Code      string
+	Severity  string
+	Message   string
+	Retryable bool
 }
 
 func New(config Config) (*Runner, error) {
@@ -280,7 +292,7 @@ func (runner *Runner) VerifyAFSCPDirectCapability(ctx context.Context) error {
 		required []string
 	}{
 		{name: "afscp --help", args: []string{"afscp", "--help"}, required: []string{"jvs afscp", "--control-root", "--home", "--json"}},
-		{name: "afscp save --help", args: []string{"afscp", "save", "--help"}, required: []string{"save", "--message", "--control-root", "--home", "--json"}},
+		{name: "afscp save --help", args: []string{"afscp", "save", "--help"}, required: []string{"save", "--message", "--purpose", "--control-root", "--home", "--json"}},
 		{name: "afscp list --help", args: []string{"afscp", "list", "--help"}, required: []string{"list", "--control-root", "--home", "--json"}},
 		{name: "afscp restore --help", args: []string{"afscp", "restore", "--help"}, required: []string{"restore", "--save-point", "--control-root", "--home", "--json"}},
 		{name: "afscp clone --help", args: []string{"afscp", "clone", "--help"}, required: []string{"clone", "--target-control-root", "--target-home", "--control-root", "--home", "--json"}},
@@ -311,11 +323,24 @@ func (runner *Runner) VerifyAFSCPDirectCapability(ctx context.Context) error {
 }
 
 func (runner *Runner) DirectSave(ctx context.Context, target DirectTarget, message string) (DirectSaveSummary, error) {
+	return runner.DirectSaveWithPurpose(ctx, target, message, "")
+}
+
+func (runner *Runner) DirectSaveWithPurpose(ctx context.Context, target DirectTarget, message string, purpose string) (DirectSaveSummary, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return DirectSaveSummary{}, fmt.Errorf("%w: save message", ErrInvalidArgument)
 	}
-	envelope, err := runner.runAFSCPDirectJSON(ctx, target, "save", []string{"save", "--message", message, "--json"})
+	purpose = strings.TrimSpace(purpose)
+	if purpose != "" && purpose != directPurposeTemplateSource {
+		return DirectSaveSummary{}, fmt.Errorf("%w: save purpose", ErrInvalidArgument)
+	}
+	args := []string{"save", "--message", message}
+	if purpose != "" {
+		args = append(args, "--purpose", purpose)
+	}
+	args = append(args, "--json")
+	envelope, err := runner.runAFSCPDirectJSON(ctx, target, "save", args)
 	if err != nil {
 		return DirectSaveSummary{}, err
 	}
@@ -323,14 +348,16 @@ func (runner *Runner) DirectSave(ctx context.Context, target DirectTarget, messa
 	historyHead, okHistoryHead := directRequiredID(envelope.Data, "history_head")
 	createdAt, okCreatedAt := stringFromMap(envelope.Data, "created_at")
 	outMessage, okMessage := stringFromMap(envelope.Data, "message")
+	outPurpose, okPurpose := optionalStringFromMap(envelope.Data, "purpose")
 	cloneEvidence, okCloneEvidence := cloneEvidenceFromDirectData(envelope.Data, "save")
-	if !okSavePoint || !okHistoryHead || historyHead != savePointID || !okCreatedAt || strings.TrimSpace(createdAt) == "" || !okMessage || !okCloneEvidence {
+	if !okSavePoint || !okHistoryHead || historyHead != savePointID || !okCreatedAt || strings.TrimSpace(createdAt) == "" || !okMessage || !okPurpose || !okCloneEvidence {
 		return DirectSaveSummary{}, fmt.Errorf("%w: afscp save", ErrInvalidEnvelope)
 	}
 	return DirectSaveSummary{
 		SavePointID:   savePointID,
 		HistoryHeadID: historyHead,
 		Message:       safeHistoryMessageText(outMessage),
+		Purpose:       safeSummaryText(outPurpose),
 		CreatedAt:     safeSummaryText(createdAt),
 		CloneEvidence: cloneEvidence,
 	}, nil
@@ -357,14 +384,16 @@ func (runner *Runner) DirectList(ctx context.Context, target DirectTarget) (Dire
 		}
 		id, okID := directRequiredID(item, "save_point_id")
 		message, okMessage := optionalStringFromMap(item, "message")
+		purpose, okPurpose := optionalStringFromMap(item, "purpose")
 		createdAt, okCreatedAt := optionalStringFromMap(item, "created_at")
 		itemHistoryHead, okItemHistoryHead := optionalBoolFromMap(item, "history_head")
-		if !okID || !okMessage || !okCreatedAt || !okItemHistoryHead {
+		if !okID || !okMessage || !okPurpose || !okCreatedAt || !okItemHistoryHead {
 			return DirectListSummary{}, fmt.Errorf("%w: afscp list", ErrInvalidEnvelope)
 		}
 		savePoints = append(savePoints, DirectSavePointSummary{
 			SavePointID: id,
 			Message:     safeHistoryMessageText(message),
+			Purpose:     safeSummaryText(purpose),
 			CreatedAt:   safeSummaryText(createdAt),
 			HistoryHead: itemHistoryHead,
 		})
@@ -464,10 +493,11 @@ func (runner *Runner) DirectDoctor(ctx context.Context, target DirectTarget) (Di
 	metadataState, okMetadataState := requiredSafeSummaryFromMap(envelope.Data, "metadata_state")
 	journal, okJournal := requiredSafeSummaryFromMap(envelope.Data, "journal")
 	recovery, okRecovery := requiredSafeSummaryFromMap(envelope.Data, "recovery")
-	if !okRepoID || !okHealthy || !healthy || !okFindings || !okMetadataState || !okJournal || !okRecovery {
+	findingSummaries, okFindingSummaries := directDoctorFindingsFromData(findings)
+	if !okRepoID || !okHealthy || !okFindings || !okFindingSummaries || !okMetadataState || !okJournal || !okRecovery {
 		return DirectDoctorSummary{}, fmt.Errorf("%w: afscp doctor", ErrInvalidEnvelope)
 	}
-	return DirectDoctorSummary{RepoID: repoID, Healthy: healthy, FindingCount: len(findings), MetadataState: metadataState, Journal: journal, Recovery: recovery}, nil
+	return DirectDoctorSummary{RepoID: repoID, Healthy: healthy, FindingCount: len(findingSummaries), Findings: findingSummaries, MetadataState: metadataState, Journal: journal, Recovery: recovery}, nil
 }
 
 func (runner *Runner) runAFSCPDirectJSON(ctx context.Context, target DirectTarget, operation string, operationArgs []string) (afscpDirectEnvelope, error) {
@@ -917,6 +947,71 @@ func cloneEvidenceFromDirectData(data map[string]any, operation string) ([]Clone
 		out = append(out, evidence)
 	}
 	return out, true
+}
+
+func directDoctorFindingsFromData(items []any) ([]DirectDoctorFindingSummary, bool) {
+	out := make([]DirectDoctorFindingSummary, 0, len(items))
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		finding, ok := directDoctorFindingFromMap(item)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, finding)
+	}
+	return out, true
+}
+
+func directDoctorFindingFromMap(item map[string]any) (DirectDoctorFindingSummary, bool) {
+	allowed := map[string]bool{
+		"code":      true,
+		"severity":  true,
+		"message":   true,
+		"retryable": true,
+	}
+	for key := range item {
+		if !allowed[key] {
+			return DirectDoctorFindingSummary{}, false
+		}
+	}
+	code, okCode := optionalStringFromMap(item, "code")
+	severity, okSeverity := requiredSafeSummaryFromMap(item, "severity")
+	message, okMessage := stringFromMap(item, "message")
+	retryable, okRetryable := boolFromMap(item, "retryable")
+	if !okCode || !okSeverity || !okMessage || !okRetryable {
+		return DirectDoctorFindingSummary{}, false
+	}
+	if strings.TrimSpace(code) != "" {
+		code = safeSummaryText(code)
+		if code == "" || code == "redacted" {
+			return DirectDoctorFindingSummary{}, false
+		}
+	}
+	message, okMessage = safeDoctorFindingMessageText(message)
+	if !okMessage {
+		return DirectDoctorFindingSummary{}, false
+	}
+	return DirectDoctorFindingSummary{Code: code, Severity: severity, Message: message, Retryable: retryable}, true
+}
+
+func safeDoctorFindingMessageText(value string) (string, bool) {
+	text := strings.TrimSpace(value)
+	if text == "" || len(text) > 256 {
+		return "", false
+	}
+	if projectionguard.ContainsForbiddenJVSInternalText(text) || containsSensitiveSummaryText(text) || containsAbsolutePath(text) || containsShellFragment(strings.ToLower(text)) {
+		return "", false
+	}
+	for i := 0; i < len(text); i++ {
+		b := text[i]
+		if b < 0x20 || b == 0x7f {
+			return "", false
+		}
+	}
+	return text, true
 }
 
 func cloneEvidenceFromMap(item map[string]any, expectedOperation string) (CloneEvidence, bool) {

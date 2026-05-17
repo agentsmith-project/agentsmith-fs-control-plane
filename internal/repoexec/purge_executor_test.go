@@ -37,6 +37,35 @@ func TestPurgeExecutorPurgesTombstonedRepoWhenRetentionMet(t *testing.T) {
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
+func TestPurgeExecutorAllowsCleanupPendingDoctorWarning(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = repoLifecycleTombstonedResource(now, resources.RepoStatusActive, now.Add(-2*time.Hour))
+	purger := &fakeStoragePurger{state: RepoStoragePresent}
+	runner := &fakeJVSRunner{
+		directDoctorSummary: jvsrunner.DirectDoctorSummary{
+			RepoID:        "jvs_repo_alpha",
+			Healthy:       false,
+			FindingCount:  1,
+			Findings:      []jvsrunner.DirectDoctorFindingSummary{{Severity: "warning", Message: "direct restore cleanup pending"}},
+			MetadataState: "ready",
+			Journal:       "clean",
+			Recovery:      "cleanup_pending",
+		},
+	}
+	executor := newTestPurgeExecutor(t, store, runner, purger, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), repoPurgeLeasedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "direct_doctor" || purger.purgeCalls != 1 {
+		t.Fatalf("jvs/purge calls = %#v/%d, want doctor then purge", runner.calls, purger.purgeCalls)
+	}
+	if store.operation.State != operations.OperationStateSucceeded || store.repo.Status != resources.RepoStatusPurged {
+		t.Fatalf("operation/repo = %#v/%#v, want purge success despite cleanup warning", store.operation, store.repo)
+	}
+}
+
 func TestPurgeExecutorAcceptsAPIInputSummaryShapeForProductConfirmation(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()

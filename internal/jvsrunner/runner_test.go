@@ -101,6 +101,23 @@ func TestAFSCPDirectMethodsUseTargetSelectorAndNoLegacyFlags(t *testing.T) {
 			},
 		},
 		{
+			name: "save with purpose",
+			stdout: directSaveStdoutWith(t, func(env map[string]any) {
+				env["data"].(map[string]any)["purpose"] = "template_source"
+			}),
+			wantArg: []string{"afscp", "--control-root", testControlRoot, "--home", testDirectHome, "save", "--message", "checkpoint before restore", "--purpose", "template_source", "--json"},
+			call: func(r *Runner) (any, error) {
+				return r.DirectSaveWithPurpose(context.Background(), target, " checkpoint before restore ", "template_source")
+			},
+			check: func(t *testing.T, summary any) {
+				got := summary.(DirectSaveSummary)
+				if got.SavePointID != "sp_001" || got.HistoryHeadID != "sp_001" || got.Message != "checkpoint before restore" || got.Purpose != "template_source" || got.CreatedAt != "2026-05-05T12:00:00Z" {
+					t.Fatalf("summary = %#v", got)
+				}
+				assertCloneEvidenceSummary(t, got.CloneEvidence, "save", []string{"save_point_payload"})
+			},
+		},
+		{
 			name:    "list",
 			stdout:  directListSuccessStdout(t),
 			wantArg: []string{"afscp", "--control-root", testControlRoot, "--home", testDirectHome, "list", "--json"},
@@ -153,7 +170,7 @@ func TestAFSCPDirectMethodsUseTargetSelectorAndNoLegacyFlags(t *testing.T) {
 			},
 			check: func(t *testing.T, summary any) {
 				got := summary.(DirectStatusSummary)
-				if got.HistoryHeadID != "sp_002" || got.MetadataState != "clean" || got.ActiveOperation != "none" || got.Recovery != "none" {
+				if got.HistoryHeadID != "sp_002" || got.MetadataState != "ready" || got.ActiveOperation != "none" || got.Recovery != "none" {
 					t.Fatalf("summary = %#v", got)
 				}
 			},
@@ -167,7 +184,7 @@ func TestAFSCPDirectMethodsUseTargetSelectorAndNoLegacyFlags(t *testing.T) {
 			},
 			check: func(t *testing.T, summary any) {
 				got := summary.(DirectDoctorSummary)
-				if got.RepoID != "jvs_repo_alpha" || !got.Healthy || got.FindingCount != 0 || got.MetadataState != "clean" || got.Journal != "clean" || got.Recovery != "none" {
+				if got.RepoID != "jvs_repo_alpha" || !got.Healthy || got.FindingCount != 0 || got.MetadataState != "ready" || got.Journal != "clean" || got.Recovery != "none" {
 					t.Fatalf("summary = %#v", got)
 				}
 			},
@@ -195,6 +212,35 @@ func TestAFSCPDirectMethodsUseTargetSelectorAndNoLegacyFlags(t *testing.T) {
 			assertSummaryDoesNotLeakPaths(t, summary)
 		})
 	}
+}
+
+func TestAFSCPDirectDoctorAllowsCleanupPendingWarningSummary(t *testing.T) {
+	t.Parallel()
+
+	target := DirectTarget{ControlRoot: testControlRoot, Home: testDirectHome}
+	stdout := directDoctorStdoutWith(t, func(env map[string]any) {
+		data := env["data"].(map[string]any)
+		data["healthy"] = false
+		data["metadata_state"] = "ready"
+		data["journal"] = "clean"
+		data["recovery"] = "cleanup_pending"
+		data["findings"] = []map[string]any{
+			{"severity": "warning", "message": "direct restore cleanup pending", "retryable": false},
+		}
+	})
+	runner := newTestRunner(t, &fakeCommandRunner{result: CommandResult{Stdout: stdout}})
+
+	summary, err := runner.DirectDoctor(context.Background(), target)
+	if err != nil {
+		t.Fatalf("DirectDoctor returned error for cleanup warning: %v", err)
+	}
+	if summary.Healthy || summary.FindingCount != 1 || summary.MetadataState != "ready" || summary.Journal != "clean" || summary.Recovery != "cleanup_pending" {
+		t.Fatalf("summary = %#v, want non-blocking cleanup warning summary", summary)
+	}
+	if len(summary.Findings) != 1 || summary.Findings[0].Severity != "warning" || summary.Findings[0].Message != "direct restore cleanup pending" || summary.Findings[0].Code != "" || summary.Findings[0].Retryable {
+		t.Fatalf("findings = %#v, want current cleanup warning shape", summary.Findings)
+	}
+	assertSummaryDoesNotLeakPaths(t, summary)
 }
 
 func TestAFSCPDirectRejectsUnsafeTargetsAndArguments(t *testing.T) {
@@ -454,7 +500,7 @@ func TestAFSCPDirectListRedactsPathLikeMessages(t *testing.T) {
 func TestVerifyAFSCPDirectCapabilityUsesAFSCPHelpAndRequiresDirectContract(t *testing.T) {
 	t.Parallel()
 
-	help := "Usage:\n  jvs afscp --control-root <control> --home <home> save --message <message> --json\n  jvs afscp --control-root <control> --home <home> list --json\n  jvs afscp --control-root <control> --home <home> restore --save-point <id> --json\n  jvs afscp --control-root <control> --home <home> clone --target-control-root <target-control> --target-home <target-home> --json\n  jvs afscp --control-root <control> --home <home> status --json\n  jvs afscp --control-root <control> --home <home> doctor --json\n"
+	help := "Usage:\n  jvs afscp --control-root <control> --home <home> save --message <message> --purpose <purpose> --json\n  jvs afscp --control-root <control> --home <home> list --json\n  jvs afscp --control-root <control> --home <home> restore --save-point <id> --json\n  jvs afscp --control-root <control> --home <home> clone --target-control-root <target-control> --target-home <target-home> --json\n  jvs afscp --control-root <control> --home <home> status --json\n  jvs afscp --control-root <control> --home <home> doctor --json\n"
 	commandRunner := &fakeCommandRunner{result: CommandResult{Stdout: []byte(help)}}
 	runner := newTestRunner(t, commandRunner)
 
@@ -1153,7 +1199,7 @@ func directStatusStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	env := directEnvelope("status")
 	data := env["data"].(map[string]any)
 	data["history_head"] = "sp_002"
-	data["metadata_state"] = "clean"
+	data["metadata_state"] = "ready"
 	data["active_operation"] = "none"
 	data["recovery"] = "none"
 	if mutate != nil {
@@ -1174,7 +1220,7 @@ func directDoctorStdoutWith(t *testing.T, mutate func(map[string]any)) []byte {
 	data["repo_id"] = "jvs_repo_alpha"
 	data["healthy"] = true
 	data["findings"] = []map[string]any{}
-	data["metadata_state"] = "clean"
+	data["metadata_state"] = "ready"
 	data["journal"] = "clean"
 	data["recovery"] = "none"
 	if mutate != nil {

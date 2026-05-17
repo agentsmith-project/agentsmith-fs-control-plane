@@ -13,6 +13,11 @@ import (
 
 var errSavePointHistoryUnavailable = errors.New("save point history unavailable")
 
+const (
+	savePointPurposeTemplateSource       = "template_source"
+	savePointPurposeLegacyTemplateSource = "task_template_source"
+)
+
 type VolumeReader interface {
 	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
 }
@@ -101,7 +106,12 @@ func (reader *JVSBackedSavePointHistoryReader) ListSavePoints(ctx context.Contex
 func historySummaryFromDirectList(history jvsrunner.DirectListSummary) jvsrunner.HistorySummary {
 	savePoints := make([]jvsrunner.SavePointSummary, 0, len(history.SavePoints))
 	for _, savePoint := range history.SavePoints {
-		savePoints = append(savePoints, jvsrunner.SavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, CreatedAt: savePoint.CreatedAt})
+		savePoints = append(savePoints, jvsrunner.SavePointSummary{
+			SavePointID: savePoint.SavePointID,
+			Message:     savePoint.Message,
+			Purpose:     savePoint.Purpose,
+			CreatedAt:   savePoint.CreatedAt,
+		})
 	}
 	return jvsrunner.HistorySummary{NewestSavePointID: history.HistoryHeadID, SavePoints: savePoints}
 }
@@ -109,6 +119,9 @@ func historySummaryFromDirectList(history jvsrunner.DirectListSummary) jvsrunner
 func savePointHistoryFromJVSSummary(repoID string, history jvsrunner.HistorySummary) (SavePointHistory, error) {
 	savePoints := make([]SavePointResponse, 0, len(history.SavePoints))
 	for _, savePoint := range history.SavePoints {
+		if isInternalTemplateSourceSavePoint(savePoint.Purpose) {
+			continue
+		}
 		if strings.TrimSpace(savePoint.SavePointID) == "" || strings.TrimSpace(savePoint.CreatedAt) == "" {
 			return SavePointHistory{}, errSavePointHistoryUnavailable
 		}
@@ -120,6 +133,15 @@ func savePointHistoryFromJVSSummary(repoID string, history jvsrunner.HistorySumm
 		})
 	}
 	return SavePointHistory{SavePoints: savePoints}, nil
+}
+
+func isInternalTemplateSourceSavePoint(purpose string) bool {
+	switch strings.TrimSpace(purpose) {
+	case savePointPurposeTemplateSource, savePointPurposeLegacyTemplateSource:
+		return true
+	default:
+		return false
+	}
 }
 
 func validHistoryVolumeRoot(root string) bool {

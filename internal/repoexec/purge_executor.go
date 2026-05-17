@@ -216,7 +216,7 @@ func (executor *PurgeExecutor) ExecuteOperationRecovery(ctx context.Context, rec
 		controlExists := strings.TrimSpace(repo.ControlVolumeSubdir) != ""
 		if controlExists {
 			doctor, err := executor.jvs.DirectDoctor(ctx, jvsrunner.DirectTarget{ControlRoot: paths.ControlRootPath, Home: paths.PayloadRootPath})
-			if err != nil || !doctor.Healthy || doctor.RepoID != repo.JVSRepoID {
+			if err != nil || !directDoctorAllowsMutation(doctor) || doctor.RepoID != repo.JVSRepoID {
 				return executor.commitPurgeIntervention(ctx, record, now, "JVS_DOCTOR_FAILED", "jvs doctor failed", withJVSErrorDetails(map[string]any{"repo_id": repo.JVSRepoID}, err))
 			}
 		}

@@ -23,6 +23,7 @@ import (
 
 type TemplateJVSRunner interface {
 	DirectSave(ctx context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error)
+	DirectSaveWithPurpose(ctx context.Context, target jvsrunner.DirectTarget, message string, purpose string) (jvsrunner.DirectSaveSummary, error)
 	DirectClone(ctx context.Context, source jvsrunner.DirectTarget, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectCloneSummary, error)
 }
 
@@ -159,7 +160,7 @@ func (executor *TemplateCreateExecutor) ExecuteOperationRecovery(ctx context.Con
 	if err := prepareDirectCloneTargetParents(paths); err != nil {
 		return executor.commitTemplateCreateFailed(ctx, working, "TEMPLATE_CREATE_TARGET_PREPARE_FAILED", "template create target preparation failed")
 	}
-	save, err := executor.jvs.DirectSave(ctx, sourceTarget, "template "+record.TemplateID)
+	save, err := executor.jvs.DirectSaveWithPurpose(ctx, sourceTarget, "template "+record.TemplateID, "template_source")
 	if err != nil {
 		if isJVSRecoveryBlockingError(err) {
 			return executor.commitTemplateCreateBlocked(ctx, working, map[string]any{

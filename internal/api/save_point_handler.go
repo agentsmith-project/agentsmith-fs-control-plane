@@ -336,7 +336,12 @@ func (handler savePointLeafHandler) writeExistingIdempotentOperation(w http.Resp
 		writeOperationIntakeHTTPError(w, r, &OperationIntakeError{Code: CodeIdempotencyConflict, Status: http.StatusConflict, Retryable: false, Message: "idempotency key conflicts with a different request"})
 		return true
 	}
-	_ = writeJSON(w, http.StatusAccepted, operationEnvelopeFromRecord(record))
+	envelope, projectionErr := operationEnvelopeFromRecord(record)
+	if projectionErr != nil {
+		writeOperationIntakeHTTPError(w, r, projectionErr)
+		return true
+	}
+	_ = writeJSON(w, http.StatusAccepted, envelope)
 	return true
 }
 

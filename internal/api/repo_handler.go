@@ -363,7 +363,7 @@ func CreateOrReuseRepoCreateOperationIntake(ctx context.Context, config RepoCrea
 	if err != nil {
 		return OperationEnvelope{}, mapOperationIntakeError(err)
 	}
-	return operationEnvelopeFromRecord(resolution.Operation), nil
+	return operationEnvelopeFromRecord(resolution.Operation)
 }
 
 func decodeCreateRepoRequest(r *http.Request) (createRepoRequestDTO, error) {

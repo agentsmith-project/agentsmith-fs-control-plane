@@ -1402,7 +1402,7 @@ func TestRunOnceRestoreEnabledAllowsNonBlockingCleanupStatus(t *testing.T) {
 	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
 	jvs := &workerAppFakeJVSRunner{
 		directRestoreSummary: jvsrunner.DirectRestoreSummary{RestoredSavePointID: "sp_001", PreviousHeadID: "sp_before", NewHeadID: "sp_001"},
-		directStatusSummary:  jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "cleanup_pending", Recovery: "none"},
+		directStatusSummary:  jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "ready", ActiveOperation: "none", Recovery: "cleanup_pending"},
 	}
 	runner, err := NewRunOnceRunner(Options{
 		Source: workerAppRestoreConfigSource(nil),
@@ -1440,9 +1440,9 @@ func TestRunOnceRestoreEnabledStatusRecoveryRetainsGate(t *testing.T) {
 		name   string
 		status jvsrunner.DirectStatusSummary
 	}{
-		{name: "journal recovery", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "none", Recovery: "journal_recovery_required"}},
-		{name: "operator intervention", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "none", Recovery: "operator_intervention_required"}},
-		{name: "blocking cleanup", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "clean", ActiveOperation: "cleanup_blocking", Recovery: "none"}},
+		{name: "journal recovery", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "ready", ActiveOperation: "none", Recovery: "journal_recovery_required"}},
+		{name: "operator intervention", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "ready", ActiveOperation: "none", Recovery: "operator_intervention_required"}},
+		{name: "blocking cleanup", status: jvsrunner.DirectStatusSummary{HistoryHeadID: "sp_001", MetadataState: "ready", ActiveOperation: "cleanup_blocking", Recovery: "none"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1784,7 +1784,7 @@ func TestNewJVSRunnerFromConfigVerifiesFileAgainstAcceptedPin(t *testing.T) {
 }
 
 func TestNewJVSRunnerFromConfigDirectRestorePreflightsCLIHelp(t *testing.T) {
-	path, sha := writeWorkerAppJVSHelpFixture(t, "Usage:\n  jvs afscp --control-root <control> --home <home> save --message <message> --json\n  jvs afscp --control-root <control> --home <home> list --json\n  jvs afscp --control-root <control> --home <home> restore --save-point <id> --json\n  jvs afscp --control-root <control> --home <home> clone --target-control-root <target-control> --target-home <target-home> --json\n  jvs afscp --control-root <control> --home <home> status --json\n  jvs afscp --control-root <control> --home <home> doctor --json\n")
+	path, sha := writeWorkerAppJVSHelpFixture(t, "Usage:\n  jvs afscp --control-root <control> --home <home> save --message <message> --purpose <purpose> --json\n  jvs afscp --control-root <control> --home <home> list --json\n  jvs afscp --control-root <control> --home <home> restore --save-point <id> --json\n  jvs afscp --control-root <control> --home <home> clone --target-control-root <target-control> --target-home <target-home> --json\n  jvs afscp --control-root <control> --home <home> status --json\n  jvs afscp --control-root <control> --home <home> doctor --json\n")
 
 	_, err := NewJVSRunnerFromConfig(config.WorkerRepoCreateRecoveryConfig{
 		Enabled:                   true,
@@ -3919,6 +3919,7 @@ type workerAppFakeJVSRunner struct {
 	controlRoot          string
 	payloadRoot          string
 	saveMessage          string
+	savePurpose          string
 	restoreSavePointID   string
 }
 
@@ -3966,17 +3967,22 @@ func (runner *workerAppFakeJVSRunner) DirectClone(_ context.Context, source jvsr
 	return runner.directCloneSummary, runner.directCloneErr
 }
 
-func (runner *workerAppFakeJVSRunner) DirectSave(_ context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error) {
+func (runner *workerAppFakeJVSRunner) DirectSave(ctx context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error) {
+	return runner.DirectSaveWithPurpose(ctx, target, message, "")
+}
+
+func (runner *workerAppFakeJVSRunner) DirectSaveWithPurpose(_ context.Context, target jvsrunner.DirectTarget, message string, purpose string) (jvsrunner.DirectSaveSummary, error) {
 	runner.calls = append(runner.calls, "direct_save")
 	runner.directTarget = target
 	runner.controlRoot = target.ControlRoot
 	runner.payloadRoot = target.Home
 	runner.saveMessage = message
+	runner.savePurpose = purpose
 	if runner.directSaveSummary.SavePointID == "" && runner.saveSummary.SavePointID != "" {
-		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, CreatedAt: runner.saveSummary.CreatedAt}
+		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, Purpose: purpose, CreatedAt: runner.saveSummary.CreatedAt}
 	}
 	if runner.directSaveSummary.SavePointID == "" {
-		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: "sp_001", HistoryHeadID: "sp_001", Message: message, CreatedAt: "2026-05-05T12:00:00Z"}
+		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: "sp_001", HistoryHeadID: "sp_001", Message: message, Purpose: purpose, CreatedAt: "2026-05-05T12:00:00Z"}
 	}
 	return runner.directSaveSummary, runner.directSaveErr
 }
@@ -3989,7 +3995,7 @@ func (runner *workerAppFakeJVSRunner) DirectList(_ context.Context, target jvsru
 	if runner.directListSummary.HistoryHeadID == "" && len(runner.directListSummary.SavePoints) == 0 {
 		savePoints := make([]jvsrunner.DirectSavePointSummary, 0, len(runner.historySummary.SavePoints))
 		for _, savePoint := range runner.historySummary.SavePoints {
-			savePoints = append(savePoints, jvsrunner.DirectSavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, CreatedAt: savePoint.CreatedAt, HistoryHead: savePoint.SavePointID == runner.historySummary.NewestSavePointID})
+			savePoints = append(savePoints, jvsrunner.DirectSavePointSummary{SavePointID: savePoint.SavePointID, Message: savePoint.Message, Purpose: savePoint.Purpose, CreatedAt: savePoint.CreatedAt, HistoryHead: savePoint.SavePointID == runner.historySummary.NewestSavePointID})
 		}
 		runner.directListSummary = jvsrunner.DirectListSummary{HistoryHeadID: runner.historySummary.NewestSavePointID, SavePoints: savePoints}
 	}
@@ -4014,7 +4020,7 @@ func (runner *workerAppFakeJVSRunner) DirectStatus(_ context.Context, target jvs
 	runner.controlRoot = target.ControlRoot
 	runner.payloadRoot = target.Home
 	if runner.directStatusSummary.HistoryHeadID == "" {
-		runner.directStatusSummary = jvsrunner.DirectStatusSummary{HistoryHeadID: runner.restoreSavePointID, MetadataState: "clean", ActiveOperation: "none", Recovery: "none"}
+		runner.directStatusSummary = jvsrunner.DirectStatusSummary{HistoryHeadID: runner.restoreSavePointID, MetadataState: "ready", ActiveOperation: "none", Recovery: "none"}
 	}
 	return runner.directStatusSummary, runner.directStatusErr
 }
@@ -4024,7 +4030,7 @@ func (runner *workerAppFakeJVSRunner) DirectDoctor(_ context.Context, target jvs
 	runner.directTarget = target
 	runner.controlRoot = target.ControlRoot
 	runner.payloadRoot = target.Home
-	if runner.directDoctorSummary == (jvsrunner.DirectDoctorSummary{}) {
+	if runner.directDoctorSummary.RepoID == "" && runner.directDoctorSummary.MetadataState == "" {
 		repoID := runner.doctorSummary.RepoID
 		if repoID == "" {
 			repoID = "jvs_repo_alpha"
@@ -4033,7 +4039,7 @@ func (runner *workerAppFakeJVSRunner) DirectDoctor(_ context.Context, target jvs
 		if runner.doctorSummary == (jvsrunner.DoctorSummary{}) {
 			healthy = true
 		}
-		runner.directDoctorSummary = jvsrunner.DirectDoctorSummary{RepoID: repoID, Healthy: healthy, FindingCount: 0, MetadataState: "clean", Journal: "clean", Recovery: "none"}
+		runner.directDoctorSummary = jvsrunner.DirectDoctorSummary{RepoID: repoID, Healthy: healthy, FindingCount: 0, MetadataState: "ready", Journal: "clean", Recovery: "none"}
 	}
 	return runner.directDoctorSummary, runner.directDoctorErr
 }
