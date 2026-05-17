@@ -136,9 +136,9 @@ routes, and generated contracts used by implementation.
 | `export_revoke` | session revoking state, operation, and audit boundary | same request returns existing revoke operation/session state |
 | `export_session_reconcile` | session terminal state, runtime ledger counts, operation, and audit boundary | replay scans durable session/ledger state and never creates caller credentials |
 | `mount_binding_create` | binding issuance state, operation, and audit boundary | same request returns existing binding without reissuing runtime material |
-| `mount_binding_status_update` | orchestrator status observation, operation, and audit boundary | same request returns existing status update result |
+| `mount_binding_status_update` | orchestrator status observation, operation, audit, and terminal release evidence boundary; `released`/`revoked` require non-accessing runtime plus completed storage flush/durable and export-visible boundaries | same request returns existing status update result |
 | `mount_binding_heartbeat` | binding lease extension boundary | same request returns existing heartbeat result |
-| `mount_binding_release` | release requested/confirmed terminal boundary | same request returns existing release state |
+| `mount_binding_release` | release requested boundary; terminal `released` is recorded only through status evidence after runtime, durable, and export visibility are complete | same request returns existing release state |
 | `mount_binding_revoke` | revoke requested/confirmed terminal boundary | same request returns existing revoke state |
 | `migration_cutover` | migration generation handoff if tooling is enabled | recovery-only replay requires operator decision when source/target generation is ambiguous |
 
@@ -192,9 +192,9 @@ Minimum GA matrix:
 | export_revoke | export session lock | idempotently move session to `revoking`/drain; terminal revoke depends on gateway or reconcile confirmation |
 | export_session_reconcile | export session lock | terminalize zero-count `revoking -> revoked` and zero-count expired `active -> expired` sessions by atomically committing the operation, session update, and audit event; nonzero or uncertain gateway state fails closed |
 | mount_binding_create | repo mount lock | inspect binding record and orchestrator issuance state |
-| mount_binding_status_update | mount binding lock | inspect orchestrator-reported terminal state and runtime access guarantee |
+| mount_binding_status_update | mount binding lock | inspect orchestrator-reported terminal state, runtime access guarantee, storage flush/durable barrier, and export-visible boundary |
 | mount_binding_heartbeat | mount binding lock | extend only non-terminal live bindings |
-| mount_binding_release | mount binding lock | terminal only after runtime access has ended |
+| mount_binding_release | mount binding lock | request release/teardown; terminal status is only after runtime access has ended and durable/export-visible evidence is reported |
 | mount_binding_revoke | mount binding lock | keep releasing until runtime is confirmed unmounted or unable to write |
 | migration_cutover, if migration tooling is enabled | migration exclusive lock | require operator decision if source/target generation is ambiguous |
 

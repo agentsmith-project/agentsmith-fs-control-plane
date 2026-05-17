@@ -184,6 +184,21 @@ func TestSecretPathRedactionContractDefinesDefaultControlPlaneOutputBoundary(t *
 	)
 }
 
+func TestWorkloadMountReleasedContractDefinesDurableExportVisibleBoundary(t *testing.T) {
+	contract := readRepoFileForContractTest(t, "docs/contracts/workload-mount-binding-v1.md")
+	model := readRepoFileForContractTest(t, "docs/WORKLOAD_MOUNTS.md")
+	for name, body := range map[string]string{"contract": contract, "model": model} {
+		t.Run(name, func(t *testing.T) {
+			requireContractPhrases(t, body,
+				"runtime mount is unmounted or otherwise non-accessing",
+				"storage flush/durable barrier",
+				"export-visible boundary",
+				"not be implemented by hash, preview, copy, or fallback materialization",
+			)
+		})
+	}
+}
+
 func TestProfileBoundaryContractDefinesDefaultFixtureAndRuntimeSupportSeparation(t *testing.T) {
 	body := readRepoFileForContractTest(t, "docs/GA_RELEASE_GATES.md")
 	requireContractPhrases(t, body,

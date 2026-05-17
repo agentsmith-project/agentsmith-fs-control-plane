@@ -65,7 +65,18 @@ Statuses:
 - `expired`
 - `failed`
 
-`released` and `revoked` are evidence-bearing non-accessing terminal statuses: the orchestrator may report them only after confirming that the runtime mount is unmounted or otherwise non-accessing. This also proves unable-to-write. A control-plane revoke request that has not yet stopped runtime access remains `releasing` and continues to block direct restore. `expired` and `failed` are observed terminal statuses; they do not carry confirmed-unmounted, non-accessing, or unable-to-write evidence by themselves.
+`released` and `revoked` are evidence-bearing terminal statuses. The
+orchestrator may report them only after completing the release boundary:
+
+- the runtime mount is unmounted or otherwise non-accessing, which also proves unable-to-write
+- the storage flush/durable barrier for runtime payload writes has completed
+- the export-visible boundary for the same payload path has completed for Files/WebDAV readers
+
+The export-visible boundary must not be implemented by hash, preview, copy, or fallback materialization. A control-plane revoke request that has not yet
+completed this boundary remains `releasing` and continues to block direct
+restore. `expired` and `failed` are observed terminal statuses; they do not
+carry confirmed-unmounted, non-accessing, unable-to-write, durable, or
+export-visible evidence by themselves.
 
 GA requires:
 
@@ -112,9 +123,9 @@ Workload mounts cannot be GA-enabled until the orchestrator contract proves:
 - the repo container directory and control root are never mounted
 - Secret RBAC prevents ordinary caller ServiceAccounts and workloads from reading JuiceFS root Secrets
 - heartbeat extends leases only for non-terminal bindings
-- release is idempotent and terminal only after runtime access has ended
+- release is idempotent and terminal only after runtime access has ended and the storage flush/durable barrier plus export-visible boundary have completed
 - revoke means requested teardown until the orchestrator confirms unmounted or otherwise non-accessing
-- `released` and `revoked` are reported only as evidence-bearing non-accessing terminal statuses; `expired` and `failed` remain observed/uncertain and do not unblock lifecycle without future explicit evidence
+- `released` and `revoked` are reported only as evidence-bearing non-accessing, durable, export-visible terminal statuses; `expired` and `failed` remain observed/uncertain and do not unblock lifecycle without future explicit evidence
 
 If these requirements are not met for a runtime, AFSCP returns
 `CAPABILITY_DENIED` instead of issuing a degraded mount binding.
