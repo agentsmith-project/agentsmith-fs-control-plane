@@ -50,6 +50,37 @@ func TestExecutorFirstAttemptInitializesDoctorsAndCommitsRepo(t *testing.T) {
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
+func TestExecutorFirstAttemptRequiresReadyMetadataAfterInit(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	runner := &fakeJVSRunner{
+		initSummary: jvsrunner.InitSummary{RepoID: "jvs_repo_alpha", Workspace: "main"},
+		directDoctorSummary: jvsrunner.DirectDoctorSummary{
+			RepoID:        "jvs_repo_alpha",
+			Healthy:       true,
+			FindingCount:  0,
+			MetadataState: "uninitialized",
+			Journal:       "clean",
+			Recovery:      "none",
+		},
+	}
+	executor := newTestExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), repoCreateLeasedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "init,direct_doctor" {
+		t.Fatalf("JVS calls = %#v, want init then direct doctor", runner.calls)
+	}
+	if store.repo.ID != "" {
+		t.Fatalf("repo commit = %#v, want no active repo when doctor metadata is not ready", store.repo)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired || store.operation.Error == nil || store.operation.Error.Code != "JVS_DOCTOR_FAILED" {
+		t.Fatalf("operation = %#v, want doctor intervention for non-ready metadata", store.operation)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
 func TestExecutorSuccessCommitSurvivesCallerContextCancellationAfterJVS(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()

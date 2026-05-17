@@ -19,6 +19,11 @@ func TestDirectDoctorAllowsOnlyCurrentCleanupWarningShape(t *testing.T) {
 			want:   true,
 		},
 		{
+			name:   "healthy uninitialized stays blocked for existing mutations",
+			doctor: jvsrunner.DirectDoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, MetadataState: "uninitialized", Journal: "clean", Recovery: "none"},
+			want:   false,
+		},
+		{
 			name:   "current cleanup warning",
 			doctor: jvsrunner.DirectDoctorSummary{RepoID: "jvs_repo_alpha", Healthy: false, FindingCount: 1, Findings: []jvsrunner.DirectDoctorFindingSummary{validCleanupWarning}, MetadataState: "ready", Journal: "clean", Recovery: "cleanup_pending"},
 			want:   true,
