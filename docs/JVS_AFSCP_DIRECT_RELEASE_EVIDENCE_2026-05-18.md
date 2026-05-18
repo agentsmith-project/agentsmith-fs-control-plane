@@ -1,39 +1,39 @@
-# JVS AFSCP Direct Local Evidence 2026-05-16
+# JVS AFSCP Direct Release Evidence 2026-05-18
 
-Status: historical pre-GA AFSCP JVS implementation pin evidence. The current
-active release pin is `docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`.
+Status: current AFSCP JVS release pin evidence.
 
-This artifact records a former local direct-capable JVS build used during
-pre-GA development before JVS v0.4.10 was published. It is retained only as
-historical evidence and must not be used as a release dependency.
+This artifact records the published JVS release artifact consumed by AFSCP
+release images. It identifies the JVS binary artifact and the source ref used
+for the active direct AFSCP contract; it does not attest to caller payload
+contents.
 
-## Local Artifact
+## Release Artifact
 
 ```text
-version: pre-ga-local-afscp-direct-2026-05-16-r3
-artifact: afscp-jvs-direct-local-linux-amd64
-binary evidence path: /tmp/afscp-jvs-direct-local
-JVS binary artifact SHA-256: f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c
-source ref: jvs@main:edd317474db5fd6f9e3e98015438a47d02ad73c6
+version: v0.4.10
+artifact: jvs-linux-amd64
+release URL: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.10
+binary URL: https://github.com/agentsmith-project/jvs/releases/download/v0.4.10/jvs-linux-amd64
+JVS binary artifact SHA-256: fa4ada8e3353f85679d13870ea53307caafbd8217b04ba576b185105d9178cef
+source ref: jvs@v0.4.10:6a0f762bc436f0d3dc7c7c1d60847992c3a82718
+GitHub Actions run: https://github.com/agentsmith-project/jvs/actions/runs/26012602687
 ```
 
-The source ref points at the local pre-GA JVS commit that provides the active
-`jvs.afscp.direct.v1` implementation. AFSCP must replace this local pin with a
-formal release artifact before GA.
-
-## Build And Artifact Identity Evidence
+## Artifact Identity Evidence
 
 Observed commands:
 
 ```bash
-go build -o /tmp/afscp-jvs-direct-local ./cmd/jvs
-sha256sum /tmp/afscp-jvs-direct-local
+gh release download v0.4.10 --repo agentsmith-project/jvs --pattern SHA256SUMS --pattern jvs-linux-amd64 --dir /tmp/jvs-v0.4.10
+cd /tmp/jvs-v0.4.10
+sha256sum --check --ignore-missing SHA256SUMS
+sha256sum jvs-linux-amd64
 ```
 
 Observed JVS binary artifact SHA-256:
 
 ```text
-f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c  /tmp/afscp-jvs-direct-local
+fa4ada8e3353f85679d13870ea53307caafbd8217b04ba576b185105d9178cef  jvs-linux-amd64
 ```
 
 ## Help Surface Evidence
@@ -41,7 +41,7 @@ f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c  /tmp/afscp-jvs
 Root help:
 
 ```bash
-/tmp/afscp-jvs-direct-local afscp --help
+/tmp/jvs-v0.4.10/jvs-linux-amd64 afscp --help
 ```
 
 Observed root usage includes:
@@ -53,17 +53,17 @@ jvs afscp --control-root <control_root_path> --home <payload_home_path> <command
 Subcommand help was checked for:
 
 ```bash
-/tmp/afscp-jvs-direct-local afscp save --help
-/tmp/afscp-jvs-direct-local afscp list --help
-/tmp/afscp-jvs-direct-local afscp restore --help
-/tmp/afscp-jvs-direct-local afscp clone --help
-/tmp/afscp-jvs-direct-local afscp status --help
-/tmp/afscp-jvs-direct-local afscp doctor --help
+/tmp/jvs-v0.4.10/jvs-linux-amd64 afscp save --help
+/tmp/jvs-v0.4.10/jvs-linux-amd64 afscp list --help
+/tmp/jvs-v0.4.10/jvs-linux-amd64 afscp restore --help
+/tmp/jvs-v0.4.10/jvs-linux-amd64 afscp clone --help
+/tmp/jvs-v0.4.10/jvs-linux-amd64 afscp status --help
+/tmp/jvs-v0.4.10/jvs-linux-amd64 afscp doctor --help
 ```
 
 Observed required flags:
 
-- `save`: `--message`, `--control-root`, `--home`, `--json`
+- `save`: `--message`, `--purpose`, `--control-root`, `--home`, `--json`
 - `list`: `--control-root`, `--home`, `--json`
 - `restore`: `--save-point`, `--control-root`, `--home`, `--json`
 - `clone`: `--target-control-root`, `--target-home`, `--control-root`, `--home`, `--json`
@@ -75,7 +75,7 @@ Observed required flags:
 AFSCP active direct commands are:
 
 ```bash
-jvs afscp --control-root <control> --home <home> save --message <message> --json
+jvs afscp --control-root <control> --home <home> save --message <message> [--purpose <purpose>] --json
 jvs afscp --control-root <control> --home <home> list --json
 jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json
 jvs afscp --control-root <source_control> --home <source_home> clone --target-control-root <target_control> --target-home <target_home> --json [--save-point <save_point_id>]
@@ -100,7 +100,7 @@ Focused AFSCP tests cover:
 - save point executor using direct list/save only,
 - restore executor using direct restore only,
 - template create/clone executors using direct clone only,
-- worker/API config accepting the current direct-capable local pin,
+- worker/API config accepting the current published JVS pin,
 - runner/repoexec structural guards rejecting legacy public save/history,
   strict doctor, and restore plan fields from the active direct surface.
 

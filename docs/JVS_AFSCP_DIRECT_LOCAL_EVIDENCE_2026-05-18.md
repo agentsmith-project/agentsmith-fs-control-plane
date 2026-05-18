@@ -1,11 +1,11 @@
 # JVS AFSCP Direct Local Evidence 2026-05-18
 
-Status: current pre-GA AFSCP JVS implementation pin evidence.
+Status: historical pre-GA AFSCP JVS implementation pin evidence. The current
+active release pin is `docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`.
 
-This artifact records the active local direct-capable JVS build used by AFSCP
-until formal JVS release provenance exists. It identifies only the JVS binary
-artifact; it does not attest to payload contents, GA release signoff, or
-replace release provenance.
+This artifact records the former local direct-capable JVS build used during
+pre-GA development before JVS v0.4.10 was published. It is retained only as
+historical evidence and must not be used as a release dependency.
 
 ## Local Artifact
 
@@ -17,9 +17,10 @@ JVS binary artifact SHA-256: 8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a40
 source ref: jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281
 ```
 
-The source ref points at the local pre-GA JVS commit that provides the active
-`jvs.afscp.direct.v1` implementation. AFSCP must replace this local pin with a
-formal release artifact before GA.
+The source ref points at the local pre-GA JVS commit that first provided the
+`jvs.afscp.direct.v1` implementation. The active AFSCP release dependency is
+now the published JVS v0.4.10 artifact recorded in
+`docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`.
 
 ## Build And Artifact Identity Evidence
 

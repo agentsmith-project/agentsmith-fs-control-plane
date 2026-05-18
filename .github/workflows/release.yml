@@ -67,4 +67,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "AFSCP ${GITHUB_REF_NAME}" \
-            --notes "Container image: \`${IMAGE}\`"$'\n\n'"GA release gate: \`bash scripts/verify-ga-release.sh\` passed in this workflow."
+            --notes "Container image: \`${IMAGE}\`"$'\n\n'"CHANGELOG: \`CHANGELOG.md\`"$'\n\n'"GA release gate: \`bash scripts/verify-ga-release.sh\` passed in this workflow."

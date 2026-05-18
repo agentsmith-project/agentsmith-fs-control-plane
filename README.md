@@ -71,7 +71,8 @@ unresolved required/default gaps and selected optional positive gaps.
 - [docs/DEVELOPER_HANDOFF.md](docs/DEVELOPER_HANDOFF.md): coding team entrypoint.
 - [docs/USER_GUIDE.md](docs/USER_GUIDE.md): guide for users, integrators, and operators.
 - [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md): guide for coding, testing, contracts, and gates.
-- [docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md](docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md): current JVS v0.4.9 release pin and runner repair contract evidence for G-005.
+- [docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md](docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md): current published JVS v0.4.10 release pin and direct runner contract evidence for G-005.
+- [docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md](docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md): historical JVS v0.4.9 release evidence.
 - [docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md](docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md): historical JVS v0.4.8 smoke evidence.
 - [docs/JVS_SMOKE_EVIDENCE_2026-05-05.md](docs/JVS_SMOKE_EVIDENCE_2026-05-05.md): historical JVS v0.4.7 blocker evidence.
 - [docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md](docs/TECHNICAL_FEASIBILITY_REVIEW_2026-05-03.md): historical feasibility review with 2026-05-04 JVS external-control resolution update.

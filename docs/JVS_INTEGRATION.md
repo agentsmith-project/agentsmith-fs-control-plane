@@ -22,10 +22,11 @@ jvs afscp --control-root <control> --home <home> status --json
 jvs afscp --control-root <control> --home <home> doctor --json
 ```
 
-The current active pin is the pre-GA local direct-capable artifact recorded in
-`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`. The old `v0.4.9` release
-evidence is historical only and must not be treated as active direct restore
-support.
+The current active pin is the published JVS `v0.4.10` direct-capable release
+artifact recorded in
+`docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`. The old `v0.4.9`
+release evidence is historical only and must not be treated as active direct
+restore support.
 
 Do not reimplement JVS save, version restore, or clone semantics inside AFSCP.
 Repo availability, archive, tombstone, and purge semantics are owned by the
@@ -56,8 +57,8 @@ See:
 
 - [contracts/jvs-runner-contract-v1.md](contracts/jvs-runner-contract-v1.md)
   for the self-contained AFSCP command matrix and fail-closed behavior.
-- [JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md](JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md)
-  for the current local pin evidence.
+- [JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md](JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md)
+  for the current release pin evidence.
 
 ## External Control Root Mode
 
@@ -98,10 +99,9 @@ External control root rules for AFSCP:
 - `jvs afscp status` and `jvs afscp doctor` are explicit metadata-only
   diagnostics, recovery aids, or smoke checks. They are not called by default
   after save or restore.
-- The packaged JVS binary must match the active JVS binary artifact SHA-256 and
-  source ref. Until a formal JVS release exists, Docker builds must inject the
-  verified local direct-capable binary instead of downloading the old release
-  asset.
+- The packaged JVS binary must match the active published JVS release artifact
+  SHA-256 and source ref. AFSCP release images must consume the GitHub-published
+  JVS release artifact instead of a local sibling checkout or ad hoc binary.
 - When `AFSCP_JVS_READY=true`, the API image needs the same direct-capable JVS
   binary config as workers because save-point list is JVS-backed in the
   internal API runtime.

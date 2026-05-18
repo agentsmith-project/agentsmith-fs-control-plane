@@ -1,6 +1,6 @@
 # Contract: JVS Runner V1
 
-Status: current implementation baseline for the pre-GA direct AFSCP runner
+Status: current implementation baseline for the direct AFSCP runner
 contract. FINAL GA is governed by `docs/GA_RELEASE_GATES.md`,
 `docs/READINESS_EVIDENCE.md`, and `scripts/verify-ga-release.sh`.
 
@@ -10,20 +10,20 @@ doctor, the active contract is `jvs.afscp.direct.v1`.
 
 ## Version Pin
 
-The active AFSCP pin is a pre-GA local direct-capable JVS build, not the old
-`v0.4.9` release asset.
+The active AFSCP pin is the published direct-capable JVS `v0.4.10` release
+artifact.
 
 ```text
-version: pre-ga-local-afscp-direct-2026-05-18-r1
-artifact: afscp-jvs-direct-local-linux-amd64
-jvs binary artifact SHA-256: 8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471
-source ref: jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281
+version: v0.4.10
+artifact: jvs-linux-amd64
+jvs binary artifact SHA-256: fa4ada8e3353f85679d13870ea53307caafbd8217b04ba576b185105d9178cef
+source ref: jvs@v0.4.10:6a0f762bc436f0d3dc7c7c1d60847992c3a82718
+release URL: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.10
 ```
 
-This local source ref identifies the committed pre-GA JVS direct-command source
-used by AFSCP. It is acceptable only for pre-GA convergence. Before GA/release
-packaging, replace it with a formal JVS release URL, JVS binary artifact
-SHA-256, and signature evidence.
+This release ref identifies the committed JVS direct-command source used by
+AFSCP. Release packaging must continue to consume this GitHub-published
+artifact or a newer explicitly pinned JVS release artifact.
 
 ## Active Direct Commands
 
@@ -95,7 +95,7 @@ direct restore recovery.
 
 ## Evidence
 
-- Active local pin evidence:
-  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`
+- Active release pin evidence:
+  `docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`
 - Historical release evidence retained for old external-control-root context:
   `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`

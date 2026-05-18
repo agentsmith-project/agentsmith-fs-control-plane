@@ -56,7 +56,7 @@ Read in this order:
 9. `api/openapi/internal-v1.openapi.yaml`
 10. `api/schemas/afscp-internal-v1.schema.json`
 11. `docs/RISK_REGISTER.md`
-12. `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`
+12. `docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`
 
 ## Runtime And Build
 
@@ -216,10 +216,10 @@ Completed:
   than silently terminalizing uncertain sessions.
 - save point create, direct restore, and namespace-scoped template
   create/clone are implemented as operation-backed JVS worker paths using the
-  pinned pre-GA direct local binary. Save point create uses direct list/save and
-  does not invoke legacy runtime repair. Template create remains an explicit
-  non-direct helper path and uses writer-session fencing plus active/stale
-  export and mount checks before cloning.
+  pinned published JVS release artifact. Save point create uses direct
+  list/save and does not invoke legacy runtime repair. Template create remains
+  an explicit non-direct helper path and uses writer-session fencing plus
+  active/stale export and mount checks before cloning.
 - writer-session fence acquisition for restore/template and read-write
   export/workload mount admission share the repo row as the durable
   serialization primitive before held-fence checks, closing the source dirty
@@ -310,16 +310,17 @@ Continue in dependency order:
 5. Continue from the implemented repo create, repo lifecycle, export/WebDAV,
    workload mount, save/restore, and template paths by closing remaining
    evidence through contracts, fences, session drain, operation leases, audit
-   behavior, focused tests, and runbook artifacts. G-005 is covered for pre-GA
-   by local direct JVS pin and runner contract evidence; it is not by itself GA
-   release evidence for storage mutation.
+   behavior, focused tests, and runbook artifacts. G-005 is covered by the
+   published direct JVS release pin and runner contract evidence; it is not by
+   itself GA release evidence for storage mutation.
 
 ## JVS Gate Status
 
-G-005 is auto-verified for pre-GA. The active local direct JVS pin is recorded
-in `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`; the v0.4.9/v0.4.8
-smoke evidence and v0.4.7 blocker evidence remain historical in
+G-005 is auto-verified. The active published direct JVS release pin is recorded
+in `docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`; the v0.4.9/v0.4.8
+smoke evidence, local pre-GA pin evidence, and v0.4.7 blocker evidence remain historical in
 `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`,
+`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`,
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md` and
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md`.
 

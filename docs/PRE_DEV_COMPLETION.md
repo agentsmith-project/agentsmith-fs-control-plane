@@ -4,7 +4,8 @@ Status: GA implementation-baseline package.
 
 This package records the documentation, contract, and decision work that
 admitted the current implementation baseline. The JVS direct runner gate is now
-covered for pre-GA by the current local direct pin and runner contract evidence.
+covered by the current published direct JVS release pin and runner contract
+evidence.
 Final GA is
 governed by `docs/GA_RELEASE_GATES.md`, `docs/READINESS_EVIDENCE.md`, and the
 repo-local command `scripts/verify-ga-release.sh`.
@@ -47,7 +48,8 @@ Operational readiness:
 - `docs/OPERATIONS_AND_AUDIT.md`
 - `docs/OPERATIONAL_READINESS.md`
 - `docs/runbooks/README.md`
-- `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`
+- `docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`
+- `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md` historical pre-GA local evidence
 - `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md` historical release evidence
 - `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md` historical v0.4.8 smoke evidence
 - `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md` historical v0.4.7 blocker evidence
@@ -111,8 +113,8 @@ mutation. Continue directly toward GA by keeping guardrails, generated
 artifacts, security boundaries, runbooks, and operations behavior covered by
 repo-local verification.
 
-G-005 is auto-verified for pre-GA by current direct local JVS evidence in
-`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md` and the runner contract.
+G-005 is auto-verified by current published direct JVS release evidence in
+`docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md` and the runner contract.
 This only covers the JVS gate. Repo/JVS/storage handlers may now proceed only through
 versioned contracts, fences, session drain, operation leases, audit behavior,
 and focused tests.

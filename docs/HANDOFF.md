@@ -146,9 +146,9 @@ Client/desktop connector owns:
    gate evidence, and focused tests; baseline
    implementation does not by itself close the relevant gate in
    `docs/READINESS_EVIDENCE.md`.
-3. Treat G-005 as covered for pre-GA by the current local direct JVS pin and
-   runner contract evidence in
-   `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`;
+3. Treat G-005 as covered by the current published JVS release pin and runner
+   contract evidence in
+   `docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`;
    repo/JVS/storage handlers still require the other contracts, fences,
    session drain, operation leases, audit behavior, and focused tests.
 4. Keep generated clients and handlers aligned with `api/openapi/internal-v1.openapi.yaml` and `api/schemas/afscp-internal-v1.schema.json`.

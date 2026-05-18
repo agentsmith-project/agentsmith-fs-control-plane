@@ -1,8 +1,7 @@
 .git
 .github
 tmp
-dist/*
-!dist/jvs-linux-amd64
+dist
 coverage.out
 *.test
 *.prof

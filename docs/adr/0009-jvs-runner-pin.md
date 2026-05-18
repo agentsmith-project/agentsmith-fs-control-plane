@@ -1,7 +1,6 @@
 # ADR 0009: Pin Direct-Capable JVS Before Storage Mutations
 
-Status: accepted for pre-GA convergence; active pin is a local
-direct-capable JVS build
+Status: accepted; active pin is a published direct-capable JVS release artifact
 
 ## Context
 
@@ -12,26 +11,26 @@ strict doctor, restore preview/run/discard lifecycle, and
 `restore --direct --discard-unsaved` adapter are not active contract.
 
 The previously recorded `v0.4.9` release does not contain the direct
-`jvs.afscp.direct.v1` surface. There is not yet a formal release artifact for
-the direct-capable JVS build, so pre-GA AFSCP pins a local binary plus source
-ref as explicit evidence instead of continuing to claim `v0.4.9` as active.
+`jvs.afscp.direct.v1` surface. JVS `v0.4.10` now publishes the direct-capable
+artifact AFSCP needs, so AFSCP pins that GitHub release artifact instead of a
+local sibling checkout or ad hoc binary.
 
-Pinned pre-GA local artifact:
+Pinned release artifact:
 
 ```text
-version: pre-ga-local-afscp-direct-2026-05-18-r1
-artifact: afscp-jvs-direct-local-linux-amd64
-JVS binary artifact SHA-256: 8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471
-source ref: jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281
-binary evidence path: dist/jvs-linux-amd64
+version: v0.4.10
+artifact: jvs-linux-amd64
+release URL: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.10
+JVS binary artifact SHA-256: fa4ada8e3353f85679d13870ea53307caafbd8217b04ba576b185105d9178cef
+source ref: jvs@v0.4.10:6a0f762bc436f0d3dc7c7c1d60847992c3a82718
 ```
 
 ## Decision
 
-Pin AFSCP's active direct JVS runtime to the local artifact above for pre-GA
-convergence. The AFSCP Dockerfile expects build pipelines to provide this
-verified direct-capable binary in the build context; it no longer downloads the
-old `v0.4.9` release asset.
+Pin AFSCP's active direct JVS runtime to the published artifact above. The AFSCP
+Dockerfile downloads the GitHub-published `v0.4.10` `jvs-linux-amd64` artifact
+with a fixed SHA-256 checksum; release workflows must not rebuild JVS from a
+sibling source checkout.
 
 AFSCP direct commands must use:
 
@@ -54,12 +53,11 @@ validation.
 
 ## Required Evidence
 
-- Record source ref, JVS binary artifact SHA-256, and help-surface evidence in
-  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`.
+- Record release URL, source ref, JVS binary artifact SHA-256, and help-surface
+  evidence in `docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`.
 - Keep `docs/contracts/jvs-runner-contract-v1.md` aligned with direct argv and
   JSON fail-closed parsing.
-- Replace this local pin with a formal JVS release URL, JVS binary artifact
-  SHA-256, and signature bundle before GA/release packaging.
+- Keep release packaging on GitHub-published JVS artifacts.
 
 ## Consequences
 
@@ -67,20 +65,20 @@ Positive:
 
 - Prevents AFSCP from advertising old `v0.4.9` or restore-preview behavior as
   active.
-- Makes the pre-GA local artifact explicit and auditable.
+- Makes the release artifact explicit and auditable.
 - Keeps active save/list/restore/clone/status/doctor paths on the fast direct
   contract.
 
 Tradeoffs:
 
-- The pin is local and dirty-source pre-GA evidence, not a production release
-  supply-chain artifact.
-- Docker builds must inject the verified local direct JVS binary until a formal
-  JVS release exists.
+- Updating JVS now requires publishing a new JVS release first, then updating
+  AFSCP's explicit release pin.
+- Docker builds require network access to GitHub release artifacts unless the
+  artifact is pre-cached by the builder.
 
 Evidence:
 
-- active local pin:
-  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`
+- active release pin:
+  `docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`
 - historical release context:
   `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`

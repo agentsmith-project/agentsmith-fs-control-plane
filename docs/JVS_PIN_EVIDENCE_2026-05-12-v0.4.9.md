@@ -1,7 +1,7 @@
 # JVS Pin Evidence 2026-05-12 v0.4.9
 
-Status: historical release evidence. The current pre-GA active AFSCP JVS pin is
-`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`.
+Status: historical release evidence. The current active AFSCP JVS release pin is
+`docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md`.
 
 This artifact is retained only as historical context for the old
 external-control-root runner baseline. It is not the active
@@ -36,7 +36,7 @@ jvs afscp --control-root <control> --home <home> <save|list|restore|status|docto
 ```
 
 AFSCP active direct save/list/restore/status/doctor must use the current local
-direct-capable pin until a formal JVS release replaces it.
+direct-capable pin until the JVS v0.4.10 release replaced it.
 
 Historical evidence remains useful for understanding earlier repo init,
 external-control-root, repo clone, and strict doctor work, but it is not active

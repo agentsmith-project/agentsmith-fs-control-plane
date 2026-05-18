@@ -31,10 +31,10 @@ import (
 )
 
 const (
-	acceptedJVSBinarySHA256           = "8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471"
-	directRestoreLocalJVSBinaryPath   = "/tmp/afscp-jvs-direct-local"
-	directRestoreLocalJVSBinarySHA256 = "8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471"
-	directRestoreLocalJVSSourceRef    = "jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281"
+	acceptedJVSBinarySHA256             = "fa4ada8e3353f85679d13870ea53307caafbd8217b04ba576b185105d9178cef"
+	directRestoreReleaseJVSBinaryPath   = "/usr/local/bin/jvs"
+	directRestoreReleaseJVSBinarySHA256 = "fa4ada8e3353f85679d13870ea53307caafbd8217b04ba576b185105d9178cef"
+	directRestoreReleaseJVSSourceRef    = "jvs@v0.4.10:6a0f762bc436f0d3dc7c7c1d60847992c3a82718"
 )
 
 func TestNewRunOnceRunnerDisabledFailsBeforeOpeningStore(t *testing.T) {
@@ -1862,11 +1862,11 @@ func TestNewJVSRunnerFromConfigDirectRestorePreflightsCLIHelp(t *testing.T) {
 		JVSBinarySHA256:           sha,
 		JVSCWD:                    filepath.Dir(path),
 		JVSDirectRestoreRequired:  true,
-		JVSDirectRestoreSourceRef: directRestoreLocalJVSSourceRef,
+		JVSDirectRestoreSourceRef: directRestoreReleaseJVSSourceRef,
 		VolumeRoots:               map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
 	})
 	if err != nil {
-		t.Fatalf("NewJVSRunnerFromConfig returned error for direct-capable local artifact: %v", err)
+		t.Fatalf("NewJVSRunnerFromConfig returned error for published direct-capable JVS artifact: %v", err)
 	}
 }
 
@@ -1879,7 +1879,7 @@ func TestNewJVSRunnerFromConfigDirectRestoreRejectsMissingCLIFlag(t *testing.T) 
 		JVSBinarySHA256:           sha,
 		JVSCWD:                    filepath.Dir(path),
 		JVSDirectRestoreRequired:  true,
-		JVSDirectRestoreSourceRef: directRestoreLocalJVSSourceRef,
+		JVSDirectRestoreSourceRef: directRestoreReleaseJVSSourceRef,
 		VolumeRoots:               map[string]string{"vol_123": "/srv/afscp/volumes/vol_123"},
 	})
 	if err == nil {
@@ -2363,10 +2363,10 @@ func workerAppTemplateCreateConfigSource(overrides config.MapSource) config.MapS
 func workerAppRestoreConfigSource(overrides config.MapSource) config.MapSource {
 	source := workerAppConfigSource(config.MapSource{
 		"AFSCP_RESTORE_RECOVERY_ENABLED":         "true",
-		"AFSCP_JVS_BINARY_PATH":                  directRestoreLocalJVSBinaryPath,
-		"AFSCP_JVS_BINARY_SHA256":                directRestoreLocalJVSBinarySHA256,
-		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256": directRestoreLocalJVSBinarySHA256,
-		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":    directRestoreLocalJVSSourceRef,
+		"AFSCP_JVS_BINARY_PATH":                  directRestoreReleaseJVSBinaryPath,
+		"AFSCP_JVS_BINARY_SHA256":                directRestoreReleaseJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_BINARY_SHA256": directRestoreReleaseJVSBinarySHA256,
+		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF":    directRestoreReleaseJVSSourceRef,
 		"AFSCP_JVS_CWD":                          "/var/lib/afscp/jvs-cwd",
 		"AFSCP_VOLUME_ROOTS":                     "vol_123=/srv/afscp/volumes/vol_123",
 	})

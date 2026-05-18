@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	directRestoreEvidencePath = "docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md"
+	directRestoreEvidencePath = "docs/JVS_AFSCP_DIRECT_RELEASE_EVIDENCE_2026-05-18.md"
 )
 
 func TestDockerfilePackagesPinnedJVSLinuxAMD64Binary(t *testing.T) {
@@ -24,8 +24,8 @@ func TestDockerfilePackagesPinnedJVSLinuxAMD64Binary(t *testing.T) {
 		"ARG JVS_ASSET=" + config.JVSAcceptedLinuxAMD64AssetName,
 		"ARG JVS_SHA256=" + config.JVSAcceptedLinuxAMD64SHA256,
 		"ARG JVS_SOURCE_REF=" + config.JVSAcceptedSourceRef,
-		"ARG JVS_LOCAL_BINARY=dist/jvs-linux-amd64",
-		"COPY --chmod=0755 ${JVS_LOCAL_BINARY} /jvs",
+		"ADD --checksum=sha256:" + config.JVSAcceptedLinuxAMD64SHA256,
+		"https://github.com/agentsmith-project/jvs/releases/download/" + config.JVSAcceptedReleaseVersion + "/" + config.JVSAcceptedLinuxAMD64AssetName,
 		"AFSCP_JVS_BINARY_SHA256=\"${JVS_SHA256}\"",
 		"AFSCP_JVS_DIRECT_RESTORE_SOURCE_REF=\"${JVS_SOURCE_REF}\"",
 		"COPY --from=jvs --chmod=0755 /jvs /usr/local/bin/jvs",
@@ -66,18 +66,19 @@ func TestDockerfileFinalImageSupportsPinnedDynamicJVSBinary(t *testing.T) {
 	}
 }
 
-func TestCurrentJVSDirectLocalEvidenceMatchesPinnedBinary(t *testing.T) {
+func TestCurrentJVSDirectReleaseEvidenceMatchesPinnedBinary(t *testing.T) {
 	data, err := os.ReadFile(directRestoreEvidencePath)
 	if err != nil {
 		t.Fatalf("read %s: %v", directRestoreEvidencePath, err)
 	}
 	doc := string(data)
 	for _, want := range []string{
-		"Status: current pre-GA AFSCP JVS implementation pin evidence.",
+		"Status: current AFSCP JVS release pin evidence.",
 		"version: " + config.JVSAcceptedReleaseVersion,
 		"artifact: " + config.JVSAcceptedLinuxAMD64AssetName,
 		"JVS binary artifact SHA-256: " + config.JVSAcceptedLinuxAMD64SHA256,
 		"source ref: " + config.JVSAcceptedSourceRef,
+		"https://github.com/agentsmith-project/jvs/releases/tag/" + config.JVSAcceptedReleaseVersion,
 		"`save`: `--message`, `--purpose`, `--control-root`, `--home`, `--json`",
 		"jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json",
 		"restore preview",
@@ -85,11 +86,30 @@ func TestCurrentJVSDirectLocalEvidenceMatchesPinnedBinary(t *testing.T) {
 		"`--direct --discard-unsaved`",
 	} {
 		if !strings.Contains(doc, want) {
-			t.Fatalf("%s missing direct restore pin evidence marker %q", directRestoreEvidencePath, want)
+			t.Fatalf("%s missing direct release pin evidence marker %q", directRestoreEvidencePath, want)
 		}
 	}
 	if strings.Contains(doc, "dirty") {
 		t.Fatalf("%s still describes the active source ref as dirty", directRestoreEvidencePath)
+	}
+}
+
+func TestReleaseWorkflowUsesPublishedJVSArtifactInsteadOfSiblingSourceBuild(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+	workflow := string(data)
+
+	for _, forbidden := range []string{
+		"repository: agentsmith-project/jvs",
+		"path: _release-jvs",
+		"make release-build",
+		"dist/jvs-linux-amd64",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("release workflow must not build or inject JVS from sibling source; found %q", forbidden)
+		}
 	}
 }
 

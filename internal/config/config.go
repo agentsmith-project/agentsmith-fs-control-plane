@@ -33,10 +33,10 @@ const (
 )
 
 const (
-	JVSAcceptedReleaseVersion      = "pre-ga-local-afscp-direct-2026-05-18-r1"
-	JVSAcceptedLinuxAMD64AssetName = "afscp-jvs-direct-local-linux-amd64"
-	JVSAcceptedLinuxAMD64SHA256    = "8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471"
-	JVSAcceptedSourceRef           = "jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281"
+	JVSAcceptedReleaseVersion      = "v0.4.10"
+	JVSAcceptedLinuxAMD64AssetName = "jvs-linux-amd64"
+	JVSAcceptedLinuxAMD64SHA256    = "fa4ada8e3353f85679d13870ea53307caafbd8217b04ba576b185105d9178cef"
+	JVSAcceptedSourceRef           = "jvs@v0.4.10:6a0f762bc436f0d3dc7c7c1d60847992c3a82718"
 )
 
 const (
