@@ -47,7 +47,7 @@ Operational readiness:
 - `docs/OPERATIONS_AND_AUDIT.md`
 - `docs/OPERATIONAL_READINESS.md`
 - `docs/runbooks/README.md`
-- `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`
+- `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`
 - `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md` historical release evidence
 - `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md` historical v0.4.8 smoke evidence
 - `docs/JVS_SMOKE_EVIDENCE_2026-05-05.md` historical v0.4.7 blocker evidence
@@ -112,7 +112,7 @@ artifacts, security boundaries, runbooks, and operations behavior covered by
 repo-local verification.
 
 G-005 is auto-verified for pre-GA by current direct local JVS evidence in
-`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md` and the runner contract.
+`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md` and the runner contract.
 This only covers the JVS gate. Repo/JVS/storage handlers may now proceed only through
 versioned contracts, fences, session drain, operation leases, audit behavior,
 and focused tests.

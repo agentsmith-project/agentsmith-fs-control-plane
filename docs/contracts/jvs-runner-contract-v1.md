@@ -14,10 +14,10 @@ The active AFSCP pin is a pre-GA local direct-capable JVS build, not the old
 `v0.4.9` release asset.
 
 ```text
-version: pre-ga-local-afscp-direct-2026-05-16-r3
+version: pre-ga-local-afscp-direct-2026-05-18-r1
 artifact: afscp-jvs-direct-local-linux-amd64
-jvs binary artifact SHA-256: f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c
-source ref: jvs@main:edd317474db5fd6f9e3e98015438a47d02ad73c6
+jvs binary artifact SHA-256: 8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471
+source ref: jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281
 ```
 
 This local source ref identifies the committed pre-GA JVS direct-command source
@@ -33,7 +33,7 @@ direct v1 binding and is not an argv parameter.
 
 | Capability | Active Argv Template | JSON Fields AFSCP Must Parse | Fail-Closed Behavior |
 | --- | --- | --- | --- |
-| direct save | `jvs afscp --control-root <control_root_path> --home <payload_home_path> save --message <message> --json` | `contract:"jvs.afscp.direct.v1"`, `command:"save"`, `status`, `data.save_point_id`, `data.history_head`, `data.created_at`, `data.message` | Reject missing save point id, missing/mismatched history head, malformed JSON, old public-JVS envelope shapes, forbidden internal fields, raw paths, credentials, or command material. |
+| direct save | `jvs afscp --control-root <control_root_path> --home <payload_home_path> save --message <message> [--purpose <purpose>] --json` | `contract:"jvs.afscp.direct.v1"`, `command:"save"`, `status`, `data.save_point_id`, `data.history_head`, `data.created_at`, `data.message`, optional `data.purpose` | Reject missing save point id, missing/mismatched history head, malformed JSON, old public-JVS envelope shapes, forbidden internal fields, raw paths, credentials, or command material. |
 | direct list | `jvs afscp --control-root <control_root_path> --home <payload_home_path> list --json` | `command:"list"`, `status`, `data.history_head`, `data.save_points[].save_point_id`, optional message/timestamp/head marker | Fail closed on malformed JSON, forbidden internal fields, raw paths, credentials, or legacy `history --limit 0` envelope shapes. |
 | direct restore | `jvs afscp --control-root <control_root_path> --home <payload_home_path> restore --save-point <save_point_id> --json` | `command:"restore"`, `status`, `data.restored_save_point_id`, optional `data.previous_head`, `data.new_head` | Restore the requested save point directly. Fail closed on missing restored id, missing/mismatched new head, malformed JSON, legacy preview/run/discard fields, `plan_id`, `restore_plan_id`, `run_command`, raw paths, credentials, or command material. |
 | direct clone | `jvs afscp --control-root <source_control_root_path> --home <source_home_path> clone --target-control-root <target_control_root_path> --target-home <target_home_path> --json [--save-point <save_point_id>]` | `command:"clone"`, `status`, `data.source_repo_id`, `data.target_repo_id`, `data.save_point_id`, `data.save_points_copied_count` | Materialize template/repo targets from direct save point metadata. Fail closed on malformed JSON, missing ids, raw paths, credentials, command material, or any ordinary workspace dirty-check envelope. |
@@ -96,6 +96,6 @@ direct restore recovery.
 ## Evidence
 
 - Active local pin evidence:
-  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`
+  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`
 - Historical release evidence retained for old external-control-root context:
   `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`

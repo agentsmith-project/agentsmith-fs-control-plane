@@ -1,7 +1,6 @@
-# JVS AFSCP Direct Local Evidence 2026-05-16
+# JVS AFSCP Direct Local Evidence 2026-05-18
 
-Status: historical pre-GA AFSCP JVS implementation pin evidence. The current
-active pin is `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`.
+Status: current pre-GA AFSCP JVS implementation pin evidence.
 
 This artifact records the active local direct-capable JVS build used by AFSCP
 until formal JVS release provenance exists. It identifies only the JVS binary
@@ -11,11 +10,11 @@ replace release provenance.
 ## Local Artifact
 
 ```text
-version: pre-ga-local-afscp-direct-2026-05-16-r3
+version: pre-ga-local-afscp-direct-2026-05-18-r1
 artifact: afscp-jvs-direct-local-linux-amd64
-binary evidence path: /tmp/afscp-jvs-direct-local
-JVS binary artifact SHA-256: f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c
-source ref: jvs@main:edd317474db5fd6f9e3e98015438a47d02ad73c6
+binary evidence path: dist/jvs-linux-amd64
+JVS binary artifact SHA-256: 8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471
+source ref: jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281
 ```
 
 The source ref points at the local pre-GA JVS commit that provides the active
@@ -27,14 +26,15 @@ formal release artifact before GA.
 Observed commands:
 
 ```bash
-go build -o /tmp/afscp-jvs-direct-local ./cmd/jvs
-sha256sum /tmp/afscp-jvs-direct-local
+make release-build
+cp <jvs_checkout>/bin/jvs-linux-amd64 dist/jvs-linux-amd64
+sha256sum dist/jvs-linux-amd64
 ```
 
 Observed JVS binary artifact SHA-256:
 
 ```text
-f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c  /tmp/afscp-jvs-direct-local
+8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471  dist/jvs-linux-amd64
 ```
 
 ## Help Surface Evidence
@@ -42,7 +42,7 @@ f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c  /tmp/afscp-jvs
 Root help:
 
 ```bash
-/tmp/afscp-jvs-direct-local afscp --help
+dist/jvs-linux-amd64 afscp --help
 ```
 
 Observed root usage includes:
@@ -54,17 +54,17 @@ jvs afscp --control-root <control_root_path> --home <payload_home_path> <command
 Subcommand help was checked for:
 
 ```bash
-/tmp/afscp-jvs-direct-local afscp save --help
-/tmp/afscp-jvs-direct-local afscp list --help
-/tmp/afscp-jvs-direct-local afscp restore --help
-/tmp/afscp-jvs-direct-local afscp clone --help
-/tmp/afscp-jvs-direct-local afscp status --help
-/tmp/afscp-jvs-direct-local afscp doctor --help
+dist/jvs-linux-amd64 afscp save --help
+dist/jvs-linux-amd64 afscp list --help
+dist/jvs-linux-amd64 afscp restore --help
+dist/jvs-linux-amd64 afscp clone --help
+dist/jvs-linux-amd64 afscp status --help
+dist/jvs-linux-amd64 afscp doctor --help
 ```
 
 Observed required flags:
 
-- `save`: `--message`, `--control-root`, `--home`, `--json`
+- `save`: `--message`, `--purpose`, `--control-root`, `--home`, `--json`
 - `list`: `--control-root`, `--home`, `--json`
 - `restore`: `--save-point`, `--control-root`, `--home`, `--json`
 - `clone`: `--target-control-root`, `--target-home`, `--control-root`, `--home`, `--json`
@@ -76,7 +76,7 @@ Observed required flags:
 AFSCP active direct commands are:
 
 ```bash
-jvs afscp --control-root <control> --home <home> save --message <message> --json
+jvs afscp --control-root <control> --home <home> save --message <message> [--purpose <purpose>] --json
 jvs afscp --control-root <control> --home <home> list --json
 jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json
 jvs afscp --control-root <source_control> --home <source_home> clone --target-control-root <target_control> --target-home <target_home> --json [--save-point <save_point_id>]

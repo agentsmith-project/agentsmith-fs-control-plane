@@ -56,7 +56,7 @@ Read in this order:
 9. `api/openapi/internal-v1.openapi.yaml`
 10. `api/schemas/afscp-internal-v1.schema.json`
 11. `docs/RISK_REGISTER.md`
-12. `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`
+12. `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`
 
 ## Runtime And Build
 
@@ -317,7 +317,7 @@ Continue in dependency order:
 ## JVS Gate Status
 
 G-005 is auto-verified for pre-GA. The active local direct JVS pin is recorded
-in `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`; the v0.4.9/v0.4.8
+in `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`; the v0.4.9/v0.4.8
 smoke evidence and v0.4.7 blocker evidence remain historical in
 `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`,
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md` and

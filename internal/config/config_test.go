@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	acceptedJVSBinarySHA256            = "f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c"
+	acceptedJVSBinarySHA256            = "8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471"
 	directRestoreLocalJVSBinaryPath    = "/tmp/afscp-jvs-direct-local"
-	directRestoreLocalJVSBinarySHA256  = "f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c"
-	directRestoreLocalJVSSourceRef     = "jvs@main:edd317474db5fd6f9e3e98015438a47d02ad73c6"
+	directRestoreLocalJVSBinarySHA256  = "8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471"
+	directRestoreLocalJVSSourceRef     = "jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281"
 	customDirectRestoreJVSBinarySHA256 = "c88553bb18bdd70e1399bf562fcb853bd200798498bd24bc25458196fb568902"
 	customDirectRestoreJVSSourceRef    = "jvs@agentsmith-direct-restore-operation:c65b418f58d6e39e91199c1d55783e2ec91be9a1"
 )

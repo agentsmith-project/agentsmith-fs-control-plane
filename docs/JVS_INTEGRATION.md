@@ -14,7 +14,7 @@ AFSCP integrates through the JVS CLI with JSON output. The active
 save/list/restore/clone/status/doctor surface is the internal direct contract:
 
 ```bash
-jvs afscp --control-root <control> --home <home> save --message <message> --json
+jvs afscp --control-root <control> --home <home> save --message <message> [--purpose <purpose>] --json
 jvs afscp --control-root <control> --home <home> list --json
 jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json
 jvs afscp --control-root <control> --home <home> clone --target-control-root <target_control> --target-home <target_home> --json
@@ -23,7 +23,7 @@ jvs afscp --control-root <control> --home <home> doctor --json
 ```
 
 The current active pin is the pre-GA local direct-capable artifact recorded in
-`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`. The old `v0.4.9` release
+`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`. The old `v0.4.9` release
 evidence is historical only and must not be treated as active direct restore
 support.
 
@@ -56,7 +56,7 @@ See:
 
 - [contracts/jvs-runner-contract-v1.md](contracts/jvs-runner-contract-v1.md)
   for the self-contained AFSCP command matrix and fail-closed behavior.
-- [JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md](JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md)
+- [JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md](JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md)
   for the current local pin evidence.
 
 ## External Control Root Mode

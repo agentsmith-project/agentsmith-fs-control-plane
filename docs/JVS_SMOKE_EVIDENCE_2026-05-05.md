@@ -4,7 +4,7 @@ Status: historical blocker evidence for JVS runner gate G-005.
 
 Superseded by historical v0.4.8 evidence in
 `docs/JVS_SMOKE_EVIDENCE_2026-05-05-v0.4.8.md`. The active pre-GA AFSCP JVS
-pin is `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`.
+pin is `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`.
 
 ## Environment
 

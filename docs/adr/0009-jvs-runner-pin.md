@@ -19,11 +19,11 @@ ref as explicit evidence instead of continuing to claim `v0.4.9` as active.
 Pinned pre-GA local artifact:
 
 ```text
-version: pre-ga-local-afscp-direct-2026-05-16-r3
+version: pre-ga-local-afscp-direct-2026-05-18-r1
 artifact: afscp-jvs-direct-local-linux-amd64
-JVS binary artifact SHA-256: f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c
-source ref: jvs@main:edd317474db5fd6f9e3e98015438a47d02ad73c6
-binary evidence path: /tmp/afscp-jvs-direct-local
+JVS binary artifact SHA-256: 8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471
+source ref: jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281
+binary evidence path: dist/jvs-linux-amd64
 ```
 
 ## Decision
@@ -36,7 +36,7 @@ old `v0.4.9` release asset.
 AFSCP direct commands must use:
 
 ```text
-jvs afscp --control-root <control> --home <home> save --message <message> --json
+jvs afscp --control-root <control> --home <home> save --message <message> [--purpose <purpose>] --json
 jvs afscp --control-root <control> --home <home> list --json
 jvs afscp --control-root <source_control> --home <source_home> clone --target-control-root <target_control> --target-home <target_home> --json [--save-point <save_point_id>]
 jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json
@@ -55,7 +55,7 @@ validation.
 ## Required Evidence
 
 - Record source ref, JVS binary artifact SHA-256, and help-surface evidence in
-  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`.
+  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`.
 - Keep `docs/contracts/jvs-runner-contract-v1.md` aligned with direct argv and
   JSON fail-closed parsing.
 - Replace this local pin with a formal JVS release URL, JVS binary artifact
@@ -81,6 +81,6 @@ Tradeoffs:
 Evidence:
 
 - active local pin:
-  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`
+  `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`
 - historical release context:
   `docs/JVS_PIN_EVIDENCE_2026-05-12-v0.4.9.md`

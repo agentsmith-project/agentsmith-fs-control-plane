@@ -1,7 +1,7 @@
 # JVS Pin Evidence 2026-05-12 v0.4.9
 
 Status: historical release evidence. The current pre-GA active AFSCP JVS pin is
-`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`.
+`docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`.
 
 This artifact is retained only as historical context for the old
 external-control-root runner baseline. It is not the active

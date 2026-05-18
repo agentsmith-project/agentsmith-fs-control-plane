@@ -1,7 +1,7 @@
 # JVS Smoke Evidence 2026-05-05 v0.4.8
 
 Status: historical evidence for JVS runner gate G-005. The active pre-GA AFSCP
-JVS pin is `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md`.
+JVS pin is `docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md`.
 
 Release: https://github.com/agentsmith-project/jvs/releases/tag/v0.4.8
 

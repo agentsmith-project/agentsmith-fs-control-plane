@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	directRestoreEvidencePath = "docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-16.md"
+	directRestoreEvidencePath = "docs/JVS_AFSCP_DIRECT_LOCAL_EVIDENCE_2026-05-18.md"
 )
 
 func TestDockerfilePackagesPinnedJVSLinuxAMD64Binary(t *testing.T) {
@@ -78,6 +78,7 @@ func TestCurrentJVSDirectLocalEvidenceMatchesPinnedBinary(t *testing.T) {
 		"artifact: " + config.JVSAcceptedLinuxAMD64AssetName,
 		"JVS binary artifact SHA-256: " + config.JVSAcceptedLinuxAMD64SHA256,
 		"source ref: " + config.JVSAcceptedSourceRef,
+		"`save`: `--message`, `--purpose`, `--control-root`, `--home`, `--json`",
 		"jvs afscp --control-root <control> --home <home> restore --save-point <save_point_id> --json",
 		"restore preview",
 		"restore run",

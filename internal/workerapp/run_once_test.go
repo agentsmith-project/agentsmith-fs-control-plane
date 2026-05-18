@@ -31,10 +31,10 @@ import (
 )
 
 const (
-	acceptedJVSBinarySHA256           = "f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c"
+	acceptedJVSBinarySHA256           = "8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471"
 	directRestoreLocalJVSBinaryPath   = "/tmp/afscp-jvs-direct-local"
-	directRestoreLocalJVSBinarySHA256 = "f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c"
-	directRestoreLocalJVSSourceRef    = "jvs@main:edd317474db5fd6f9e3e98015438a47d02ad73c6"
+	directRestoreLocalJVSBinarySHA256 = "8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471"
+	directRestoreLocalJVSSourceRef    = "jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281"
 )
 
 func TestNewRunOnceRunnerDisabledFailsBeforeOpeningStore(t *testing.T) {
@@ -525,6 +525,76 @@ func TestRunOnceClaimsQueuedNamespaceUpsertAndBindingPutThroughDefaultRunner(t *
 	}
 	if len(store.auditEvents) != 2 {
 		t.Fatalf("audit events = %#v, want namespace and binding events", store.auditEvents)
+	}
+}
+
+func TestRunOnceClaimsNamespaceAndBindingWhenJVSSavePointRuntimeUnavailable(t *testing.T) {
+	now := workerAppNow()
+	namespaceRecord := workerAppOperationRecord(now)
+	bindingRecord := workerAppBindingOperationRecord("op_binding", now)
+	bindingRecord.CreatedAt = namespaceRecord.CreatedAt.Add(time.Minute)
+	store := newWorkerAppStore(namespaceRecord, bindingRecord)
+	factoryCalls := 0
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppSavePointConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			factoryCalls++
+			return nil, fmt.Errorf("%w: test runtime missing", ErrJVSRuntimeUnavailable)
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_namespace" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("JVS factory calls = %d, want one save-point initialization attempt", factoryCalls)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 2 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want claimed=2 failed=0 unsupported=0 manual=0", summary)
+	}
+	if store.namespace.ID != "ns_alpha01" || store.binding.NamespaceID != "ns_alpha01" || store.binding.DefaultVolumeID != "vol_123" {
+		t.Fatalf("committed namespace/binding = %#v/%#v", store.namespace, store.binding)
+	}
+	if len(store.auditEvents) != 2 {
+		t.Fatalf("audit events = %#v, want namespace and binding events", store.auditEvents)
+	}
+}
+
+func TestRunOnceSavePointEnabledGenericJVSErrorFailsClosed(t *testing.T) {
+	now := workerAppNow()
+	namespaceRecord := workerAppOperationRecord(now)
+	bindingRecord := workerAppBindingOperationRecord("op_binding", now)
+	store := newWorkerAppStore(namespaceRecord, bindingRecord)
+
+	_, err := NewRunOnceRunner(Options{
+		Source: workerAppSavePointConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return nil, errors.New("generic jvs factory error")
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_namespace" },
+	})
+	if err == nil {
+		t.Fatal("NewRunOnceRunner succeeded, want generic JVS error")
+	}
+	if !strings.Contains(err.Error(), "generic jvs factory error") {
+		t.Fatalf("NewRunOnceRunner error = %q, want generic JVS factory error", err)
+	}
+	if store.genericUpdateCalls != 0 || len(store.acquireIDs) != 0 {
+		t.Fatalf("store generic/acquire = %d/%#v, want fail-closed before recovery", store.genericUpdateCalls, store.acquireIDs)
 	}
 }
 

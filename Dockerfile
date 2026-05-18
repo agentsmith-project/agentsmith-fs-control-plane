@@ -20,10 +20,10 @@ RUN export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" && \
 
 FROM scratch AS jvs
 
-ARG JVS_VERSION=pre-ga-local-afscp-direct-2026-05-16-r3
+ARG JVS_VERSION=pre-ga-local-afscp-direct-2026-05-18-r1
 ARG JVS_ASSET=afscp-jvs-direct-local-linux-amd64
-ARG JVS_SHA256=f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c
-ARG JVS_SOURCE_REF=jvs@main:edd317474db5fd6f9e3e98015438a47d02ad73c6
+ARG JVS_SHA256=8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471
+ARG JVS_SOURCE_REF=jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281
 ARG JVS_LOCAL_BINARY=dist/jvs-linux-amd64
 
 # Pre-GA direct AFSCP JVS has no formal release URL yet. Build pipelines must
@@ -36,8 +36,8 @@ FROM gcr.io/distroless/base-debian12:nonroot
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG CREATED=unknown
-ARG JVS_SHA256=f6028582acdf9257f83636bcb70dc63a809887689bb3bc52c47336360f6b3d1c
-ARG JVS_SOURCE_REF=jvs@main:edd317474db5fd6f9e3e98015438a47d02ad73c6
+ARG JVS_SHA256=8bc40b092355e29f8a8a852255b306d4d660c66f7dbd8581a402caa07cd64471
+ARG JVS_SOURCE_REF=jvs@main:e0d6539e81c2da1e896ad3c5925f4e896840d281
 
 LABEL org.opencontainers.image.title="AFSCP" \
       org.opencontainers.image.description="Agentsmith filesystem control plane" \

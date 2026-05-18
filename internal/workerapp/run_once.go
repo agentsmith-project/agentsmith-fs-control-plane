@@ -315,19 +315,14 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		}
 		executors := []recovery.OperationExecutor{volumeExecutor, namespaceExecutor, disableExecutor, bindingExecutor, mountExecutor}
 		if opConfig.RepoCreate.Enabled {
-			jvsFactory := options.JVSRunnerFactory
-			if jvsFactory == nil {
-				jvsFactory = NewJVSRunnerFromConfig
-			}
-			jvs, err := jvsFactory(opConfig.RepoCreate)
+			jvs, available, err := newRecoveryJVSRunner(opConfig.RepoCreate, options.JVSRunnerFactory)
 			if err != nil {
-				if !IsJVSRuntimeUnavailable(err) {
-					if handle.Close != nil {
-						err = errors.Join(err, handle.Close())
-					}
-					return nil, err
+				if handle.Close != nil {
+					err = errors.Join(err, handle.Close())
 				}
-			} else {
+				return nil, err
+			}
+			if available {
 				if jvs == nil {
 					err = errors.New("repo create jvs runner is required")
 					if handle.Close != nil {
@@ -362,215 +357,245 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			}
 		}
 		if opConfig.RepoLifecycle.Enabled {
-			jvsFactory := options.JVSRunnerFactory
-			if jvsFactory == nil {
-				jvsFactory = NewJVSRunnerFromConfig
-			}
-			jvs, err := jvsFactory(opConfig.RepoLifecycle)
+			jvs, available, err := newRecoveryJVSRunner(opConfig.RepoLifecycle, options.JVSRunnerFactory)
 			if err != nil {
 				if handle.Close != nil {
 					err = errors.Join(err, handle.Close())
 				}
 				return nil, err
 			}
-			lifecycleExecutor, err := repoexec.NewLifecycleExecutor(repoexec.LifecycleConfig{
-				Store:        scopedStore,
-				JVSRunner:    jvs,
-				Owner:        opConfig.Owner,
-				Clock:        now,
-				AuditEventID: func() string { return eventID() },
-				VolumeRoots:  opConfig.RepoLifecycle.VolumeRoots,
-			})
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+			if available {
+				if jvs == nil {
+					err = errors.New("repo lifecycle jvs runner is required")
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
 				}
-				return nil, err
+				lifecycleExecutor, err := repoexec.NewLifecycleExecutor(repoexec.LifecycleConfig{
+					Store:        scopedStore,
+					JVSRunner:    jvs,
+					Owner:        opConfig.Owner,
+					Clock:        now,
+					AuditEventID: func() string { return eventID() },
+					VolumeRoots:  opConfig.RepoLifecycle.VolumeRoots,
+				})
+				if err != nil {
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
+				}
+				executors = append(executors, lifecycleExecutor)
+				scopedStore.repoLifecycleEnabled = true
 			}
-			executors = append(executors, lifecycleExecutor)
-			scopedStore.repoLifecycleEnabled = true
 		}
 		if opConfig.RepoPurge.Enabled {
-			jvsFactory := options.JVSRunnerFactory
-			if jvsFactory == nil {
-				jvsFactory = NewJVSRunnerFromConfig
-			}
-			jvs, err := jvsFactory(opConfig.RepoPurge)
+			jvs, available, err := newRecoveryJVSRunner(opConfig.RepoPurge, options.JVSRunnerFactory)
 			if err != nil {
 				if handle.Close != nil {
 					err = errors.Join(err, handle.Close())
 				}
 				return nil, err
 			}
-			purgerFactory := options.StoragePurgerFactory
-			if purgerFactory == nil {
-				purgerFactory = NewStoragePurgerFromConfig
-			}
-			purger, err := purgerFactory(opConfig.RepoPurge)
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+			if available {
+				if jvs == nil {
+					err = errors.New("repo purge jvs runner is required")
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
 				}
-				return nil, err
-			}
-			purgeExecutor, err := repoexec.NewPurgeExecutor(repoexec.PurgeConfig{
-				Store:         scopedStore,
-				JVSRunner:     jvs,
-				StoragePurger: purger,
-				Owner:         opConfig.Owner,
-				Clock:         now,
-				AuditEventID:  func() string { return eventID() },
-				VolumeRoots:   opConfig.RepoPurge.VolumeRoots,
-			})
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+				purgerFactory := options.StoragePurgerFactory
+				if purgerFactory == nil {
+					purgerFactory = NewStoragePurgerFromConfig
 				}
-				return nil, err
+				purger, err := purgerFactory(opConfig.RepoPurge)
+				if err != nil {
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
+				}
+				purgeExecutor, err := repoexec.NewPurgeExecutor(repoexec.PurgeConfig{
+					Store:         scopedStore,
+					JVSRunner:     jvs,
+					StoragePurger: purger,
+					Owner:         opConfig.Owner,
+					Clock:         now,
+					AuditEventID:  func() string { return eventID() },
+					VolumeRoots:   opConfig.RepoPurge.VolumeRoots,
+				})
+				if err != nil {
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
+				}
+				executors = append(executors, purgeExecutor)
+				scopedStore.repoPurgeEnabled = true
 			}
-			executors = append(executors, purgeExecutor)
-			scopedStore.repoPurgeEnabled = true
 		}
 		if opConfig.SavePoint.Enabled {
-			jvsFactory := options.JVSRunnerFactory
-			if jvsFactory == nil {
-				jvsFactory = NewJVSRunnerFromConfig
-			}
-			jvs, err := jvsFactory(opConfig.SavePoint)
+			jvs, available, err := newRecoveryJVSRunner(opConfig.SavePoint, options.JVSRunnerFactory)
 			if err != nil {
 				if handle.Close != nil {
 					err = errors.Join(err, handle.Close())
 				}
 				return nil, err
 			}
-			savePointExecutor, err := repoexec.NewSavePointExecutor(repoexec.SavePointConfig{
-				Store:        scopedStore,
-				JVSRunner:    jvs,
-				Owner:        opConfig.Owner,
-				Clock:        now,
-				AuditEventID: func() string { return eventID() },
-				VolumeRoots:  opConfig.SavePoint.VolumeRoots,
-			})
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+			if available {
+				if jvs == nil {
+					err = errors.New("save point jvs runner is required")
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
 				}
-				return nil, err
+				savePointExecutor, err := repoexec.NewSavePointExecutor(repoexec.SavePointConfig{
+					Store:        scopedStore,
+					JVSRunner:    jvs,
+					Owner:        opConfig.Owner,
+					Clock:        now,
+					AuditEventID: func() string { return eventID() },
+					VolumeRoots:  opConfig.SavePoint.VolumeRoots,
+				})
+				if err != nil {
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
+				}
+				executors = append(executors, savePointExecutor)
+				scopedStore.savePointEnabled = true
 			}
-			executors = append(executors, savePointExecutor)
-			scopedStore.savePointEnabled = true
 		}
 		if opConfig.TemplateCreate.Enabled {
-			jvsFactory := options.JVSRunnerFactory
-			if jvsFactory == nil {
-				jvsFactory = NewJVSRunnerFromConfig
-			}
-			jvs, err := jvsFactory(opConfig.TemplateCreate)
+			jvs, available, err := newRecoveryJVSRunner(opConfig.TemplateCreate, options.JVSRunnerFactory)
 			if err != nil {
 				if handle.Close != nil {
 					err = errors.Join(err, handle.Close())
 				}
 				return nil, err
 			}
-			templateJVS, ok := jvs.(repoexec.TemplateJVSRunner)
-			if !ok {
-				err = errors.New("template create jvs runner does not support direct clone")
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+			if available {
+				if jvs == nil {
+					err = errors.New("template create jvs runner is required")
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
 				}
-				return nil, err
-			}
-			templateCreateExecutor, err := repoexec.NewTemplateCreateExecutor(repoexec.TemplateConfig{
-				Store:        scopedStore,
-				JVSRunner:    templateJVS,
-				Owner:        opConfig.Owner,
-				Clock:        now,
-				AuditEventID: func() string { return eventID() },
-				VolumeRoots:  opConfig.TemplateCreate.VolumeRoots,
-			})
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+				templateJVS, ok := jvs.(repoexec.TemplateJVSRunner)
+				if !ok {
+					err = errors.New("template create jvs runner does not support direct clone")
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
 				}
-				return nil, err
+				templateCreateExecutor, err := repoexec.NewTemplateCreateExecutor(repoexec.TemplateConfig{
+					Store:        scopedStore,
+					JVSRunner:    templateJVS,
+					Owner:        opConfig.Owner,
+					Clock:        now,
+					AuditEventID: func() string { return eventID() },
+					VolumeRoots:  opConfig.TemplateCreate.VolumeRoots,
+				})
+				if err != nil {
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
+				}
+				executors = append(executors, templateCreateExecutor)
+				scopedStore.templateCreateEnabled = true
 			}
-			executors = append(executors, templateCreateExecutor)
-			scopedStore.templateCreateEnabled = true
 		}
 		if opConfig.TemplateClone.Enabled {
-			jvsFactory := options.JVSRunnerFactory
-			if jvsFactory == nil {
-				jvsFactory = NewJVSRunnerFromConfig
-			}
-			jvs, err := jvsFactory(opConfig.TemplateClone)
+			jvs, available, err := newRecoveryJVSRunner(opConfig.TemplateClone, options.JVSRunnerFactory)
 			if err != nil {
 				if handle.Close != nil {
 					err = errors.Join(err, handle.Close())
 				}
 				return nil, err
 			}
-			templateJVS, ok := jvs.(repoexec.TemplateJVSRunner)
-			if !ok {
-				err = errors.New("template clone jvs runner does not support direct clone")
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+			if available {
+				if jvs == nil {
+					err = errors.New("template clone jvs runner is required")
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
 				}
-				return nil, err
-			}
-			templateCloneExecutor, err := repoexec.NewTemplateCloneExecutor(repoexec.TemplateConfig{
-				Store:        scopedStore,
-				JVSRunner:    templateJVS,
-				Owner:        opConfig.Owner,
-				Clock:        now,
-				AuditEventID: func() string { return eventID() },
-				VolumeRoots:  opConfig.TemplateClone.VolumeRoots,
-			})
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+				templateJVS, ok := jvs.(repoexec.TemplateJVSRunner)
+				if !ok {
+					err = errors.New("template clone jvs runner does not support direct clone")
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
 				}
-				return nil, err
+				templateCloneExecutor, err := repoexec.NewTemplateCloneExecutor(repoexec.TemplateConfig{
+					Store:        scopedStore,
+					JVSRunner:    templateJVS,
+					Owner:        opConfig.Owner,
+					Clock:        now,
+					AuditEventID: func() string { return eventID() },
+					VolumeRoots:  opConfig.TemplateClone.VolumeRoots,
+				})
+				if err != nil {
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
+				}
+				executors = append(executors, templateCloneExecutor)
+				scopedStore.templateCloneEnabled = true
 			}
-			executors = append(executors, templateCloneExecutor)
-			scopedStore.templateCloneEnabled = true
 		}
 		if opConfig.Restore.Enabled {
-			jvsFactory := options.JVSRunnerFactory
-			if jvsFactory == nil {
-				jvsFactory = NewJVSRunnerFromConfig
-			}
-			jvs, err := jvsFactory(opConfig.Restore)
+			jvs, available, err := newRecoveryJVSRunner(opConfig.Restore, options.JVSRunnerFactory)
 			if err != nil {
 				if handle.Close != nil {
 					err = errors.Join(err, handle.Close())
 				}
 				return nil, err
 			}
-			restoreJVS, ok := jvs.(repoexec.RestoreJVSRunner)
-			if !ok {
-				if handle.Close != nil {
-					err = errors.Join(errors.New("restore jvs runner does not support direct restore"), handle.Close())
-				} else {
-					err = errors.New("restore jvs runner does not support direct restore")
+			if available {
+				if jvs == nil {
+					err = errors.New("restore jvs runner is required")
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
 				}
-				return nil, err
-			}
-			restoreExecutor, err := repoexec.NewRestoreExecutor(repoexec.RestoreConfig{
-				Store:        scopedStore,
-				JVSRunner:    restoreJVS,
-				Owner:        opConfig.Owner,
-				Clock:        now,
-				AuditEventID: func() string { return eventID() },
-				VolumeRoots:  opConfig.Restore.VolumeRoots,
-			})
-			if err != nil {
-				if handle.Close != nil {
-					err = errors.Join(err, handle.Close())
+				restoreJVS, ok := jvs.(repoexec.RestoreJVSRunner)
+				if !ok {
+					if handle.Close != nil {
+						err = errors.Join(errors.New("restore jvs runner does not support direct restore"), handle.Close())
+					} else {
+						err = errors.New("restore jvs runner does not support direct restore")
+					}
+					return nil, err
 				}
-				return nil, err
+				restoreExecutor, err := repoexec.NewRestoreExecutor(repoexec.RestoreConfig{
+					Store:        scopedStore,
+					JVSRunner:    restoreJVS,
+					Owner:        opConfig.Owner,
+					Clock:        now,
+					AuditEventID: func() string { return eventID() },
+					VolumeRoots:  opConfig.Restore.VolumeRoots,
+				})
+				if err != nil {
+					if handle.Close != nil {
+						err = errors.Join(err, handle.Close())
+					}
+					return nil, err
+				}
+				executors = append(executors, restoreExecutor)
+				scopedStore.restoreEnabled = true
 			}
-			executors = append(executors, restoreExecutor)
-			scopedStore.restoreEnabled = true
 		}
 		operationRecovery := recovery.NewOperationCoordinator(recovery.OperationConfig{
 			Reader:        scopedStore,
@@ -678,6 +703,20 @@ func NewAuditDelivererFromConfig(cfg config.WorkerAuditDeliveryConfig) (auditdel
 		BearerToken: cfg.BearerToken,
 		Timeout:     cfg.Timeout,
 	})
+}
+
+func newRecoveryJVSRunner(cfg config.WorkerRepoCreateRecoveryConfig, factory JVSRunnerFactory) (repoexec.JVSRunner, bool, error) {
+	if factory == nil {
+		factory = NewJVSRunnerFromConfig
+	}
+	runner, err := factory(cfg)
+	if err != nil {
+		if IsJVSRuntimeUnavailable(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return runner, true, nil
 }
 
 func NewJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
