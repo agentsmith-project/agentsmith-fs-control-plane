@@ -45,6 +45,63 @@ func TestDockerfilePackagesPinnedJVSLinuxAMD64Binary(t *testing.T) {
 	}
 }
 
+func TestDockerfilePackagesJuiceFSCloneRuntimeForDirectSavePoints(t *testing.T) {
+	data, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	dockerfile := string(data)
+
+	for _, want := range []string{
+		"FROM juicedata/mount:ce-v1.3.1 AS juicefs",
+		"LD_LIBRARY_PATH=\"/usr/local/juicefs-lib\"",
+		"COPY --from=juicefs --chmod=0755 /usr/local/bin/juicefs /usr/local/bin/juicefs",
+		"COPY --from=juicefs --chmod=0755 /usr/lib/libfdb_c.so /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /usr/lib/ceph/libceph-common.so* /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /usr/lib/librados.so* /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /usr/lib/librados_tp.so* /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /usr/lib/x86_64-linux-gnu/libcrypto.so* /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /usr/lib/x86_64-linux-gnu/libstdc++.so* /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so* /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /usr/lib/x86_64-linux-gnu/libgssapi_krb5.so* /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /usr/lib/x86_64-linux-gnu/libgfapi.so* /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /usr/lib/x86_64-linux-gnu/libglusterfs.so* /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /lib/x86_64-linux-gnu/libtirpc.so* /usr/local/juicefs-lib/",
+		"COPY --from=juicefs --chmod=0755 /lib/x86_64-linux-gnu/libnl-3.so* /usr/local/juicefs-lib/",
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Fatalf("Dockerfile missing JuiceFS runtime marker %q", want)
+		}
+	}
+
+	finalStageStart := strings.LastIndex(dockerfile, "\nFROM ")
+	if finalStageStart == -1 {
+		t.Fatal("Dockerfile has no final FROM stage")
+	}
+	finalStage := dockerfile[finalStageStart:]
+	if !strings.Contains(finalStage, "COPY --from=juicefs --chmod=0755 /usr/local/bin/juicefs /usr/local/bin/juicefs") {
+		t.Fatalf("final image stage does not package juicefs CLI for direct save/restore clone operations: %s", finalStage)
+	}
+	if !strings.Contains(finalStage, "LD_LIBRARY_PATH=\"/usr/local/juicefs-lib\"") {
+		t.Fatalf("final image stage does not expose the JuiceFS runtime library path: %s", finalStage)
+	}
+	if !strings.Contains(finalStage, "COPY --from=juicefs --chmod=0755 /usr/lib/libfdb_c.so /usr/local/juicefs-lib/") {
+		t.Fatalf("final image stage does not package the JuiceFS FoundationDB runtime library: %s", finalStage)
+	}
+	if !strings.Contains(finalStage, "COPY --from=juicefs --chmod=0755 /usr/lib/ceph/libceph-common.so* /usr/local/juicefs-lib/") {
+		t.Fatalf("final image stage does not package the JuiceFS Ceph runtime library: %s", finalStage)
+	}
+	if !strings.Contains(finalStage, "COPY --from=juicefs --chmod=0755 /usr/lib/librados.so* /usr/local/juicefs-lib/") {
+		t.Fatalf("final image stage does not package the JuiceFS RADOS runtime library: %s", finalStage)
+	}
+	if !strings.Contains(finalStage, "COPY --from=juicefs --chmod=0755 /usr/lib/librados_tp.so* /usr/local/juicefs-lib/") {
+		t.Fatalf("final image stage does not package the JuiceFS RADOS thread-pool runtime library: %s", finalStage)
+	}
+	if !strings.Contains(finalStage, "COPY --from=juicefs --chmod=0755 /usr/lib/x86_64-linux-gnu/libgfapi.so* /usr/local/juicefs-lib/") {
+		t.Fatalf("final image stage does not package the JuiceFS Gluster runtime libraries: %s", finalStage)
+	}
+}
+
 func TestDockerfileFinalImageSupportsPinnedDynamicJVSBinary(t *testing.T) {
 	data, err := os.ReadFile("Dockerfile")
 	if err != nil {

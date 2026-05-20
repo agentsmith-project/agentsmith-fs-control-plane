@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.7 - 2026-05-20
+
+- Packages the JuiceFS CLI in the AFSCP runtime image so direct JVS save, restore, and clone operations can execute `juicefs clone`.
+- Adds Dockerfile contract coverage for the image-level JuiceFS runtime dependency.
+
 ## v1.0.6 - 2026-05-18
 
 - Packages the published direct-capable JVS `v0.4.10` release artifact in the AFSCP container image.
