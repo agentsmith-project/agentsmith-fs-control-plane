@@ -46,7 +46,9 @@ guidance, not in AFSCP contracts, tests, schemas, or implementation packages.
 - AFSCP does not expose caller display-name rename or catalog-only detach APIs.
 - AFSCP does not accept raw filesystem paths, metadata URLs, bucket
   credentials, or Secret values from ordinary callers.
-- AFSCP gate and release closure depends on AFSCP product, security, runtime,
-  operations, contract, and generated-client compatibility evidence.
+- AFSCP gate and release closure depends only on objective repo-local evidence
+  covered by `bash scripts/verify-ga-release.sh`; product, security, runtime,
+  operations, contract, schema/OpenAPI, and generated-client-relevant
+  compatibility checks count only through that gate.
 - Reference consumer adoption may inform requirements and compatibility fixes,
   but it is not a gate for AFSCP release.

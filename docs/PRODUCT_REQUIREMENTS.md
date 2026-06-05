@@ -49,8 +49,11 @@ AFSCP should provide an independently runnable, independently releasable shared 
 - First or reference consumer adoption, handoff, integration sequencing, caller
   application methods, and caller business logic are out of scope for AFSCP GA
   release gates. Consumers may provide requirements and compatibility feedback,
-  but AFSCP GA is closed by AFSCP product, security, platform/runtime,
-  operations, and generated-client compatibility evidence.
+  but AFSCP GA release closure is decided only by the repo-local
+  selector-driven gate `bash scripts/verify-ga-release.sh`. Product, security,
+  platform/runtime, operations, contract, schema/OpenAPI, and
+  generated-client-relevant compatibility checks count only when represented as
+  repo-local evidence covered by that command.
 
 ## Non-Goals
 

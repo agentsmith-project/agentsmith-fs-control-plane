@@ -166,10 +166,14 @@ Status: product-neutral research report.
 #### Finding 17: 文档一致性存在旧 wording 和实现状态冲突
 
 - Severity: Low
-- 证据: `docs/PRODUCT_REQUIREMENTS.md:49-53` 仍写 GA 由 generated-client compatibility evidence 等关闭，措辞与当前单一 repo-local gate 容易混读；`cmd/README.md:5-11` 仍说 API 不实现 WebDAV、mount、save/restore、template handlers yet，但代码和文档已有相应 handler 与 gateway；`docs/GA_RELEASE_GATES.md:11-21` 已把 gate 明确为 repo-local command。
-- 问题说明: 个别文档仍保留旧 evidence wording 或早期实现状态描述，容易让 reviewer 误判当前能力或 gate 边界。
-- 影响: 主 agent 验收、release note、operator handoff 时可能出现口径冲突。
-- 建议方向: 后续单独清理文档口径：PRODUCT_REQUIREMENTS 的 evidence wording 与 GA_RELEASE_GATES 对齐；cmd README 与当前实现状态对齐。本报告不修改这些文件。
+- Follow-up: active PRD and decoupling docs now route release closure through
+  `bash scripts/verify-ga-release.sh`; `cmd/README.md` now lists WebDAV export,
+  workload mount, save/restore, and template flows as current command behavior.
+- 问题说明: 该历史发现已完成主动文档收口；active docs 不再把调用方采纳、人工评审或生成客户端反馈写成独立 GA gate。
+- 影响: 后续 reviewer 应以 `docs/GA_RELEASE_GATES.md` 和
+  `scripts/verify-ga-release.sh` 为 release closure 入口，研究报告只保留背景。
+- 建议方向: 后续新增 PRD、边界文档或 command README 时，继续使用唯一
+  repo-local gate 和当前实现状态口径。
 
 #### Finding 18: 共享卷多租户 residual risk threat model 不足
 
