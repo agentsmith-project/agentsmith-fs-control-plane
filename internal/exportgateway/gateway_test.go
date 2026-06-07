@@ -1,6 +1,7 @@
 package exportgateway
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
@@ -819,10 +821,152 @@ func TestDeniedAuditPayloadDoesNotContainSensitiveWebDAVMaterial(t *testing.T) {
 	}
 }
 
+func TestDeniedRequestsEmitRedactedStructuredLogs(t *testing.T) {
+	t.Run("credential lookup failed", func(t *testing.T) {
+		env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+		env.store.getErr = errors.New("credential rejected by namespace predicate password=store-secret")
+
+		rec := env.request(http.MethodGet, "/e/"+testExportID+"/docs/customer-secret.txt", nil, "")
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		entry := requireDenyLogEntry(t, env, denyClassAuthzDenied, "credential_lookup_failed")
+		requireLogBool(t, entry, "credential_found", false)
+		requireLogString(t, entry, "source_path_class", "child")
+		requireLogNoLeak(t, env, "store-secret", "customer-secret.txt", testPassword, testExportID, env.volumeRoot, env.payloadRoot)
+	})
+
+	t.Run("wrong password", func(t *testing.T) {
+		env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+		req := httptest.NewRequest(http.MethodGet, "http://files.example.test/e/"+testExportID+"/docs/customer-secret.txt", nil)
+		req.SetBasicAuth(testExportID, "wrong-secret")
+		req.Header.Set("X-Secret-Header", "authorization-secret")
+		rec := httptest.NewRecorder()
+
+		env.handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		entry := requireDenyLogEntry(t, env, denyClassAuthzDenied, "credential_password_mismatch")
+		requireLogBool(t, entry, "credential_found", true)
+		requireLogBool(t, entry, "method_allowed", true)
+		requireLogString(t, entry, "namespace_id", testNamespace)
+		requireLogString(t, entry, "repo_id", testRepo)
+		requireLogString(t, entry, "session_status", string(sessionstate.ExportStatusActive))
+		requireLogNoLeak(t, env, "wrong-secret", "authorization-secret", testPassword, testExportID, "customer-secret.txt", env.volumeRoot, env.payloadRoot)
+	})
+
+	t.Run("session unusable", func(t *testing.T) {
+		env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusRevoked)
+
+		rec := env.request(http.MethodGet, "/e/"+testExportID+"/docs/customer-secret.txt", nil, "")
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		entry := requireDenyLogEntry(t, env, denyClassAuthzDenied, "session_not_usable")
+		requireLogBool(t, entry, "credential_found", true)
+		requireLogString(t, entry, "session_status", string(sessionstate.ExportStatusRevoked))
+		requireLogNoLeak(t, env, testPassword, testExportID, "customer-secret.txt", env.volumeRoot, env.payloadRoot)
+	})
+
+	t.Run("method policy denied", func(t *testing.T) {
+		env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+
+		rec := env.request(http.MethodPut, "/e/"+testExportID+"/docs/customer-secret.txt", strings.NewReader("body-secret"), "")
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		entry := requireDenyLogEntry(t, env, denyClassCapabilityDenied, "method_not_allowed")
+		requireLogBool(t, entry, "credential_found", true)
+		requireLogBool(t, entry, "method_allowed", false)
+		requireLogString(t, entry, "export_mode", string(sessionstate.AccessModeReadOnly))
+		requireLogNoLeak(t, env, testPassword, testExportID, "customer-secret.txt", "body-secret", env.volumeRoot, env.payloadRoot)
+	})
+
+	t.Run("source path denied", func(t *testing.T) {
+		env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
+		if err := os.MkdirAll(filepath.Join(env.payloadRoot, "links"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		outside := t.TempDir()
+		if err := os.Symlink(outside, filepath.Join(env.payloadRoot, "links", "out")); err != nil {
+			t.Fatal(err)
+		}
+
+		rec := env.request(http.MethodGet, "/e/"+testExportID+"/links/out/customer-secret.txt", nil, "")
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		entry := requireDenyLogEntry(t, env, denyClassSourceSymlinkDenied, "source_path_denied")
+		requireLogBool(t, entry, "method_allowed", true)
+		requireLogString(t, entry, "source_path_class", "child")
+		requireLogNumber(t, entry, "source_child_segments", 3)
+		requireLogNoLeak(t, env, outside, testPassword, testExportID, "links/out/customer-secret.txt", "customer-secret.txt", env.volumeRoot, env.payloadRoot)
+	})
+
+	t.Run("payload root open denied", func(t *testing.T) {
+		env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+		if err := os.RemoveAll(env.payloadRoot); err != nil {
+			t.Fatal(err)
+		}
+
+		rec := env.request(http.MethodGet, "/e/"+testExportID+"/", nil, "")
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		entry := requireDenyLogEntry(t, env, denyClassSourcePolicyDenied, "payload_root_open_denied")
+		requireLogString(t, entry, "source_path_class", "root")
+		requireLogNoLeak(t, env, testPassword, testExportID, env.volumeRoot, env.payloadRoot)
+	})
+
+	t.Run("destination path denied", func(t *testing.T) {
+		env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
+		env.writePayload(t, "docs/hello.txt", "hello")
+		destination := "http://files.example.test/e/" + testExportID + "/docs/%252e%252e/customer-secret.txt?token=destination-secret"
+
+		rec := env.request("COPY", "/e/"+testExportID+"/docs/hello.txt", nil, destination)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		entry := requireDenyLogEntry(t, env, denyClassDestinationTraversalDenied, "destination_path_denied")
+		requireLogBool(t, entry, "method_allowed", true)
+		requireLogString(t, entry, "source_path_class", "child")
+		requireLogNoLeak(t, env, destination, "destination-secret", "customer-secret.txt", testPassword, testExportID, env.volumeRoot, env.payloadRoot)
+	})
+
+	t.Run("runtime admission denied", func(t *testing.T) {
+		env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
+		if err := os.MkdirAll(filepath.Join(env.payloadRoot, "docs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		storeDetail := "export_sessions runtime admission returned no rows password=runtime-secret"
+		env.store.runtimeErrs = []error{fmt.Errorf("%s: %w", storeDetail, sql.ErrNoRows)}
+
+		rec := env.request(http.MethodPut, "/e/"+testExportID+"/docs/customer-secret.txt", strings.NewReader("body-secret"), "")
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+		entry := requireDenyLogEntry(t, env, denyClassAuthzDenied, "runtime_admission_denied")
+		requireLogString(t, entry, "runtime_admission_result", "denied")
+		requireLogBool(t, entry, "credential_found", true)
+		requireLogBool(t, entry, "method_allowed", true)
+		requireLogNoLeak(t, env, storeDetail, "runtime-secret", "sql", "no rows", "body-secret", "customer-secret.txt", testPassword, testExportID, env.volumeRoot, env.payloadRoot)
+	})
+}
+
 type gatewayTestEnv struct {
 	handler     http.Handler
 	store       *fakeGatewayStore
 	auditSink   *fakeAuditSink
+	logBuffer   *bytes.Buffer
 	volumeRoot  string
 	payloadRoot string
 }
@@ -861,10 +1005,12 @@ func newGatewayTestEnv(t *testing.T, mode sessionstate.AccessMode, status sessio
 		},
 	}
 	auditSink := &fakeAuditSink{}
+	logBuffer := &bytes.Buffer{}
 	handler, err := NewHandler(Config{
 		Store:        store,
 		AuditSink:    auditSink,
 		AuditEventID: func() string { return "evt_exportgateway_test" },
+		Logger:       observability.NewJSONLogger(logBuffer, nil),
 		VolumeRoots:  map[string]string{testVolumeID: volumeRoot},
 		Prefix:       "/e/",
 		Now:          fixedGatewayNow,
@@ -873,7 +1019,7 @@ func newGatewayTestEnv(t *testing.T, mode sessionstate.AccessMode, status sessio
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
-	return &gatewayTestEnv{handler: handler, store: store, auditSink: auditSink, volumeRoot: volumeRoot, payloadRoot: payloadRoot}
+	return &gatewayTestEnv{handler: handler, store: store, auditSink: auditSink, logBuffer: logBuffer, volumeRoot: volumeRoot, payloadRoot: payloadRoot}
 }
 
 func (env *gatewayTestEnv) request(method, target string, body io.Reader, destination string) *httptest.ResponseRecorder {
@@ -1128,6 +1274,80 @@ func requireNoRuntimeObservation(t *testing.T, env *gatewayTestEnv) {
 	t.Helper()
 	if len(env.store.observations) != 0 || len(env.store.runtimeBegins) != 0 || len(env.store.runtimeHeartbeats) != 0 || len(env.store.runtimeEnds) != 0 {
 		t.Fatalf("runtime calls observations/begins/heartbeats/ends = %d/%d/%d/%d, want 0", len(env.store.observations), len(env.store.runtimeBegins), len(env.store.runtimeHeartbeats), len(env.store.runtimeEnds))
+	}
+}
+
+func requireDenyLogEntry(t *testing.T, env *gatewayTestEnv, wantClass string, wantReasonCode string) map[string]any {
+	t.Helper()
+	entries := decodeLogEntries(t, env.logBuffer.String())
+	for index := len(entries) - 1; index >= 0; index-- {
+		entry := entries[index]
+		if entry["event"] != "export_gateway_denied" {
+			continue
+		}
+		if got, want := entry["component"], "export_gateway"; got != want {
+			t.Fatalf("component = %#v, want %#v in %#v", got, want, entry)
+		}
+		if got := entry["export_id_fingerprint"]; got == "" || got == testExportID {
+			t.Fatalf("export_id_fingerprint = %#v, want redacted fingerprint", got)
+		}
+		if wantClass != "" {
+			requireLogString(t, entry, "deny_class", wantClass)
+		}
+		requireLogString(t, entry, "reason_code", wantReasonCode)
+		return entry
+	}
+	t.Fatalf("deny log not found in %s", env.logBuffer.String())
+	return nil
+}
+
+func decodeLogEntries(t *testing.T, rendered string) []map[string]any {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(rendered), "\n")
+	entries := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("decode log entry %q: %v", line, err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func requireLogString(t *testing.T, entry map[string]any, key string, want string) {
+	t.Helper()
+	if got, ok := entry[key].(string); !ok || got != want {
+		t.Fatalf("%s = %#v, want %q in %#v", key, entry[key], want, entry)
+	}
+}
+
+func requireLogBool(t *testing.T, entry map[string]any, key string, want bool) {
+	t.Helper()
+	if got, ok := entry[key].(bool); !ok || got != want {
+		t.Fatalf("%s = %#v, want %v in %#v", key, entry[key], want, entry)
+	}
+}
+
+func requireLogNumber(t *testing.T, entry map[string]any, key string, want int) {
+	t.Helper()
+	got, ok := entry[key].(float64)
+	if !ok || int(got) != want {
+		t.Fatalf("%s = %#v, want %d in %#v", key, entry[key], want, entry)
+	}
+}
+
+func requireLogNoLeak(t *testing.T, env *gatewayTestEnv, forbidden ...string) {
+	t.Helper()
+	rendered := env.logBuffer.String()
+	for _, value := range forbidden {
+		if value != "" && strings.Contains(rendered, value) {
+			t.Fatalf("deny log leaked %q in %s", value, rendered)
+		}
 	}
 }
 

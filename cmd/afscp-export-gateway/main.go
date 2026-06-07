@@ -134,6 +134,7 @@ func serveGateway(ctx context.Context, cfg exportgateway.ServerConfig) error {
 	handler, err := exportgateway.NewHandler(exportgateway.Config{
 		Store:       store,
 		AuditSink:   auditOutboxSink{store: store},
+		Logger:      observability.NewJSONLogger(os.Stderr, nil),
 		VolumeRoots: cfg.VolumeRoots,
 		Prefix:      cfg.Prefix,
 	})

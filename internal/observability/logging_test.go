@@ -15,13 +15,14 @@ func TestLogEventEmitsRedactedStructuredJSON(t *testing.T) {
 	logger := NewJSONLogger(&logs, nil)
 
 	LogEvent(context.Background(), logger, slog.LevelInfo, "afscp.request.denied", "capability denied", map[string]any{
-		"correlation_id": "corr_123",
-		"operation_id":   "createRepo",
-		"route":          "/internal/v1/repos",
-		"method":         http.MethodPost,
-		"path":           "/internal/v1/repos",
-		"metadata_url":   "redis://:metadata-secret@metadata:6379/1",
-		"Authorization":  "Bearer authorization-token",
+		"correlation_id":   "corr_123",
+		"operation_id":     "createRepo",
+		"route":            "/internal/v1/repos",
+		"method":           http.MethodPost,
+		"path":             "/internal/v1/repos",
+		"credential_found": true,
+		"metadata_url":     "redis://:metadata-secret@metadata:6379/1",
+		"Authorization":    "Bearer authorization-token",
 		"headers": map[string]string{
 			"Authorization": "Bearer nested-authorization-token",
 			"X-Request":     "request-id",
@@ -58,6 +59,9 @@ func TestLogEventEmitsRedactedStructuredJSON(t *testing.T) {
 	}
 	if got, want := entry["path"], "/internal/v1/repos"; got != want {
 		t.Fatalf("path = %#v, want %#v", got, want)
+	}
+	if got, want := entry["credential_found"], true; got != want {
+		t.Fatalf("credential_found = %#v, want %#v", got, want)
 	}
 	if got := entry["metadata_url"]; got != Redacted {
 		t.Fatalf("metadata_url = %#v, want %q", got, Redacted)
@@ -98,6 +102,7 @@ func TestNewJSONLoggerRedactsDirectSlogAttributesAndMessage(t *testing.T) {
 		context.Background(),
 		`metadata postgres://user:metadata-secret@metadata.internal:5432/jfs Authorization: Bearer message-token`,
 		slog.String("path", `/payload --token path-token redis://:path-metadata-secret@metadata:6379/1`),
+		slog.Bool("credential_found", true),
 		slog.Group("headers",
 			slog.String("Authorization", "Bearer nested-authorization-token"),
 			slog.String("X-Request", "request-id"),
@@ -107,6 +112,9 @@ func TestNewJSONLoggerRedactsDirectSlogAttributesAndMessage(t *testing.T) {
 	entry := decodeSingleLogEntry(t, logs.Bytes())
 	if got, want := entry["level"], "WARN"; got != want {
 		t.Fatalf("level = %#v, want %#v", got, want)
+	}
+	if got, want := entry["credential_found"], true; got != want {
+		t.Fatalf("credential_found = %#v, want %#v", got, want)
 	}
 
 	rendered := logs.String()

@@ -73,6 +73,10 @@ func redactLogAttr(attr slog.Attr) slog.Attr {
 	if attr.Key == slog.MessageKey {
 		attr.Key = "message"
 	}
+	attr.Value = attr.Value.Resolve()
+	if isCredentialFoundField(attr.Key) && attr.Value.Kind() == slog.KindBool {
+		return attr
+	}
 	if IsSensitiveField(attr.Key) {
 		return slog.String(attr.Key, Redacted)
 	}

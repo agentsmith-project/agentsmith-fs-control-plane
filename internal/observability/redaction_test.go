@@ -17,6 +17,7 @@ func TestRedactFieldsRedactsSensitiveAFSCPKeys(t *testing.T) {
 		"kubernetes_secret_ref": "afscp/root-credentials",
 		"webdav_password":       "webdav-password",
 		"repo_id":               "repo_123",
+		"credential_found":      true,
 	}
 
 	redacted := RedactFields(fields)
@@ -37,6 +38,9 @@ func TestRedactFieldsRedactsSensitiveAFSCPKeys(t *testing.T) {
 
 	if got, want := redacted["repo_id"], "repo_123"; got != want {
 		t.Fatalf("repo_id = %#v, want %#v", got, want)
+	}
+	if got, want := redacted["credential_found"], true; got != want {
+		t.Fatalf("credential_found = %#v, want %#v", got, want)
 	}
 	if got, want := fields["access_key"], "access-key"; got != want {
 		t.Fatalf("input access_key mutated to %#v, want %#v", got, want)

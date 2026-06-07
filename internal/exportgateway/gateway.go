@@ -3,10 +3,12 @@ package exportgateway
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +21,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/exportaccess"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"golang.org/x/net/webdav"
@@ -44,6 +47,7 @@ type Config struct {
 	AuditSink        audit.Sink
 	AuditEventID     func() string
 	RuntimeRequestID func() (string, error)
+	Logger           *slog.Logger
 	VolumeRoots      map[string]string
 	Prefix           string
 	Now              func() time.Time
@@ -62,6 +66,7 @@ type Handler struct {
 	auditSink    audit.Sink
 	auditEventID func() string
 	requestID    func() (string, error)
+	logger       *slog.Logger
 	volumeRoots  map[string]string
 	prefix       string
 	now          func() time.Time
@@ -134,17 +139,26 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	if requestID == nil {
 		requestID = newRuntimeRequestID
 	}
-	return &Handler{
+	handler := &Handler{
 		store:        cfg.Store,
 		auditSink:    cfg.AuditSink,
 		auditEventID: auditEventID,
 		requestID:    requestID,
+		logger:       cfg.Logger,
 		volumeRoots:  roots,
 		prefix:       prefix,
 		now:          now,
 		heartbeatTTL: heartbeatTTL,
 		lockSystem:   webdav.NewMemLS(),
-	}, nil
+	}
+	if handler.logger != nil {
+		observability.LogEvent(context.Background(), handler.logger, slog.LevelInfo, "export_gateway_start", "export gateway started", map[string]any{
+			"component":               "export_gateway",
+			"prefix":                  prefix,
+			"volume_roots_configured": len(roots),
+		})
+	}
+	return handler, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -153,11 +167,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		if exportID, ok := exportIDFromRawPath(rawSourcePath, h.prefix); ok {
 			h.emitDeniedAudit(r, deniedAudit{
-				eventType: audit.EventTypePathDenied,
-				status:    http.StatusNotFound,
-				reason:    "path_denied",
-				denyClass: classifyRawChildDenyClass(rawSourcePath, h.prefix, exportID, "source"),
-				exportID:  exportID,
+				eventType:  audit.EventTypePathDenied,
+				status:     http.StatusNotFound,
+				reason:     "path_denied",
+				reasonCode: "source_path_invalid",
+				denyClass:  classifyRawChildDenyClass(rawSourcePath, h.prefix, exportID, "source"),
+				exportID:   exportID,
 			})
 		}
 		http.NotFound(w, r)
@@ -167,12 +182,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	username, password, ok := r.BasicAuth()
 	if !ok {
 		h.emitDeniedAudit(r, deniedAudit{
-			eventType: audit.EventTypeAuthzDenied,
-			status:    http.StatusUnauthorized,
-			reason:    "authz_denied",
-			denyClass: denyClassAuthzDenied,
-			exportID:  source.ExportID,
-			source:    source,
+			eventType:       audit.EventTypeAuthzDenied,
+			status:          http.StatusUnauthorized,
+			reason:          "authz_denied",
+			reasonCode:      "basic_auth_missing",
+			denyClass:       denyClassAuthzDenied,
+			exportID:        source.ExportID,
+			source:          source,
+			credentialFound: boolPtr(false),
 		})
 		w.Header().Set("WWW-Authenticate", `Basic realm="afscp-export"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -180,70 +197,92 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if username != source.ExportID {
 		h.emitDeniedAudit(r, deniedAudit{
-			eventType: audit.EventTypeAuthzDenied,
-			status:    http.StatusForbidden,
-			reason:    "authz_denied",
-			denyClass: denyClassAuthzDenied,
-			exportID:  source.ExportID,
-			source:    source,
+			eventType:       audit.EventTypeAuthzDenied,
+			status:          http.StatusForbidden,
+			reason:          "authz_denied",
+			reasonCode:      "username_export_mismatch",
+			denyClass:       denyClassAuthzDenied,
+			exportID:        source.ExportID,
+			source:          source,
+			credentialFound: boolPtr(false),
 		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
 	credential, err := h.store.GetExportGatewayCredential(r.Context(), source.ExportID)
-	if err != nil || !credential.Verifier.Verify(password) {
-		denied := deniedAudit{
-			eventType: audit.EventTypeAuthzDenied,
-			status:    http.StatusForbidden,
-			reason:    "authz_denied",
-			denyClass: denyClassAuthzDenied,
-			exportID:  source.ExportID,
-			source:    source,
-		}
-		if err == nil {
-			denied.credential = &credential
-		}
-		h.emitDeniedAudit(r, denied)
+	if err != nil {
+		h.emitDeniedAudit(r, deniedAudit{
+			eventType:       audit.EventTypeAuthzDenied,
+			status:          http.StatusForbidden,
+			reason:          "authz_denied",
+			reasonCode:      "credential_lookup_failed",
+			denyClass:       denyClassAuthzDenied,
+			exportID:        source.ExportID,
+			source:          source,
+			credentialFound: boolPtr(false),
+		})
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if !credential.Verifier.Verify(password) {
+		h.emitDeniedAudit(r, deniedAudit{
+			eventType:       audit.EventTypeAuthzDenied,
+			status:          http.StatusForbidden,
+			reason:          "authz_denied",
+			reasonCode:      "credential_password_mismatch",
+			denyClass:       denyClassAuthzDenied,
+			exportID:        source.ExportID,
+			source:          source,
+			credential:      &credential,
+			credentialFound: boolPtr(true),
+		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if !credentialUsable(credential, h.now()) {
 		h.emitDeniedAudit(r, deniedAudit{
-			eventType:   audit.EventTypeAuthzDenied,
-			status:      http.StatusForbidden,
-			reason:      "authz_denied",
-			denyClass:   denyClassAuthzDenied,
-			exportID:    source.ExportID,
-			source:      source,
-			credential:  &credential,
-			extraDetail: map[string]any{"session_status": string(credential.Session.Status)},
+			eventType:       audit.EventTypeAuthzDenied,
+			status:          http.StatusForbidden,
+			reason:          "authz_denied",
+			reasonCode:      "session_not_usable",
+			denyClass:       denyClassAuthzDenied,
+			exportID:        source.ExportID,
+			source:          source,
+			credential:      &credential,
+			credentialFound: boolPtr(true),
+			extraDetail:     map[string]any{"session_status": string(credential.Session.Status)},
 		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if credential.Session.ID != source.ExportID {
 		h.emitDeniedAudit(r, deniedAudit{
-			eventType:  audit.EventTypeAuthzDenied,
-			status:     http.StatusForbidden,
-			reason:     "authz_denied",
-			denyClass:  denyClassAuthzDenied,
-			exportID:   source.ExportID,
-			source:     source,
-			credential: &credential,
+			eventType:       audit.EventTypeAuthzDenied,
+			status:          http.StatusForbidden,
+			reason:          "authz_denied",
+			reasonCode:      "credential_session_mismatch",
+			denyClass:       denyClassAuthzDenied,
+			exportID:        source.ExportID,
+			source:          source,
+			credential:      &credential,
+			credentialFound: boolPtr(true),
 		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if !methodAllowed(r.Method, credential.Session.Mode) {
 		h.emitDeniedAudit(r, deniedAudit{
-			eventType:  audit.EventTypeCapabilityDenied,
-			status:     http.StatusForbidden,
-			reason:     "capability_denied",
-			denyClass:  denyClassCapabilityDenied,
-			exportID:   source.ExportID,
-			source:     source,
-			credential: &credential,
+			eventType:       audit.EventTypeCapabilityDenied,
+			status:          http.StatusForbidden,
+			reason:          "capability_denied",
+			reasonCode:      "method_not_allowed",
+			denyClass:       denyClassCapabilityDenied,
+			exportID:        source.ExportID,
+			source:          source,
+			credential:      &credential,
+			credentialFound: boolPtr(true),
+			methodAllowed:   boolPtr(false),
 		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -252,26 +291,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	payloadRoot, err := h.payloadRoot(credential)
 	if err != nil {
 		h.emitDeniedAudit(r, deniedAudit{
-			eventType:  audit.EventTypePathDenied,
-			status:     http.StatusForbidden,
-			reason:     "path_denied",
-			denyClass:  denyClassSourcePolicyDenied,
-			exportID:   source.ExportID,
-			source:     source,
-			credential: &credential,
+			eventType:       audit.EventTypePathDenied,
+			status:          http.StatusForbidden,
+			reason:          "path_denied",
+			reasonCode:      "payload_root_resolve_denied",
+			denyClass:       denyClassSourcePolicyDenied,
+			exportID:        source.ExportID,
+			source:          source,
+			credential:      &credential,
+			credentialFound: boolPtr(true),
+			methodAllowed:   boolPtr(true),
 		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if err := h.validatePath(payloadRoot, credential.PayloadVolumeSubdir, source); err != nil {
 		h.emitDeniedAudit(r, deniedAudit{
-			eventType:  audit.EventTypePathDenied,
-			status:     http.StatusForbidden,
-			reason:     "path_denied",
-			denyClass:  classifyPolicyDenyClass(err, "source"),
-			exportID:   source.ExportID,
-			source:     source,
-			credential: &credential,
+			eventType:       audit.EventTypePathDenied,
+			status:          http.StatusForbidden,
+			reason:          "path_denied",
+			reasonCode:      "source_path_denied",
+			denyClass:       classifyPolicyDenyClass(err, "source"),
+			exportID:        source.ExportID,
+			source:          source,
+			credential:      &credential,
+			credentialFound: boolPtr(true),
+			methodAllowed:   boolPtr(true),
 		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -282,13 +327,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		parsedDest, denyClass, ok := h.parseDestination(r, source.ExportID)
 		if !ok {
 			h.emitDeniedAudit(r, deniedAudit{
-				eventType:  audit.EventTypePathDenied,
-				status:     http.StatusForbidden,
-				reason:     "path_denied",
-				denyClass:  denyClass,
-				exportID:   source.ExportID,
-				source:     source,
-				credential: &credential,
+				eventType:       audit.EventTypePathDenied,
+				status:          http.StatusForbidden,
+				reason:          "path_denied",
+				reasonCode:      "destination_path_denied",
+				denyClass:       denyClass,
+				exportID:        source.ExportID,
+				source:          source,
+				credential:      &credential,
+				credentialFound: boolPtr(true),
+				methodAllowed:   boolPtr(true),
 			})
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
@@ -296,14 +344,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		dest = parsedDest
 		if err := h.validatePath(payloadRoot, credential.PayloadVolumeSubdir, dest); err != nil {
 			h.emitDeniedAudit(r, deniedAudit{
-				eventType:  audit.EventTypePathDenied,
-				status:     http.StatusForbidden,
-				reason:     "path_denied",
-				denyClass:  classifyPolicyDenyClass(err, "destination"),
-				exportID:   source.ExportID,
-				source:     source,
-				dest:       dest,
-				credential: &credential,
+				eventType:       audit.EventTypePathDenied,
+				status:          http.StatusForbidden,
+				reason:          "path_denied",
+				reasonCode:      "destination_path_denied",
+				denyClass:       classifyPolicyDenyClass(err, "destination"),
+				exportID:        source.ExportID,
+				source:          source,
+				dest:            dest,
+				credential:      &credential,
+				credentialFound: boolPtr(true),
+				methodAllowed:   boolPtr(true),
 			})
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
@@ -313,13 +364,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fs, err := newNoFollowFileSystem(payloadRoot)
 	if err != nil {
 		h.emitDeniedAudit(r, deniedAudit{
-			eventType:  audit.EventTypePathDenied,
-			status:     http.StatusForbidden,
-			reason:     "path_denied",
-			denyClass:  denyClassSourcePolicyDenied,
-			exportID:   source.ExportID,
-			source:     source,
-			credential: &credential,
+			eventType:       audit.EventTypePathDenied,
+			status:          http.StatusForbidden,
+			reason:          "path_denied",
+			reasonCode:      "payload_root_open_denied",
+			denyClass:       denyClassSourcePolicyDenied,
+			exportID:        source.ExportID,
+			source:          source,
+			credential:      &credential,
+			credentialFound: boolPtr(true),
+			methodAllowed:   boolPtr(true),
 		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -336,13 +390,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = fs.Close()
 		if runtimeObservationAdmissionDenied(err) {
 			h.emitDeniedAudit(r, deniedAudit{
-				eventType:  audit.EventTypeAuthzDenied,
-				status:     http.StatusForbidden,
-				reason:     "authz_denied",
-				denyClass:  denyClassAuthzDenied,
-				exportID:   source.ExportID,
-				source:     source,
-				credential: &credential,
+				eventType:              audit.EventTypeAuthzDenied,
+				status:                 http.StatusForbidden,
+				reason:                 "authz_denied",
+				reasonCode:             "runtime_admission_denied",
+				denyClass:              denyClassAuthzDenied,
+				exportID:               source.ExportID,
+				source:                 source,
+				credential:             &credential,
+				credentialFound:        boolPtr(true),
+				methodAllowed:          boolPtr(true),
+				runtimeAdmissionResult: "denied",
 			})
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
@@ -370,21 +428,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type deniedAudit struct {
-	eventType   audit.EventType
-	status      int
-	reason      string
-	denyClass   string
-	exportID    string
-	source      gatewayPath
-	dest        gatewayPath
-	credential  *exportaccess.GatewayCredential
-	extraDetail map[string]any
+	eventType              audit.EventType
+	status                 int
+	reason                 string
+	reasonCode             string
+	denyClass              string
+	exportID               string
+	source                 gatewayPath
+	dest                   gatewayPath
+	credential             *exportaccess.GatewayCredential
+	credentialFound        *bool
+	methodAllowed          *bool
+	runtimeAdmissionResult string
+	extraDetail            map[string]any
 }
 
 func (h *Handler) emitDeniedAudit(r *http.Request, denied deniedAudit) {
-	if h.auditSink == nil {
-		return
-	}
 	exportID := strings.TrimSpace(denied.exportID)
 	if exportID == "" {
 		exportID = denied.source.ExportID
@@ -392,14 +451,24 @@ func (h *Handler) emitDeniedAudit(r *http.Request, denied deniedAudit) {
 	if exportID == "" {
 		return
 	}
+	h.emitDeniedLog(r, exportID, denied)
+
+	if h.auditSink == nil {
+		return
+	}
 
 	details := map[string]any{
-		"method":      requestMethod(r),
-		"status":      denied.status,
-		"reason_code": denied.reason,
+		"method":                requestMethod(r),
+		"status":                denied.status,
+		"reason_code":           denied.reason,
+		"component":             "export_gateway",
+		"export_id_fingerprint": exportIDFingerprint(exportID),
 	}
 	if denied.denyClass != "" {
 		details["deny_class"] = denied.denyClass
+	}
+	if denied.reasonCode != "" {
+		details["deny_reason_code"] = denied.reasonCode
 	}
 	resource := audit.Resource{Type: "export", ID: exportID}
 	var callerService string
@@ -419,11 +488,13 @@ func (h *Handler) emitDeniedAudit(r *http.Request, denied deniedAudit) {
 			details["session_status"] = string(session.Status)
 		}
 	}
-	if sourceChild, ok := safeChild(denied.source); ok {
-		details["source_child"] = sourceChild
-	}
-	if destChild, ok := safeChild(denied.dest); ok {
-		details["destination_child"] = destChild
+	for key, value := range denyEvidenceFields(r, exportID, denied) {
+		switch key {
+		case "event", "method", "status", "reason_code", "deny_class", "component", "export_id_fingerprint", "namespace_id", "repo_id", "export_mode", "session_status":
+			continue
+		default:
+			details[key] = value
+		}
 	}
 	for key, value := range denied.extraDetail {
 		details[key] = value
@@ -450,6 +521,94 @@ func (h *Handler) emitDeniedAudit(r *http.Request, denied deniedAudit) {
 		ctx = r.Context()
 	}
 	_ = h.auditSink.Emit(ctx, event)
+}
+
+func (h *Handler) emitDeniedLog(r *http.Request, exportID string, denied deniedAudit) {
+	if h.logger == nil {
+		return
+	}
+	observability.LogEvent(
+		requestContext(r),
+		h.logger,
+		slog.LevelWarn,
+		"export_gateway_denied",
+		"export gateway denied WebDAV request",
+		denyEvidenceFields(r, exportID, denied),
+	)
+}
+
+func denyEvidenceFields(r *http.Request, exportID string, denied deniedAudit) map[string]any {
+	reasonCode := denied.reasonCode
+	if reasonCode == "" {
+		reasonCode = denied.reason
+	}
+	fields := map[string]any{
+		"component":             "export_gateway",
+		"method":                requestMethod(r),
+		"status":                denied.status,
+		"reason_code":           reasonCode,
+		"export_id_fingerprint": exportIDFingerprint(exportID),
+	}
+	if denied.denyClass != "" {
+		fields["deny_class"] = denied.denyClass
+	}
+	if denied.credentialFound != nil {
+		fields["credential_found"] = *denied.credentialFound
+	} else {
+		fields["credential_found"] = denied.credential != nil
+	}
+	if denied.methodAllowed != nil {
+		fields["method_allowed"] = *denied.methodAllowed
+	} else if denied.credential != nil {
+		fields["method_allowed"] = methodAllowed(requestMethod(r), denied.credential.Session.Mode)
+	}
+	if denied.runtimeAdmissionResult != "" {
+		fields["runtime_admission_result"] = denied.runtimeAdmissionResult
+	}
+	addPathEvidence(fields, "source", denied.source, exportID)
+	addPathEvidence(fields, "destination", denied.dest, "")
+
+	if denied.credential != nil {
+		session := denied.credential.Session
+		if session.NamespaceID != "" {
+			fields["namespace_id"] = session.NamespaceID
+		}
+		if session.RepoID != "" {
+			fields["repo_id"] = session.RepoID
+		}
+		if session.Mode != "" {
+			fields["export_mode"] = string(session.Mode)
+		}
+		if session.Status != "" {
+			fields["session_status"] = string(session.Status)
+		}
+	}
+	for key, value := range denied.extraDetail {
+		fields[key] = value
+	}
+	return fields
+}
+
+func addPathEvidence(fields map[string]any, prefix string, parsed gatewayPath, exportID string) {
+	pathClass, segments, ok := pathEvidence(parsed, exportID)
+	if !ok {
+		return
+	}
+	fields[prefix+"_path_class"] = pathClass
+	fields[prefix+"_child_segments"] = segments
+}
+
+func pathEvidence(parsed gatewayPath, exportID string) (string, int, bool) {
+	if parsed.Root {
+		return "root", 0, true
+	}
+	if len(parsed.Segments) > 0 {
+		return "child", len(parsed.Segments), true
+	}
+	if parsed.ExportID != "" || strings.TrimSpace(exportID) != "" {
+		return "invalid", 0, true
+	}
+	return "", 0, false
 }
 
 func (h *Handler) beginRuntimeRequest(ctx context.Context, requestID, exportID string, mutating bool) error {
@@ -853,13 +1012,6 @@ func decodedPathCandidates(value string) []string {
 	return candidates
 }
 
-func safeChild(parsed gatewayPath) (string, bool) {
-	if parsed.Root || len(parsed.Segments) == 0 {
-		return "", false
-	}
-	return path.Join(parsed.Segments...), true
-}
-
 func requestMethod(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -867,11 +1019,31 @@ func requestMethod(r *http.Request) string {
 	return r.Method
 }
 
+func requestContext(r *http.Request) context.Context {
+	if r == nil || r.Context() == nil {
+		return context.Background()
+	}
+	return r.Context()
+}
+
 func correlationIDFromRequest(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
 	return strings.TrimSpace(r.Header.Get(auth.HeaderCorrelationID))
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func exportIDFingerprint(exportID string) string {
+	exportID = strings.TrimSpace(exportID)
+	if exportID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(exportID))
+	return "sha256:" + hex.EncodeToString(sum[:])[:16]
 }
 
 func newAuditEventID() string {

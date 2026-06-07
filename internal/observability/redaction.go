@@ -129,6 +129,11 @@ func IsSensitiveField(name string) bool {
 }
 
 func redactValue(fieldName string, value any) any {
+	if isCredentialFoundField(fieldName) {
+		if _, ok := value.(bool); ok {
+			return value
+		}
+	}
 	if IsSensitiveField(fieldName) {
 		return Redacted
 	}
@@ -216,6 +221,10 @@ func normalizeSensitiveFieldName(name string) string {
 			return -1
 		}
 	}, strings.TrimSpace(name))
+}
+
+func isCredentialFoundField(name string) bool {
+	return normalizeSensitiveFieldName(name) == "credentialfound"
 }
 
 func isSensitiveValue(value string) bool {
