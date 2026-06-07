@@ -104,8 +104,9 @@ type Options struct {
 }
 
 type RunOnceRunner struct {
-	runner worker.Runner
-	close  func() error
+	runner         worker.Runner
+	close          func() error
+	runOnceTimeout time.Duration
 }
 
 var eventCounter uint64
@@ -643,8 +644,9 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 		})
 	}
 	return &RunOnceRunner{
-		runner: worker.New(workerConfig),
-		close:  handle.Close,
+		runner:         worker.New(workerConfig),
+		close:          handle.Close,
+		runOnceTimeout: cfg.Worker.RunOnceTimeout,
 	}, nil
 }
 
@@ -772,6 +774,11 @@ func (runner *RunOnceRunner) RunOnce(ctx context.Context) (worker.Result, error)
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if runner.runOnceTimeout > 0 {
+		runCtx, cancel := context.WithTimeout(ctx, runner.runOnceTimeout)
+		defer cancel()
+		ctx = runCtx
 	}
 	result, err := runner.runner.RunOnce(ctx)
 	if err == nil {

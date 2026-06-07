@@ -83,7 +83,10 @@ implementation evidence also includes
 repo lifecycle workers, save/restore flows, namespace-scoped template
 create/clone, workload mount issuance and orchestrator plans, writer-session
 fences with shared repo-row serialization against read-write session admission,
-and an explicit workload mount stale-lease scan. These artifacts are current
+an explicit workload mount stale-lease scan, and run-once worker execution
+bounded by `AFSCP_WORKER_RUN_ONCE_TIMEOUT` so stuck JVS-backed mutations converge
+through the existing durable failure and writer-fence release paths instead of
+leaving same-repo mutation gates non-terminal indefinitely. These artifacts are current
 release evidence only when covered by repo-local verification from
 `bash scripts/verify-ga-release.sh`; manual acceptance or approval does not
 constitute a gate.

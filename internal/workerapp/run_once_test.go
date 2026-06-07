@@ -1724,29 +1724,22 @@ func TestNewRunOnceRunnerAppliesConfiguredTimeoutOnlyToStoreOpen(t *testing.T) {
 	}
 }
 
-func TestRunOnceDoesNotApplyConfiguredTimeoutToLeasedOperationExecution(t *testing.T) {
+func TestRunOnceAppliesConfiguredTimeoutToLeasedRestoreExecution(t *testing.T) {
 	now := workerAppNow()
-	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
-	store := newWorkerAppStore(repoRecord)
-	store.renewCh = make(chan workerAppRenewCall, 1)
+	record := workerAppRestoreOperationRecord("op_restore", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	restoreStarted := make(chan struct{})
 	jvs := &workerAppFakeJVSRunner{
-		initSummary:   jvsrunner.InitSummary{RepoID: "jvs_repo_alpha", Workspace: "main"},
-		doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
-		beforeInit: func(ctx context.Context) error {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-store.renewCh:
-				return nil
-			case <-time.After(2 * time.Second):
-				return errors.New("timed out waiting for operation lease renewal")
-			}
+		beforeDirectRestore: func(ctx context.Context) error {
+			close(restoreStarted)
+			<-ctx.Done()
+			return ctx.Err()
 		},
 	}
 	runner, err := NewRunOnceRunner(Options{
-		Source: workerAppRepoConfigSource(config.MapSource{
-			"AFSCP_OPERATION_RECOVERY_LEASE_DURATION": "30ms",
-			"AFSCP_WORKER_RUN_ONCE_TIMEOUT":           "1ms",
+		Source: workerAppRestoreConfigSource(config.MapSource{
+			"AFSCP_WORKER_RUN_ONCE_TIMEOUT": "100ms",
 		}),
 		StoreFactory: func(context.Context, string) (StoreHandle, error) {
 			return StoreHandle{Store: store}, nil
@@ -1755,27 +1748,38 @@ func TestRunOnceDoesNotApplyConfiguredTimeoutToLeasedOperationExecution(t *testi
 			return jvs, nil
 		},
 		Clock:        func() time.Time { return now },
-		AuditEventID: func() string { return "evt_repo" },
+		AuditEventID: func() string { return "evt_restore" },
 	})
 	if err != nil {
 		t.Fatalf("NewRunOnceRunner: %v", err)
 	}
 
 	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunOnce error = %v, want context deadline exceeded", err)
+	}
+	select {
+	case <-restoreStarted:
+	default:
+		t.Fatal("direct restore did not start")
 	}
 	if summary := result.Summary().Operation; summary.Scanned != 1 || summary.Claimed != 1 || summary.Manual != 0 || summary.Failed != 0 {
-		t.Fatalf("summary = %#v, want repo_create claimed without timeout failure", summary)
+		t.Fatalf("summary = %#v, want restore claimed and terminalized by timeout failure", summary)
 	}
-	if deadline := store.listDeadline; !deadline.IsZero() {
-		t.Fatalf("operation recovery context deadline = %v, want parent context without run-once timeout", deadline)
+	if strings.Join(jvs.calls, ",") != "direct_restore" {
+		t.Fatalf("jvs calls = %#v, want direct_restore only", jvs.calls)
 	}
-	if len(store.renewCalls) == 0 {
-		t.Fatal("operation lease was not renewed during long run-once operation")
+	if store.operation.Type != operations.OperationRestore || store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "JVS_RESTORE_FAILED" {
+		t.Fatalf("operation = %#v, want failed restore operation after run-once timeout", store.operation)
 	}
-	if call := store.renewCalls[0]; call.operationID != "op_repo" || call.request.Owner != "worker-a" || call.request.Duration != 30*time.Millisecond {
-		t.Fatalf("renew call = %#v, want same operation owner and configured lease duration", call)
+	if store.operation.Phase != operations.OperationPhaseRestoreWriterFenced || store.operation.LeaseOwner != "" || store.operation.LeaseExpiresAt != nil {
+		t.Fatalf("operation lease/phase = %#v, want committed terminal restore writer-fenced operation", store.operation)
+	}
+	if store.releasedFenceID != "fence_op_restore" || activeWorkerAppWriterFenceCount(store.fences, "op_restore") != 0 {
+		t.Fatalf("released/active writer fence = %q/%#v, want released restore writer fence", store.releasedFenceID, store.fences)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeRestore || store.auditEvents[0].Outcome != audit.OutcomeFailed {
+		t.Fatalf("audit events = %#v, want failed restore audit", store.auditEvents)
 	}
 }
 
@@ -3969,6 +3973,7 @@ func (store *fakeWorkerAppAuditStore) MarkAuditOutboxDeliveryFailed(context.Cont
 type workerAppFakeJVSRunner struct {
 	calls                []string
 	beforeInit           func(context.Context) error
+	beforeDirectRestore  func(context.Context) error
 	initSummary          jvsrunner.InitSummary
 	doctorSummary        jvsrunner.DoctorSummary
 	saveSummary          jvsrunner.SaveSummary
@@ -4072,12 +4077,17 @@ func (runner *workerAppFakeJVSRunner) DirectList(_ context.Context, target jvsru
 	return runner.directListSummary, runner.directListErr
 }
 
-func (runner *workerAppFakeJVSRunner) DirectRestore(_ context.Context, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectRestoreSummary, error) {
+func (runner *workerAppFakeJVSRunner) DirectRestore(ctx context.Context, target jvsrunner.DirectTarget, savePointID string) (jvsrunner.DirectRestoreSummary, error) {
 	runner.calls = append(runner.calls, "direct_restore")
 	runner.directTarget = target
 	runner.controlRoot = target.ControlRoot
 	runner.payloadRoot = target.Home
 	runner.restoreSavePointID = savePointID
+	if runner.beforeDirectRestore != nil {
+		if err := runner.beforeDirectRestore(ctx); err != nil {
+			return jvsrunner.DirectRestoreSummary{}, err
+		}
+	}
 	if runner.directRestoreSummary.RestoredSavePointID == "" {
 		runner.directRestoreSummary = jvsrunner.DirectRestoreSummary{RestoredSavePointID: savePointID, NewHeadID: savePointID}
 	}
