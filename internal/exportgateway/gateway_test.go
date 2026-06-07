@@ -215,6 +215,29 @@ func TestReadOnlyMethodPolicy(t *testing.T) {
 	}
 }
 
+func TestReadOnlyPropfindWorkspaceArtifactsChildReturnsMultiStatus(t *testing.T) {
+	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+	artifactsDir := filepath.Join(env.payloadRoot, "workspace", ".artifacts")
+	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "report.txt"), []byte("artifact"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := env.request("PROPFIND", "/e/"+testExportID+"/workspace/.artifacts/", nil, "")
+
+	if rec.Code != http.StatusMultiStatus {
+		t.Fatalf("PROPFIND status = %d, want 207, body %q", rec.Code, rec.Body.String())
+	}
+	if len(env.auditSink.events) != 0 {
+		t.Fatalf("audit events = %d, want 0 denied events", len(env.auditSink.events))
+	}
+	if len(env.store.runtimeBegins) != 1 || len(env.store.runtimeEnds) != 1 {
+		t.Fatalf("runtime begin/end = %d/%d, want one admitted PROPFIND", len(env.store.runtimeBegins), len(env.store.runtimeEnds))
+	}
+}
+
 func TestReadWritePutGetAndCopyMoveDestinationPolicy(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
 	if err := os.MkdirAll(filepath.Join(env.payloadRoot, "docs"), 0o755); err != nil {

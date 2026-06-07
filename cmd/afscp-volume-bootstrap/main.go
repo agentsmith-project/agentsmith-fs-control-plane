@@ -19,6 +19,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/runtimeidentity"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store/postgres"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/volumebootstrap"
 	_ "github.com/lib/pq"
@@ -33,6 +34,10 @@ const (
 var version = "dev"
 
 func main() {
+	if err := runtimeidentity.DropToContainerNonrootIfRoot(); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: drop privileges: %s\n", commandName, safeError(err))
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	os.Exit(newCommand(os.Stdout, os.Stderr).runContext(ctx, os.Args[1:]))

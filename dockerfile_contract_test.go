@@ -123,6 +123,46 @@ func TestDockerfileFinalImageSupportsPinnedDynamicJVSBinary(t *testing.T) {
 	}
 }
 
+func TestDockerfileRunsGatewayAsStorageReaderAndNonGatewayCommandsDropPrivileges(t *testing.T) {
+	data, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	dockerfile := string(data)
+	finalStageStart := strings.LastIndex(dockerfile, "\nFROM ")
+	if finalStageStart == -1 {
+		t.Fatal("Dockerfile has no final FROM stage")
+	}
+	finalStage := dockerfile[finalStageStart:]
+	if !strings.Contains(finalStage, "\nUSER 0:0\n") {
+		t.Fatalf("final image stage must run as storage reader root for the export gateway: %s", finalStage)
+	}
+
+	for _, path := range []string{
+		"cmd/afscp-api/main.go",
+		"cmd/afscp-worker/main.go",
+		"cmd/afscp-migrate/main.go",
+		"cmd/afscp-volume-bootstrap/main.go",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		source := string(data)
+		if !strings.Contains(source, "runtimeidentity.DropToContainerNonrootIfRoot()") {
+			t.Fatalf("%s must drop root image privileges at process start", path)
+		}
+	}
+
+	data, err = os.ReadFile("cmd/afscp-export-gateway/main.go")
+	if err != nil {
+		t.Fatalf("read gateway main: %v", err)
+	}
+	if strings.Contains(string(data), "DropToContainerNonrootIfRoot") {
+		t.Fatal("export gateway must retain storage-reader identity instead of dropping to API/worker nonroot")
+	}
+}
+
 func TestCurrentJVSDirectReleaseEvidenceMatchesPinnedBinary(t *testing.T) {
 	data, err := os.ReadFile(directRestoreEvidencePath)
 	if err != nil {

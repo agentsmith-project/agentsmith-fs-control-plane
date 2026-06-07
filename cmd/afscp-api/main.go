@@ -14,6 +14,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/apiapp"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/config"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/observability"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/runtimeidentity"
 )
 
 const (
@@ -23,6 +24,10 @@ const (
 var version = "dev"
 
 func main() {
+	if err := runtimeidentity.DropToContainerNonrootIfRoot(); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: drop privileges: %s\n", commandName, safeError(err))
+		os.Exit(1)
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
