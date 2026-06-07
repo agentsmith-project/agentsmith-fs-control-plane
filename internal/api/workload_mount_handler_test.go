@@ -519,6 +519,7 @@ func TestCreateWorkloadMountBindingRejectsDisabledNamespaceButReleaseStatusStayA
 		t.Fatalf("intake calls = %d, want create rejected before intake", intake.calls)
 	}
 
+	roots, _ := visiblePayloadVolumeRootsForTest(t, meta.mount.VolumeID, meta.mount.NamespaceID, meta.mount.RepoID)
 	orchestratorConfig := workloadMountHandlerConfig(intake, fakeAllowedCallerPolicy{callers: []auth.AllowedCaller{{CallerService: "runtime-orchestrator", Kind: auth.CallerKindOrchestrator, Roles: []auth.Role{auth.RoleOrchestratorMount}}}}, func(config *WorkloadMountHandlerConfig) {
 		config.RepoReader = &fakeRepoReader{repos: []resources.Repo{meta.repo}}
 		config.NamespaceReader = &fakeNamespaceReader{namespace: meta.namespace}
@@ -527,6 +528,7 @@ func TestCreateWorkloadMountBindingRejectsDisabledNamespaceButReleaseStatusStayA
 		config.FenceReader = &fakeRepoFenceReader{fences: meta.fences}
 		config.MountReader = fakeWorkloadMountReader{binding: meta.mount}
 		config.PlanReader = fakeWorkloadMountPlanReader{plan: meta.plan}
+		config.VolumeRoots = roots
 	})
 	orchestratorConfig.PrincipalResolver = fakePrincipalResolver{principal: auth.AuthenticatedPrincipal{Subject: "svc:runtime-orchestrator", CanonicalCallerService: "runtime-orchestrator"}}
 	orchestrator := WorkloadMountHandler(orchestratorConfig)

@@ -167,6 +167,7 @@ func TestInternalAPIShellKeepsUnimplementedKnownRoutesCapabilityDenied(t *testin
 
 func TestInternalAPIShellCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testing.T) {
 	meta := exportMetaFixture()
+	roots, _ := visiblePayloadVolumeRootsForTest(t, meta.repo.VolumeID, meta.repo.NamespaceID, meta.repo.ID)
 	store := &fakeExportStore{}
 	handler := NewInternalAPIShell(InternalAPIShellConfig{
 		PrincipalResolver:         namespaceBindingPrincipalResolver(),
@@ -175,6 +176,7 @@ func TestInternalAPIShellCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testin
 		RepoReader:                meta.repoReader,
 		VolumeReader:              meta.volumeReader,
 		RepoFenceReader:           &fakeRepoFenceReader{fences: meta.fences},
+		VolumeRoots:               roots,
 		ExportStore:               store,
 		GenerateOperationID:       func() string { return "op_export_shell" },
 		Now:                       fixedNamespaceNow,
@@ -202,6 +204,37 @@ func TestInternalAPIShellCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testin
 	}
 	if !strings.HasPrefix(got, "https://files.example.test/public/e/") || !strings.HasSuffix(got, "/") {
 		t.Fatalf("access.url = %q, want configured public base URL", got)
+	}
+}
+
+func TestInternalAPIShellCreateExportFailsClosedWithoutConfiguredVolumeRoots(t *testing.T) {
+	meta := exportMetaFixture()
+	store := &fakeExportStore{}
+	handler := NewInternalAPIShell(InternalAPIShellConfig{
+		PrincipalResolver:         namespaceBindingPrincipalResolver(),
+		NamespaceBindingReader:    meta.bindingReader,
+		NamespaceReader:           meta.namespaceReader,
+		RepoReader:                meta.repoReader,
+		VolumeReader:              meta.volumeReader,
+		RepoFenceReader:           &fakeRepoFenceReader{fences: meta.fences},
+		ExportStore:               store,
+		GenerateOperationID:       func() string { return "op_export_shell" },
+		Now:                       fixedNamespaceNow,
+		WebDAVExportPublicBaseURL: "https://files.example.test/public",
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeExportNotReady || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want retryable EXPORT_NOT_READY", env.Error)
+	}
+	if store.createCalls != 0 {
+		t.Fatalf("create calls = %d, want denied before credential create", store.createCalls)
 	}
 }
 

@@ -373,6 +373,7 @@ func newCallerRuntimeBoundaryE2E(t *testing.T, edit func(*callerRuntimeBoundaryE
 		UpdatedAt:      now,
 	}
 	repoActive := repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)
+	roots, _ := visiblePayloadVolumeRootsForTest(t, repoActive.VolumeID, repoActive.NamespaceID, repoActive.ID)
 	repoDelete := repoResourceFixture("ns_123", "repo_delete", resources.RepoStatusActive)
 	repoPurge := repoResourceFixture("ns_123", "repo_purge", resources.RepoStatusTombstoned)
 	repoPurge.Lifecycle = resources.RepoLifecycle{
@@ -424,6 +425,7 @@ func newCallerRuntimeBoundaryE2E(t *testing.T, edit func(*callerRuntimeBoundaryE
 		NamespaceReader:            &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
 		RepoReader:                 &fakeRepoReader{repos: []resources.Repo{repoActive, repoDelete, repoPurge}},
 		VolumeReader:               fakeWorkloadMountVolumeReader{volume: volume},
+		VolumeRoots:                roots,
 		WorkloadMountBindingReader: fakeWorkloadMountReader{binding: mount},
 		WorkloadMountPlanReader:    fakeWorkloadMountPlanReader{plan: plan, calls: config.planCalls},
 		ExportStore:                &fakeExportStore{},

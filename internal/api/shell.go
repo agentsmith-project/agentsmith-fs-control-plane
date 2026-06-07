@@ -50,6 +50,7 @@ type InternalAPIShellConfig struct {
 	SavePointMutationGate          RepoJVSMutationGateStatusReader
 	SavePointHistoryJVSRunner      JVSHistoryRunner
 	SavePointHistoryVolumeRoots    map[string]string
+	VolumeRoots                    map[string]string
 	OperationInspectionReader      OperationInspectionStoreReader
 	OperatorRepairStore            OperatorRepairStore
 	RepoCreateIntakeStore          RepoCreateOperationIntakeStore
@@ -355,6 +356,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		FenceReader:       config.RepoFenceReader,
 		MountReader:       mountReader,
 		PlanReader:        mountPlanReader,
+		VolumeRoots:       config.VolumeRoots,
 		IntakeStore:       config.OperationIntakeStore,
 		IntakeLookupStore: operationLookupStore,
 		PrincipalResolver: config.PrincipalResolver,
@@ -382,6 +384,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		BindingReader:     config.NamespaceBindingReader,
 		VolumeReader:      config.VolumeReader,
 		FenceReader:       config.RepoFenceReader,
+		VolumeRoots:       config.VolumeRoots,
 		Store:             exportStore,
 		IntakeLookupStore: exportLookupStore,
 		PrincipalResolver: config.PrincipalResolver,

@@ -209,6 +209,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		SavePointMutationGate:          handle.Store,
 		SavePointHistoryReader:         savePointHistoryReader,
 		SavePointHistoryVolumeRoots:    cfg.API.SavePointHistory.VolumeRoots,
+		VolumeRoots:                    cfg.API.VolumeRoots,
 		OperationInspectionReader:      handle.Store,
 		OperatorRepairStore:            operatorRepairStore,
 		RepoCreateIntakeStore:          handle.Store,

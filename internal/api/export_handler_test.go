@@ -22,7 +22,7 @@ import (
 
 func TestCreateExportReturnsOneTimePasswordAndPersistsOnlyVerifier(t *testing.T) {
 	store := &fakeExportStore{}
-	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_write","ttl_seconds":120}`, "ns_123"))
@@ -62,7 +62,7 @@ func TestCreateExportReturnsOneTimePasswordAndPersistsOnlyVerifier(t *testing.T)
 
 func TestCreateExportNotReadyReturnsRetryableConflictWithoutAccessSecret(t *testing.T) {
 	store := &fakeExportStore{err: exportaccess.ErrExportNotReady}
-	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
@@ -87,7 +87,7 @@ func TestCreateExportNotReadyReturnsRetryableConflictWithoutAccessSecret(t *test
 
 func TestCreateExportIdempotentReplayReturnsRedactedSessionWithoutPassword(t *testing.T) {
 	store := &fakeExportStore{reused: true}
-	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
@@ -272,7 +272,7 @@ func TestRestoreReconciliationModeExportReplayDoesNotReturnAccess(t *testing.T) 
 	session := exportSessionFixture(sessionstate.ExportStatusActive)
 	session.Mode = sessionstate.AccessModeReadOnly
 	store := &fakeExportStore{restoreReconciliationBlocked: true, lookupRecord: existingExportOperationRecord("op_existing_export", hash, map[string]any{"ttl_seconds": 120}), session: session}
-	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
@@ -572,7 +572,7 @@ func TestCreateExportDefaultsTTLAndClampsDefaultToPolicyMax(t *testing.T) {
 			meta := exportMetaFixture()
 			meta.binding.ExportPolicy["max_session_seconds"] = tt.maxTTL
 			store := &fakeExportStore{}
-			handler := exportHandlerForTest(store, meta, namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+			handler := exportHandlerForTest(t, store, meta, namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only"}`, "ns_123"))
@@ -593,7 +593,7 @@ func TestCreateExportDefaultsTTLAndClampsDefaultToPolicyMax(t *testing.T) {
 
 func TestGetExportReturnsRedactedSessionOnly(t *testing.T) {
 	store := &fakeExportStore{}
-	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, exportRequest(http.MethodGet, "/internal/v1/exports/export_123", "", "ns_123"))
@@ -625,7 +625,7 @@ func TestGetExportRejectsNamespaceMismatch(t *testing.T) {
 		session.NamespaceID = "ns_other"
 		return session
 	}()}
-	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, exportRequest(http.MethodGet, "/internal/v1/exports/export_123", "", "ns_123"))
@@ -641,7 +641,7 @@ func TestGetExportRejectsNamespaceMismatch(t *testing.T) {
 
 func TestRevokeExportIsIdempotentAndLeavesSessionRevoking(t *testing.T) {
 	store := &fakeExportStore{}
-	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, exportRequest(http.MethodDelete, "/internal/v1/exports/export_123", "", "ns_123"))
@@ -671,7 +671,7 @@ func TestRevokeExportRemainsAvailableForRevokingSessionAfterNamespaceDisable(t *
 	meta.namespace = resources.Namespace{ID: "ns_123", Status: resources.NamespaceStatusDisabled, DisabledReason: "security hold", DisabledAt: &disabledAt, CreatedAt: now.Add(-time.Hour), UpdatedAt: now}
 	meta.namespaceReader = &fakeNamespaceReader{namespace: meta.namespace}
 	store := &fakeExportStore{session: exportSessionFixture(sessionstate.ExportStatusRevoking)}
-	handler := exportHandlerForTest(store, meta, namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	handler := exportHandlerForTest(t, store, meta, namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, exportRequest(http.MethodDelete, "/internal/v1/exports/export_123", "", "ns_123"))
@@ -739,7 +739,7 @@ func TestCreateExportAdmissionFailures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &fakeExportStore{}
-			handler := exportHandlerForTest(store, tt.meta, namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+			handler := exportHandlerForTest(t, store, tt.meta, namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", tt.body, tt.ns))
@@ -761,7 +761,7 @@ func TestCreateExportAdmissionFailures(t *testing.T) {
 func TestExportHandlerAuthAndStoreErrors(t *testing.T) {
 	t.Run("missing auth rejected before store", func(t *testing.T) {
 		store := &fakeExportStore{}
-		handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+		handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 		req := exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123")
 		req.Header.Del(auth.HeaderAuthorization)
 		rec := httptest.NewRecorder()
@@ -782,7 +782,7 @@ func TestExportHandlerAuthAndStoreErrors(t *testing.T) {
 
 	t.Run("role denied before store", func(t *testing.T) {
 		store := &fakeExportStore{}
-		handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleRepoAdmin))
+		handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleRepoAdmin))
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
@@ -801,7 +801,7 @@ func TestExportHandlerAuthAndStoreErrors(t *testing.T) {
 
 	t.Run("create idempotency conflict", func(t *testing.T) {
 		store := &fakeExportStore{err: operations.ErrIdempotencyConflict}
-		handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+		handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
@@ -827,7 +827,7 @@ func TestExportHandlerAuthAndStoreErrors(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &fakeExportStore{err: errors.New("postgres password=export-secret metadata_url=raw failed")}
-			handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+			handler := exportHandlerForTest(t, store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, exportRequest(tt.method, tt.path, tt.body, "ns_123"))
@@ -848,13 +848,16 @@ func TestExportHandlerAuthAndStoreErrors(t *testing.T) {
 	}
 }
 
-func exportHandlerForTest(store *fakeExportStore, meta exportMeta, policy AllowedCallerPolicy) http.Handler {
+func exportHandlerForTest(t testing.TB, store *fakeExportStore, meta exportMeta, policy AllowedCallerPolicy) http.Handler {
+	t.Helper()
+	roots, _ := visiblePayloadVolumeRootsForTest(t, meta.repo.VolumeID, meta.repo.NamespaceID, meta.repo.ID)
 	return ExportHandler(ExportHandlerConfig{
 		RepoReader:        meta.repoReader,
 		NamespaceReader:   meta.namespaceReader,
 		BindingReader:     meta.bindingReader,
 		VolumeReader:      meta.volumeReader,
 		FenceReader:       &fakeRepoFenceReader{fences: meta.fences},
+		VolumeRoots:       roots,
 		Store:             store,
 		PrincipalResolver: namespaceBindingPrincipalResolver(),
 		AllowedCallers:    policy,

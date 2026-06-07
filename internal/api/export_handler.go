@@ -35,6 +35,7 @@ type ExportHandlerConfig struct {
 	BindingReader     NamespaceVolumeBindingReader
 	VolumeReader      VolumeReader
 	FenceReader       RepoFenceReader
+	VolumeRoots       map[string]string
 	Store             ExportStore
 	IntakeLookupStore OperationIdempotencyLookupStore
 	PrincipalResolver PrincipalResolver
@@ -76,6 +77,7 @@ func ExportHandler(config ExportHandlerConfig) http.Handler {
 		bindingReader:     config.BindingReader,
 		volumeReader:      config.VolumeReader,
 		fenceReader:       config.FenceReader,
+		volumeRoots:       cloneVolumeRoots(config.VolumeRoots),
 		store:             config.Store,
 		lookupStore:       lookup,
 		operationID:       config.OperationID,
@@ -126,6 +128,7 @@ type exportLeafHandler struct {
 	bindingReader     NamespaceVolumeBindingReader
 	volumeReader      VolumeReader
 	fenceReader       RepoFenceReader
+	volumeRoots       map[string]string
 	store             ExportStore
 	lookupStore       OperationIdempotencyLookupStore
 	operationID       OperationIDGenerator
@@ -226,6 +229,9 @@ func (handler exportLeafHandler) create(w http.ResponseWriter, r *http.Request, 
 		writeValidationErrorWithAudit(w, r, route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid export ttl", []string{"invalid_ttl_seconds"}, handler.sink)
 		return
 	}
+	if !handler.repoPayloadExportVisible(w, r, repo.VolumeID, repo.NamespaceID, repo.ID) {
+		return
+	}
 	now := handler.currentTime()
 	exportID := handler.newExportID()
 	if err := pathresolver.ValidateID(pathresolver.ExportID, exportID); err != nil {
@@ -284,6 +290,14 @@ func (handler exportLeafHandler) create(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	_ = writeJSON(w, http.StatusAccepted, envelope)
+}
+
+func (handler exportLeafHandler) repoPayloadExportVisible(w http.ResponseWriter, r *http.Request, volumeID, namespaceID, repoID string) bool {
+	if err := repoPayloadExportVisible(handler.volumeRoots, volumeID, namespaceID, repoID); err != nil {
+		writeExportError(w, r, http.StatusConflict, CodeExportNotReady, "export target is not ready", true)
+		return false
+	}
+	return true
 }
 
 func (handler exportLeafHandler) restoreReconciliationBlocked(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, namespaceID, repoID string) bool {

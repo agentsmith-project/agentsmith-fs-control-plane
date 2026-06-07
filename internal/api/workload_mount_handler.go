@@ -40,6 +40,7 @@ type WorkloadMountHandlerConfig struct {
 	FenceReader       RepoFenceReader
 	MountReader       WorkloadMountBindingReader
 	PlanReader        WorkloadMountPlanReader
+	VolumeRoots       map[string]string
 	IntakeStore       OperationIntakeStore
 	IntakeLookupStore OperationIdempotencyLookupStore
 	PrincipalResolver PrincipalResolver
@@ -76,6 +77,14 @@ type updateWorkloadMountStatusRequest struct {
 	Reason         string `json:"reason,omitempty"`
 }
 
+type workloadMountStatusCanonicalRequest struct {
+	MountBindingID string `json:"mount_binding_id"`
+	Status         string `json:"status"`
+	ObservedAt     string `json:"observed_at"`
+	LeaseExpiresAt string `json:"lease_expires_at,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+}
+
 func WorkloadMountHandler(config WorkloadMountHandlerConfig) http.Handler {
 	routes := workloadMountRoutes()
 	lookup := config.IntakeLookupStore
@@ -84,7 +93,7 @@ func WorkloadMountHandler(config WorkloadMountHandlerConfig) http.Handler {
 			lookup = typed
 		}
 	}
-	leaf := workloadMountLeafHandler{routes: routes, repoReader: config.RepoReader, namespaceReader: config.NamespaceReader, bindingReader: config.BindingReader, volumeReader: config.VolumeReader, fenceReader: config.FenceReader, mountReader: config.MountReader, planReader: config.PlanReader, intakeStore: config.IntakeStore, lookupStore: lookup, operationID: config.OperationID, mountBindingID: config.MountBindingID, eventID: config.EventID, now: config.Now, admissionDisabled: config.AdmissionDisabled, sink: config.AuditSink}
+	leaf := workloadMountLeafHandler{routes: routes, repoReader: config.RepoReader, namespaceReader: config.NamespaceReader, bindingReader: config.BindingReader, volumeReader: config.VolumeReader, fenceReader: config.FenceReader, mountReader: config.MountReader, planReader: config.PlanReader, volumeRoots: cloneVolumeRoots(config.VolumeRoots), intakeStore: config.IntakeStore, lookupStore: lookup, operationID: config.OperationID, mountBindingID: config.MountBindingID, eventID: config.EventID, now: config.Now, admissionDisabled: config.AdmissionDisabled, sink: config.AuditSink}
 	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, workloadMountRouteResolver{routes: routes}, config.AllowedCallers, config.AuditSink)
 }
 
@@ -125,6 +134,7 @@ type workloadMountLeafHandler struct {
 	fenceReader       RepoFenceReader
 	mountReader       WorkloadMountBindingReader
 	planReader        WorkloadMountPlanReader
+	volumeRoots       map[string]string
 	intakeStore       OperationIntakeStore
 	lookupStore       OperationIdempotencyLookupStore
 	operationID       OperationIDGenerator
@@ -347,6 +357,9 @@ func (handler workloadMountLeafHandler) mutateExisting(w http.ResponseWriter, r 
 	if handler.restoreReconciliationBlocked(w, r, route, requestContext, namespaceID, binding.RepoID) {
 		return
 	}
+	if handler.terminalStatusRequiresExportVisible(canonical) && !handler.repoPayloadExportVisible(w, r, route, requestContext, binding.VolumeID, binding.NamespaceID, binding.RepoID) {
+		return
+	}
 	now := handler.currentTime()
 	envelope, intakeErr := CreateOrReuseOperationIntake(r.Context(), OperationIntakeConfig{Store: handler.intakeStore}, OperationIntakeRequest{
 		RequestContext:      requestContext,
@@ -366,6 +379,27 @@ func (handler workloadMountLeafHandler) mutateExisting(w http.ResponseWriter, r 
 		return
 	}
 	_ = writeJSON(w, http.StatusAccepted, envelope)
+}
+
+func (handler workloadMountLeafHandler) terminalStatusRequiresExportVisible(canonical any) bool {
+	statusUpdate, ok := canonical.(workloadMountStatusCanonicalRequest)
+	if !ok {
+		return false
+	}
+	switch sessionstate.MountStatus(statusUpdate.Status) {
+	case sessionstate.MountStatusReleased, sessionstate.MountStatusRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+func (handler workloadMountLeafHandler) repoPayloadExportVisible(w http.ResponseWriter, r *http.Request, route RouteMetadata, requestContext auth.RequestContext, volumeID, namespaceID, repoID string) bool {
+	if err := repoPayloadExportVisible(handler.volumeRoots, volumeID, namespaceID, repoID); err != nil {
+		writePolicyDeniedErrorWithAudit(w, r, route, requestContext, CodeExportNotReady, http.StatusConflict, true, "export target is not ready", []string{"repo_payload_not_export_visible"}, handler.sink)
+		return false
+	}
+	return true
 }
 
 func workloadMountAdmissionGatedMutation(route RouteMetadata) bool {
@@ -412,13 +446,7 @@ func (handler workloadMountLeafHandler) mutationCanonical(operationID, mountBind
 		summary["status"] = string(status)
 		summary["observed_at"] = observedAt.Format(time.RFC3339)
 		summary["reason"] = reason
-		return struct {
-			MountBindingID string `json:"mount_binding_id"`
-			Status         string `json:"status"`
-			ObservedAt     string `json:"observed_at"`
-			LeaseExpiresAt string `json:"lease_expires_at,omitempty"`
-			Reason         string `json:"reason,omitempty"`
-		}{mountBindingID, string(status), observedAt.Format(time.RFC3339), leaseExpiresAt, reason}, summary, operations.OperationPhaseMountBindingStatusValidate, nil
+		return workloadMountStatusCanonicalRequest{mountBindingID, string(status), observedAt.Format(time.RFC3339), leaseExpiresAt, reason}, summary, operations.OperationPhaseMountBindingStatusValidate, nil
 	case "heartbeatWorkloadMountBinding":
 		return map[string]string{"mount_binding_id": mountBindingID}, summary, operations.OperationPhaseMountBindingHeartbeatValidate, drainEmptyBody(r)
 	case "releaseWorkloadMountBinding":

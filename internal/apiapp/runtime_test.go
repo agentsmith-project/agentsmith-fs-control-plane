@@ -398,6 +398,11 @@ func TestInternalRuntimeCreateExportUsesConfiguredWebDAVPublicBaseURL(t *testing
 		volume: activeRuntimeVolume(now),
 	}
 	source := readyTestRuntimeSource()
+	volumeRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(volumeRoot, "afscp", "namespaces", "ns_alpha", "repos", "repo_alpha", "payload"), 0o755); err != nil {
+		t.Fatalf("mkdir payload root: %v", err)
+	}
+	source["AFSCP_API_VOLUME_ROOTS"] = "vol_main=" + volumeRoot
 	source["AFSCP_API_WEBDAV_EXPORT_PUBLIC_BASE_URL"] = "https://files.example.test/public"
 	runtime, err := NewRuntime(Options{
 		Source: source,
