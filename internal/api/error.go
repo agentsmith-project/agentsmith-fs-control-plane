@@ -48,6 +48,7 @@ const (
 	CodeVolumeMismatchRequiresImport  ErrorCode = "VOLUME_MISMATCH_REQUIRES_IMPORT"
 	CodeExportExpired                 ErrorCode = "EXPORT_EXPIRED"
 	CodeExportRevoked                 ErrorCode = "EXPORT_REVOKED"
+	CodeExportNotReady                ErrorCode = "EXPORT_NOT_READY"
 	CodeMountBindingTerminal          ErrorCode = "MOUNT_BINDING_TERMINAL"
 	CodeRepoLifecycleInvalidState     ErrorCode = "REPO_LIFECYCLE_INVALID_STATE"
 	CodeRepoLifecycleFenceHeld        ErrorCode = "REPO_LIFECYCLE_FENCE_HELD"
@@ -93,6 +94,7 @@ var allErrorCodes = []ErrorCode{
 	CodeVolumeMismatchRequiresImport,
 	CodeExportExpired,
 	CodeExportRevoked,
+	CodeExportNotReady,
 	CodeMountBindingTerminal,
 	CodeRepoLifecycleInvalidState,
 	CodeRepoLifecycleFenceHeld,

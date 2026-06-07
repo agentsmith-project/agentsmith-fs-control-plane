@@ -60,6 +60,31 @@ func TestCreateExportReturnsOneTimePasswordAndPersistsOnlyVerifier(t *testing.T)
 	}
 }
 
+func TestCreateExportNotReadyReturnsRetryableConflictWithoutAccessSecret(t *testing.T) {
+	store := &fakeExportStore{err: exportaccess.ErrExportNotReady}
+	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, exportRequest(http.MethodPost, "/internal/v1/repos/repo_123/exports", `{"mode":"read_only","ttl_seconds":120}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeExportNotReady || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want retryable EXPORT_NOT_READY", env.Error)
+	}
+	if store.createCalls != 1 {
+		t.Fatalf("create calls = %d, want one durable admission attempt", store.createCalls)
+	}
+	rendered := strings.ToLower(rec.Body.String())
+	for _, forbidden := range []string{"access", "password", "export-password-once", "credential_hash", "credential_salt", "verifier"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("not-ready response leaked %q: %s", forbidden, rec.Body.String())
+		}
+	}
+}
+
 func TestCreateExportIdempotentReplayReturnsRedactedSessionWithoutPassword(t *testing.T) {
 	store := &fakeExportStore{reused: true}
 	handler := exportHandlerForTest(store, exportMetaFixture(), namespaceBindingAllowedPolicy(auth.RoleExportAdmin))

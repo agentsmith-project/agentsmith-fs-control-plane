@@ -76,6 +76,16 @@ func (store *Store) CreateOrReuseExport(ctx context.Context, request exportacces
 		row = store.exec.QueryRowContext(ctx, exportCreateReplaySQL(), args...)
 		session, operation, err = scanExportSessionAndOperationWithInserted(row, &inserted)
 	}
+	if errors.Is(err, sql.ErrNoRows) {
+		blocked, classifyErr := store.exportCreateBlockedByReleasingWorkloadMount(ctx, request.Session.NamespaceID, request.Session.RepoID, request.Session.Mode)
+		if classifyErr != nil {
+			return exportaccess.CreateResult{}, classifyErr
+		}
+		if blocked {
+			return exportaccess.CreateResult{}, exportaccess.ErrExportNotReady
+		}
+		return exportaccess.CreateResult{}, err
+	}
 	if err != nil {
 		return exportaccess.CreateResult{}, err
 	}
@@ -83,6 +93,18 @@ func (store *Store) CreateOrReuseExport(ctx context.Context, request exportacces
 		return exportaccess.CreateResult{}, fmt.Errorf("%w: export_create scope %q already exists with a different request hash", operations.ErrIdempotencyConflict, record.IdempotencyScope)
 	}
 	return exportaccess.CreateResult{Session: session, Operation: operation, Reused: !inserted}, nil
+}
+
+func (store *Store) exportCreateBlockedByReleasingWorkloadMount(ctx context.Context, namespaceID, repoID string, mode sessionstate.AccessMode) (bool, error) {
+	row := store.exec.QueryRowContext(ctx, exportCreateBlockedByReleasingWorkloadMountSQL(), namespaceID, repoID, string(mode))
+	var blocked bool
+	if err := row.Scan(&blocked); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return blocked, nil
 }
 
 func (store *Store) GetExportSession(ctx context.Context, exportID string) (exportaccess.Session, error) {
@@ -433,11 +455,13 @@ func exportCreateOrReuseSQL() string {
 		"SELECT fence_id FROM repo_fences, active_repo WHERE repo_fences.repo_id = active_repo.repo_id AND repo_fences.fence_kind = 'lifecycle' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
 		"), held_writer_fence AS (" +
 		"SELECT fence_id FROM repo_fences, active_repo WHERE repo_fences.repo_id = active_repo.repo_id AND repo_fences.fence_kind = 'writer_session' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL FOR UPDATE" +
+		"), release_visible_workload_mount_blocker AS (" +
+		"SELECT mount_binding_id FROM workload_mount_bindings, active_repo WHERE workload_mount_bindings.namespace_id = $17 AND workload_mount_bindings.repo_id = active_repo.repo_id AND workload_mount_bindings.status = 'releasing' FOR UPDATE" +
 		"), inserted_operation AS (" +
 		"INSERT INTO operations (" + strings.Join(operationColumns, ", ") + ") SELECT " + placeholders(1, len(operationColumns)) + " WHERE NOT EXISTS (SELECT 1 FROM existing_operation) " +
 		"AND $3 = 'succeeded' AND $2 = 'export_create' AND $4 = 'export_create_committed' AND $15 = 'export' AND $16 = $20 AND $20 = $33 AND $17 = $34 AND $18 = $35 " +
 		"AND EXISTS (SELECT 1 FROM active_namespace) AND EXISTS (SELECT 1 FROM active_binding) AND EXISTS (SELECT 1 FROM active_repo) AND EXISTS (SELECT 1 FROM active_volume) " +
-		"AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) AND ($37 = 'read_only' OR NOT EXISTS (SELECT 1 FROM held_writer_fence)) " +
+		"AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) AND NOT EXISTS (SELECT 1 FROM release_visible_workload_mount_blocker) AND ($37 = 'read_only' OR NOT EXISTS (SELECT 1 FROM held_writer_fence)) " +
 		"ON CONFLICT (caller_service, namespace_id, operation_type, idempotency_key) DO UPDATE SET operation_id = operations.operation_id " +
 		"RETURNING " + operationReturningColumnsSQL() + ", (xmax = 0) AS inserted" +
 		"), inserted_session AS (" +
@@ -452,6 +476,24 @@ func exportCreateReplaySQL() string {
 	return "SELECT " + prefixedColumns("export_sessions", exportSessionPublicColumns) + ", " + prefixedColumns("operations", operationSelectColumns) + ", false AS inserted " +
 		"FROM operations JOIN export_sessions ON export_sessions.export_id = operations.export_id AND export_sessions.namespace_id = operations.namespace_id AND export_sessions.repo_id = operations.repo_id " +
 		"WHERE operations.caller_service = $12 AND operations.namespace_id = $17 AND operations.operation_type = 'export_create' AND operations.idempotency_key = $9 LIMIT 1"
+}
+
+func exportCreateBlockedByReleasingWorkloadMountSQL() string {
+	return "WITH active_namespace AS (" +
+		"SELECT namespace_id FROM namespaces WHERE namespace_id = $1 AND status = 'active'" +
+		"), active_binding AS (" +
+		"SELECT namespace_id FROM namespace_volume_bindings WHERE namespace_id = $1 AND status = 'active' AND COALESCE((export_policy->>'webdav_enabled')::boolean, false) = true" +
+		"), active_repo AS (" +
+		"SELECT repo_id, volume_id FROM repos WHERE namespace_id = $1 AND repo_id = $2 AND repo_kind = 'repo' AND status = 'active' AND lifecycle_status = 'active'" +
+		"), active_volume AS (" +
+		"SELECT volumes.volume_id FROM volumes JOIN active_repo ON active_repo.volume_id = volumes.volume_id WHERE volumes.status = 'active' AND COALESCE((volumes.capabilities->>'webdav_export')::boolean, false) = true" +
+		"), held_lifecycle_fence AS (" +
+		"SELECT fence_id FROM repo_fences, active_repo WHERE repo_fences.repo_id = active_repo.repo_id AND repo_fences.fence_kind = 'lifecycle' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL" +
+		"), held_writer_fence AS (" +
+		"SELECT fence_id FROM repo_fences, active_repo WHERE repo_fences.repo_id = active_repo.repo_id AND repo_fences.fence_kind = 'writer_session' AND status IN ('active','expired','recovery_required') AND released_at IS NULL AND recovered_at IS NULL" +
+		"), release_visible_workload_mount_blocker AS (" +
+		"SELECT mount_binding_id FROM workload_mount_bindings, active_repo WHERE workload_mount_bindings.namespace_id = $1 AND workload_mount_bindings.repo_id = active_repo.repo_id AND workload_mount_bindings.status = 'releasing'" +
+		") SELECT EXISTS (SELECT 1 FROM active_namespace) AND EXISTS (SELECT 1 FROM active_binding) AND EXISTS (SELECT 1 FROM active_repo) AND EXISTS (SELECT 1 FROM active_volume) AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) AND ($3 = 'read_only' OR NOT EXISTS (SELECT 1 FROM held_writer_fence)) AND EXISTS (SELECT 1 FROM release_visible_workload_mount_blocker)"
 }
 
 func exportRevokeSQL() string {

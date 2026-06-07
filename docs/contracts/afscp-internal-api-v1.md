@@ -196,8 +196,8 @@ The internal API must expose a standard error envelope and stable error codes
 for authentication, caller authorization, namespace/resource mismatch,
 capability denial, idempotency conflict, missing repo or volume metadata, active
 writer restore rejection, dirty restore rejection, JVS failure, export
-expiry/revoke, mount terminal state, repo lifecycle invalid state, lifecycle
-session drain failure, missing purge
+expiry/revoke/not-ready admission, mount terminal state, repo lifecycle invalid
+state, lifecycle session drain failure, missing purge
 confirmation, purge retention denial, operation recovery required, durable
 metadata/store unavailability, and unclassified internal service bugs.
 

@@ -102,6 +102,78 @@ func TestCreateOrReuseExportSQLPredicatesMatchOperationAndSessionArgs(t *testing
 	}
 }
 
+func TestCreateOrReuseExportSQLBlocksReleasingWorkloadMountsBeforeCredentialCommit(t *testing.T) {
+	sql := exportCreateOrReuseSQL()
+
+	assertSQLContainsInOrder(t, sql,
+		"held_writer_fence AS (",
+		"release_visible_workload_mount_blocker AS (",
+		"FROM workload_mount_bindings, active_repo",
+		"workload_mount_bindings.namespace_id = $17",
+		"workload_mount_bindings.repo_id = active_repo.repo_id",
+		"workload_mount_bindings.status = 'releasing'",
+		"FOR UPDATE",
+		"inserted_operation AS (",
+		"AND NOT EXISTS (SELECT 1 FROM release_visible_workload_mount_blocker)",
+		"inserted_session AS (",
+		"INSERT INTO export_sessions",
+	)
+}
+
+func TestCreateOrReuseExportSQLAllowsReleasedWorkloadMountAfterTerminalBoundary(t *testing.T) {
+	sql := exportCreateOrReuseSQL()
+	guard := sqlBetween(t, sql, "release_visible_workload_mount_blocker AS (", "), inserted_operation AS (")
+	classifier := sqlBetween(t, exportCreateBlockedByReleasingWorkloadMountSQL(), "release_visible_workload_mount_blocker AS (", ") SELECT EXISTS")
+
+	for _, fragment := range []string{guard, classifier} {
+		if strings.Contains(fragment, "released") || strings.Contains(fragment, "revoked") {
+			t.Fatalf("export create release-visible guard blocks terminal evidence statuses: %s", fragment)
+		}
+	}
+	assertSQLContainsAll(t, guard,
+		"workload_mount_bindings.status = 'releasing'",
+		"FOR UPDATE",
+	)
+	assertSQLContainsAll(t, classifier,
+		"workload_mount_bindings.status = 'releasing'",
+	)
+}
+
+func TestExportCreateNotReadyClassifierRequiresOnlyReleasingBlockerWithAdmissionPredicates(t *testing.T) {
+	sql := exportCreateBlockedByReleasingWorkloadMountSQL()
+
+	assertSQLContainsInOrder(t, sql,
+		"active_namespace AS (",
+		"namespace_id = $1",
+		"status = 'active'",
+		"active_binding AS (",
+		"namespace_id = $1",
+		"webdav_enabled",
+		"active_repo AS (",
+		"namespace_id = $1",
+		"repo_id = $2",
+		"repo_kind = 'repo'",
+		"lifecycle_status = 'active'",
+		"active_volume AS (",
+		"webdav_export",
+		"held_lifecycle_fence AS (",
+		"fence_kind = 'lifecycle'",
+		"held_writer_fence AS (",
+		"fence_kind = 'writer_session'",
+		"release_visible_workload_mount_blocker AS (",
+		"workload_mount_bindings.namespace_id = $1",
+		"workload_mount_bindings.repo_id = active_repo.repo_id",
+		"workload_mount_bindings.status = 'releasing'",
+		"SELECT EXISTS (SELECT 1 FROM active_namespace)",
+		"EXISTS (SELECT 1 FROM active_binding)",
+		"EXISTS (SELECT 1 FROM active_repo)",
+		"EXISTS (SELECT 1 FROM active_volume)",
+		"NOT EXISTS (SELECT 1 FROM held_lifecycle_fence)",
+		"($3 = 'read_only' OR NOT EXISTS (SELECT 1 FROM held_writer_fence))",
+		"EXISTS (SELECT 1 FROM release_visible_workload_mount_blocker)",
+	)
+}
+
 func TestCreateOrReuseExportSQLOnlyCreatesSessionAndAuditForNewOperation(t *testing.T) {
 	sql := exportCreateOrReuseSQL()
 
@@ -196,6 +268,55 @@ func TestCreateOrReuseExportFallsBackToCommittedReplayWhenInsertRaceReturnsNoRow
 		"export_sessions.export_id = operations.export_id AND export_sessions.namespace_id = operations.namespace_id AND export_sessions.repo_id = operations.repo_id",
 		"operation_type = 'export_create'",
 		"false AS inserted",
+	)
+}
+
+func TestCreateOrReuseExportReturnsNotReadyWhenAdmissionAndReplayHaveNoRows(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	request := exportCreateRequestFixture(t, now)
+	exec := &exportSequentialQueryRowExecutor{
+		rows: []fakeRow{
+			{err: sql.ErrNoRows},
+			{err: sql.ErrNoRows},
+			{values: []any{true}},
+		},
+	}
+	st := &Store{exec: exec}
+
+	got, err := st.CreateOrReuseExport(context.Background(), request)
+	if !errors.Is(err, exportaccess.ErrExportNotReady) {
+		t.Fatalf("CreateOrReuseExport err = %v result = %#v, want ErrExportNotReady", err, got)
+	}
+	if exec.queryRowCalls != 3 {
+		t.Fatalf("query row calls = %d, want primary admission, committed replay fallback, and not-ready classifier", exec.queryRowCalls)
+	}
+	assertSQLContainsAll(t, exec.queries[0], "INSERT INTO operations", "release_visible_workload_mount_blocker", "INSERT INTO export_sessions")
+	assertSQLContainsAll(t, exec.queries[1], "FROM operations JOIN export_sessions", "operation_type = 'export_create'")
+	assertSQLContainsAll(t, exec.queries[2], "release_visible_workload_mount_blocker", "SELECT EXISTS")
+}
+
+func TestCreateOrReuseExportPreservesNoRowsWhenNoReleasingBlockerIsConfirmed(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	request := exportCreateRequestFixture(t, now)
+	exec := &exportSequentialQueryRowExecutor{
+		rows: []fakeRow{
+			{err: sql.ErrNoRows},
+			{err: sql.ErrNoRows},
+			{values: []any{false}},
+		},
+	}
+	st := &Store{exec: exec}
+
+	got, err := st.CreateOrReuseExport(context.Background(), request)
+	if !errors.Is(err, sql.ErrNoRows) || errors.Is(err, exportaccess.ErrExportNotReady) {
+		t.Fatalf("CreateOrReuseExport err = %v result = %#v, want original sql.ErrNoRows", err, got)
+	}
+	if exec.queryRowCalls != 3 {
+		t.Fatalf("query row calls = %d, want primary admission, committed replay fallback, and classifier", exec.queryRowCalls)
+	}
+	assertSQLContainsAll(t, exec.queries[2],
+		"EXISTS (SELECT 1 FROM active_namespace)",
+		"EXISTS (SELECT 1 FROM release_visible_workload_mount_blocker)",
 	)
 }
 

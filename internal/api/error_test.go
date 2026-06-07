@@ -40,6 +40,7 @@ func TestErrorCodesExposeStableSchemaEnumOrder(t *testing.T) {
 		CodeVolumeMismatchRequiresImport,
 		CodeExportExpired,
 		CodeExportRevoked,
+		CodeExportNotReady,
 		CodeMountBindingTerminal,
 		CodeRepoLifecycleInvalidState,
 		CodeRepoLifecycleFenceHeld,

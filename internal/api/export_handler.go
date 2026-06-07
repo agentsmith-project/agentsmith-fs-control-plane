@@ -608,6 +608,10 @@ func (handler exportLeafHandler) writeStoreError(w http.ResponseWriter, r *http.
 		writeOperationIntakeHTTPError(w, r, &OperationIntakeError{Code: CodeIdempotencyConflict, Status: http.StatusConflict, Retryable: false, Message: "idempotency key conflicts with a different request"})
 		return
 	}
+	if errors.Is(err, exportaccess.ErrExportNotReady) {
+		writeExportError(w, r, http.StatusConflict, CodeExportNotReady, "export target is not ready", true)
+		return
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		writeExportError(w, r, http.StatusNotFound, CodeOperationNotFound, "export was not found", false)
 		return

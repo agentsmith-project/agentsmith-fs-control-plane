@@ -28,6 +28,8 @@ const (
 	passwordVerifierSHA256 = "sha256"
 )
 
+var ErrExportNotReady = errors.New("export target is not ready")
+
 type Protocol string
 
 type Actor struct {

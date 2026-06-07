@@ -67,6 +67,9 @@ redacted `ExportSession` and never returns the WebDAV password again.
 - Credentials are short-lived and revocable. The default TTL is 3600 seconds,
   the minimum accepted TTL is 60 seconds, and the maximum TTL comes from
   namespace export policy (`max_session_seconds`).
+- Export create must fail with a retryable `EXPORT_NOT_READY` conflict rather
+  than issuing credentials while a same-repo workload mount release is still
+  waiting for its terminal export-visible boundary.
 - Expired or revoked credentials must fail future requests. Read-write exports remain active or uncertain writer sessions until the gateway confirms no future writes are possible and any active write-capable requests are closed, expired and reconciled, or terminal.
 - Any export, read-only or read-write, blocks repo archive/delete/purge lifecycle drain until the gateway confirms no future access is possible and active requests are closed, expired and reconciled, or terminal.
 - Exports are rooted at the repo payload root and never expose the JVS control root.
