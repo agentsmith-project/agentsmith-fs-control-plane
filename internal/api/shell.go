@@ -49,6 +49,7 @@ type InternalAPIShellConfig struct {
 	SavePointHistoryReader         SavePointHistoryReader
 	SavePointMutationGate          RepoJVSMutationGateStatusReader
 	SavePointSessionStateReader    SavePointSessionStateReader
+	SavePointCreateReady           bool
 	SavePointHistoryJVSRunner      JVSHistoryRunner
 	SavePointHistoryVolumeRoots    map[string]string
 	VolumeRoots                    map[string]string
@@ -234,6 +235,7 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 		HistoryReader:      savePointHistoryReader,
 		MutationGate:       savePointMutationGate,
 		SessionStateReader: savePointSessionStateReader,
+		CreateReady:        config.SavePointCreateReady,
 		IntakeStore:        config.OperationIntakeStore,
 		PrincipalResolver:  config.PrincipalResolver,
 		AllowedCallers: RouteAwareAllowedCallerPolicy{

@@ -57,6 +57,7 @@ type SavePointHandlerConfig struct {
 	HistoryReader      SavePointHistoryReader
 	MutationGate       RepoJVSMutationGateStatusReader
 	SessionStateReader SavePointSessionStateReader
+	CreateReady        bool
 	IntakeStore        OperationIntakeStore
 	IntakeLookupStore  OperationIdempotencyLookupStore
 	PrincipalResolver  PrincipalResolver
@@ -106,6 +107,7 @@ func SavePointHandler(config SavePointHandlerConfig) http.Handler {
 		historyReader:   config.HistoryReader,
 		mutationGate:    mutationGate,
 		sessionReader:   sessionReader,
+		createReady:     config.CreateReady,
 		intakeStore:     config.IntakeStore,
 		lookupStore:     lookupStore,
 		operationID:     config.OperationID,
@@ -145,6 +147,7 @@ type savePointLeafHandler struct {
 	historyReader   SavePointHistoryReader
 	mutationGate    RepoJVSMutationGateStatusReader
 	sessionReader   SavePointSessionStateReader
+	createReady     bool
 	intakeStore     OperationIntakeStore
 	lookupStore     OperationIdempotencyLookupStore
 	operationID     OperationIDGenerator
@@ -211,6 +214,9 @@ func (handler savePointLeafHandler) serveCreate(w http.ResponseWriter, r *http.R
 	}
 	canonical := savePointCreateCanonicalRequest{RepoID: repoID, Message: body.Message}
 	if handler.writeExistingIdempotentOperation(w, r, route, requestContext, namespaceID, canonical) {
+		return
+	}
+	if !handler.checkCreateReady(w, r) {
 		return
 	}
 	repo, namespace, binding, heldFences, ok := handler.loadMetadata(w, r, route, requestContext, namespaceID, repoID)
@@ -288,6 +294,17 @@ func (handler savePointLeafHandler) serveList(w http.ResponseWriter, r *http.Req
 		}
 	}
 	_ = writeJSON(w, http.StatusOK, SavePointListResponse{SavePoints: history.SavePoints})
+}
+
+func (handler savePointLeafHandler) checkCreateReady(w http.ResponseWriter, r *http.Request) bool {
+	if handler.createReady {
+		return true
+	}
+	code, message, retryable, details := fileLibraryBlockingOperationError(false)
+	details["execution_status"] = "pending"
+	envelope := NewErrorEnvelope(code, message, retryable, CorrelationIDFromRequest(r), nil, details)
+	_ = WriteErrorEnvelope(w, http.StatusConflict, envelope)
+	return false
 }
 
 func (handler savePointLeafHandler) checkHistoryReadGate(w http.ResponseWriter, r *http.Request, repoID string) bool {

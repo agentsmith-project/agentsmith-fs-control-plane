@@ -208,6 +208,7 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 		RepoFenceReader:                handle.Store,
 		SavePointMutationGate:          handle.Store,
 		SavePointHistoryReader:         savePointHistoryReader,
+		SavePointCreateReady:           savePointCreateReady(cfg),
 		SavePointHistoryVolumeRoots:    cfg.API.SavePointHistory.VolumeRoots,
 		VolumeRoots:                    cfg.API.VolumeRoots,
 		OperationInspectionReader:      handle.Store,
@@ -227,6 +228,31 @@ func NewRuntimeFromConfig(cfg config.Config, options Options) (*Runtime, error) 
 	})
 
 	return &Runtime{Handler: handler, close: handle.Close}, nil
+}
+
+func savePointCreateReady(cfg config.Config) bool {
+	history := cfg.API.SavePointHistory
+	recovery := cfg.Worker.OperationRecovery
+	savePoint := recovery.SavePoint
+	if !history.Enabled || !recovery.Enabled || !savePoint.Enabled {
+		return false
+	}
+	if history.JVSBinaryPath != savePoint.JVSBinaryPath ||
+		history.JVSBinarySHA256 != savePoint.JVSBinarySHA256 ||
+		history.JVSCWD != savePoint.JVSCWD ||
+		history.JVSDirectRestoreRequired != savePoint.JVSDirectRestoreRequired ||
+		history.JVSDirectRestoreSourceRef != savePoint.JVSDirectRestoreSourceRef {
+		return false
+	}
+	if len(history.VolumeRoots) == 0 || len(history.VolumeRoots) != len(savePoint.VolumeRoots) {
+		return false
+	}
+	for volumeID, root := range history.VolumeRoots {
+		if savePoint.VolumeRoots[volumeID] != root {
+			return false
+		}
+	}
+	return true
 }
 
 func apiAdmissionDisabledCapabilities(cfg config.Config) map[capability.ID]bool {

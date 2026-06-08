@@ -27,6 +27,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/jvsrunner"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workloadmount"
 )
 
@@ -327,6 +328,96 @@ func TestInternalRuntimeJVSReadyWiresSavePointHistoryReaderWithoutHiddenAPIGate(
 	}
 	if body := rec.Body.String(); !strings.Contains(body, `"save_point_id":"sp_001"`) || strings.Contains(body, string(api.CodeInternalError)) {
 		t.Fatalf("body = %s, want save point history without internal error", body)
+	}
+}
+
+func TestInternalRuntimeDeniesSavePointCreateWhenWorkerRecoveryNotDeclared(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	binding := testBinding()
+	binding.AllowedCallers = []resources.AllowedCaller{{
+		CallerService: "svc_api",
+		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
+	}}
+	store := &fakeRuntimeStore{
+		binding:   binding,
+		namespace: activeRuntimeNamespace(now),
+		repo:      activeRuntimeRepo(now),
+		volume:    activeRuntimeVolume(now),
+	}
+	source := readyTestRuntimeSource()
+
+	runtime, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+		},
+		SavePointHistoryRunnerFactory: testSavePointHistoryRunnerFactory(),
+		OperationID:                   func() string { return "op_savepoint_runtime" },
+		Clock:                         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, internalPOST("/internal/v1/repos/repo_alpha/save-points", "svc_api", "token-api", `{"message":"checkpoint"}`))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeRuntimeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != api.CodeFileLibraryOperationPending || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want retryable %s", env.Error, api.CodeFileLibraryOperationPending)
+	}
+	if store.operationCreateCalls != 0 {
+		t.Fatalf("operation create calls = %d, want denied before intake", store.operationCreateCalls)
+	}
+}
+
+func TestInternalRuntimeAcceptsSavePointCreateWhenWorkerRecoveryMatchesHistory(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	binding := testBinding()
+	binding.AllowedCallers = []resources.AllowedCaller{{
+		CallerService: "svc_api",
+		Roles:         []resources.CallerRole{resources.CallerRoleRepoAdmin},
+	}}
+	store := &fakeRuntimeStore{
+		binding:                 binding,
+		namespace:               activeRuntimeNamespace(now),
+		repo:                    activeRuntimeRepo(now),
+		volume:                  activeRuntimeVolume(now),
+		operationCreateSucceeds: true,
+	}
+	source := readyTestRuntimeSource()
+	source["AFSCP_POSTGRES_DSN"] = "postgres://api:secret@db/afscp"
+	source["AFSCP_WORKER_OPERATION_RECOVERY_ENABLED"] = "true"
+	source["AFSCP_WORKER_OWNER"] = "worker-a"
+	source["AFSCP_SAVE_POINT_RECOVERY_ENABLED"] = "true"
+	source["AFSCP_VOLUME_ROOTS"] = "vol_main=/srv/afscp/volumes/vol_main"
+
+	runtime, err := NewRuntime(Options{
+		Source: source,
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store, Close: store.Close, Ping: func(context.Context) error { return nil }}, nil
+		},
+		SavePointHistoryRunnerFactory: testSavePointHistoryRunnerFactory(),
+		OperationID:                   func() string { return "op_savepoint_runtime" },
+		Clock:                         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer closeRuntime(t, runtime)
+
+	rec := httptest.NewRecorder()
+	runtime.Handler.ServeHTTP(rec, internalPOST("/internal/v1/repos/repo_alpha/save-points", "svc_api", "token-api", `{"message":"checkpoint"}`))
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+	}
+	if store.operationCreateCalls != 1 || store.operationSpec.Scope.OperationType != operations.OperationSavePointCreate || store.operationSpec.RepoID != "repo_alpha" {
+		t.Fatalf("operation create calls/spec = %d/%#v, want save point intake", store.operationCreateCalls, store.operationSpec)
 	}
 }
 
@@ -1875,6 +1966,31 @@ func testBinding() resources.NamespaceVolumeBinding {
 	}
 }
 
+func activeRuntimeNamespace(now time.Time) resources.Namespace {
+	return resources.Namespace{
+		ID:        "ns_alpha",
+		Status:    resources.NamespaceStatusActive,
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now,
+	}
+}
+
+func activeRuntimeRepo(now time.Time) resources.Repo {
+	return resources.Repo{
+		ID:                  "repo_alpha",
+		NamespaceID:         "ns_alpha",
+		VolumeID:            "vol_main",
+		JVSRepoID:           "jvs_repo_alpha",
+		Kind:                resources.RepoKindRepo,
+		Status:              resources.RepoStatusActive,
+		ControlVolumeSubdir: "afscp/namespaces/ns_alpha/repos/repo_alpha/control",
+		PayloadVolumeSubdir: "afscp/namespaces/ns_alpha/repos/repo_alpha/payload",
+		Lifecycle:           resources.RepoLifecycle{Status: resources.RepoStatusActive},
+		CreatedAt:           now.Add(-time.Hour),
+		UpdatedAt:           now,
+	}
+}
+
 func activeRuntimeVolume(now time.Time) resources.Volume {
 	return resources.Volume{
 		ID:             "vol_main",
@@ -1897,17 +2013,19 @@ func runtimeVolumeHealthHasFinding(response api.VolumeHealthResponse, code strin
 }
 
 type fakeRuntimeStore struct {
-	binding              resources.NamespaceVolumeBinding
-	namespace            resources.Namespace
-	repo                 resources.Repo
-	volume               resources.Volume
-	exportCreate         exportaccess.CreateRequest
-	exportCreateCalls    int
-	repoInNamespaceCalls int
-	operationCreateCalls int
-	templateCreateCalls  int
-	templateCloneCalls   int
-	closed               bool
+	binding                 resources.NamespaceVolumeBinding
+	namespace               resources.Namespace
+	repo                    resources.Repo
+	volume                  resources.Volume
+	exportCreate            exportaccess.CreateRequest
+	exportCreateCalls       int
+	repoInNamespaceCalls    int
+	operationCreateCalls    int
+	operationCreateSucceeds bool
+	operationSpec           operations.QueuedOperationSpec
+	templateCreateCalls     int
+	templateCloneCalls      int
+	closed                  bool
 }
 
 func (store *fakeRuntimeStore) Close() error {
@@ -1976,6 +2094,14 @@ func (*fakeRuntimeStore) GetExportSession(context.Context, string) (exportaccess
 	return exportaccess.Session{}, sql.ErrNoRows
 }
 
+func (*fakeRuntimeStore) ListExportSessionsByRepo(context.Context, string) ([]sessionstate.ExportSession, error) {
+	return nil, nil
+}
+
+func (*fakeRuntimeStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
+	return nil, nil
+}
+
 func (*fakeRuntimeStore) RevokeExport(context.Context, exportaccess.RevokeRequest) (exportaccess.RevokeResult, error) {
 	return exportaccess.RevokeResult{}, errors.New("not implemented")
 }
@@ -2000,8 +2126,16 @@ func (*fakeRuntimeStore) GetOperationByIdempotencyScope(context.Context, operati
 	return operations.OperationRecord{}, sql.ErrNoRows
 }
 
-func (store *fakeRuntimeStore) CreateOrReuseOperation(context.Context, operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
+func (store *fakeRuntimeStore) CreateOrReuseOperation(_ context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {
 	store.operationCreateCalls++
+	store.operationSpec = spec
+	if store.operationCreateSucceeds {
+		record, err := operations.NewQueuedOperationRecord(spec)
+		if err != nil {
+			return operations.IdempotencyResolution{}, err
+		}
+		return operations.IdempotencyResolution{Operation: record}, nil
+	}
 	return operations.IdempotencyResolution{}, errors.New("not implemented")
 }
 

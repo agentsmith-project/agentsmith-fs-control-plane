@@ -38,6 +38,41 @@ func TestSavePointCreateValidatesMessageAndCreatesQueuedOperation(t *testing.T) 
 	assertSavePointResponseDoesNotLeak(t, rec.Body.String())
 }
 
+func TestSavePointCreateRequiresExecutionCapabilityBeforeIntake(t *testing.T) {
+	intake := &fakeOperationIntakeStore{}
+	handler := SavePointHandler(SavePointHandlerConfig{
+		RepoReader:         &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}},
+		NamespaceReader:    &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
+		BindingReader:      &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
+		FenceReader:        &fakeRepoFenceReader{},
+		MutationGate:       &fakeRepoJVSMutationGateReader{},
+		SessionStateReader: &fakeSavePointSessionStateReader{},
+		IntakeStore:        intake,
+		PrincipalResolver:  namespaceBindingPrincipalResolver(),
+		AllowedCallers:     namespaceBindingAllowedPolicy(auth.RoleRepoAdmin),
+		OperationID:        func() string { return "op_savepoint" },
+		Now:                func() time.Time { return fixedNamespaceNow() },
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, savePointRequest(http.MethodPost, "/internal/v1/repos/repo_123/save-points", `{"message":"checkpoint"}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeFileLibraryOperationPending || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want retryable %s", env.Error, CodeFileLibraryOperationPending)
+	}
+	if got, ok := env.Error.Details["execution_status"].(string); !ok || got != "pending" {
+		t.Fatalf("execution_status = %#v, want pending", env.Error.Details["execution_status"])
+	}
+	if intake.calls != 0 {
+		t.Fatalf("intake calls = %d, want denied before operation intake", intake.calls)
+	}
+	assertSavePointResponseDoesNotLeak(t, rec.Body.String())
+}
+
 func TestSavePointCreatePreservesNaturalLanguageSensitiveWords(t *testing.T) {
 	for _, message := range []string{"fix secret handling", "rotate token docs", "update password policy"} {
 		t.Run(message, func(t *testing.T) {
@@ -276,6 +311,7 @@ func TestSavePointCreateRejectsDisabledNamespaceBeforeIntakeAndAudits(t *testing
 		BindingReader:     &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
 		FenceReader:       &fakeRepoFenceReader{},
 		MutationGate:      &fakeRepoJVSMutationGateReader{},
+		CreateReady:       true,
 		IntakeStore:       intake,
 		PrincipalResolver: namespaceBindingPrincipalResolver(),
 		AllowedCallers:    namespaceBindingAllowedPolicy(auth.RoleRepoAdmin),
@@ -568,6 +604,7 @@ func savePointTestHandlerWithSessions(intake *fakeOperationIntakeStore, history 
 		HistoryReader:      history,
 		MutationGate:       gate,
 		SessionStateReader: sessionReader,
+		CreateReady:        true,
 		IntakeStore:        intake,
 		PrincipalResolver:  namespaceBindingPrincipalResolver(),
 		AllowedCallers:     namespaceBindingAllowedPolicy(auth.RoleRepoAdmin),
