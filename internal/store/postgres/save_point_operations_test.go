@@ -136,6 +136,45 @@ func TestCommitSavePointCreateFailedAllowsValidateOrPreparedStoredPhase(t *testi
 	}
 }
 
+func TestMarkSavePointCreateWriterDrainPendingExpiresLeaseWithoutAudit(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := savePointOperationRecord(now, operations.OperationStateRunning, operations.OperationPhaseSavePointCreateValidate)
+	record.Error = &operations.OperationError{Code: "SAVE_POINT_WRITER_DRAIN_PENDING", Message: "save point writer drain is pending", Retryable: true, CorrelationID: record.CorrelationID, OperationID: record.ID}
+	record.VerificationResult = map[string]any{"writer_drain_status": "pending"}
+	returned := record
+	returned.LeaseExpiresAt = &now
+	values := operationRowValues(returned)
+	values[25] = mustMarshalJSONForTest(returned.VerificationResult)
+	values[27] = mustMarshalJSONForTest(returned.Error)
+	exec := &fakeExecutor{row: fakeRow{values: values}}
+	st := &Store{exec: exec}
+
+	got, err := st.MarkSavePointCreateWriterDrainPendingWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now)
+	if err != nil {
+		t.Fatalf("MarkSavePointCreateWriterDrainPendingWithLease: %v", err)
+	}
+
+	if got.State != operations.OperationStateRunning || got.Error == nil || got.Error.Code != "SAVE_POINT_WRITER_DRAIN_PENDING" || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(now) {
+		t.Fatalf("operation = %#v, want running writer-drain pending with expired lease", got)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"WITH eligible_operation AS",
+		"operation_state = 'running'",
+		"operation_type = 'save_point_create'",
+		"phase = 'validate_save_point_create'",
+		"FOR UPDATE",
+		"UPDATE operations SET",
+		"operation_state = $1",
+		"lease_owner = operations.lease_owner",
+		"lease_expires_at = $11",
+		"finished_at = NULL",
+		"RETURNING",
+	)
+	if strings.Contains(exec.query, "INSERT INTO audit_outbox") {
+		t.Fatalf("writer drain pending update must not append terminal audit: %s", exec.query)
+	}
+}
+
 func TestCommitSavePointCreateSucceededRejectsWrongStateBeforeSQL(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	record := savePointOperationRecord(now, operations.OperationStateRunning, operations.OperationPhaseSavePointCreateCommitted)

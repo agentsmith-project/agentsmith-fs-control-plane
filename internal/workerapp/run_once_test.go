@@ -1362,6 +1362,115 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	}
 }
 
+func TestRunOnceSavePointCreateWriterDrainPendingStaysRunning(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	store.mounts = []sessionstate.WorkloadMountBinding{{
+		ID:             "wmb_writer",
+		NamespaceID:    record.NamespaceID,
+		RepoID:         record.RepoID,
+		Status:         sessionstate.MountStatusReleasing,
+		ReadOnly:       false,
+		LeaseExpiresAt: now.Add(time.Hour),
+		CreatedAt:      now.Add(-time.Minute),
+		UpdatedAt:      now,
+	}}
+	jvs := &workerAppFakeJVSRunner{}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppSavePointConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_savepoint" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Reclaimed != 0 || summary.Manual != 0 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want claimed pending writer drain", summary)
+	}
+	if len(jvs.calls) != 0 {
+		t.Fatalf("jvs calls = %#v, want writer drain gate before DirectSave", jvs.calls)
+	}
+	got := store.records[record.ID]
+	if got.State != operations.OperationStateRunning || got.Phase != operations.OperationPhaseSavePointCreateValidate || got.Error == nil || got.Error.Code != "SAVE_POINT_WRITER_DRAIN_PENDING" || !got.Error.Retryable {
+		t.Fatalf("operation = %#v, want running retryable writer drain pending", got)
+	}
+	if got.FinishedAt != nil || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(now) {
+		t.Fatalf("operation lease/finish = %v/%v, want expired running lease and no finish", got.LeaseExpiresAt, got.FinishedAt)
+	}
+	if len(store.auditEvents) != 0 {
+		t.Fatalf("audit events = %#v, want no terminal audit while pending", store.auditEvents)
+	}
+}
+
+func TestRunOnceSavePointCreateReclaimsWriterDrainPendingAfterDrain(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
+	record.State = operations.OperationStateRunning
+	record.Attempt = 1
+	record.LeaseOwner = "worker-old"
+	expired := now.Add(-time.Second)
+	record.LeaseExpiresAt = &expired
+	started := now.Add(-time.Minute)
+	record.StartedAt = &started
+	record.Error = &operations.OperationError{Code: "SAVE_POINT_WRITER_DRAIN_PENDING", Message: "save point writer drain is pending", Retryable: true, CorrelationID: record.CorrelationID, OperationID: record.ID}
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	jvs := &workerAppFakeJVSRunner{
+		directSaveSummary: jvsrunner.DirectSaveSummary{
+			SavePointID:   "sp_after",
+			HistoryHeadID: "sp_after",
+			CreatedAt:     "2026-05-05T12:00:00Z",
+		},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppSavePointConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_savepoint" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Reclaimed != 1 || summary.Claimed != 0 || summary.Manual != 0 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want reclaimed save_point_create", summary)
+	}
+	if strings.Join(jvs.calls, ",") != "direct_save,direct_list" {
+		t.Fatalf("jvs calls = %#v, want direct_save,direct_list", jvs.calls)
+	}
+	got := store.records[record.ID]
+	if got.State != operations.OperationStateSucceeded || got.Phase != operations.OperationPhaseSavePointCreateCommitted {
+		t.Fatalf("operation = %#v, want succeeded save_point_create_committed", got)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_committed" {
+		t.Fatalf("audit events = %#v, want committed save point audit", store.auditEvents)
+	}
+}
+
 func TestRunOnceSavePointCreateHeartbeatFailureDoesNotRunDirectSave(t *testing.T) {
 	now := workerAppNow()
 	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
@@ -3962,6 +4071,19 @@ func (store *fakeWorkerAppStore) CommitSavePointCreateFailedWithLease(_ context.
 	store.records[operation.ID] = operation
 	store.operation = operation
 	store.auditEvents = append(store.auditEvents, event)
+	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) MarkSavePointCreateWriterDrainPendingWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	operation := record.Record()
+	existing, ok := store.records[operation.ID]
+	if !ok || existing.State != operations.OperationStateRunning || existing.LeaseOwner != owner || existing.LeaseExpiresAt == nil || !existing.LeaseExpiresAt.After(now) {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	operation.LeaseOwner = existing.LeaseOwner
+	operation.LeaseExpiresAt = &now
+	store.records[operation.ID] = operation
+	store.operation = operation
 	return operation, nil
 }
 

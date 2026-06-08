@@ -39,6 +39,11 @@ type SavePointJVSRunner interface {
 	DirectList(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error)
 }
 
+const (
+	savePointWriterDrainPendingCode     = "SAVE_POINT_WRITER_DRAIN_PENDING"
+	savePointWriterDrainUnavailableCode = "SAVE_POINT_WRITER_DRAIN_UNAVAILABLE"
+)
+
 type SavePointExecutor struct {
 	store        savePointCreateStore
 	jvs          SavePointJVSRunner
@@ -111,7 +116,7 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	if record.Phase != operations.OperationPhaseSavePointCreateValidate || plan.Action != recovery.RecoveryActionClaimable {
+	if record.Phase != operations.OperationPhaseSavePointCreateValidate || !savePointCreateCanRunPreSave(record, plan) {
 		return executor.commitSavePointIntervention(ctx, record, "SAVE_POINT_RECOVERY_UNCERTAIN", "save point recovery requires operator intervention", map[string]any{
 			"recovery_action": string(plan.Action),
 			"phase":           record.Phase,
@@ -169,11 +174,11 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 func (executor *SavePointExecutor) checkWriterDrainGate(ctx context.Context, record operations.OperationRecord, now time.Time) (bool, error) {
 	exports, err := executor.store.ListExportSessionsByRepo(ctx, record.RepoID)
 	if err != nil {
-		return false, executor.commitSavePointFailedWithDetails(ctx, record, "SAVE_POINT_WRITER_DRAIN_UNAVAILABLE", "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
+		return false, executor.commitSavePointFailedWithDetails(ctx, record, savePointWriterDrainUnavailableCode, "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
 	}
 	mounts, err := executor.store.ListWorkloadMountBindingsByRepo(ctx, record.RepoID)
 	if err != nil {
-		return false, executor.commitSavePointFailedWithDetails(ctx, record, "SAVE_POINT_WRITER_DRAIN_UNAVAILABLE", "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
+		return false, executor.commitSavePointFailedWithDetails(ctx, record, savePointWriterDrainUnavailableCode, "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
 	}
 	decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{
 		NamespaceID:    record.NamespaceID,
@@ -186,9 +191,9 @@ func (executor *SavePointExecutor) checkWriterDrainGate(ctx context.Context, rec
 		return true, nil
 	}
 	if decision.ErrorFamily == sessionstate.ErrorFamilyInternalError {
-		return false, executor.commitSavePointFailedWithDetails(ctx, record, "SAVE_POINT_WRITER_DRAIN_UNAVAILABLE", "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
+		return false, executor.commitSavePointFailedWithDetails(ctx, record, savePointWriterDrainUnavailableCode, "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
 	}
-	return false, executor.commitSavePointFailedWithDetails(ctx, record, "SAVE_POINT_WRITER_DRAIN_PENDING", "save point writer drain is pending", true, savePointWriterDrainPendingDetails(decision))
+	return false, executor.markSavePointWriterDrainPending(ctx, record, now, savePointWriterDrainPendingDetails(decision))
 }
 
 func (executor *SavePointExecutor) validateMetadata(ctx context.Context, record operations.OperationRecord, repo resources.Repo) error {
@@ -299,6 +304,28 @@ func (executor *SavePointExecutor) commitSavePointFailedWithDetails(ctx context.
 	return nil
 }
 
+func (executor *SavePointExecutor) markSavePointWriterDrainPending(ctx context.Context, record operations.OperationRecord, now time.Time, details map[string]any) error {
+	operation := record
+	operation.State = operations.OperationStateRunning
+	operation.Phase = operations.OperationPhaseSavePointCreateValidate
+	operation.ExternalResourceIDs = map[string]string{}
+	operation.JVSJSONOutput = nil
+	operation.VerificationResult = details
+	operation.FinishedAt = nil
+	operation.Error = &operations.OperationError{
+		Code:          savePointWriterDrainPendingCode,
+		Message:       "save point writer drain is pending",
+		Retryable:     true,
+		CorrelationID: record.CorrelationID,
+		OperationID:   record.ID,
+		Details:       details,
+	}
+	if _, err := executor.store.MarkSavePointCreateWriterDrainPendingWithLease(ctx, operation.SanitizedForPersistence(), executor.owner, now); err != nil {
+		return errors.New("save point writer drain pending update failed")
+	}
+	return nil
+}
+
 func (executor *SavePointExecutor) commitSavePointIntervention(ctx context.Context, record operations.OperationRecord, code, message string, details map[string]any) error {
 	now, err := executor.requireCurrentTime()
 	if err != nil {
@@ -333,8 +360,9 @@ func savePointFailedOperation(record operations.OperationRecord, now time.Time, 
 
 func savePointWriterDrainPendingDetails(decision sessionstate.Decision) map[string]any {
 	details := map[string]any{
-		"writer_drain_status": "pending",
-		"writer_drain_reason": decision.ErrorFamily.String(),
+		"writer_drain_status":      "pending",
+		"writer_drain_reason":      decision.ErrorFamily.String(),
+		"writer_gate_error_family": decision.ErrorFamily.String(),
 	}
 	if strings.TrimSpace(decision.BlockingKind) != "" {
 		details["blocking_session_kind"] = decision.BlockingKind
@@ -490,6 +518,27 @@ func validateSavePointLeasedRecord(record operations.OperationRecord, owner stri
 		return errors.New("invalid save point recovery record")
 	}
 	return nil
+}
+
+func savePointCreateCanRunPreSave(record operations.OperationRecord, plan recovery.RecoveryPlan) bool {
+	switch plan.Action {
+	case recovery.RecoveryActionClaimable:
+		return true
+	case recovery.RecoveryActionReclaim:
+		return savePointCreateWriterDrainPending(record)
+	default:
+		return false
+	}
+}
+
+func savePointCreateWriterDrainPending(record operations.OperationRecord) bool {
+	if record.Error == nil || record.Error.Code != savePointWriterDrainPendingCode || !record.Error.Retryable {
+		return false
+	}
+	if record.Phase != operations.OperationPhaseSavePointCreateValidate || len(record.ExternalResourceIDs) != 0 || record.JVSJSONOutput != nil {
+		return false
+	}
+	return true
 }
 
 func savePointMessage(record operations.OperationRecord) (string, error) {

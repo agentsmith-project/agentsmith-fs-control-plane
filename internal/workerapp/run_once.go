@@ -1120,6 +1120,10 @@ func (scoped operationRecoveryStore) CommitSavePointCreateFailedWithLease(ctx co
 	return scoped.store.CommitSavePointCreateFailedWithLease(ctx, record, owner, now, event)
 }
 
+func (scoped operationRecoveryStore) MarkSavePointCreateWriterDrainPendingWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	return scoped.store.MarkSavePointCreateWriterDrainPendingWithLease(ctx, record, owner, now)
+}
+
 func (scoped operationRecoveryStore) RecordSavePointCreateRecoveryCapability(ctx context.Context, owner string, observedAt, expiresAt time.Time) error {
 	return scoped.store.RecordSavePointCreateRecoveryCapability(ctx, owner, observedAt, expiresAt)
 }

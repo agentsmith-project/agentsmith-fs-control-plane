@@ -33,6 +33,27 @@ func (store *Store) CommitSavePointCreateFailedWithLease(ctx context.Context, sa
 	return store.commitSavePointCreateTerminalWithLease(ctx, record, owner, now, event, savePointCreateFailureCommitWithLeaseSQL())
 }
 
+func (store *Store) MarkSavePointCreateWriterDrainPendingWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	record := sanitized.Record()
+	if err := validateSavePointCreateWriterDrainPendingRecord(record); err != nil {
+		return operations.OperationRecord{}, err
+	}
+	operationArgs, err := operationLeaseFencedUpdateArgs(record, owner, now)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	args := append(operationArgs, savePointCreateStoredPredicateArgs(record)...)
+	row := store.exec.QueryRowContext(ctx, savePointCreateWriterDrainPendingWithLeaseSQL(), args...)
+	got, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("save point create writer drain pending update", record.ID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return got, nil
+}
+
 func (store *Store) commitSavePointCreateTerminalWithLease(ctx context.Context, record operations.OperationRecord, owner string, now time.Time, event audit.Event, query string) (operations.OperationRecord, error) {
 	operationArgs, err := operationLeaseFencedUpdateArgs(record, owner, now)
 	if err != nil {
@@ -95,6 +116,25 @@ func validateSavePointCreateFailureRecord(record operations.OperationRecord) err
 	return validateSavePointCreateRecordResource(record, true)
 }
 
+func validateSavePointCreateWriterDrainPendingRecord(record operations.OperationRecord) error {
+	if record.Type != operations.OperationSavePointCreate {
+		return operationLeaseInvalidRequest("operation_type", "operation record must be save_point_create")
+	}
+	if record.State != operations.OperationStateRunning {
+		return operationLeaseInvalidRequest("operation_state", "save point writer drain pending update requires running operation")
+	}
+	if record.Phase != operations.OperationPhaseSavePointCreateValidate {
+		return operationLeaseInvalidRequest("phase", "save point writer drain pending update must stay in validate phase")
+	}
+	if record.FinishedAt != nil {
+		return operationLeaseInvalidRequest("finished_at", "save point writer drain pending update must not finish operation")
+	}
+	if record.Error == nil || record.Error.Code != "SAVE_POINT_WRITER_DRAIN_PENDING" || !record.Error.Retryable {
+		return operationLeaseInvalidRequest("error", "save point writer drain pending update requires retryable writer drain error")
+	}
+	return validateSavePointCreateRecordResource(record, true)
+}
+
 func validateSavePointCreateRecordResource(record operations.OperationRecord, requireError bool) error {
 	if strings.TrimSpace(record.NamespaceID) == "" || strings.TrimSpace(record.RepoID) == "" || record.Resource.Type != "repo" || record.Resource.ID != record.RepoID {
 		return operationLeaseInvalidRequest("resource", "save point create requires target repo resource")
@@ -151,6 +191,31 @@ func savePointCreateSuccessCommitWithLeaseSQL() string {
 
 func savePointCreateFailureCommitWithLeaseSQL() string {
 	return savePointCreateTerminalCommitWithLeaseSQL("phase IN ('validate_save_point_create','save_point_create_prepared')")
+}
+
+func savePointCreateWriterDrainPendingWithLeaseSQL() string {
+	return "WITH eligible_operation AS (" +
+		"SELECT operation_id FROM operations WHERE operation_id = $12 AND operation_state = 'running' AND lease_owner = $13 AND lease_expires_at IS NOT NULL AND lease_expires_at > $11 " +
+		"AND operation_type = 'save_point_create' AND phase = 'validate_save_point_create' " +
+		"AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
+		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 FOR UPDATE" +
+		"), updated_operation AS (" +
+		"UPDATE operations SET " +
+		"operation_state = $1, " +
+		"phase = $2, " +
+		"lease_owner = operations.lease_owner, " +
+		"lease_expires_at = $11, " +
+		"external_resource_ids = $3, " +
+		"input_summary = $4, " +
+		"jvs_json_output = $5, " +
+		"verification_result = $6, " +
+		"compensation_status = $7, " +
+		"error_json = $8, " +
+		"started_at = COALESCE(operations.started_at, $9, $11), " +
+		"finished_at = NULL, " +
+		"updated_at = $11 " +
+		"FROM eligible_operation WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
 func savePointCreateTerminalCommitWithLeaseSQL(storedPhasePredicate string) string {

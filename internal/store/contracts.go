@@ -310,6 +310,7 @@ type RepoPurgeOperationRecoveryStore interface {
 type SavePointCreateOperationCommitStore interface {
 	CommitSavePointCreateSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
 	CommitSavePointCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
+	MarkSavePointCreateWriterDrainPendingWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error)
 }
 
 type SavePointCreateOperationMetadataReader interface {

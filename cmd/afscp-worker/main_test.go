@@ -648,6 +648,10 @@ func (store *cmdWorkerAppStore) CommitSavePointCreateFailedWithLease(context.Con
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
+func (store *cmdWorkerAppStore) MarkSavePointCreateWriterDrainPendingWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected mark")
+}
+
 func (store *cmdWorkerAppStore) RecordSavePointCreateRecoveryCapability(context.Context, string, time.Time, time.Time) error {
 	return nil
 }
