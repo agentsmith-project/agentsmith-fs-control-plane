@@ -15,6 +15,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
 )
 
@@ -115,7 +116,7 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 			"phase":           record.Phase,
 		})
 	}
-	_, err = executor.requireCurrentTime()
+	now, err := executor.requireCurrentTime()
 	if err != nil {
 		return err
 	}
@@ -126,6 +127,13 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	}
 	if err := executor.validateMetadata(ctx, record, repo); err != nil {
 		return executor.commitSavePointFailed(ctx, record, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed")
+	}
+	writerDrainAllowed, err := executor.checkWriterDrainGate(ctx, record, now)
+	if err != nil {
+		return err
+	}
+	if !writerDrainAllowed {
+		return nil
 	}
 	target, err := executor.directTarget(repo)
 	if err != nil {
@@ -144,6 +152,31 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 		return executor.commitSavePointIntervention(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save failed", details)
 	}
 	return executor.commitSavePointSuccess(ctx, record, savePointFromDirectSaveSummary(saved, message), message, false, false, false, saved.CloneEvidence)
+}
+
+func (executor *SavePointExecutor) checkWriterDrainGate(ctx context.Context, record operations.OperationRecord, now time.Time) (bool, error) {
+	exports, err := executor.store.ListExportSessionsByRepo(ctx, record.RepoID)
+	if err != nil {
+		return false, executor.commitSavePointFailedWithDetails(ctx, record, "SAVE_POINT_WRITER_DRAIN_UNAVAILABLE", "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
+	}
+	mounts, err := executor.store.ListWorkloadMountBindingsByRepo(ctx, record.RepoID)
+	if err != nil {
+		return false, executor.commitSavePointFailedWithDetails(ctx, record, "SAVE_POINT_WRITER_DRAIN_UNAVAILABLE", "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
+	}
+	decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{
+		NamespaceID:    record.NamespaceID,
+		RepoID:         record.RepoID,
+		Now:            now,
+		ExportSessions: exports,
+		Mounts:         mounts,
+	})
+	if decision.Allowed {
+		return true, nil
+	}
+	if decision.ErrorFamily == sessionstate.ErrorFamilyInternalError {
+		return false, executor.commitSavePointFailedWithDetails(ctx, record, "SAVE_POINT_WRITER_DRAIN_UNAVAILABLE", "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
+	}
+	return false, executor.commitSavePointFailedWithDetails(ctx, record, "SAVE_POINT_WRITER_DRAIN_PENDING", "save point writer drain is pending", true, savePointWriterDrainPendingDetails(decision))
 }
 
 func (executor *SavePointExecutor) validateMetadata(ctx context.Context, record operations.OperationRecord, repo resources.Repo) error {
@@ -278,6 +311,21 @@ func savePointFailedOperation(record operations.OperationRecord, now time.Time, 
 	operation.Error = &operations.OperationError{Code: code, Message: message, Retryable: retryable, CorrelationID: record.CorrelationID, OperationID: record.ID, Details: map[string]any{"repo_id": record.RepoID}}
 	operation.FinishedAt = &now
 	return operation
+}
+
+func savePointWriterDrainPendingDetails(decision sessionstate.Decision) map[string]any {
+	details := map[string]any{
+		"writer_drain_status": "pending",
+		"writer_drain_reason": decision.ErrorFamily.String(),
+	}
+	if strings.TrimSpace(decision.BlockingKind) != "" {
+		details["blocking_session_kind"] = decision.BlockingKind
+	}
+	return details
+}
+
+func savePointWriterDrainUnavailableDetails() map[string]any {
+	return map[string]any{"writer_drain_status": "unknown"}
 }
 
 func isJVSRepoBusyError(err error) bool {

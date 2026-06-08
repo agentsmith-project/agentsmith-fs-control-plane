@@ -16,10 +16,16 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
 type SavePointHistoryReader interface {
 	ListSavePoints(ctx context.Context, namespaceID, repoID string) (SavePointHistory, error)
+}
+
+type SavePointSessionStateReader interface {
+	ListExportSessionsByRepo(ctx context.Context, repoID string) ([]sessionstate.ExportSession, error)
+	ListWorkloadMountBindingsByRepo(ctx context.Context, repoID string) ([]sessionstate.WorkloadMountBinding, error)
 }
 
 type RepoJVSMutationGateStatus = operations.RepoJVSMutationGateStatus
@@ -44,19 +50,20 @@ type SavePointListResponse struct {
 }
 
 type SavePointHandlerConfig struct {
-	RepoReader        RepoReader
-	NamespaceReader   NamespaceReader
-	BindingReader     NamespaceVolumeBindingReader
-	FenceReader       RepoFenceReader
-	HistoryReader     SavePointHistoryReader
-	MutationGate      RepoJVSMutationGateStatusReader
-	IntakeStore       OperationIntakeStore
-	IntakeLookupStore OperationIdempotencyLookupStore
-	PrincipalResolver PrincipalResolver
-	AllowedCallers    AllowedCallerPolicy
-	OperationID       OperationIDGenerator
-	Now               func() time.Time
-	AuditSink         audit.Sink
+	RepoReader         RepoReader
+	NamespaceReader    NamespaceReader
+	BindingReader      NamespaceVolumeBindingReader
+	FenceReader        RepoFenceReader
+	HistoryReader      SavePointHistoryReader
+	MutationGate       RepoJVSMutationGateStatusReader
+	SessionStateReader SavePointSessionStateReader
+	IntakeStore        OperationIntakeStore
+	IntakeLookupStore  OperationIdempotencyLookupStore
+	PrincipalResolver  PrincipalResolver
+	AllowedCallers     AllowedCallerPolicy
+	OperationID        OperationIDGenerator
+	Now                func() time.Time
+	AuditSink          audit.Sink
 }
 
 type savePointCreateRequestDTO struct {
@@ -83,6 +90,12 @@ func SavePointHandler(config SavePointHandlerConfig) http.Handler {
 			mutationGate = typed
 		}
 	}
+	sessionReader := config.SessionStateReader
+	if sessionReader == nil {
+		if typed, ok := config.IntakeStore.(SavePointSessionStateReader); ok {
+			sessionReader = typed
+		}
+	}
 	leaf := savePointLeafHandler{
 		createRoute:     createRoute,
 		listRoute:       listRoute,
@@ -92,6 +105,7 @@ func SavePointHandler(config SavePointHandlerConfig) http.Handler {
 		fenceReader:     config.FenceReader,
 		historyReader:   config.HistoryReader,
 		mutationGate:    mutationGate,
+		sessionReader:   sessionReader,
 		intakeStore:     config.IntakeStore,
 		lookupStore:     lookupStore,
 		operationID:     config.OperationID,
@@ -130,6 +144,7 @@ type savePointLeafHandler struct {
 	fenceReader     RepoFenceReader
 	historyReader   SavePointHistoryReader
 	mutationGate    RepoJVSMutationGateStatusReader
+	sessionReader   SavePointSessionStateReader
 	intakeStore     OperationIntakeStore
 	lookupStore     OperationIdempotencyLookupStore
 	operationID     OperationIDGenerator
@@ -211,6 +226,9 @@ func (handler savePointLeafHandler) serveCreate(w http.ResponseWriter, r *http.R
 	if handler.now != nil {
 		now = handler.now()
 	}
+	if !handler.checkWriterDrainGate(w, r, namespaceID, repoID, now) {
+		return
+	}
 	envelope, intakeErr := CreateOrReuseOperationIntake(r.Context(), OperationIntakeConfig{Store: handler.intakeStore}, OperationIntakeRequest{
 		RequestContext:      requestContext,
 		Route:               route,
@@ -283,6 +301,50 @@ func (handler savePointLeafHandler) checkHistoryReadGate(w http.ResponseWriter, 
 		return false
 	}
 	return true
+}
+
+func (handler savePointLeafHandler) checkWriterDrainGate(w http.ResponseWriter, r *http.Request, namespaceID, repoID string, now time.Time) bool {
+	if handler.sessionReader == nil {
+		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return false
+	}
+	exports, err := handler.sessionReader.ListExportSessionsByRepo(r.Context(), repoID)
+	if err != nil {
+		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return false
+	}
+	mounts, err := handler.sessionReader.ListWorkloadMountBindingsByRepo(r.Context(), repoID)
+	if err != nil {
+		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return false
+	}
+	decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{
+		NamespaceID:    namespaceID,
+		RepoID:         repoID,
+		Now:            now,
+		ExportSessions: exports,
+		Mounts:         mounts,
+	})
+	if decision.Allowed {
+		return true
+	}
+	if decision.ErrorFamily == sessionstate.ErrorFamilyInternalError {
+		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return false
+	}
+	writeSavePointWriterDrainGateError(w, r, decision)
+	return false
+}
+
+func writeSavePointWriterDrainGateError(w http.ResponseWriter, r *http.Request, decision sessionstate.Decision) {
+	code, message, retryable, details := fileLibraryBlockingOperationError(false)
+	details["writer_drain_status"] = "pending"
+	details["writer_drain_reason"] = decision.ErrorFamily.String()
+	if strings.TrimSpace(decision.BlockingKind) != "" {
+		details["blocking_session_kind"] = decision.BlockingKind
+	}
+	envelope := NewErrorEnvelope(code, message, retryable, CorrelationIDFromRequest(r), nil, details)
+	_ = WriteErrorEnvelope(w, http.StatusConflict, envelope)
 }
 
 func readRepoJVSMutationGateStatus(ctx context.Context, reader RepoJVSMutationGateStatusReader, repoID string) (RepoJVSMutationGateStatus, error) {

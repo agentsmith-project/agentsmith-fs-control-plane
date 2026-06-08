@@ -172,6 +172,43 @@ func TestSavePointExecutorUsesDirectSaveTarget(t *testing.T) {
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
+func TestSavePointExecutorBlocksUndrainedWriterBeforeDirectSave(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.mounts = []sessionstate.WorkloadMountBinding{
+		savePointRepoExecMountFixture(now, false, sessionstate.MountStatusReleasing, nil, nil),
+	}
+	if decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Now: now, Mounts: store.mounts}); decision.Allowed {
+		t.Fatalf("test fixture writer gate decision = %#v, want denied", decision)
+	}
+	runner := &fakeJVSRunner{
+		directSaveSummary: jvsrunner.DirectSaveSummary{SavePointID: "sp_after", HistoryHeadID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want retryable failed commit without recovery error", err)
+	}
+	if store.listExportSessionCalls != 1 || store.listMountSessionCalls != 1 {
+		t.Fatalf("session state calls export/mount = %d/%d, want 1/1", store.listExportSessionCalls, store.listMountSessionCalls)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("JVS calls = %#v, want writer drain gate before DirectSave", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "SAVE_POINT_WRITER_DRAIN_PENDING" || !store.operation.Error.Retryable {
+		t.Fatalf("operation = %#v, want retryable failed writer-drain pending", store.operation)
+	}
+	if got := store.operation.VerificationResult.(map[string]any)["writer_drain_status"]; got != "pending" {
+		t.Fatalf("verification = %#v, want writer_drain_status pending", store.operation.VerificationResult)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_failed" {
+		t.Fatalf("audit events = %#v, want ordinary failed save point audit", store.auditEvents)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
 func TestSavePointExecutorDirectSaveRepoBusyFailsWithoutLegacyRepair(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()
@@ -1190,6 +1227,21 @@ func repoExecTimePtr(t time.Time) *time.Time {
 	return &t
 }
 
+func savePointRepoExecMountFixture(now time.Time, readOnly bool, status sessionstate.MountStatus, confirmedUnmountedAt, unableToWriteAt *time.Time) sessionstate.WorkloadMountBinding {
+	return sessionstate.WorkloadMountBinding{
+		ID:                   "wmb_savepoint",
+		NamespaceID:          "ns_alpha01",
+		RepoID:               "repo_alpha01",
+		ReadOnly:             readOnly,
+		Status:               status,
+		LeaseExpiresAt:       now.Add(time.Hour),
+		ConfirmedUnmountedAt: confirmedUnmountedAt,
+		UnableToWriteAt:      unableToWriteAt,
+		CreatedAt:            now.Add(-time.Minute),
+		UpdatedAt:            now,
+	}
+}
+
 func newFakeStore() *fakeRepoCreateStore {
 	now := repoExecNow()
 	return &fakeRepoCreateStore{
@@ -1244,6 +1296,8 @@ type fakeRepoCreateStore struct {
 	templateCreateSuccessCommitAt  time.Time
 	templateCloneSuccessCommitAt   time.Time
 	beforeListSessions             func()
+	listExportSessionCalls         int
+	listMountSessionCalls          int
 }
 
 func (store *fakeRepoCreateStore) GetNamespace(context.Context, string) (resources.Namespace, error) {
@@ -1294,12 +1348,14 @@ func (store *fakeRepoCreateStore) CommitRepoCreateFailedWithLease(ctx context.Co
 	return store.operation, nil
 }
 func (store *fakeRepoCreateStore) ListExportSessionsByRepo(context.Context, string) ([]sessionstate.ExportSession, error) {
+	store.listExportSessionCalls++
 	if store.beforeListSessions != nil {
 		store.beforeListSessions()
 	}
 	return append([]sessionstate.ExportSession(nil), store.exports...), nil
 }
 func (store *fakeRepoCreateStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
+	store.listMountSessionCalls++
 	if store.beforeListSessions != nil {
 		store.beforeListSessions()
 	}

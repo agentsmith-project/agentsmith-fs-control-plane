@@ -14,6 +14,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
 func TestSavePointCreateValidatesMessageAndCreatesQueuedOperation(t *testing.T) {
@@ -173,6 +174,93 @@ func TestSavePointCreateDeniesArchivedAndLifecycleFence(t *testing.T) {
 			env := decodeErrorEnvelope(t, rec.Body.Bytes())
 			if env.Error.Code != tt.code {
 				t.Fatalf("code = %s, want %s", env.Error.Code, tt.code)
+			}
+			assertSavePointResponseDoesNotLeak(t, rec.Body.String())
+		})
+	}
+}
+
+func TestSavePointCreateBlocksUndrainedWriterBeforeIntake(t *testing.T) {
+	now := fixedNamespaceNow()
+	for _, tt := range []struct {
+		name  string
+		mount sessionstate.WorkloadMountBinding
+	}{
+		{name: "active", mount: savePointMountFixture(now, false, sessionstate.MountStatusActive, now.Add(time.Hour), nil, nil)},
+		{name: "releasing", mount: savePointMountFixture(now, false, sessionstate.MountStatusReleasing, now.Add(time.Hour), nil, nil)},
+		{name: "stale", mount: savePointMountFixture(now, false, sessionstate.MountStatusActive, now.Add(-time.Hour), nil, nil)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			intake := &fakeOperationIntakeStore{}
+			sessionReader := &fakeSavePointSessionStateReader{
+				mounts: []sessionstate.WorkloadMountBinding{tt.mount},
+			}
+			handler := savePointTestHandlerWithSessions(intake, nil, &fakeRepoJVSMutationGateReader{}, sessionReader, resources.RepoStatusActive, nil)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, savePointRequest(http.MethodPost, "/internal/v1/repos/repo_123/save-points", `{"message":"checkpoint"}`, "ns_123"))
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+			}
+			env := decodeErrorEnvelope(t, rec.Body.Bytes())
+			if env.Error.Code != CodeFileLibraryOperationPending || !env.Error.Retryable {
+				t.Fatalf("error = %#v, want retryable %s", env.Error, CodeFileLibraryOperationPending)
+			}
+			if intake.calls != 0 {
+				t.Fatalf("intake calls = %d, want blocked before operation intake", intake.calls)
+			}
+			if sessionReader.exportCalls != 1 || sessionReader.mountCalls != 1 {
+				t.Fatalf("session calls export/mount = %d/%d, want 1/1", sessionReader.exportCalls, sessionReader.mountCalls)
+			}
+			assertSavePointResponseDoesNotLeak(t, rec.Body.String())
+		})
+	}
+}
+
+func TestSavePointCreateAllowsReadOnlyAndWriterDrainedMounts(t *testing.T) {
+	now := fixedNamespaceNow()
+	for _, tt := range []struct {
+		name    string
+		exports []sessionstate.ExportSession
+		mounts  []sessionstate.WorkloadMountBinding
+	}{
+		{
+			name:    "read only active export",
+			exports: []sessionstate.ExportSession{savePointExportFixture(now, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive, now.Add(time.Hour))},
+		},
+		{
+			name:   "read only active mount",
+			mounts: []sessionstate.WorkloadMountBinding{savePointMountFixture(now, true, sessionstate.MountStatusActive, now.Add(time.Hour), nil, nil)},
+		},
+		{
+			name:   "released confirmed unmounted",
+			mounts: []sessionstate.WorkloadMountBinding{savePointMountFixture(now, false, sessionstate.MountStatusReleased, now.Add(time.Hour), &now, nil)},
+		},
+		{
+			name:   "revoked unable to write",
+			mounts: []sessionstate.WorkloadMountBinding{savePointMountFixture(now, false, sessionstate.MountStatusRevoked, now.Add(time.Hour), nil, &now)},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			intake := &fakeOperationIntakeStore{}
+			handler := savePointTestHandlerWithSessions(
+				intake,
+				nil,
+				&fakeRepoJVSMutationGateReader{},
+				&fakeSavePointSessionStateReader{exports: tt.exports, mounts: tt.mounts},
+				resources.RepoStatusActive,
+				nil,
+			)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, savePointRequest(http.MethodPost, "/internal/v1/repos/repo_123/save-points", `{"message":"checkpoint"}`, "ns_123"))
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+			}
+			if intake.calls != 1 {
+				t.Fatalf("intake calls = %d, want create operation", intake.calls)
 			}
 			assertSavePointResponseDoesNotLeak(t, rec.Body.String())
 		})
@@ -468,18 +556,23 @@ func savePointTestHandler(intake *fakeOperationIntakeStore, history SavePointHis
 }
 
 func savePointTestHandlerWithGate(intake *fakeOperationIntakeStore, history SavePointHistoryReader, gate RepoJVSMutationGateStatusReader, repoStatus resources.RepoStatus, held []fences.Fence) http.Handler {
+	return savePointTestHandlerWithSessions(intake, history, gate, &fakeSavePointSessionStateReader{}, repoStatus, held)
+}
+
+func savePointTestHandlerWithSessions(intake *fakeOperationIntakeStore, history SavePointHistoryReader, gate RepoJVSMutationGateStatusReader, sessionReader SavePointSessionStateReader, repoStatus resources.RepoStatus, held []fences.Fence) http.Handler {
 	return SavePointHandler(SavePointHandlerConfig{
-		RepoReader:        &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", repoStatus)}},
-		NamespaceReader:   &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
-		BindingReader:     &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
-		FenceReader:       &fakeRepoFenceReader{fences: held},
-		HistoryReader:     history,
-		MutationGate:      gate,
-		IntakeStore:       intake,
-		PrincipalResolver: namespaceBindingPrincipalResolver(),
-		AllowedCallers:    namespaceBindingAllowedPolicy(auth.RoleRepoAdmin),
-		OperationID:       func() string { return "op_savepoint" },
-		Now:               func() time.Time { return fixedNamespaceNow() },
+		RepoReader:         &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", repoStatus)}},
+		NamespaceReader:    &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
+		BindingReader:      &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
+		FenceReader:        &fakeRepoFenceReader{fences: held},
+		HistoryReader:      history,
+		MutationGate:       gate,
+		SessionStateReader: sessionReader,
+		IntakeStore:        intake,
+		PrincipalResolver:  namespaceBindingPrincipalResolver(),
+		AllowedCallers:     namespaceBindingAllowedPolicy(auth.RoleRepoAdmin),
+		OperationID:        func() string { return "op_savepoint" },
+		Now:                func() time.Time { return fixedNamespaceNow() },
 	})
 }
 
@@ -537,6 +630,38 @@ func savePointLifecycleFence(operationID string) fences.Fence {
 	return fences.Fence{ID: "fence_savepoint", RepoID: "repo_123", Kind: fences.KindLifecycle, HolderOperationID: operationID, Status: fences.StatusActive, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}
 }
 
+func savePointExportFixture(now time.Time, mode sessionstate.AccessMode, status sessionstate.ExportStatus, expiresAt time.Time) sessionstate.ExportSession {
+	return sessionstate.ExportSession{
+		ID:                        "export_savepoint",
+		NamespaceID:               "ns_123",
+		RepoID:                    "repo_123",
+		Mode:                      mode,
+		Status:                    status,
+		ExpiresAt:                 expiresAt,
+		ActiveRequestCount:        1,
+		ActiveWriteCount:          0,
+		LastObservedAt:            &now,
+		GatewayHeartbeatExpiresAt: ptrTime(now.Add(time.Minute)),
+		CreatedAt:                 now.Add(-time.Minute),
+		UpdatedAt:                 now,
+	}
+}
+
+func savePointMountFixture(now time.Time, readOnly bool, status sessionstate.MountStatus, leaseExpiresAt time.Time, confirmedUnmountedAt, unableToWriteAt *time.Time) sessionstate.WorkloadMountBinding {
+	return sessionstate.WorkloadMountBinding{
+		ID:                   "wmb_savepoint",
+		NamespaceID:          "ns_123",
+		RepoID:               "repo_123",
+		ReadOnly:             readOnly,
+		Status:               status,
+		LeaseExpiresAt:       leaseExpiresAt,
+		ConfirmedUnmountedAt: confirmedUnmountedAt,
+		UnableToWriteAt:      unableToWriteAt,
+		CreatedAt:            now.Add(-time.Minute),
+		UpdatedAt:            now,
+	}
+}
+
 type fakeSavePointHistoryReader struct {
 	history SavePointHistory
 	err     error
@@ -549,6 +674,30 @@ func (reader *fakeSavePointHistoryReader) ListSavePoints(context.Context, string
 		return SavePointHistory{}, reader.err
 	}
 	return reader.history, nil
+}
+
+type fakeSavePointSessionStateReader struct {
+	exports     []sessionstate.ExportSession
+	mounts      []sessionstate.WorkloadMountBinding
+	err         error
+	exportCalls int
+	mountCalls  int
+}
+
+func (reader *fakeSavePointSessionStateReader) ListExportSessionsByRepo(context.Context, string) ([]sessionstate.ExportSession, error) {
+	reader.exportCalls++
+	if reader.err != nil {
+		return nil, reader.err
+	}
+	return append([]sessionstate.ExportSession(nil), reader.exports...), nil
+}
+
+func (reader *fakeSavePointSessionStateReader) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
+	reader.mountCalls++
+	if reader.err != nil {
+		return nil, reader.err
+	}
+	return append([]sessionstate.WorkloadMountBinding(nil), reader.mounts...), nil
 }
 
 type fakeRepoJVSMutationGateReader struct {

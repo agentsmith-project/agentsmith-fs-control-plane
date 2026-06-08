@@ -14,6 +14,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
 func TestCreateOrReuseOperationIntakeCreatesQueuedOperationEnvelope(t *testing.T) {
@@ -538,6 +539,11 @@ type fakeOperationIntakeStore struct {
 	jvsMutation                  bool
 	jvsMutationErr               error
 	jvsMutationCalls             int
+	exports                      []sessionstate.ExportSession
+	mounts                       []sessionstate.WorkloadMountBinding
+	sessionReadErr               error
+	exportSessionCalls           int
+	mountSessionCalls            int
 	restoreReconciliationBlocked bool
 	restoreReconciliationCalls   int
 }
@@ -628,6 +634,22 @@ func (store *fakeOperationIntakeStore) GetRepoJVSMutationGateStatus(context.Cont
 		}, nil
 	}
 	return RepoJVSMutationGateStatus{}, nil
+}
+
+func (store *fakeOperationIntakeStore) ListExportSessionsByRepo(context.Context, string) ([]sessionstate.ExportSession, error) {
+	store.exportSessionCalls++
+	if store.sessionReadErr != nil {
+		return nil, store.sessionReadErr
+	}
+	return append([]sessionstate.ExportSession(nil), store.exports...), nil
+}
+
+func (store *fakeOperationIntakeStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
+	store.mountSessionCalls++
+	if store.sessionReadErr != nil {
+		return nil, store.sessionReadErr
+	}
+	return append([]sessionstate.WorkloadMountBinding(nil), store.mounts...), nil
 }
 
 func operationIntakeError(t *testing.T, err error) *OperationIntakeError {

@@ -48,6 +48,7 @@ type InternalAPIShellConfig struct {
 	RepoFenceReader                RepoFenceReader
 	SavePointHistoryReader         SavePointHistoryReader
 	SavePointMutationGate          RepoJVSMutationGateStatusReader
+	SavePointSessionStateReader    SavePointSessionStateReader
 	SavePointHistoryJVSRunner      JVSHistoryRunner
 	SavePointHistoryVolumeRoots    map[string]string
 	VolumeRoots                    map[string]string
@@ -180,6 +181,12 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 			savePointMutationGate = typed
 		}
 	}
+	savePointSessionStateReader := config.SavePointSessionStateReader
+	if savePointSessionStateReader == nil {
+		if typed, ok := config.OperationIntakeStore.(SavePointSessionStateReader); ok {
+			savePointSessionStateReader = typed
+		}
+	}
 	var restoreIntakeStore RestoreOperationIntakeStore
 	if typed, ok := config.OperationIntakeStore.(RestoreOperationIntakeStore); ok {
 		restoreIntakeStore = typed
@@ -220,14 +227,15 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	}
 
 	savePointHandler := SavePointHandler(SavePointHandlerConfig{
-		RepoReader:        config.RepoReader,
-		NamespaceReader:   config.NamespaceReader,
-		BindingReader:     config.NamespaceBindingReader,
-		FenceReader:       config.RepoFenceReader,
-		HistoryReader:     savePointHistoryReader,
-		MutationGate:      savePointMutationGate,
-		IntakeStore:       config.OperationIntakeStore,
-		PrincipalResolver: config.PrincipalResolver,
+		RepoReader:         config.RepoReader,
+		NamespaceReader:    config.NamespaceReader,
+		BindingReader:      config.NamespaceBindingReader,
+		FenceReader:        config.RepoFenceReader,
+		HistoryReader:      savePointHistoryReader,
+		MutationGate:       savePointMutationGate,
+		SessionStateReader: savePointSessionStateReader,
+		IntakeStore:        config.OperationIntakeStore,
+		PrincipalResolver:  config.PrincipalResolver,
 		AllowedCallers: RouteAwareAllowedCallerPolicy{
 			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
 			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),
