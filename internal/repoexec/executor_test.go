@@ -121,8 +121,8 @@ func TestSavePointExecutorSavesWithoutPreSaveHistoryList(t *testing.T) {
 	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "direct_save" {
-		t.Fatalf("JVS calls = %#v, want direct_save only", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save,direct_list" {
+		t.Fatalf("JVS calls = %#v, want direct_save,direct_list", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseSavePointCreateCommitted {
 		t.Fatalf("operation = %#v, want succeeded committed", store.operation)
@@ -131,8 +131,8 @@ func TestSavePointExecutorSavesWithoutPreSaveHistoryList(t *testing.T) {
 	if _, exists := result["pre_save_newest_save_point_id"]; exists {
 		t.Fatalf("verification = %#v, want no pre-save marker", result)
 	}
-	if result["save_point_id"] != "sp_after" || result["unsaved_changes_known"] != false {
-		t.Fatalf("verification = %#v, want save result", result)
+	if result["save_point_id"] != "sp_after" || result["unsaved_changes_known"] != false || result["history_visible"] != true || result["history_head_id"] != "sp_after" {
+		t.Fatalf("verification = %#v, want list-visible save result", result)
 	}
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
@@ -149,8 +149,8 @@ func TestSavePointExecutorUsesDirectSaveTarget(t *testing.T) {
 	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
 		t.Fatalf("ExecuteOperationRecovery: %v", err)
 	}
-	if strings.Join(runner.calls, ",") != "direct_save" {
-		t.Fatalf("JVS calls = %#v, want direct_save only", runner.calls)
+	if strings.Join(runner.calls, ",") != "direct_save,direct_list" {
+		t.Fatalf("JVS calls = %#v, want direct_save,direct_list", runner.calls)
 	}
 	if !strings.HasSuffix(runner.directTarget.ControlRoot, "/afscp/namespaces/ns_alpha01/repos/repo_alpha01/control") ||
 		!strings.HasSuffix(runner.directTarget.Home, "/afscp/namespaces/ns_alpha01/repos/repo_alpha01/payload") {
@@ -168,6 +168,76 @@ func TestSavePointExecutorUsesDirectSaveTarget(t *testing.T) {
 	assertCloneEvidenceProjection(t, store.auditEvents[0].Details, "save")
 	if _, exists := verification["pre_save_history_captured"]; exists {
 		t.Fatalf("verification = %#v, want no pre-save history marker", verification)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
+func TestSavePointExecutorDoesNotCommitSuccessUntilDirectSaveIsListVisible(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		directSaveSummary: jvsrunner.DirectSaveSummary{SavePointID: "sp_after", HistoryHeadID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
+		directListSummary: jvsrunner.DirectListSummary{
+			HistoryHeadID: "sp_before",
+			SavePoints: []jvsrunner.DirectSavePointSummary{{
+				SavePointID: "sp_before",
+				Message:     "before",
+				CreatedAt:   "2026-05-05T11:00:00Z",
+				HistoryHead: true,
+			}},
+		},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "direct_save,direct_list" {
+		t.Fatalf("JVS calls = %#v, want direct_save,direct_list", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Phase != operations.OperationPhaseSavePointCreateValidate {
+		t.Fatalf("operation = %#v, want failed validate operation", store.operation)
+	}
+	if store.operation.Error == nil || store.operation.Error.Code != "SAVE_POINT_NOT_VISIBLE" || store.operation.Error.Retryable {
+		t.Fatalf("operation error = %#v, want non-retryable SAVE_POINT_NOT_VISIBLE", store.operation.Error)
+	}
+	if store.operation.Error.Details["save_point_id"] != "sp_after" || store.operation.Error.Details["history_head_id"] != "sp_before" {
+		t.Fatalf("operation error details = %#v, want redacted visibility failure facts", store.operation.Error.Details)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_failed" {
+		t.Fatalf("audit events = %#v, want failed save point audit", store.auditEvents)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
+func TestSavePointExecutorRequiresDirectListEvidenceToMatchDirectSaveSummary(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		directSaveSummary: jvsrunner.DirectSaveSummary{SavePointID: "sp_after", HistoryHeadID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
+		directListSummary: jvsrunner.DirectListSummary{
+			HistoryHeadID: "sp_after",
+			SavePoints: []jvsrunner.DirectSavePointSummary{{
+				SavePointID: "sp_after",
+				Message:     "different message",
+				CreatedAt:   "2026-05-05T12:00:00Z",
+				HistoryHead: true,
+			}},
+		},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "SAVE_POINT_NOT_VISIBLE" {
+		t.Fatalf("operation = %#v, want failed SAVE_POINT_NOT_VISIBLE", store.operation)
+	}
+	if store.operation.Error.Details["message_match"] != false || store.operation.Error.Details["created_at_match"] != true || store.operation.Error.Details["purpose_match"] != true {
+		t.Fatalf("operation error details = %#v, want list evidence mismatch facts", store.operation.Error.Details)
 	}
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
@@ -1579,6 +1649,14 @@ func (runner *fakeJVSRunner) DirectSaveWithPurpose(_ context.Context, target jvs
 	if runner.directSaveSummary.SavePointID == "" && runner.saveSummary.SavePointID != "" {
 		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, Purpose: purpose, CreatedAt: runner.saveSummary.CreatedAt}
 	}
+	if runner.directSaveSummary.SavePointID != "" {
+		if runner.directSaveSummary.HistoryHeadID == "" {
+			runner.directSaveSummary.HistoryHeadID = runner.directSaveSummary.SavePointID
+		}
+		if runner.directSaveSummary.Message == "" {
+			runner.directSaveSummary.Message = message
+		}
+	}
 	if runner.directSaveSummary.SavePointID != "" && len(runner.directSaveSummary.CloneEvidence) == 0 {
 		runner.directSaveSummary.CloneEvidence = fakeCloneEvidence("save", "save_point_payload", 42)
 	}
@@ -1590,6 +1668,18 @@ func (runner *fakeJVSRunner) DirectList(_ context.Context, target jvsrunner.Dire
 	runner.directTarget = target
 	runner.controlRoot = target.ControlRoot
 	runner.payloadRoot = target.Home
+	if runner.directListSummary.HistoryHeadID == "" && len(runner.directListSummary.SavePoints) == 0 && runner.directSaveSummary.SavePointID != "" {
+		runner.directListSummary = jvsrunner.DirectListSummary{
+			HistoryHeadID: runner.directSaveSummary.SavePointID,
+			SavePoints: []jvsrunner.DirectSavePointSummary{{
+				SavePointID: runner.directSaveSummary.SavePointID,
+				Message:     runner.directSaveSummary.Message,
+				Purpose:     runner.directSaveSummary.Purpose,
+				CreatedAt:   runner.directSaveSummary.CreatedAt,
+				HistoryHead: true,
+			}},
+		}
+	}
 	if runner.directListSummary.HistoryHeadID == "" && len(runner.directListSummary.SavePoints) == 0 {
 		savePoints := make([]jvsrunner.DirectSavePointSummary, 0, len(runner.historySummary.SavePoints))
 		for _, savePoint := range runner.historySummary.SavePoints {

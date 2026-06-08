@@ -65,6 +65,20 @@ func validateSavePointCreateSuccessRecord(record operations.OperationRecord) err
 	if record.Phase != operations.OperationPhaseSavePointCreateCommitted {
 		return operationLeaseInvalidRequest("phase", "save point create success requires committed terminal phase")
 	}
+	savePointID := strings.TrimSpace(record.ExternalResourceIDs["save_point_id"])
+	if err := operations.ValidateSavePointID(savePointID); err != nil {
+		return operationLeaseInvalidRequest("external_resource_ids", "save point create success requires save point id resource")
+	}
+	if outputID, ok := savePointCreateEvidenceID(record.JVSJSONOutput); !ok || outputID != savePointID {
+		return operationLeaseInvalidRequest("jvs_json_output", "save point create success requires matching save point id evidence")
+	}
+	verificationID, ok := savePointCreateEvidenceID(record.VerificationResult)
+	if !ok {
+		return operationLeaseInvalidRequest("verification_result", "save point create success requires matching save point id verification")
+	}
+	if verificationID != savePointID {
+		return operationLeaseInvalidRequest("verification_result", "save point create success requires matching save point id verification")
+	}
 	return validateSavePointCreateRecordResource(record, false)
 }
 
@@ -108,6 +122,23 @@ func validateSavePointCreateAuditEvent(record operations.OperationRecord, event 
 		return auditOutboxInvalidRequest("caller", "save point create audit caller context must match operation")
 	}
 	return nil
+}
+
+func savePointCreateEvidenceID(value any) (string, bool) {
+	var raw string
+	switch typed := value.(type) {
+	case map[string]any:
+		raw, _ = typed["save_point_id"].(string)
+	case map[string]string:
+		raw = typed["save_point_id"]
+	default:
+		return "", false
+	}
+	savePointID := strings.TrimSpace(raw)
+	if err := operations.ValidateSavePointID(savePointID); err != nil {
+		return "", false
+	}
+	return savePointID, true
 }
 
 func savePointCreateStoredPredicateArgs(record operations.OperationRecord) []any {

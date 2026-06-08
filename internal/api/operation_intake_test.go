@@ -123,6 +123,46 @@ func TestCreateOrReuseOperationIntakeReusesExistingOperation(t *testing.T) {
 	assertOperationEnvelopeDoesNotLeakInternalFields(t, envelope)
 }
 
+func TestOperationEnvelopeProjectsSavePointResultOnlyWhenIDsAlign(t *testing.T) {
+	record := operations.OperationRecord{
+		ID:                  "op_savepoint",
+		Type:                operations.OperationSavePointCreate,
+		State:               operations.OperationStateSucceeded,
+		Resource:            operations.ResourceRef{Type: "repo", ID: "repo_123"},
+		RepoID:              "repo_123",
+		ExternalResourceIDs: map[string]string{"save_point_id": "sp_001"},
+		JVSJSONOutput:       map[string]any{"save_point_id": "sp_001", "created_at": "2026-05-05T12:00:00Z"},
+		VerificationResult:  map[string]any{"save_point_id": "sp_001"},
+	}
+
+	envelope, err := operationEnvelopeFromRecord(record)
+	if err != nil {
+		t.Fatalf("operationEnvelopeFromRecord: %v", err)
+	}
+	if envelope.Result["save_point_id"] != "sp_001" || envelope.Result["repo_id"] != "repo_123" || envelope.Result["created_at"] != "2026-05-05T12:00:00Z" {
+		t.Fatalf("result = %#v, want save point id result", envelope.Result)
+	}
+
+	record.VerificationResult = map[string]any{"save_point_id": "sp_other"}
+	envelope, err = operationEnvelopeFromRecord(record)
+	if err != nil {
+		t.Fatalf("operationEnvelopeFromRecord mismatched id: %v", err)
+	}
+	if envelope.Result != nil {
+		t.Fatalf("result = %#v, want nil when save point ids disagree", envelope.Result)
+	}
+
+	record.VerificationResult = map[string]any{"save_point_id": "sp_001"}
+	record.ExternalResourceIDs = nil
+	envelope, err = operationEnvelopeFromRecord(record)
+	if err != nil {
+		t.Fatalf("operationEnvelopeFromRecord missing external id: %v", err)
+	}
+	if envelope.Result != nil {
+		t.Fatalf("result = %#v, want nil when save point external id is missing", envelope.Result)
+	}
+}
+
 func TestCreateOrReuseOperationIntakeAllowsVolumeGlobalWithoutNamespace(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	store := &fakeOperationIntakeStore{}

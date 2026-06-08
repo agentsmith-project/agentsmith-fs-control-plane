@@ -79,9 +79,37 @@ func TestCommitSavePointCreateSucceededAllowsValidatePhaseWithoutPreSaveMarker(t
 
 func TestSavePointCreateSuccessValidatorDoesNotRequirePreSaveMarker(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
-	valid := savePointOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseSavePointCreateCommitted)
+	valid := savePointSuccessOperationRecord(now, "sp_001")
 	if err := validateSavePointCreateSuccessRecord(valid); err != nil {
 		t.Fatalf("validateSavePointCreateSuccessRecord without pre-save pointer: %v", err)
+	}
+}
+
+func TestSavePointCreateSuccessValidatorRequiresConsistentSavePointID(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		edit func(*operations.OperationRecord)
+	}{
+		{name: "missing external id", edit: func(record *operations.OperationRecord) {
+			record.ExternalResourceIDs = map[string]string{}
+		}},
+		{name: "missing output id", edit: func(record *operations.OperationRecord) {
+			record.JVSJSONOutput = map[string]any{}
+		}},
+		{name: "mismatched verification id", edit: func(record *operations.OperationRecord) {
+			record.VerificationResult = map[string]any{"save_point_id": "sp_other"}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := savePointSuccessOperationRecord(now, "sp_001")
+			tt.edit(&record)
+
+			if err := validateSavePointCreateSuccessRecord(record); err == nil {
+				t.Fatal("validateSavePointCreateSuccessRecord succeeded, want save point id evidence error")
+			}
+		})
 	}
 }
 
@@ -148,6 +176,15 @@ func savePointOperationRecord(now time.Time, state operations.OperationState, ph
 		StartedAt:           &started,
 		CreatedAt:           now.Add(-time.Hour),
 	}
+}
+
+func savePointSuccessOperationRecord(now time.Time, savePointID string) operations.OperationRecord {
+	record := savePointOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseSavePointCreateCommitted)
+	record.ExternalResourceIDs = map[string]string{"save_point_id": savePointID}
+	record.JVSJSONOutput = map[string]any{"save_point_id": savePointID}
+	record.VerificationResult = map[string]any{"save_point_id": savePointID}
+	record.FinishedAt = &now
+	return record
 }
 
 func savePointAudit(record operations.OperationRecord, outcome audit.Outcome, now time.Time) audit.Event {

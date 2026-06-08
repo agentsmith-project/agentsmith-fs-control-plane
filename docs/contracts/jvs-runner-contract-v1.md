@@ -40,6 +40,13 @@ direct v1 binding and is not an argv parameter.
 | direct status | `jvs afscp --control-root <control_root_path> --home <payload_home_path> status --json` | `command:"status"`, `status`, `data.history_head`, metadata state, active operation, recovery summary | Explicit metadata-only visibility/diagnostic command. It must not be called by default in save/restore hot paths. |
 | direct doctor | `jvs afscp --control-root <control_root_path> --home <payload_home_path> doctor --json` | `command:"doctor"`, `status`, `data.repo_id`, `data.healthy`, findings, metadata state, journal, recovery summary | Explicit metadata-only diagnostic command. It must not be called by default in save/restore hot paths. |
 
+For `save_point_create`, accepted operation intake is not terminal success.
+Success requires the same `save_point_id` in the direct save result, operation
+evidence/projection, and same-target direct list history head, with matching
+message, purpose, and `created_at`. Direct list errors, mismatches, or
+not-visible results must fail closed as typed failed or
+operator-intervention/recovery-visible, never ordinary success.
+
 AFSCP runner preflight verifies `jvs afscp --help` plus
 `jvs afscp <save|list|restore|clone|status|doctor> --help` so root help that
 uses a generic `<command>` placeholder does not hide missing subcommands.

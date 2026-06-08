@@ -128,7 +128,7 @@ routes, and generated contracts used by implementation.
 | `repo_delete` | tombstone state plus session-drain predicate | same request returns delete terminal result |
 | `repo_restore_tombstoned` | tombstone restore state plus retention predicate | same request returns restore terminal result |
 | `repo_purge` | irreversible purge marker and retained storage absence | same request returns original purge terminal result; disabled default denies before side effects |
-| `save_point_create` | JVS save point plus operation/audit boundary | same request returns original save point metadata |
+| `save_point_create` | JVS direct save result plus same-target direct list/history-head visibility, operation, and audit boundary | same request returns original visible save point metadata |
 | `restore` | writer-session fence, JVS direct restore output, operation, audit, and recovery boundary | same request returns original direct restore operation/result without creating a planning artifact |
 | `template_create` | source save point and target template create boundary | same request returns original template operation/result; disabled default denies before side effects |
 | `template_clone` | target repo create from template boundary | same request returns original clone operation/result; disabled default denies before side effects |
@@ -156,7 +156,7 @@ routes, and generated contracts used by implementation.
 | `repo_delete` | stable session/lifecycle denial before mutation | ambiguous_external_state or uncertain tombstone transition |
 | `repo_restore_tombstoned` | stable retention/lifecycle denial before mutation | ambiguous_external_state or uncertain tombstone restore transition |
 | `repo_purge` | capability_disabled_or_unsupported or approval/retention denial before side effects | ambiguous_external_state after possible irreversible deletion |
-| `save_point_create` | validation/JVS preflight denial before save side effects | ambiguous_external_state or uncertain JVS save state |
+| `save_point_create` | validation/JVS preflight denial before save side effects, or deterministic direct list not-visible/mismatch after claimed save | ambiguous_external_state, direct list error, or uncertain JVS save state |
 | `restore` | writer-session, dirty-state, or JVS direct restore denial before confirmed mutation | ambiguous_external_state, direct restore result mismatch, explicit diagnostic/recovery evidence requiring repair, or uncertain restore commit recovery |
 | `template_create` | capability_disabled_or_unsupported or validation denial before side effects | ambiguous_external_state after save/clone uncertainty |
 | `template_clone` | capability_disabled_or_unsupported or validation denial before side effects | ambiguous_external_state after clone uncertainty |
@@ -184,7 +184,7 @@ Minimum GA matrix:
 | repo_delete | repo lifecycle exclusive plus session drain | inspect tombstone status, session terminal state, and retained storage |
 | repo_restore_tombstoned | repo lifecycle exclusive | inspect tombstone status, retention policy, and repo health |
 | repo_purge | repo lifecycle exclusive plus session drain | inspect purge marker and absence of retained storage |
-| save_point_create | repo JVS exclusive | inspect JVS output/save point existence before retry |
+| save_point_create | repo JVS exclusive | inspect direct save output and same-target direct list/history-head visibility before terminal success or retry |
 | restore | repo JVS exclusive direct restore mutation plus writer-session fence | validate direct restore output, gate writer sessions, and release or retain fence based on durable operation/audit/recovery outcome |
 | template_create | source repo exclusive during save phase, then source read gate plus target template exclusive create | inspect source save point, clone history mode, and target template path |
 | template_clone | template read gate plus target repo exclusive create | inspect target repo path and JVS identity |

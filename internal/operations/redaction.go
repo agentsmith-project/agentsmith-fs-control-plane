@@ -48,7 +48,11 @@ func RedactExternalResourceIDs(ids map[string]string) (map[string]string, Redact
 
 	out := make(map[string]string, len(ids))
 	fields := make([]string, 0, len(ids))
-	for key := range ids {
+	for key, value := range ids {
+		if key == "save_point_id" && ValidateSavePointID(strings.TrimSpace(value)) == nil {
+			out[key] = strings.TrimSpace(value)
+			continue
+		}
 		out[key] = redactedValue
 		fields = append(fields, joinPath("external_resource_ids", key))
 	}

@@ -1348,14 +1348,71 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	if store.savePointListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_savepoint" {
 		t.Fatalf("list/acquire = %d/%#v, want save_point_create listed and acquired", store.savePointListCalls, store.acquireIDs)
 	}
-	if strings.Join(jvs.calls, ",") != "direct_save" {
-		t.Fatalf("jvs calls = %#v, want direct_save", jvs.calls)
+	if strings.Join(jvs.calls, ",") != "direct_save,direct_list" {
+		t.Fatalf("jvs calls = %#v, want direct_save,direct_list", jvs.calls)
 	}
 	if store.operation.ID != record.ID || store.operation.Type != operations.OperationSavePointCreate || store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseSavePointCreateCommitted {
 		t.Fatalf("operation = %#v, want succeeded save_point_create_committed", store.operation)
 	}
 	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeSavePointCreate || store.auditEvents[0].Outcome != audit.OutcomeSucceeded || store.auditEvents[0].Reason != "save_point_create_committed" {
 		t.Fatalf("audit events = %#v, want succeeded save_point_create_committed event", store.auditEvents)
+	}
+}
+
+func TestRunOnceSavePointCreateDirectSaveInvisibleTerminalizesTypedFailure(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	jvs := &workerAppFakeJVSRunner{
+		directSaveSummary: jvsrunner.DirectSaveSummary{
+			SavePointID:   "sp_after",
+			HistoryHeadID: "sp_after",
+			Message:       "checkpoint",
+			CreatedAt:     "2026-05-05T12:00:00Z",
+		},
+		directListSummary: jvsrunner.DirectListSummary{
+			HistoryHeadID: "sp_before",
+			SavePoints: []jvsrunner.DirectSavePointSummary{{
+				SavePointID: "sp_before",
+				Message:     "before",
+				CreatedAt:   "2026-05-05T11:00:00Z",
+				HistoryHead: true,
+			}},
+		},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppSavePointConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_savepoint" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Manual != 0 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want claimed typed terminal failure", summary)
+	}
+	if strings.Join(jvs.calls, ",") != "direct_save,direct_list" {
+		t.Fatalf("jvs calls = %#v, want direct_save,direct_list", jvs.calls)
+	}
+	got := store.records[record.ID]
+	if got.State != operations.OperationStateFailed || got.Error == nil || got.Error.Code != "SAVE_POINT_NOT_VISIBLE" || got.Error.Retryable {
+		t.Fatalf("operation = %#v, want non-retryable failed SAVE_POINT_NOT_VISIBLE", got)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeSavePointCreate || store.auditEvents[0].Reason != "save_point_create_failed" {
+		t.Fatalf("audit events = %#v, want failed save_point_create event", store.auditEvents)
 	}
 }
 
@@ -4168,6 +4225,12 @@ func (runner *workerAppFakeJVSRunner) DirectSaveWithPurpose(_ context.Context, t
 	if runner.directSaveSummary.SavePointID == "" {
 		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: "sp_001", HistoryHeadID: "sp_001", Message: message, Purpose: purpose, CreatedAt: "2026-05-05T12:00:00Z"}
 	}
+	if runner.directSaveSummary.HistoryHeadID == "" {
+		runner.directSaveSummary.HistoryHeadID = runner.directSaveSummary.SavePointID
+	}
+	if runner.directSaveSummary.Message == "" {
+		runner.directSaveSummary.Message = message
+	}
 	return runner.directSaveSummary, nil
 }
 
@@ -4176,6 +4239,18 @@ func (runner *workerAppFakeJVSRunner) DirectList(_ context.Context, target jvsru
 	runner.directTarget = target
 	runner.controlRoot = target.ControlRoot
 	runner.payloadRoot = target.Home
+	if runner.directListSummary.HistoryHeadID == "" && len(runner.directListSummary.SavePoints) == 0 && runner.directSaveSummary.SavePointID != "" {
+		runner.directListSummary = jvsrunner.DirectListSummary{
+			HistoryHeadID: runner.directSaveSummary.SavePointID,
+			SavePoints: []jvsrunner.DirectSavePointSummary{{
+				SavePointID: runner.directSaveSummary.SavePointID,
+				Message:     runner.directSaveSummary.Message,
+				Purpose:     runner.directSaveSummary.Purpose,
+				CreatedAt:   runner.directSaveSummary.CreatedAt,
+				HistoryHead: true,
+			}},
+		}
+	}
 	if runner.directListSummary.HistoryHeadID == "" && len(runner.directListSummary.SavePoints) == 0 {
 		savePoints := make([]jvsrunner.DirectSavePointSummary, 0, len(runner.historySummary.SavePoints))
 		for _, savePoint := range runner.historySummary.SavePoints {

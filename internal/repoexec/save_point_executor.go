@@ -36,6 +36,7 @@ type savePointCreateStore interface {
 
 type SavePointJVSRunner interface {
 	DirectSave(ctx context.Context, target jvsrunner.DirectTarget, message string) (jvsrunner.DirectSaveSummary, error)
+	DirectList(ctx context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error)
 }
 
 type SavePointExecutor struct {
@@ -151,7 +152,18 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 		}
 		return executor.commitSavePointIntervention(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save failed", details)
 	}
-	return executor.commitSavePointSuccess(ctx, record, savePointFromDirectSaveSummary(saved, message), message, false, false, false, saved.CloneEvidence)
+	if err := validateSavePointDirectSaveSummary(saved, message); err != nil {
+		return executor.commitSavePointIntervention(ctx, record, "SAVE_POINT_MATERIALIZATION_UNCERTAIN", "save point materialization is uncertain", savePointMaterializationDetails(saved))
+	}
+	visibility, err := executor.verifySavePointVisible(ctx, target, saved)
+	if err != nil {
+		details := withJVSErrorDetails(savePointVisibilityDetails(visibility), err)
+		if errors.Is(err, errSavePointNotVisible) {
+			return executor.commitSavePointFailedWithDetails(ctx, record, "SAVE_POINT_NOT_VISIBLE", "save point was not visible after direct save", false, details)
+		}
+		return executor.commitSavePointIntervention(ctx, record, "SAVE_POINT_VISIBILITY_UNCERTAIN", "save point visibility is uncertain", details)
+	}
+	return executor.commitSavePointSuccess(ctx, record, savePointFromDirectSaveSummary(saved, message), message, false, false, false, saved.CloneEvidence, visibility)
 }
 
 func (executor *SavePointExecutor) checkWriterDrainGate(ctx context.Context, record operations.OperationRecord, now time.Time) (bool, error) {
@@ -231,7 +243,7 @@ func (executor *SavePointExecutor) requireCurrentTime() (time.Time, error) {
 	return now, nil
 }
 
-func (executor *SavePointExecutor) commitSavePointSuccess(ctx context.Context, record operations.OperationRecord, savePoint jvsrunner.SavePointSummary, message string, unsavedChanges, unsavedChangesKnown, adopted bool, cloneEvidence []jvsrunner.CloneEvidence) error {
+func (executor *SavePointExecutor) commitSavePointSuccess(ctx context.Context, record operations.OperationRecord, savePoint jvsrunner.SavePointSummary, message string, unsavedChanges, unsavedChangesKnown, adopted bool, cloneEvidence []jvsrunner.CloneEvidence, visibility savePointVisibilityEvidence) error {
 	now, err := executor.requireCurrentTime()
 	if err != nil {
 		return err
@@ -240,9 +252,9 @@ func (executor *SavePointExecutor) commitSavePointSuccess(ctx context.Context, r
 	operation.State = operations.OperationStateSucceeded
 	operation.Phase = operations.OperationPhaseSavePointCreateCommitted
 	operation.ExternalResourceIDs = map[string]string{"save_point_id": savePoint.SavePointID}
-	jvsOutput := map[string]any{"save_point_id": savePoint.SavePointID, "message": message, "created_at": savePoint.CreatedAt, "repo_id": record.RepoID, "unsaved_changes_known": unsavedChangesKnown}
-	verification := map[string]any{"save_point_id": savePoint.SavePointID, "created_at": savePoint.CreatedAt, "unsaved_changes_known": unsavedChangesKnown, "adopted": adopted}
-	auditDetails := map[string]any{"repo_id": record.RepoID, "save_point_id": savePoint.SavePointID, "unsaved_changes_known": unsavedChangesKnown, "adopted": adopted}
+	jvsOutput := map[string]any{"save_point_id": savePoint.SavePointID, "message": message, "created_at": savePoint.CreatedAt, "repo_id": record.RepoID, "unsaved_changes_known": unsavedChangesKnown, "history_visible": true, "history_head_id": visibility.HistoryHeadID}
+	verification := map[string]any{"save_point_id": savePoint.SavePointID, "created_at": savePoint.CreatedAt, "unsaved_changes_known": unsavedChangesKnown, "adopted": adopted, "history_visible": true, "history_head_id": visibility.HistoryHeadID}
+	auditDetails := map[string]any{"repo_id": record.RepoID, "save_point_id": savePoint.SavePointID, "unsaved_changes_known": unsavedChangesKnown, "adopted": adopted, "history_visible": true, "history_head_id": visibility.HistoryHeadID}
 	if unsavedChangesKnown {
 		jvsOutput["unsaved_changes"] = unsavedChanges
 		verification["unsaved_changes"] = unsavedChanges
@@ -273,6 +285,9 @@ func (executor *SavePointExecutor) commitSavePointFailedWithDetails(ctx context.
 	}
 	operation := savePointFailedOperation(record, now, operations.OperationStateFailed, code, message, retryable)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	if operation.Error != nil {
+		operation.Error.Details = mergeStringAnyMap(asStringAnyMap(operation.Error.Details), details)
+	}
 	attachJVSErrorDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "save_point_create_failed", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
@@ -291,6 +306,9 @@ func (executor *SavePointExecutor) commitSavePointIntervention(ctx context.Conte
 	}
 	operation := savePointFailedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message, false)
 	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	if operation.Error != nil {
+		operation.Error.Details = mergeStringAnyMap(asStringAnyMap(operation.Error.Details), details)
+	}
 	attachJVSErrorDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "save_point_create_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {
@@ -351,6 +369,103 @@ func savePointDirectSaveHasSideEffectEvidence(summary jvsrunner.DirectSaveSummar
 		strings.TrimSpace(summary.Purpose) != "" ||
 		strings.TrimSpace(summary.CreatedAt) != "" ||
 		len(summary.CloneEvidence) > 0
+}
+
+var (
+	errSavePointNotVisible             = errors.New("save point was not visible in history")
+	errInvalidSavePointMaterialization = errors.New("invalid save point materialization")
+)
+
+type savePointVisibilityEvidence struct {
+	SavePointID    string
+	HistoryHeadID  string
+	HistoryHead    bool
+	MessageMatch   bool
+	CreatedAtMatch bool
+	PurposeMatch   bool
+	Visible        bool
+}
+
+func validateSavePointDirectSaveSummary(summary jvsrunner.DirectSaveSummary, message string) error {
+	savePointID := strings.TrimSpace(summary.SavePointID)
+	if err := operations.ValidateSavePointID(savePointID); err != nil {
+		return errInvalidSavePointMaterialization
+	}
+	if strings.TrimSpace(summary.HistoryHeadID) != savePointID {
+		return errInvalidSavePointMaterialization
+	}
+	if summary.Message != message || strings.TrimSpace(summary.CreatedAt) == "" || savePointCreateInternalPurpose(summary.Purpose) {
+		return errInvalidSavePointMaterialization
+	}
+	return nil
+}
+
+func (executor *SavePointExecutor) verifySavePointVisible(ctx context.Context, target jvsrunner.DirectTarget, saved jvsrunner.DirectSaveSummary) (savePointVisibilityEvidence, error) {
+	evidence := savePointVisibilityEvidence{SavePointID: strings.TrimSpace(saved.SavePointID)}
+	history, err := executor.jvs.DirectList(ctx, target)
+	if err != nil {
+		return evidence, err
+	}
+	evidence.HistoryHeadID = strings.TrimSpace(history.HistoryHeadID)
+	for _, savePoint := range history.SavePoints {
+		if strings.TrimSpace(savePoint.SavePointID) != evidence.SavePointID {
+			continue
+		}
+		evidence.HistoryHead = savePoint.HistoryHead
+		evidence.MessageMatch = savePoint.Message == saved.Message
+		evidence.CreatedAtMatch = strings.TrimSpace(savePoint.CreatedAt) == strings.TrimSpace(saved.CreatedAt)
+		evidence.PurposeMatch = strings.TrimSpace(savePoint.Purpose) == strings.TrimSpace(saved.Purpose)
+		evidence.Visible = evidence.HistoryHeadID == evidence.SavePointID &&
+			savePoint.HistoryHead &&
+			evidence.MessageMatch &&
+			evidence.CreatedAtMatch &&
+			evidence.PurposeMatch &&
+			!savePointCreateInternalPurpose(savePoint.Purpose)
+		if evidence.Visible {
+			return evidence, nil
+		}
+		return evidence, errSavePointNotVisible
+	}
+	return evidence, errSavePointNotVisible
+}
+
+func savePointMaterializationDetails(summary jvsrunner.DirectSaveSummary) map[string]any {
+	details := map[string]any{
+		"save_point_materialized": false,
+	}
+	if savePointID := strings.TrimSpace(summary.SavePointID); savePointID != "" {
+		details["save_point_id"] = savePointID
+	}
+	if headID := strings.TrimSpace(summary.HistoryHeadID); headID != "" {
+		details["history_head_id"] = headID
+	}
+	return details
+}
+
+func savePointVisibilityDetails(evidence savePointVisibilityEvidence) map[string]any {
+	details := map[string]any{
+		"history_visible": false,
+	}
+	if strings.TrimSpace(evidence.SavePointID) != "" {
+		details["save_point_id"] = evidence.SavePointID
+	}
+	if strings.TrimSpace(evidence.HistoryHeadID) != "" {
+		details["history_head_id"] = evidence.HistoryHeadID
+	}
+	details["history_head"] = evidence.HistoryHead
+	details["message_match"] = evidence.MessageMatch
+	details["created_at_match"] = evidence.CreatedAtMatch
+	details["purpose_match"] = evidence.PurposeMatch
+	return details
+}
+
+func savePointCreateInternalPurpose(purpose string) bool {
+	switch strings.TrimSpace(purpose) {
+	case "template_source", "task_template_source":
+		return true
+	default:
+		return false
+	}
 }
 
 func (executor *SavePointExecutor) auditEvent(operation operations.OperationRecord, now time.Time, outcome audit.Outcome, reason string, details map[string]any) (audit.Event, error) {

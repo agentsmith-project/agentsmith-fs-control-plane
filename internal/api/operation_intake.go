@@ -258,6 +258,7 @@ func operationEnvelopeFromRecord(record operations.OperationRecord) (OperationEn
 		OperationID:    record.ID,
 		OperationState: OperationState(record.State),
 		Resource:       ResourceRef{Type: record.Resource.Type, ID: record.Resource.ID},
+		Result:         operationResultFromRecord(record),
 		Error:          standardErrorFromOperationError(record.Error),
 	}), nil
 }
@@ -334,6 +335,54 @@ func standardErrorFromOperationError(operationError *operations.OperationError) 
 		CorrelationID: operationError.CorrelationID,
 		OperationID:   operationID,
 		Details:       cloneAnyMap(operationError.Details),
+	}
+}
+
+func operationResultFromRecord(record operations.OperationRecord) map[string]any {
+	if record.State != operations.OperationStateSucceeded {
+		return nil
+	}
+	switch record.Type {
+	case operations.OperationSavePointCreate:
+		return savePointCreateOperationResult(record)
+	default:
+		return nil
+	}
+}
+
+func savePointCreateOperationResult(record operations.OperationRecord) map[string]any {
+	savePointID, ok := operationResultString(record.JVSJSONOutput, "save_point_id")
+	if !ok || operations.ValidateSavePointID(savePointID) != nil {
+		return nil
+	}
+	externalID, ok := operationResultString(record.ExternalResourceIDs, "save_point_id")
+	if !ok || operations.ValidateSavePointID(externalID) != nil || externalID != savePointID {
+		return nil
+	}
+	if verificationID, ok := operationResultString(record.VerificationResult, "save_point_id"); !ok || verificationID != savePointID {
+		return nil
+	}
+	result := map[string]any{"save_point_id": savePointID}
+	if createdAt, ok := operationResultString(record.JVSJSONOutput, "created_at"); ok {
+		result["created_at"] = createdAt
+	}
+	if repoID := strings.TrimSpace(record.RepoID); repoID != "" {
+		result["repo_id"] = repoID
+	}
+	return result
+}
+
+func operationResultString(value any, key string) (string, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		raw, _ := typed[key].(string)
+		out := strings.TrimSpace(raw)
+		return out, out != ""
+	case map[string]string:
+		out := strings.TrimSpace(typed[key])
+		return out, out != ""
+	default:
+		return "", false
 	}
 }
 

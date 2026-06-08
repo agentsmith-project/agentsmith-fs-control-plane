@@ -53,7 +53,7 @@ func TestSanitizeRecordRedactsExternalResourceIDs(t *testing.T) {
 		ID:                  "op-1",
 		Type:                OperationRepoCreate,
 		State:               OperationStateSucceeded,
-		ExternalResourceIDs: map[string]string{"jvs_repo_id": "jvs-secret", "volume": "vol-secret"},
+		ExternalResourceIDs: map[string]string{"jvs_repo_id": "jvs-secret", "volume": "vol-secret", "save_point_id": "sp_001"},
 	}
 
 	sanitized := record.Sanitized()
@@ -62,6 +62,9 @@ func TestSanitizeRecordRedactsExternalResourceIDs(t *testing.T) {
 	}
 	if got := sanitized.ExternalResourceIDs["volume"]; got != redactedValue {
 		t.Fatalf("volume = %q, want redacted value", got)
+	}
+	if got := sanitized.ExternalResourceIDs["save_point_id"]; got != "sp_001" {
+		t.Fatalf("save_point_id = %q, want safe opaque id preserved", got)
 	}
 	assertNoSecretMaterial(t, sanitized.ExternalResourceIDs)
 	if !sanitized.Redaction.Redacted {
