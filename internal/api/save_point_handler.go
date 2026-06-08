@@ -34,6 +34,10 @@ type RepoJVSMutationGateStatusReader interface {
 	GetRepoJVSMutationGateStatus(ctx context.Context, repoID string) (RepoJVSMutationGateStatus, error)
 }
 
+type SavePointCreateRecoveryCapabilityReader interface {
+	SavePointCreateRecoveryCapabilityReady(ctx context.Context, now time.Time) (bool, error)
+}
+
 type SavePointHistory struct {
 	SavePoints []SavePointResponse
 }
@@ -58,6 +62,7 @@ type SavePointHandlerConfig struct {
 	MutationGate       RepoJVSMutationGateStatusReader
 	SessionStateReader SavePointSessionStateReader
 	CreateReady        bool
+	CreateReadyReader  SavePointCreateRecoveryCapabilityReader
 	IntakeStore        OperationIntakeStore
 	IntakeLookupStore  OperationIdempotencyLookupStore
 	PrincipalResolver  PrincipalResolver
@@ -97,22 +102,29 @@ func SavePointHandler(config SavePointHandlerConfig) http.Handler {
 			sessionReader = typed
 		}
 	}
+	createReadyReader := config.CreateReadyReader
+	if createReadyReader == nil {
+		if typed, ok := config.IntakeStore.(SavePointCreateRecoveryCapabilityReader); ok {
+			createReadyReader = typed
+		}
+	}
 	leaf := savePointLeafHandler{
-		createRoute:     createRoute,
-		listRoute:       listRoute,
-		repoReader:      config.RepoReader,
-		namespaceReader: config.NamespaceReader,
-		bindingReader:   config.BindingReader,
-		fenceReader:     config.FenceReader,
-		historyReader:   config.HistoryReader,
-		mutationGate:    mutationGate,
-		sessionReader:   sessionReader,
-		createReady:     config.CreateReady,
-		intakeStore:     config.IntakeStore,
-		lookupStore:     lookupStore,
-		operationID:     config.OperationID,
-		now:             config.Now,
-		sink:            config.AuditSink,
+		createRoute:       createRoute,
+		listRoute:         listRoute,
+		repoReader:        config.RepoReader,
+		namespaceReader:   config.NamespaceReader,
+		bindingReader:     config.BindingReader,
+		fenceReader:       config.FenceReader,
+		historyReader:     config.HistoryReader,
+		mutationGate:      mutationGate,
+		sessionReader:     sessionReader,
+		createReady:       config.CreateReady,
+		createReadyReader: createReadyReader,
+		intakeStore:       config.IntakeStore,
+		lookupStore:       lookupStore,
+		operationID:       config.OperationID,
+		now:               config.Now,
+		sink:              config.AuditSink,
 	}
 	return AuthGateWithAuditSink(leaf, config.PrincipalResolver, savePointRouteResolver{createRoute: createRoute, listRoute: listRoute}, config.AllowedCallers, config.AuditSink)
 }
@@ -138,21 +150,22 @@ func (resolver savePointRouteResolver) ResolveRouteClass(r *http.Request) (Route
 }
 
 type savePointLeafHandler struct {
-	createRoute     RouteMetadata
-	listRoute       RouteMetadata
-	repoReader      RepoReader
-	namespaceReader NamespaceReader
-	bindingReader   NamespaceVolumeBindingReader
-	fenceReader     RepoFenceReader
-	historyReader   SavePointHistoryReader
-	mutationGate    RepoJVSMutationGateStatusReader
-	sessionReader   SavePointSessionStateReader
-	createReady     bool
-	intakeStore     OperationIntakeStore
-	lookupStore     OperationIdempotencyLookupStore
-	operationID     OperationIDGenerator
-	now             func() time.Time
-	sink            audit.Sink
+	createRoute       RouteMetadata
+	listRoute         RouteMetadata
+	repoReader        RepoReader
+	namespaceReader   NamespaceReader
+	bindingReader     NamespaceVolumeBindingReader
+	fenceReader       RepoFenceReader
+	historyReader     SavePointHistoryReader
+	mutationGate      RepoJVSMutationGateStatusReader
+	sessionReader     SavePointSessionStateReader
+	createReady       bool
+	createReadyReader SavePointCreateRecoveryCapabilityReader
+	intakeStore       OperationIntakeStore
+	lookupStore       OperationIdempotencyLookupStore
+	operationID       OperationIDGenerator
+	now               func() time.Time
+	sink              audit.Sink
 }
 
 func (handler savePointLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -297,14 +310,38 @@ func (handler savePointLeafHandler) serveList(w http.ResponseWriter, r *http.Req
 }
 
 func (handler savePointLeafHandler) checkCreateReady(w http.ResponseWriter, r *http.Request) bool {
-	if handler.createReady {
-		return true
+	if !handler.createReady {
+		writeSavePointCreatePending(w, r, "worker_recovery_config_not_ready")
+		return false
 	}
+	if handler.createReadyReader == nil {
+		writeSavePointCreatePending(w, r, "worker_recovery_not_ready")
+		return false
+	}
+	now := time.Now().UTC()
+	if handler.now != nil {
+		now = handler.now()
+	}
+	ready, err := handler.createReadyReader.SavePointCreateRecoveryCapabilityReady(r.Context(), now)
+	if err != nil {
+		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return false
+	}
+	if !ready {
+		writeSavePointCreatePending(w, r, "worker_recovery_not_ready")
+		return false
+	}
+	return true
+}
+
+func writeSavePointCreatePending(w http.ResponseWriter, r *http.Request, reason string) {
 	code, message, retryable, details := fileLibraryBlockingOperationError(false)
 	details["execution_status"] = "pending"
+	if strings.TrimSpace(reason) != "" {
+		details["execution_reason"] = reason
+	}
 	envelope := NewErrorEnvelope(code, message, retryable, CorrelationIDFromRequest(r), nil, details)
 	_ = WriteErrorEnvelope(w, http.StatusConflict, envelope)
-	return false
 }
 
 func (handler savePointLeafHandler) checkHistoryReadGate(w http.ResponseWriter, r *http.Request, repoID string) bool {

@@ -321,6 +321,14 @@ type SavePointCreateOperationMetadataReader interface {
 	RepoSessionStateReader
 }
 
+type SavePointCreateRecoveryCapabilityReader interface {
+	SavePointCreateRecoveryCapabilityReady(ctx context.Context, now time.Time) (bool, error)
+}
+
+type SavePointCreateRecoveryCapabilityRecorder interface {
+	RecordSavePointCreateRecoveryCapability(ctx context.Context, owner string, observedAt, expiresAt time.Time) error
+}
+
 type RestoreOperationCommitStore interface {
 	MarkRestoreWriterFencedWithLease(ctx context.Context, fence fences.Fence, record operations.SanitizedOperationRecord, owner string, now time.Time) (fences.Fence, operations.OperationRecord, error)
 	CommitRestoreSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error)
@@ -364,6 +372,7 @@ type SavePointCreateOperationRecoveryStore interface {
 	AcquireSavePointCreateOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
 	SavePointCreateOperationCommitStore
 	SavePointCreateOperationMetadataReader
+	SavePointCreateRecoveryCapabilityRecorder
 }
 
 // AuditSink accepts audit events for append-only or outbox-backed delivery.

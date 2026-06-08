@@ -51,5 +51,6 @@ func RequiredTables() []string {
 		"restore_reconciliation_runs",
 		"restore_reconciliation_targets",
 		"restore_reconciliation_observations",
+		"worker_capability_heartbeats",
 	}
 }

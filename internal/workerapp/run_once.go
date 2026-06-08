@@ -217,6 +217,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 	if eventID == nil {
 		eventID = NewAuditEventID
 	}
+	savePointRecoveryCapabilityEnabled := false
 
 	if exportConfig.Enabled {
 		workerConfig.ExportSessionReconcile = exportreconcile.New(exportreconcile.Config{
@@ -469,6 +470,7 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 				}
 				executors = append(executors, savePointExecutor)
 				scopedStore.savePointEnabled = true
+				savePointRecoveryCapabilityEnabled = true
 			}
 		}
 		if opConfig.TemplateCreate.Enabled {
@@ -609,7 +611,17 @@ func NewRunOnceRunner(options Options) (*RunOnceRunner, error) {
 			Clock:         now,
 			AuditEventID:  func() string { return eventID() },
 		})
-		workerConfig.OperationRecovery = operationRecovery
+		var operationRecoveryRunner worker.OperationRecoveryRunner = operationRecovery
+		if savePointRecoveryCapabilityEnabled {
+			operationRecoveryRunner = savePointCapabilityOperationRecoveryRunner{
+				inner:    operationRecovery,
+				recorder: scopedStore,
+				owner:    opConfig.Owner,
+				ttl:      cfg.Worker.RunOnceTimeout,
+				clock:    now,
+			}
+		}
+		workerConfig.OperationRecovery = operationRecoveryRunner
 	}
 
 	if auditConfig.Enabled {
@@ -719,6 +731,35 @@ func newRecoveryJVSRunner(cfg config.WorkerRepoCreateRecoveryConfig, factory JVS
 		return nil, false, err
 	}
 	return runner, true, nil
+}
+
+type savePointCapabilityOperationRecoveryRunner struct {
+	inner    worker.OperationRecoveryRunner
+	recorder store.SavePointCreateRecoveryCapabilityRecorder
+	owner    string
+	ttl      time.Duration
+	clock    func() time.Time
+}
+
+func (runner savePointCapabilityOperationRecoveryRunner) RunOnce(ctx context.Context) (recovery.OperationBatchResult, error) {
+	if runner.inner == nil {
+		return recovery.OperationBatchResult{}, errors.New("operation recovery runner is required")
+	}
+	if runner.recorder == nil {
+		return recovery.OperationBatchResult{}, errors.New("save point recovery capability recorder is required")
+	}
+	observedAt := time.Now().UTC()
+	if runner.clock != nil {
+		observedAt = runner.clock()
+	}
+	ttl := runner.ttl
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	if err := runner.recorder.RecordSavePointCreateRecoveryCapability(ctx, runner.owner, observedAt, observedAt.Add(ttl)); err != nil {
+		return recovery.OperationBatchResult{}, err
+	}
+	return runner.inner.RunOnce(ctx)
 }
 
 func NewJVSRunnerFromConfig(cfg config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
@@ -1077,6 +1118,10 @@ func (scoped operationRecoveryStore) CommitSavePointCreateSucceededWithLease(ctx
 
 func (scoped operationRecoveryStore) CommitSavePointCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	return scoped.store.CommitSavePointCreateFailedWithLease(ctx, record, owner, now, event)
+}
+
+func (scoped operationRecoveryStore) RecordSavePointCreateRecoveryCapability(ctx context.Context, owner string, observedAt, expiresAt time.Time) error {
+	return scoped.store.RecordSavePointCreateRecoveryCapability(ctx, owner, observedAt, expiresAt)
 }
 
 func (scoped operationRecoveryStore) CommitTemplateCreateSucceededWithLease(ctx context.Context, template resources.Repo, sourceRepoID, sourceSavePointID, cloneHistoryMode string, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {

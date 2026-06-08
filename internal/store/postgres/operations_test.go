@@ -28,6 +28,8 @@ func TestStoreImplementsContracts(t *testing.T) {
 	var _ store.RepoCreateOperationCommitStore = (*Store)(nil)
 	var _ store.RepoCreateOperationRecoveryStore = (*Store)(nil)
 	var _ store.SavePointCreateOperationRecoveryStore = (*Store)(nil)
+	var _ store.SavePointCreateRecoveryCapabilityReader = (*Store)(nil)
+	var _ store.SavePointCreateRecoveryCapabilityRecorder = (*Store)(nil)
 	var _ store.RestoreOperationRecoveryStore = (*Store)(nil)
 	var _ store.RepoJVSMutationGateReader = (*Store)(nil)
 	var _ store.RepoJVSMutationGateStatusReader = (*Store)(nil)

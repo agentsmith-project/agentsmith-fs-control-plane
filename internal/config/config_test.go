@@ -952,6 +952,32 @@ func TestLoadWorkerOperationRecoveryRequiresDSNAndOwnerWhenEnabled(t *testing.T)
 	}
 }
 
+func TestLoadWorkerOperationRecoverySubCapabilityImpliesTopLevelRecovery(t *testing.T) {
+	source := MapSource{
+		"AFSCP_SAVE_POINT_RECOVERY_ENABLED": "true",
+		"AFSCP_POSTGRES_DSN":                "postgres://user:password@db/afscp",
+		"AFSCP_WORKER_OWNER":                "worker-a",
+		"AFSCP_JVS_BINARY_PATH":             "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":           JVSAcceptedLinuxAMD64SHA256,
+		"AFSCP_JVS_CWD":                     "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                "vol_123=/srv/afscp/volumes/vol_123",
+	}
+
+	cfg, err := Load(source)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Worker.OperationRecovery.Enabled || !cfg.Worker.OperationRecovery.SavePoint.Enabled {
+		t.Fatalf("operation recovery config = %#v, want savepoint sub-capability to enable recovery", cfg.Worker.OperationRecovery)
+	}
+
+	delete(source, "AFSCP_POSTGRES_DSN")
+	_, err = Load(source)
+	if err == nil || !strings.Contains(err.Error(), "AFSCP_POSTGRES_DSN") {
+		t.Fatalf("Load without dsn error = %v, want operation recovery dsn requirement", err)
+	}
+}
+
 func TestLoadWorkerOperationRecoveryRejectsInvalidValues(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -1348,6 +1348,9 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	if store.savePointListCalls != 1 || strings.Join(store.acquireIDs, ",") != "op_savepoint" {
 		t.Fatalf("list/acquire = %d/%#v, want save_point_create listed and acquired", store.savePointListCalls, store.acquireIDs)
 	}
+	if store.savePointCapabilityOwner != "worker-a" || !store.savePointCapabilityObservedAt.Equal(now) || !store.savePointCapabilityExpiresAt.After(now) {
+		t.Fatalf("save point capability heartbeat = owner %q observed %s expires %s, want live worker-a heartbeat", store.savePointCapabilityOwner, store.savePointCapabilityObservedAt, store.savePointCapabilityExpiresAt)
+	}
 	if strings.Join(jvs.calls, ",") != "direct_save,direct_list" {
 		t.Fatalf("jvs calls = %#v, want direct_save,direct_list", jvs.calls)
 	}
@@ -1356,6 +1359,46 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	}
 	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeSavePointCreate || store.auditEvents[0].Outcome != audit.OutcomeSucceeded || store.auditEvents[0].Reason != "save_point_create_committed" {
 		t.Fatalf("audit events = %#v, want succeeded save_point_create_committed event", store.auditEvents)
+	}
+}
+
+func TestRunOnceSavePointCreateHeartbeatFailureDoesNotRunDirectSave(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	store.savePointCapabilityErr = errors.New("heartbeat store unavailable")
+	jvs := &workerAppFakeJVSRunner{
+		directSaveSummary: jvsrunner.DirectSaveSummary{
+			SavePointID:   "sp_after",
+			HistoryHeadID: "sp_after",
+			CreatedAt:     "2026-05-05T12:00:00Z",
+		},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppSavePointConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_savepoint" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("RunOnce succeeded, want heartbeat failure")
+	}
+	if summary := result.Summary().Operation; summary.Scanned != 0 || summary.Claimed != 0 {
+		t.Fatalf("summary = %#v, want no recovery after heartbeat failure", summary)
+	}
+	if len(jvs.calls) != 0 || store.savePointListCalls != 0 || len(store.acquireIDs) != 0 {
+		t.Fatalf("jvs/list/acquire = %#v/%d/%#v, want direct save skipped", jvs.calls, store.savePointListCalls, store.acquireIDs)
 	}
 }
 
@@ -2977,6 +3020,10 @@ type fakeWorkerAppStore struct {
 	restoreReconciliationMismatchCommits []restorereconcile.MismatchCommit
 	genericUpdateCalls                   int
 	volumeReadErr                        error
+	savePointCapabilityOwner             string
+	savePointCapabilityObservedAt        time.Time
+	savePointCapabilityExpiresAt         time.Time
+	savePointCapabilityErr               error
 }
 
 type workerAppAuditFailedCall struct {
@@ -3916,6 +3963,16 @@ func (store *fakeWorkerAppStore) CommitSavePointCreateFailedWithLease(_ context.
 	store.operation = operation
 	store.auditEvents = append(store.auditEvents, event)
 	return operation, nil
+}
+
+func (store *fakeWorkerAppStore) RecordSavePointCreateRecoveryCapability(_ context.Context, owner string, observedAt, expiresAt time.Time) error {
+	if store.savePointCapabilityErr != nil {
+		return store.savePointCapabilityErr
+	}
+	store.savePointCapabilityOwner = owner
+	store.savePointCapabilityObservedAt = observedAt
+	store.savePointCapabilityExpiresAt = expiresAt
+	return nil
 }
 
 func (store *fakeWorkerAppStore) CommitTemplateCreateSucceededWithLease(_ context.Context, template resources.Repo, _ string, _ string, _ string, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event) (resources.Repo, operations.OperationRecord, error) {

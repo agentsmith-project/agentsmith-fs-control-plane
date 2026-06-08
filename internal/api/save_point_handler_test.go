@@ -73,6 +73,79 @@ func TestSavePointCreateRequiresExecutionCapabilityBeforeIntake(t *testing.T) {
 	assertSavePointResponseDoesNotLeak(t, rec.Body.String())
 }
 
+func TestSavePointCreateRequiresLiveWorkerRecoveryCapabilityBeforeIntake(t *testing.T) {
+	intake := &fakeOperationIntakeStore{}
+	reader := &fakeSavePointCreateReadyReader{ready: false}
+	handler := SavePointHandler(SavePointHandlerConfig{
+		RepoReader:         &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}},
+		NamespaceReader:    &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
+		BindingReader:      &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
+		FenceReader:        &fakeRepoFenceReader{},
+		MutationGate:       &fakeRepoJVSMutationGateReader{},
+		SessionStateReader: &fakeSavePointSessionStateReader{},
+		CreateReady:        true,
+		CreateReadyReader:  reader,
+		IntakeStore:        intake,
+		PrincipalResolver:  namespaceBindingPrincipalResolver(),
+		AllowedCallers:     namespaceBindingAllowedPolicy(auth.RoleRepoAdmin),
+		OperationID:        func() string { return "op_savepoint" },
+		Now:                func() time.Time { return fixedNamespaceNow() },
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, savePointRequest(http.MethodPost, "/internal/v1/repos/repo_123/save-points", `{"message":"checkpoint"}`, "ns_123"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeFileLibraryOperationPending || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want retryable %s", env.Error, CodeFileLibraryOperationPending)
+	}
+	if got, ok := env.Error.Details["execution_reason"].(string); !ok || got != "worker_recovery_not_ready" {
+		t.Fatalf("execution_reason = %#v, want worker_recovery_not_ready", env.Error.Details["execution_reason"])
+	}
+	if reader.calls != 1 || intake.calls != 0 {
+		t.Fatalf("ready/intake calls = %d/%d, want worker capability check before operation intake", reader.calls, intake.calls)
+	}
+	assertSavePointResponseDoesNotLeak(t, rec.Body.String())
+}
+
+func TestSavePointCreateLiveWorkerRecoveryCapabilityErrorFailsClosed(t *testing.T) {
+	intake := &fakeOperationIntakeStore{}
+	reader := &fakeSavePointCreateReadyReader{err: errors.New("metadata unavailable")}
+	handler := SavePointHandler(SavePointHandlerConfig{
+		RepoReader:         &fakeRepoReader{repos: []resources.Repo{repoResourceFixture("ns_123", "repo_123", resources.RepoStatusActive)}},
+		NamespaceReader:    &fakeNamespaceReader{namespace: activeNamespaceFixture("ns_123")},
+		BindingReader:      &fakeNamespaceVolumeBindingReader{binding: namespacePolicyBindingFixture("ns_123", resources.AllowedCaller{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}})},
+		FenceReader:        &fakeRepoFenceReader{},
+		MutationGate:       &fakeRepoJVSMutationGateReader{},
+		SessionStateReader: &fakeSavePointSessionStateReader{},
+		CreateReady:        true,
+		CreateReadyReader:  reader,
+		IntakeStore:        intake,
+		PrincipalResolver:  namespaceBindingPrincipalResolver(),
+		AllowedCallers:     namespaceBindingAllowedPolicy(auth.RoleRepoAdmin),
+		OperationID:        func() string { return "op_savepoint" },
+		Now:                func() time.Time { return fixedNamespaceNow() },
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, savePointRequest(http.MethodPost, "/internal/v1/repos/repo_123/save-points", `{"message":"checkpoint"}`, "ns_123"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d body = %s, want 503", rec.Code, rec.Body.String())
+	}
+	env := decodeErrorEnvelope(t, rec.Body.Bytes())
+	if env.Error.Code != CodeStorageUnavailable || !env.Error.Retryable {
+		t.Fatalf("error = %#v, want retryable storage unavailable", env.Error)
+	}
+	if intake.calls != 0 {
+		t.Fatalf("intake calls = %d, want denied before operation intake", intake.calls)
+	}
+	assertSavePointResponseDoesNotLeak(t, rec.Body.String())
+}
+
 func TestSavePointCreatePreservesNaturalLanguageSensitiveWords(t *testing.T) {
 	for _, message := range []string{"fix secret handling", "rotate token docs", "update password policy"} {
 		t.Run(message, func(t *testing.T) {
@@ -312,6 +385,7 @@ func TestSavePointCreateRejectsDisabledNamespaceBeforeIntakeAndAudits(t *testing
 		FenceReader:       &fakeRepoFenceReader{},
 		MutationGate:      &fakeRepoJVSMutationGateReader{},
 		CreateReady:       true,
+		CreateReadyReader: &fakeSavePointCreateReadyReader{ready: true},
 		IntakeStore:       intake,
 		PrincipalResolver: namespaceBindingPrincipalResolver(),
 		AllowedCallers:    namespaceBindingAllowedPolicy(auth.RoleRepoAdmin),
@@ -605,6 +679,7 @@ func savePointTestHandlerWithSessions(intake *fakeOperationIntakeStore, history 
 		MutationGate:       gate,
 		SessionStateReader: sessionReader,
 		CreateReady:        true,
+		CreateReadyReader:  &fakeSavePointCreateReadyReader{ready: true},
 		IntakeStore:        intake,
 		PrincipalResolver:  namespaceBindingPrincipalResolver(),
 		AllowedCallers:     namespaceBindingAllowedPolicy(auth.RoleRepoAdmin),
@@ -711,6 +786,20 @@ func (reader *fakeSavePointHistoryReader) ListSavePoints(context.Context, string
 		return SavePointHistory{}, reader.err
 	}
 	return reader.history, nil
+}
+
+type fakeSavePointCreateReadyReader struct {
+	ready bool
+	err   error
+	calls int
+}
+
+func (reader *fakeSavePointCreateReadyReader) SavePointCreateRecoveryCapabilityReady(context.Context, time.Time) (bool, error) {
+	reader.calls++
+	if reader.err != nil {
+		return false, reader.err
+	}
+	return reader.ready, nil
 }
 
 type fakeSavePointSessionStateReader struct {

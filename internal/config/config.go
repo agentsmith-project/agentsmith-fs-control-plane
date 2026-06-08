@@ -358,6 +358,9 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 		return WorkerConfig{}, err
 	}
 	worker.OperationRecovery.Restore = restore
+	if workerOperationRecoverySubCapabilityEnabled(worker.OperationRecovery) {
+		worker.OperationRecovery.Enabled = true
+	}
 
 	limit, err := intValue(source, "AFSCP_OPERATION_RECOVERY_LIMIT", worker.OperationRecovery.Limit)
 	if err != nil {
@@ -416,6 +419,16 @@ func loadWorkerConfig(source Source, defaults WorkerConfig) (WorkerConfig, error
 	worker.AuditDelivery = auditDelivery
 
 	return worker, nil
+}
+
+func workerOperationRecoverySubCapabilityEnabled(cfg WorkerOperationRecoveryConfig) bool {
+	return cfg.RepoCreate.Enabled ||
+		cfg.RepoLifecycle.Enabled ||
+		cfg.RepoPurge.Enabled ||
+		cfg.SavePoint.Enabled ||
+		cfg.TemplateCreate.Enabled ||
+		cfg.TemplateClone.Enabled ||
+		cfg.Restore.Enabled
 }
 
 func loadWorkerExportSessionReconcileConfig(source Source, defaults WorkerExportSessionReconcileConfig) (WorkerExportSessionReconcileConfig, error) {
