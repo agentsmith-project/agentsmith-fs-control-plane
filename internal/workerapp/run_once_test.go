@@ -1359,6 +1359,112 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	}
 }
 
+func TestRunOnceSavePointCreateDirectCommandFailureTerminalizesWithoutManual(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	jvs := &workerAppFakeJVSRunner{
+		directSaveErr: &jvsrunner.CommandError{Command: "afscp save", ExitCode: 1, Code: "E_PERMISSION_DENIED"},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppSavePointConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_savepoint" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Manual != 0 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want claimed terminal failure without manual", summary)
+	}
+	if strings.Join(jvs.calls, ",") != "direct_save" {
+		t.Fatalf("jvs calls = %#v, want direct_save", jvs.calls)
+	}
+	got := store.records[record.ID]
+	if got.State != operations.OperationStateFailed || got.Phase != operations.OperationPhaseSavePointCreateValidate || got.Error == nil || got.Error.Code != "JVS_COMMAND_FAILED" || got.Error.Retryable {
+		t.Fatalf("operation = %#v, want non-retryable failed JVS_COMMAND_FAILED", got)
+	}
+	if got.LeaseOwner != "" || got.LeaseExpiresAt != nil {
+		t.Fatalf("operation lease = %q/%v, want released terminal lease", got.LeaseOwner, got.LeaseExpiresAt)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeSavePointCreate || store.auditEvents[0].Reason != "save_point_create_failed" {
+		t.Fatalf("audit events = %#v, want failed save_point_create event", store.auditEvents)
+	}
+}
+
+func TestRunOnceSavePointCreateAmbiguousFailuresRemainManual(t *testing.T) {
+	now := workerAppNow()
+	tests := []struct {
+		name      string
+		edit      func(*operations.OperationRecord, *workerAppFakeJVSRunner)
+		wantCalls string
+		wantCode  string
+	}{
+		{name: "plain direct save error", wantCalls: "direct_save", wantCode: "JVS_COMMAND_FAILED", edit: func(_ *operations.OperationRecord, jvs *workerAppFakeJVSRunner) {
+			jvs.directSaveErr = errors.New("direct save process failed after possible write")
+		}},
+		{name: "prepared recovery", wantCalls: "", wantCode: "SAVE_POINT_RECOVERY_UNCERTAIN", edit: func(record *operations.OperationRecord, _ *workerAppFakeJVSRunner) {
+			record.Phase = operations.OperationPhaseSavePointCreatePrepared
+			record.VerificationResult = map[string]any{"pre_save_history_captured": true, "pre_save_newest_save_point_id": "sp_before"}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
+			jvs := &workerAppFakeJVSRunner{}
+			tt.edit(&record, jvs)
+			store := newWorkerAppStore(record)
+			store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+			runner, err := NewRunOnceRunner(Options{
+				Source: workerAppSavePointConfigSource(nil),
+				StoreFactory: func(context.Context, string) (StoreHandle, error) {
+					return StoreHandle{Store: store}, nil
+				},
+				JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+					return jvs, nil
+				},
+				Clock:        func() time.Time { return now },
+				AuditEventID: func() string { return "evt_savepoint" },
+			})
+			if err != nil {
+				t.Fatalf("NewRunOnceRunner: %v", err)
+			}
+
+			result, err := runner.RunOnce(context.Background())
+			if err == nil {
+				t.Fatal("RunOnce succeeded, want manual intervention recovery count error")
+			}
+			summary := result.Summary().Operation
+			if summary.Manual != 1 || summary.Claimed != 0 || summary.Failed != 0 {
+				t.Fatalf("summary = %#v, want one manual recovery result", summary)
+			}
+			if gotCalls := strings.Join(jvs.calls, ","); gotCalls != tt.wantCalls {
+				t.Fatalf("jvs calls = %#v, want %q", jvs.calls, tt.wantCalls)
+			}
+			got := store.records[record.ID]
+			if got.State != operations.OperationStateOperatorInterventionRequired || got.Error == nil || got.Error.Code != tt.wantCode {
+				t.Fatalf("operation = %#v, want operator intervention %s", got, tt.wantCode)
+			}
+			if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_operator_intervention_required" {
+				t.Fatalf("audit events = %#v, want operator intervention audit", store.auditEvents)
+			}
+		})
+	}
+}
+
 func TestRunOnceTemplateCreateDisabledScansAndPersistsUnsupportedIntervention(t *testing.T) {
 	now := workerAppNow()
 	record := workerAppTemplateCreateOperationRecord("op_template_create", now)
@@ -4053,13 +4159,16 @@ func (runner *workerAppFakeJVSRunner) DirectSaveWithPurpose(_ context.Context, t
 	runner.payloadRoot = target.Home
 	runner.saveMessage = message
 	runner.savePurpose = purpose
+	if runner.directSaveErr != nil {
+		return runner.directSaveSummary, runner.directSaveErr
+	}
 	if runner.directSaveSummary.SavePointID == "" && runner.saveSummary.SavePointID != "" {
 		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, Purpose: purpose, CreatedAt: runner.saveSummary.CreatedAt}
 	}
 	if runner.directSaveSummary.SavePointID == "" {
 		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: "sp_001", HistoryHeadID: "sp_001", Message: message, Purpose: purpose, CreatedAt: "2026-05-05T12:00:00Z"}
 	}
-	return runner.directSaveSummary, runner.directSaveErr
+	return runner.directSaveSummary, nil
 }
 
 func (runner *workerAppFakeJVSRunner) DirectList(_ context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error) {

@@ -135,8 +135,11 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	saved, err := executor.jvs.DirectSave(ctx, target, message)
 	if err != nil {
 		details := withJVSErrorDetails(nil, err)
-		if isJVSRepoBusyError(err) {
-			return executor.commitSavePointFailedWithDetails(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save blocked by active repo access", true, details)
+		if savePointDirectCommandFailureIsTerminal(saved, err) {
+			if isJVSRepoBusyError(err) {
+				return executor.commitSavePointFailedWithDetails(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save blocked by active repo access", true, details)
+			}
+			return executor.commitSavePointFailedWithDetails(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save failed", false, details)
 		}
 		return executor.commitSavePointIntervention(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save failed", details)
 	}
@@ -280,6 +283,26 @@ func savePointFailedOperation(record operations.OperationRecord, now time.Time, 
 func isJVSRepoBusyError(err error) bool {
 	var commandErr *jvsrunner.CommandError
 	return errors.As(err, &commandErr) && commandErr.Code == "E_REPO_BUSY"
+}
+
+func savePointDirectCommandFailureIsTerminal(summary jvsrunner.DirectSaveSummary, err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var commandErr *jvsrunner.CommandError
+	if !errors.As(err, &commandErr) {
+		return false
+	}
+	return !savePointDirectSaveHasSideEffectEvidence(summary)
+}
+
+func savePointDirectSaveHasSideEffectEvidence(summary jvsrunner.DirectSaveSummary) bool {
+	return strings.TrimSpace(summary.SavePointID) != "" ||
+		strings.TrimSpace(summary.HistoryHeadID) != "" ||
+		strings.TrimSpace(summary.Message) != "" ||
+		strings.TrimSpace(summary.Purpose) != "" ||
+		strings.TrimSpace(summary.CreatedAt) != "" ||
+		len(summary.CloneEvidence) > 0
 }
 
 func (executor *SavePointExecutor) auditEvent(operation operations.OperationRecord, now time.Time, outcome audit.Outcome, reason string, details map[string]any) (audit.Event, error) {

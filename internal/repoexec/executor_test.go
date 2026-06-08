@@ -199,6 +199,89 @@ func TestSavePointExecutorDirectSaveRepoBusyFailsWithoutLegacyRepair(t *testing.
 	}
 }
 
+func TestSavePointExecutorDirectSaveCommandErrorFailsTerminallyWithoutManualIntervention(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		directSaveErr: &jvsrunner.CommandError{Command: "afscp save", ExitCode: 1, Code: "E_PERMISSION_DENIED"},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want terminal failed commit without recovery error", err)
+	}
+	if errors.Is(err, recovery.ErrOperationManualIntervention) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want no manual intervention", err)
+	}
+	if strings.Join(runner.calls, ",") != "direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct_save only", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Phase != operations.OperationPhaseSavePointCreateValidate {
+		t.Fatalf("operation = %#v, want failed validate operation", store.operation)
+	}
+	if store.operation.Error == nil || store.operation.Error.Code != "JVS_COMMAND_FAILED" || store.operation.Error.Retryable {
+		t.Fatalf("operation error = %#v, want non-retryable JVS_COMMAND_FAILED", store.operation.Error)
+	}
+	if store.operation.Error.Details["jvs_error_code"] != "E_PERMISSION_DENIED" || store.operation.Error.Details["jvs_command"] != "afscp save" || store.operation.Error.Details["jvs_exit_code"] != 1 {
+		t.Fatalf("operation error details = %#v, want safe direct command details", store.operation.Error.Details)
+	}
+	if store.operation.VerificationResult.(map[string]any)["jvs_error_code"] != "E_PERMISSION_DENIED" {
+		t.Fatalf("verification = %#v, want safe direct command details", store.operation.VerificationResult)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_failed" {
+		t.Fatalf("audit events = %#v, want ordinary failed save point audit", store.auditEvents)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
+func TestSavePointExecutorDirectSaveAmbiguousFailuresRequireManualIntervention(t *testing.T) {
+	now := repoExecNow()
+	tests := []struct {
+		name string
+		edit func(*fakeJVSRunner)
+	}{
+		{name: "plain error", edit: func(runner *fakeJVSRunner) {
+			runner.directSaveErr = errors.New("direct save process failed after possible write")
+		}},
+		{name: "context deadline", edit: func(runner *fakeJVSRunner) {
+			runner.directSaveErr = fmt.Errorf("%w: afscp save: %w", jvsrunner.ErrCommandFailed, context.DeadlineExceeded)
+		}},
+		{name: "invalid envelope", edit: func(runner *fakeJVSRunner) {
+			runner.directSaveErr = fmt.Errorf("%w: afscp save", jvsrunner.ErrInvalidEnvelope)
+		}},
+		{name: "command error with side effect evidence", edit: func(runner *fakeJVSRunner) {
+			runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: "sp_possible", HistoryHeadID: "sp_possible", CreatedAt: "2026-05-05T12:00:00Z"}
+			runner.directSaveErr = &jvsrunner.CommandError{Command: "afscp save", ExitCode: 1, Code: "E_OUTPUT_MISMATCH"}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.repo = activeRepoResource(now)
+			runner := &fakeJVSRunner{}
+			tt.edit(runner)
+			executor := newTestSavePointExecutor(t, store, runner, now)
+
+			err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+			if !errors.Is(err, recovery.ErrOperationManualIntervention) {
+				t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+			}
+			if strings.Join(runner.calls, ",") != "direct_save" {
+				t.Fatalf("JVS calls = %#v, want direct_save only", runner.calls)
+			}
+			if store.operation.State != operations.OperationStateOperatorInterventionRequired {
+				t.Fatalf("operation = %#v, want operator intervention", store.operation)
+			}
+			if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_operator_intervention_required" {
+				t.Fatalf("audit events = %#v, want operator intervention audit", store.auditEvents)
+			}
+			assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+		})
+	}
+}
+
 func TestSavePointExecutorUsesFreshTerminalTimestampAfterSlowJVSSave(t *testing.T) {
 	started := repoExecNow()
 	terminal := started.Add(118 * time.Second)
@@ -379,6 +462,25 @@ func TestSavePointExecutorPreparedRecoveryRequiresManualInterventionWithoutJVS(t
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("JVS calls = %#v, want no save/list for obsolete prepared recovery", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateOperatorInterventionRequired {
+		t.Fatalf("operation state = %s, want operator intervention", store.operation.State)
+	}
+}
+
+func TestSavePointExecutorRetryRecoveryRequiresManualInterventionWithoutJVS(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionRetry})
+	if !errors.Is(err, recovery.ErrOperationManualIntervention) {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want manual intervention", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("JVS calls = %#v, want no save/list for retry recovery", runner.calls)
 	}
 	if store.operation.State != operations.OperationStateOperatorInterventionRequired {
 		t.Fatalf("operation state = %s, want operator intervention", store.operation.State)
@@ -1404,9 +1506,6 @@ func (runner *fakeJVSRunner) DirectSaveWithPurpose(_ context.Context, target jvs
 	if runner.afterSave != nil {
 		defer runner.afterSave()
 	}
-	if runner.directSaveSummary.SavePointID == "" && runner.saveSummary.SavePointID != "" {
-		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, Purpose: purpose, CreatedAt: runner.saveSummary.CreatedAt}
-	}
 	if runner.directSaveSummary.SavePointID != "" && len(runner.directSaveSummary.CloneEvidence) == 0 {
 		runner.directSaveSummary.CloneEvidence = fakeCloneEvidence("save", "save_point_payload", 42)
 	}
@@ -1418,7 +1517,16 @@ func (runner *fakeJVSRunner) DirectSaveWithPurpose(_ context.Context, target jvs
 	if runner.directSaveErr != nil {
 		return runner.directSaveSummary, runner.directSaveErr
 	}
-	return runner.directSaveSummary, runner.saveErr
+	if runner.saveErr != nil {
+		return runner.directSaveSummary, runner.saveErr
+	}
+	if runner.directSaveSummary.SavePointID == "" && runner.saveSummary.SavePointID != "" {
+		runner.directSaveSummary = jvsrunner.DirectSaveSummary{SavePointID: runner.saveSummary.SavePointID, HistoryHeadID: runner.saveSummary.NewestSavePointID, Message: message, Purpose: purpose, CreatedAt: runner.saveSummary.CreatedAt}
+	}
+	if runner.directSaveSummary.SavePointID != "" && len(runner.directSaveSummary.CloneEvidence) == 0 {
+		runner.directSaveSummary.CloneEvidence = fakeCloneEvidence("save", "save_point_payload", 42)
+	}
+	return runner.directSaveSummary, nil
 }
 
 func (runner *fakeJVSRunner) DirectList(_ context.Context, target jvsrunner.DirectTarget) (jvsrunner.DirectListSummary, error) {
