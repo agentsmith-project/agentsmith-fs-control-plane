@@ -151,7 +151,7 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 		details := withJVSErrorDetails(nil, err)
 		if savePointDirectCommandFailureIsTerminal(saved, err) {
 			if isJVSRepoBusyError(err) {
-				return executor.commitSavePointFailedWithDetails(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save blocked by active repo access", true, details)
+				return executor.markSavePointWriterDrainPending(ctx, record, now, savePointJVSRepoBusyPendingDetails(err))
 			}
 			return executor.commitSavePointFailedWithDetails(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save failed", false, details)
 		}
@@ -368,6 +368,14 @@ func savePointWriterDrainPendingDetails(decision sessionstate.Decision) map[stri
 		details["blocking_session_kind"] = decision.BlockingKind
 	}
 	return details
+}
+
+func savePointJVSRepoBusyPendingDetails(err error) map[string]any {
+	return withJVSErrorDetails(map[string]any{
+		"writer_drain_status": "pending",
+		"writer_drain_reason": "jvs_repo_busy",
+		"writer_drain_source": "jvs_direct_save",
+	}, err)
 }
 
 func savePointWriterDrainUnavailableDetails() map[string]any {

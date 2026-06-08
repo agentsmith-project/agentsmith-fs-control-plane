@@ -1614,6 +1614,56 @@ func TestRunOnceSavePointCreateDirectCommandFailureTerminalizesWithoutManual(t *
 	}
 }
 
+func TestRunOnceSavePointCreateDirectSaveRepoBusyStaysPending(t *testing.T) {
+	now := workerAppNow()
+	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
+	store := newWorkerAppStore(record)
+	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+	jvs := &workerAppFakeJVSRunner{
+		directSaveErr: &jvsrunner.CommandError{Command: "afscp save", ExitCode: 1, Code: "E_REPO_BUSY"},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppSavePointConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_savepoint" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Manual != 0 || summary.Failed != 0 || summary.Unsupported != 0 {
+		t.Fatalf("summary = %#v, want claimed pending without terminal failure", summary)
+	}
+	if strings.Join(jvs.calls, ",") != "direct_save" {
+		t.Fatalf("jvs calls = %#v, want direct_save", jvs.calls)
+	}
+	got := store.records[record.ID]
+	if got.State != operations.OperationStateRunning || got.Phase != operations.OperationPhaseSavePointCreateValidate || got.Error == nil || got.Error.Code != "SAVE_POINT_WRITER_DRAIN_PENDING" || !got.Error.Retryable {
+		t.Fatalf("operation = %#v, want running retryable writer-drain pending", got)
+	}
+	if got.FinishedAt != nil || got.LeaseOwner != "worker-a" || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(now) {
+		t.Fatalf("operation finish/lease = %v/%q/%v, want unfinished expired worker lease", got.FinishedAt, got.LeaseOwner, got.LeaseExpiresAt)
+	}
+	details := got.VerificationResult.(map[string]any)
+	if details["writer_drain_reason"] != "jvs_repo_busy" || details["jvs_error_code"] != "E_REPO_BUSY" {
+		t.Fatalf("verification = %#v, want jvs repo-busy writer drain marker", details)
+	}
+	if len(store.auditEvents) != 0 {
+		t.Fatalf("audit events = %#v, want no terminal save_point_create event", store.auditEvents)
+	}
+}
+
 func TestRunOnceSavePointCreateAmbiguousFailuresRemainManual(t *testing.T) {
 	now := workerAppNow()
 	tests := []struct {
