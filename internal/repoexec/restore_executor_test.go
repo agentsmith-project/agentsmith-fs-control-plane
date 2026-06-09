@@ -145,6 +145,48 @@ func TestRestoreExecutorJVSFailureCommitsFailedWithoutPreviewOrRun(t *testing.T)
 	}
 }
 
+func TestRestoreExecutorDirectRestoreBusyKeepsWriterDrainPending(t *testing.T) {
+	now := repoExecNow()
+	for _, tt := range []struct {
+		name       string
+		code       string
+		wantReason string
+	}{
+		{name: "repo busy", code: "E_REPO_BUSY", wantReason: "jvs_repo_busy"},
+		{name: "direct lock", code: "JVS_LOCKED", wantReason: "jvs_direct_locked"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.repo = activeRepoResource(now)
+			runner := &fakeJVSRunner{directRestoreErr: &jvsrunner.CommandError{Command: "afscp restore", ExitCode: 1, Code: tt.code}}
+			executor := newTestRestoreExecutor(t, store, runner, now)
+
+			if err := executor.ExecuteOperationRecovery(context.Background(), restoreLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+				t.Fatalf("ExecuteOperationRecovery: %v", err)
+			}
+			if strings.Join(runner.calls, ",") != "direct_restore" {
+				t.Fatalf("JVS calls = %#v, want direct restore only", runner.calls)
+			}
+			if store.operation.State != operations.OperationStateRunning || store.operation.Phase != operations.OperationPhaseRestoreWriterFenced || store.operation.Error == nil || store.operation.Error.Code != restoreWriterDrainPendingCode || !store.operation.Error.Retryable {
+				t.Fatalf("operation = %#v, want running retryable writer-drain pending", store.operation)
+			}
+			if store.operation.FinishedAt != nil || store.operation.LeaseExpiresAt == nil || !store.operation.LeaseExpiresAt.Equal(now) {
+				t.Fatalf("operation finish/lease = %v/%v, want unfinished expired worker lease", store.operation.FinishedAt, store.operation.LeaseExpiresAt)
+			}
+			if store.releasedFenceID != "" || activeWriterFenceCount(store.fences, "op_restore") != 1 {
+				t.Fatalf("released/active writer fence = %q/%#v, want retained writer fence", store.releasedFenceID, store.fences)
+			}
+			details := asStringAnyMap(store.operation.VerificationResult)
+			if details["writer_drain_reason"] != tt.wantReason || details["writer_drain_source"] != "jvs_direct_restore" || details["jvs_error_code"] != tt.code {
+				t.Fatalf("verification = %#v, want restore busy pending details", details)
+			}
+			if len(store.auditEvents) != 0 {
+				t.Fatalf("audit events = %#v, want no terminal audit while writer drain is pending", store.auditEvents)
+			}
+		})
+	}
+}
+
 func TestRestoreExecutorJVSRecoveryRequiredCommitsOperatorIntervention(t *testing.T) {
 	now := repoExecNow()
 	store := newFakeStore()

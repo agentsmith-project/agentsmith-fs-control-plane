@@ -156,6 +156,9 @@ func (executor *RestoreExecutor) ExecuteOperationRecovery(ctx context.Context, r
 
 	summary, err := executor.jvs.DirectRestore(ctx, target, savePointID)
 	if err != nil {
+		if reason, ok := jvsDirectRestorePendingReason(err); ok {
+			return executor.markRestoreWriterDrainPending(ctx, working, now, restoreJVSDirectRestorePendingDetails(reason, err))
+		}
 		if isJVSRecoveryRequiredError(err) {
 			return executor.commitRestoreIntervention(ctx, working, now, "JVS_RESTORE_RECOVERY_REQUIRED", "jvs restore recovery required", withJVSErrorDetails(nil, err))
 		}
@@ -320,6 +323,29 @@ func restoreWriterDrainPendingDetails(decision sessionstate.Decision) map[string
 		details["blocking_session_kind"] = decision.BlockingKind
 	}
 	return details
+}
+
+func jvsDirectRestorePendingReason(err error) (string, bool) {
+	var commandErr *jvsrunner.CommandError
+	if !errors.As(err, &commandErr) {
+		return "", false
+	}
+	switch commandErr.Code {
+	case "E_REPO_BUSY":
+		return "jvs_repo_busy", true
+	case "JVS_LOCKED":
+		return "jvs_direct_locked", true
+	default:
+		return "", false
+	}
+}
+
+func restoreJVSDirectRestorePendingDetails(reason string, err error) map[string]any {
+	return withJVSErrorDetails(map[string]any{
+		"writer_drain_status": "pending",
+		"writer_drain_reason": reason,
+		"writer_drain_source": "jvs_direct_restore",
+	}, err)
 }
 
 func (executor *RestoreExecutor) commitRestoreSuccess(ctx context.Context, record operations.OperationRecord, now time.Time, summary jvsrunner.DirectRestoreSummary, statusEvidence map[string]any) error {
