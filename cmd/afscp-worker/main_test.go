@@ -7,6 +7,7 @@ import (
 	"errors"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -127,6 +128,16 @@ func TestCommandRunOnceCanUseWorkerAppFactoryWithInjectedStore(t *testing.T) {
 	}
 	if summary.Operation.Scanned != 0 || summary.Operation.Failed != 0 {
 		t.Fatalf("summary = %#v, want empty successful operation pass", summary)
+	}
+}
+
+func TestWorkerEntrypointDoesNotDropStorageReaderIdentity(t *testing.T) {
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if strings.Contains(string(source), "DropToContainerNonrootIfRoot") || strings.Contains(string(source), "internal/runtimeidentity") {
+		t.Fatalf("afscp-worker entrypoint must not drop storage-reader identity")
 	}
 }
 

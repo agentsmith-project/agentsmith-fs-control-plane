@@ -150,10 +150,11 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	if err != nil {
 		details := withJVSErrorDetails(nil, err)
 		if savePointDirectCommandFailureIsTerminal(saved, err) {
-			if isJVSRepoBusyError(err) {
-				return executor.markSavePointWriterDrainPending(ctx, record, now, savePointJVSRepoBusyPendingDetails(err))
+			if reason, ok := jvsDirectSavePendingReason(err); ok {
+				return executor.markSavePointWriterDrainPending(ctx, record, now, savePointJVSDirectSavePendingDetails(reason, err))
 			}
-			return executor.commitSavePointFailedWithDetails(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save failed", false, details)
+			code, message := savePointDirectSaveFailureCode(err)
+			return executor.commitSavePointFailedWithDetails(ctx, record, code, message, false, details)
 		}
 		return executor.commitSavePointIntervention(ctx, record, "JVS_COMMAND_FAILED", "jvs direct save failed", details)
 	}
@@ -370,10 +371,10 @@ func savePointWriterDrainPendingDetails(decision sessionstate.Decision) map[stri
 	return details
 }
 
-func savePointJVSRepoBusyPendingDetails(err error) map[string]any {
+func savePointJVSDirectSavePendingDetails(reason string, err error) map[string]any {
 	return withJVSErrorDetails(map[string]any{
 		"writer_drain_status": "pending",
-		"writer_drain_reason": "jvs_repo_busy",
+		"writer_drain_reason": reason,
 		"writer_drain_source": "jvs_direct_save",
 	}, err)
 }
@@ -382,9 +383,34 @@ func savePointWriterDrainUnavailableDetails() map[string]any {
 	return map[string]any{"writer_drain_status": "unknown"}
 }
 
-func isJVSRepoBusyError(err error) bool {
+func jvsDirectSavePendingReason(err error) (string, bool) {
 	var commandErr *jvsrunner.CommandError
-	return errors.As(err, &commandErr) && commandErr.Code == "E_REPO_BUSY"
+	if !errors.As(err, &commandErr) {
+		return "", false
+	}
+	switch commandErr.Code {
+	case "E_REPO_BUSY":
+		return "jvs_repo_busy", true
+	case "JVS_LOCKED":
+		return "jvs_direct_locked", true
+	default:
+		return "", false
+	}
+}
+
+func savePointDirectSaveFailureCode(err error) (string, string) {
+	var commandErr *jvsrunner.CommandError
+	if !errors.As(err, &commandErr) {
+		return "JVS_COMMAND_FAILED", "jvs direct save failed"
+	}
+	switch commandErr.Code {
+	case "JVS_CLONE_FAILED":
+		return "SAVE_POINT_PAYLOAD_CLONE_FAILED", "save point payload clone failed"
+	case "JVS_CLONE_UNAVAILABLE":
+		return "SAVE_POINT_PAYLOAD_CLONE_UNAVAILABLE", "save point payload clone is unavailable"
+	default:
+		return "JVS_COMMAND_FAILED", "jvs direct save failed"
+	}
 }
 
 func savePointDirectCommandFailureIsTerminal(summary jvsrunner.DirectSaveSummary, err error) bool {

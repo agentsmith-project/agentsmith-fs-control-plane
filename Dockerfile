@@ -93,7 +93,7 @@ COPY --from=juicefs --chmod=0755 /lib/x86_64-linux-gnu/libkeyutils.so* /usr/loca
 COPY --from=juicefs --chmod=0755 /lib/x86_64-linux-gnu/libz.so* /usr/local/juicefs-lib/
 COPY --from=juicefs --chmod=0755 /lib/x86_64-linux-gnu/libnl-3.so* /usr/local/juicefs-lib/
 
-# The WebDAV gateway must traverse caller-owned payload trees. Non-gateway
-# commands drop to distroless nonroot at process start.
+# The WebDAV gateway and worker must traverse caller-owned payload trees.
+# API, migration, and bootstrap commands drop to distroless nonroot at process start.
 USER 0:0
 CMD ["/usr/local/bin/afscp-api"]

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/runtimeidentity"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/worker"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/workerapp"
 )
@@ -26,10 +25,6 @@ const (
 var version = "dev"
 
 func main() {
-	if err := runtimeidentity.DropToContainerNonrootIfRoot(); err != nil {
-		fmt.Fprintf(os.Stderr, "%s: drop privileges: %s\n", commandName, audit.RedactString(err.Error()))
-		os.Exit(1)
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	os.Exit(newCommand(os.Stdout, os.Stderr).runContext(ctx, os.Args[1:]))

@@ -311,42 +311,54 @@ func TestSavePointExecutorReclaimsWriterDrainPendingAfterDrain(t *testing.T) {
 	}
 }
 
-func TestSavePointExecutorDirectSaveRepoBusyStaysPendingWithoutLegacyRepair(t *testing.T) {
-	now := repoExecNow()
-	store := newFakeStore()
-	store.repo = activeRepoResource(now)
-	runner := &fakeJVSRunner{
-		directListSummary: jvsrunner.DirectListSummary{
-			HistoryHeadID: "sp_before",
-			SavePoints:    []jvsrunner.DirectSavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z", HistoryHead: true}},
-		},
-		directSaveErr: &jvsrunner.CommandError{Command: "afscp save", ExitCode: 1, Code: "E_REPO_BUSY"},
+func TestSavePointExecutorDirectSaveTransientJVSConflictsStayPending(t *testing.T) {
+	tests := []struct {
+		name       string
+		jvsCode    string
+		wantReason string
+	}{
+		{name: "repo busy", jvsCode: "E_REPO_BUSY", wantReason: "jvs_repo_busy"},
+		{name: "direct lock", jvsCode: "JVS_LOCKED", wantReason: "jvs_direct_locked"},
 	}
-	executor := newTestSavePointExecutor(t, store, runner, now)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := repoExecNow()
+			store := newFakeStore()
+			store.repo = activeRepoResource(now)
+			runner := &fakeJVSRunner{
+				directListSummary: jvsrunner.DirectListSummary{
+					HistoryHeadID: "sp_before",
+					SavePoints:    []jvsrunner.DirectSavePointSummary{{SavePointID: "sp_before", Message: "before", CreatedAt: "2026-05-05T11:00:00Z", HistoryHead: true}},
+				},
+				directSaveErr: &jvsrunner.CommandError{Command: "afscp save", ExitCode: 1, Code: tt.jvsCode},
+			}
+			executor := newTestSavePointExecutor(t, store, runner, now)
 
-	if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
-		t.Fatalf("ExecuteOperationRecovery: %v", err)
+			if err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+				t.Fatalf("ExecuteOperationRecovery: %v", err)
+			}
+			if strings.Join(runner.calls, ",") != "direct_save" {
+				t.Fatalf("JVS calls = %#v, want direct save without list or doctor repair runtime", runner.calls)
+			}
+			if store.operation.State != operations.OperationStateRunning || store.operation.Phase != operations.OperationPhaseSavePointCreateValidate || store.operation.Error == nil || store.operation.Error.Code != "SAVE_POINT_WRITER_DRAIN_PENDING" || !store.operation.Error.Retryable {
+				t.Fatalf("operation = %#v, want running retryable writer-drain pending", store.operation)
+			}
+			if store.operation.FinishedAt != nil || store.operation.LeaseExpiresAt == nil || !store.operation.LeaseExpiresAt.Equal(now) {
+				t.Fatalf("operation lease/finish = %v/%v, want lease expired at now and no finish", store.operation.LeaseExpiresAt, store.operation.FinishedAt)
+			}
+			result := store.operation.VerificationResult.(map[string]any)
+			if result["writer_drain_reason"] != tt.wantReason || result["jvs_error_code"] != tt.jvsCode {
+				t.Fatalf("verification = %#v, want %s marker with %s", result, tt.wantReason, tt.jvsCode)
+			}
+			if _, exists := result["jvs_repair_attempted"]; exists {
+				t.Fatalf("verification = %#v, direct save must not record repair runtime attempt", store.operation.VerificationResult)
+			}
+			if len(store.auditEvents) != 0 {
+				t.Fatalf("audit events = %#v, want no terminal audit while writer drain is pending", store.auditEvents)
+			}
+			assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+		})
 	}
-	if strings.Join(runner.calls, ",") != "direct_save" {
-		t.Fatalf("JVS calls = %#v, want direct save without list or doctor repair runtime", runner.calls)
-	}
-	if store.operation.State != operations.OperationStateRunning || store.operation.Phase != operations.OperationPhaseSavePointCreateValidate || store.operation.Error == nil || store.operation.Error.Code != "SAVE_POINT_WRITER_DRAIN_PENDING" || !store.operation.Error.Retryable {
-		t.Fatalf("operation = %#v, want running retryable writer-drain pending", store.operation)
-	}
-	if store.operation.FinishedAt != nil || store.operation.LeaseExpiresAt == nil || !store.operation.LeaseExpiresAt.Equal(now) {
-		t.Fatalf("operation lease/finish = %v/%v, want lease expired at now and no finish", store.operation.LeaseExpiresAt, store.operation.FinishedAt)
-	}
-	result := store.operation.VerificationResult.(map[string]any)
-	if result["writer_drain_reason"] != "jvs_repo_busy" || result["jvs_error_code"] != "E_REPO_BUSY" {
-		t.Fatalf("verification = %#v, want jvs repo-busy writer drain marker", result)
-	}
-	if _, exists := result["jvs_repair_attempted"]; exists {
-		t.Fatalf("verification = %#v, direct save must not record repair runtime attempt", store.operation.VerificationResult)
-	}
-	if len(store.auditEvents) != 0 {
-		t.Fatalf("audit events = %#v, want no terminal audit while writer drain is pending", store.auditEvents)
-	}
-	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
 func TestSavePointExecutorDirectSaveCommandErrorFailsTerminallyWithoutManualIntervention(t *testing.T) {
@@ -382,6 +394,37 @@ func TestSavePointExecutorDirectSaveCommandErrorFailsTerminallyWithoutManualInte
 	}
 	if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_failed" {
 		t.Fatalf("audit events = %#v, want ordinary failed save point audit", store.auditEvents)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
+func TestSavePointExecutorDirectSaveCloneFailureUsesTypedTerminalReason(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	runner := &fakeJVSRunner{
+		directSaveErr: &jvsrunner.CommandError{Command: "afscp save", ExitCode: 5, Code: "JVS_CLONE_FAILED"},
+	}
+	executor := newTestSavePointExecutor(t, store, runner, now)
+
+	err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+	if err != nil {
+		t.Fatalf("ExecuteOperationRecovery error = %v, want terminal failed commit without recovery error", err)
+	}
+	if strings.Join(runner.calls, ",") != "direct_save" {
+		t.Fatalf("JVS calls = %#v, want direct_save only", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "SAVE_POINT_PAYLOAD_CLONE_FAILED" || store.operation.Error.Retryable {
+		t.Fatalf("operation = %#v, want typed non-retryable payload clone failure", store.operation)
+	}
+	if store.operation.Error.Details["jvs_error_code"] != "JVS_CLONE_FAILED" || store.operation.Error.Details["jvs_command"] != "afscp save" || store.operation.Error.Details["jvs_exit_code"] != 5 {
+		t.Fatalf("operation error details = %#v, want safe direct clone failure details", store.operation.Error.Details)
+	}
+	if store.operation.VerificationResult.(map[string]any)["jvs_error_code"] != "JVS_CLONE_FAILED" {
+		t.Fatalf("verification = %#v, want safe direct clone failure details", store.operation.VerificationResult)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_failed" {
+		t.Fatalf("audit events = %#v, want failed save point audit", store.auditEvents)
 	}
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
