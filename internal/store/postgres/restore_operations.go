@@ -34,6 +34,27 @@ func (store *Store) MarkRestoreWriterFencedWithLease(ctx context.Context, fence 
 	return gotFence, gotOperation, nil
 }
 
+func (store *Store) MarkRestoreWriterDrainPendingWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	record := sanitized.Record()
+	if err := validateRestoreWriterDrainPendingRecord(record); err != nil {
+		return operations.OperationRecord{}, err
+	}
+	args, err := operationLeaseFencedUpdateArgs(record, owner, now)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	args = append(args, restoreStoredPredicateArgs(record)...)
+	row := store.exec.QueryRowContext(ctx, restoreWriterDrainPendingWithLeaseSQL(), args...)
+	gotOperation, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("restore writer drain pending mark", record.ID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return gotOperation, nil
+}
+
 func (store *Store) CommitRestoreSucceededWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	record := sanitized.Record()
 	if err := validateRestoreSuccessRecord(record); err != nil {
@@ -104,6 +125,22 @@ func validateRestoreWriterFencedRecord(record operations.OperationRecord, fence 
 	}
 	if fence.Kind != fences.KindWriterSession || fence.Status != fences.StatusActive || fence.RepoID != record.RepoID || fence.HolderOperationID != record.ID {
 		return operationLeaseInvalidRequest("session_fence_id", "restore writer fence must be active and owned by the operation")
+	}
+	return nil
+}
+
+func validateRestoreWriterDrainPendingRecord(record operations.OperationRecord) error {
+	if err := validateRestoreProgressRecord(record, operations.OperationPhaseRestoreWriterFenced, "restore writer drain pending requires writer-fenced phase"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(record.SessionFenceID) == "" {
+		return operationLeaseInvalidRequest("session_fence_id", "restore writer drain pending requires session fence id")
+	}
+	if record.FinishedAt != nil {
+		return operationLeaseInvalidRequest("finished_at", "restore writer drain pending must remain non-terminal")
+	}
+	if record.Error == nil || strings.TrimSpace(record.Error.Code) != "RESTORE_WRITER_DRAIN_PENDING" || !record.Error.Retryable {
+		return operationLeaseInvalidRequest("error", "restore writer drain pending requires retryable pending error")
 	}
 	return nil
 }
@@ -395,6 +432,34 @@ func restoreWriterFencedMarkWithLeaseSQL() string {
 		restoreWriterFencedOperationUpdateSetSQL() +
 		"FROM eligible_operation, confirmed_writer_fence WHERE operations.operation_id = eligible_operation.operation_id AND confirmed_writer_fence.fence_id = $21 AND NOT EXISTS (SELECT 1 FROM held_lifecycle_fence) RETURNING " + operationReturningColumnsSQL() +
 		") SELECT " + prefixedColumns("confirmed_writer_fence", repoFenceColumns) + ", " + prefixedColumns("updated_operation", operationSelectColumns) + " FROM confirmed_writer_fence, updated_operation"
+}
+
+func restoreWriterDrainPendingWithLeaseSQL() string {
+	return "WITH eligible_operation AS (" +
+		"SELECT operation_id, input_summary FROM operations WHERE operation_id = $12 AND operation_state = 'running' AND lease_owner = $13 AND lease_expires_at IS NOT NULL AND lease_expires_at > $11 " +
+		"AND operation_type = 'restore' AND phase = 'restore_writer_fenced' " +
+		"AND namespace_id = $14 AND repo_id = $15 AND resource_type = 'repo' AND resource_id = $15 " +
+		"AND caller_service = $16 AND correlation_id = $17 AND authorized_actor_type = $18 AND authorized_actor_id = $19 " +
+		"AND input_summary->>'save_point_id' = $20 AND session_fence_id = $21 FOR UPDATE" +
+		"), held_writer_fence AS (" +
+		"SELECT fence_id FROM repo_fences, eligible_operation WHERE repo_fences.repo_id = $15 AND repo_fences.fence_id = $21 AND repo_fences.fence_kind = 'writer_session' AND repo_fences.holder_operation_id = $12 AND repo_fences.status = 'active' AND repo_fences.released_at IS NULL AND repo_fences.recovered_at IS NULL FOR UPDATE" +
+		"), updated_operation AS (" +
+		"UPDATE operations SET " +
+		"operation_state = $1, " +
+		"phase = $2, " +
+		"lease_owner = operations.lease_owner, " +
+		"lease_expires_at = $11, " +
+		"external_resource_ids = $3, " +
+		"input_summary = $4, " +
+		"jvs_json_output = $5, " +
+		"verification_result = $6, " +
+		"compensation_status = $7, " +
+		"error_json = $8, " +
+		"started_at = COALESCE(operations.started_at, $9, $11), " +
+		"finished_at = NULL, " +
+		"updated_at = $11 " +
+		"FROM eligible_operation, held_writer_fence WHERE operations.operation_id = eligible_operation.operation_id RETURNING " + operationReturningColumnsSQL() +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
 func restoreSuccessCommitWithLeaseSQL() string {

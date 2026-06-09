@@ -88,11 +88,42 @@ func TestRestoreExecutorBlocksActiveWriterSessionsBeforeJVSRestore(t *testing.T)
 	if len(runner.calls) != 0 {
 		t.Fatalf("JVS calls = %#v, want active writer gate before JVS", runner.calls)
 	}
-	if store.operation.State != operations.OperationStateFailed || store.operation.Phase != operations.OperationPhaseRestoreWriterFenced {
-		t.Fatalf("operation = %#v, want failed writer-fenced operation", store.operation)
+	if store.operation.State != operations.OperationStateRunning || store.operation.Phase != operations.OperationPhaseRestoreWriterFenced || store.operation.Error == nil || store.operation.Error.Code != restoreWriterDrainPendingCode || !store.operation.Error.Retryable {
+		t.Fatalf("operation = %#v, want running writer drain pending operation", store.operation)
 	}
-	if store.releasedFenceID != "fence_op_restore" {
-		t.Fatalf("released fence = %q, want writer fence released after pre-JVS denial", store.releasedFenceID)
+	if store.releasedFenceID != "" || activeWriterFenceCount(store.fences, "op_restore") != 1 {
+		t.Fatalf("released/active writer fence = %q/%#v, want retained same-op writer fence", store.releasedFenceID, store.fences)
+	}
+}
+
+func TestRestoreExecutorReclaimsWriterDrainPendingAfterDrain(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.repo = activeRepoResource(now)
+	store.exports = []sessionstate.ExportSession{freshExportSession(now, "export_alpha", sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(time.Hour))}
+	runner := &fakeJVSRunner{directRestoreSummary: jvsrunner.DirectRestoreSummary{RestoredSavePointID: "sp_001", PreviousHeadID: "sp_002", NewHeadID: "sp_001"}}
+	executor := newTestRestoreExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), restoreLeasedRecord(now), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery pending: %v", err)
+	}
+	if len(runner.calls) != 0 || store.operation.Error == nil || store.operation.Error.Code != restoreWriterDrainPendingCode {
+		t.Fatalf("pending operation/JVS calls = %#v/%#v, want no DirectRestore and pending error", store.operation, runner.calls)
+	}
+
+	store.exports = nil
+	runner.calls = nil
+	if err := executor.ExecuteOperationRecovery(context.Background(), store.operation, recovery.RecoveryPlan{Action: recovery.RecoveryActionReclaim}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery reclaimed: %v", err)
+	}
+	if strings.Join(runner.calls, ",") != "direct_restore,direct_status" {
+		t.Fatalf("JVS calls after drain = %#v, want direct restore then status", runner.calls)
+	}
+	if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseRestoreCommitted {
+		t.Fatalf("operation = %#v, want succeeded restore_committed", store.operation)
+	}
+	if store.releasedFenceID != "fence_op_restore" || activeWriterFenceCount(store.fences, "op_restore") != 0 {
+		t.Fatalf("released/active writer fence = %q/%#v, want released same-op fence", store.releasedFenceID, store.fences)
 	}
 }
 

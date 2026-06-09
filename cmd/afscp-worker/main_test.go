@@ -691,6 +691,10 @@ func (store *cmdWorkerAppStore) MarkRestoreWriterFencedWithLease(context.Context
 	return fences.Fence{}, operations.OperationRecord{}, errors.New("unexpected progress update")
 }
 
+func (store *cmdWorkerAppStore) MarkRestoreWriterDrainPendingWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected progress update")
+}
+
 func (store *cmdWorkerAppStore) CommitRestoreSucceededWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time, audit.Event) (operations.OperationRecord, error) {
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }

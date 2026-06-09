@@ -101,6 +101,41 @@ func TestMarkRestoreWriterFencedWithLeaseCreatesOrConfirmsWriterFence(t *testing
 	)
 }
 
+func TestMarkRestoreWriterDrainPendingWithLeaseKeepsFenceAndExpiresLease(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := restoreOperationRecord(now, operations.OperationStateRunning, operations.OperationPhaseRestoreWriterFenced)
+	record.SessionFenceID = "fence_restore01"
+	record.Error = &operations.OperationError{Code: "RESTORE_WRITER_DRAIN_PENDING", Message: "restore writer drain is pending", Retryable: true, CorrelationID: record.CorrelationID, OperationID: record.ID}
+	record.VerificationResult = map[string]any{"writer_drain_status": "pending"}
+	exec := &fakeExecutor{row: fakeRow{values: operationRowValues(record)}}
+	st := &Store{exec: exec}
+
+	got, err := st.MarkRestoreWriterDrainPendingWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now)
+	if err != nil {
+		t.Fatalf("MarkRestoreWriterDrainPendingWithLease: %v", err)
+	}
+	if got.State != operations.OperationStateRunning || got.Phase != operations.OperationPhaseRestoreWriterFenced {
+		t.Fatalf("restore writer drain pending = %#v", got)
+	}
+
+	assertSQLContainsInOrder(t, exec.query,
+		"WITH eligible_operation AS",
+		"operation_type = 'restore'",
+		"phase = 'restore_writer_fenced'",
+		"input_summary->>'save_point_id' = $20 AND session_fence_id = $21",
+		"held_writer_fence AS",
+		"fence_kind = 'writer_session'",
+		"updated_operation AS",
+		"lease_expires_at = $11",
+		"finished_at = NULL",
+	)
+	for _, forbidden := range []string{"released_writer_fence", "UPDATE repo_fences SET status = 'released'", "INSERT INTO audit_outbox"} {
+		if strings.Contains(exec.query, forbidden) {
+			t.Fatalf("restore writer drain pending SQL must not include %q: %s", forbidden, exec.query)
+		}
+	}
+}
+
 func TestCommitRestoreSucceededWithLeaseAuditsAndReleasesFenceWithoutPlan(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	record := restoreOperationRecord(now, operations.OperationStateSucceeded, operations.OperationPhaseRestoreCommitted)

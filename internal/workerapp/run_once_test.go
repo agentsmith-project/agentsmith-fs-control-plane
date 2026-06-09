@@ -4211,6 +4211,14 @@ func (store *fakeWorkerAppStore) MarkRestoreWriterFencedWithLease(_ context.Cont
 	return fence, operation, nil
 }
 
+func (store *fakeWorkerAppStore) MarkRestoreWriterDrainPendingWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time) (operations.OperationRecord, error) {
+	operation := record.Record()
+	operation.LeaseExpiresAt = &now
+	store.records[operation.ID] = operation
+	store.operation = operation
+	return operation, nil
+}
+
 func (store *fakeWorkerAppStore) CommitRestoreSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	operation := record.Record()
 	operation.LeaseOwner = ""

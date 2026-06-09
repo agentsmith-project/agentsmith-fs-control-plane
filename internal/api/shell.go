@@ -251,14 +251,15 @@ func NewInternalAPIShell(config InternalAPIShellConfig) http.Handler {
 	listSavePointsHandler := requestLogHandler(savePointHandler, config.Logger, slog.LevelInfo, "afscp.request", "request handled", "/internal/v1/repos/{repoId}/save-points", "listSavePoints")
 
 	restoreHandler := RestoreHandler(RestoreHandlerConfig{
-		RepoReader:        config.RepoReader,
-		NamespaceReader:   config.NamespaceReader,
-		BindingReader:     config.NamespaceBindingReader,
-		FenceReader:       config.RepoFenceReader,
-		MutationGate:      savePointMutationGate,
-		IntakeStore:       restoreIntakeStore,
-		IntakeLookupStore: operationLookupStore,
-		PrincipalResolver: config.PrincipalResolver,
+		RepoReader:         config.RepoReader,
+		NamespaceReader:    config.NamespaceReader,
+		BindingReader:      config.NamespaceBindingReader,
+		FenceReader:        config.RepoFenceReader,
+		MutationGate:       savePointMutationGate,
+		SessionStateReader: savePointSessionStateReader,
+		IntakeStore:        restoreIntakeStore,
+		IntakeLookupStore:  operationLookupStore,
+		PrincipalResolver:  config.PrincipalResolver,
 		AllowedCallers: RouteAwareAllowedCallerPolicy{
 			DeploymentGlobal:    deploymentPolicyOrStatic(config.DeploymentGlobalPolicy, config.DeploymentGlobalCallers),
 			DeploymentNamespace: deploymentPolicyOrStatic(config.DeploymentNamespacePolicy, config.DeploymentNamespaceCallers),

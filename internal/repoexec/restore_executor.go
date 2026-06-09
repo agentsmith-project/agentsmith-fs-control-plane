@@ -34,6 +34,11 @@ type RestoreConfig struct {
 	VolumeRoots  map[string]string
 }
 
+const (
+	restoreWriterDrainPendingCode     = "RESTORE_WRITER_DRAIN_PENDING"
+	restoreWriterDrainUnavailableCode = "RESTORE_WRITER_DRAIN_UNAVAILABLE"
+)
+
 type restoreStore interface {
 	store.RestoreOperationCommitStore
 	store.RestoreOperationMetadataReader
@@ -141,8 +146,12 @@ func (executor *RestoreExecutor) ExecuteOperationRecovery(ctx context.Context, r
 		working.SessionFenceID = updatedFence.ID
 	}
 
-	if err := executor.checkWriterSessions(ctx, working, now); err != nil {
-		return executor.commitRestoreFailed(ctx, working, now, "RESTORE_WRITER_SESSIONS_DENIED", "restore writer sessions denied", map[string]any{"writer_gate_error_family": restoreWriterGateFamily(err)})
+	writerDecision, err := executor.checkWriterSessions(ctx, working, now)
+	if err != nil {
+		if restoreWriterGatePending(err) {
+			return executor.markRestoreWriterDrainPending(ctx, working, now, restoreWriterDrainPendingDetails(writerDecision))
+		}
+		return executor.commitRestoreFailed(ctx, working, now, restoreWriterDrainUnavailableCode, "restore writer drain validation failed", map[string]any{"writer_gate_error_family": restoreWriterGateFamily(err)})
 	}
 
 	summary, err := executor.jvs.DirectRestore(ctx, target, savePointID)
@@ -240,26 +249,26 @@ func (err restoreWriterGateError) Unwrap() error {
 	return err.err
 }
 
-func (executor *RestoreExecutor) checkWriterSessions(ctx context.Context, record operations.OperationRecord, now time.Time) error {
+func (executor *RestoreExecutor) checkWriterSessions(ctx context.Context, record operations.OperationRecord, now time.Time) (sessionstate.Decision, error) {
 	exports, err := executor.store.ListExportSessionsByRepo(ctx, record.RepoID)
 	if err != nil {
-		return restoreWriterGateError{family: sessionstate.ErrorFamilyInternalError, err: errRestoreInvalidWriterSession}
+		return sessionstate.Decision{ErrorFamily: sessionstate.ErrorFamilyInternalError}, restoreWriterGateError{family: sessionstate.ErrorFamilyInternalError, err: errRestoreInvalidWriterSession}
 	}
 	mounts, err := executor.store.ListWorkloadMountBindingsByRepo(ctx, record.RepoID)
 	if err != nil {
-		return restoreWriterGateError{family: sessionstate.ErrorFamilyInternalError, err: errRestoreInvalidWriterSession}
+		return sessionstate.Decision{ErrorFamily: sessionstate.ErrorFamilyInternalError}, restoreWriterGateError{family: sessionstate.ErrorFamilyInternalError, err: errRestoreInvalidWriterSession}
 	}
 	decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{NamespaceID: record.NamespaceID, RepoID: record.RepoID, Now: now, ExportSessions: exports, Mounts: mounts})
 	if decision.Allowed {
-		return nil
+		return decision, nil
 	}
 	switch decision.ErrorFamily {
 	case sessionstate.ErrorFamilyActiveWriterSessions:
-		return restoreWriterGateError{family: decision.ErrorFamily, err: errRestoreActiveWriterSession}
+		return decision, restoreWriterGateError{family: decision.ErrorFamily, err: errRestoreActiveWriterSession}
 	case sessionstate.ErrorFamilyStaleWriterSessionUncertain:
-		return restoreWriterGateError{family: decision.ErrorFamily, err: errRestoreStaleWriterSession}
+		return decision, restoreWriterGateError{family: decision.ErrorFamily, err: errRestoreStaleWriterSession}
 	default:
-		return restoreWriterGateError{family: decision.ErrorFamily, err: errRestoreInvalidWriterSession}
+		return decision, restoreWriterGateError{family: decision.ErrorFamily, err: errRestoreInvalidWriterSession}
 	}
 }
 
@@ -269,6 +278,48 @@ func restoreWriterGateFamily(err error) string {
 		return gateErr.family.String()
 	}
 	return ""
+}
+
+func restoreWriterGatePending(err error) bool {
+	var gateErr restoreWriterGateError
+	if !errors.As(err, &gateErr) {
+		return false
+	}
+	return gateErr.family == sessionstate.ErrorFamilyActiveWriterSessions || gateErr.family == sessionstate.ErrorFamilyStaleWriterSessionUncertain
+}
+
+func (executor *RestoreExecutor) markRestoreWriterDrainPending(ctx context.Context, record operations.OperationRecord, now time.Time, details map[string]any) error {
+	operation := record
+	operation.State = operations.OperationStateRunning
+	operation.Phase = operations.OperationPhaseRestoreWriterFenced
+	operation.ExternalResourceIDs = map[string]string{}
+	operation.JVSJSONOutput = nil
+	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	operation.FinishedAt = nil
+	operation.Error = &operations.OperationError{
+		Code:          restoreWriterDrainPendingCode,
+		Message:       "restore writer drain is pending",
+		Retryable:     true,
+		CorrelationID: record.CorrelationID,
+		OperationID:   record.ID,
+		Details:       details,
+	}
+	if _, err := executor.store.MarkRestoreWriterDrainPendingWithLease(ctx, operation.SanitizedForPersistence(), executor.owner, now); err != nil {
+		return errors.New("restore writer drain pending update failed")
+	}
+	return nil
+}
+
+func restoreWriterDrainPendingDetails(decision sessionstate.Decision) map[string]any {
+	details := map[string]any{
+		"writer_drain_status":      "pending",
+		"writer_drain_reason":      decision.ErrorFamily.String(),
+		"writer_gate_error_family": decision.ErrorFamily.String(),
+	}
+	if strings.TrimSpace(decision.BlockingKind) != "" {
+		details["blocking_session_kind"] = decision.BlockingKind
+	}
+	return details
 }
 
 func (executor *RestoreExecutor) commitRestoreSuccess(ctx context.Context, record operations.OperationRecord, now time.Time, summary jvsrunner.DirectRestoreSummary, statusEvidence map[string]any) error {

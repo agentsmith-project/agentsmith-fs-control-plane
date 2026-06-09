@@ -11,6 +11,7 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/fences"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
 type fakeRestoreHTTPStore struct {
@@ -18,6 +19,8 @@ type fakeRestoreHTTPStore struct {
 	namespace            resources.Namespace
 	binding              resources.NamespaceVolumeBinding
 	fences               []fences.Fence
+	exports              []sessionstate.ExportSession
+	mounts               []sessionstate.WorkloadMountBinding
 	existing             operations.OperationRecord
 	spec                 operations.QueuedOperationSpec
 	repoErr              error
@@ -28,6 +31,7 @@ type fakeRestoreHTTPStore struct {
 	jvsMutationErr       error
 	jvsMutationStatus    *RepoJVSMutationGateStatus
 	jvsMutationStatusErr error
+	sessionErr           error
 	lookupErr            error
 	createErr            error
 	createCalls          int
@@ -36,6 +40,8 @@ type fakeRestoreHTTPStore struct {
 	previewIntakeCalls   int
 	runIntakeCalls       int
 	jvsMutationCalls     int
+	exportSessionCalls   int
+	mountSessionCalls    int
 }
 
 func newFakeRestoreHTTPStore(time.Time) *fakeRestoreHTTPStore {
@@ -128,6 +134,22 @@ func (store *fakeRestoreHTTPStore) GetRepoJVSMutationGateStatus(context.Context,
 		}, nil
 	}
 	return RepoJVSMutationGateStatus{}, nil
+}
+
+func (store *fakeRestoreHTTPStore) ListExportSessionsByRepo(context.Context, string) ([]sessionstate.ExportSession, error) {
+	store.exportSessionCalls++
+	if store.sessionErr != nil {
+		return nil, store.sessionErr
+	}
+	return append([]sessionstate.ExportSession(nil), store.exports...), nil
+}
+
+func (store *fakeRestoreHTTPStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
+	store.mountSessionCalls++
+	if store.sessionErr != nil {
+		return nil, store.sessionErr
+	}
+	return append([]sessionstate.WorkloadMountBinding(nil), store.mounts...), nil
 }
 
 func (store *fakeRestoreHTTPStore) GetOperationByIdempotencyScope(context.Context, operations.IdempotencyScope) (operations.OperationRecord, error) {

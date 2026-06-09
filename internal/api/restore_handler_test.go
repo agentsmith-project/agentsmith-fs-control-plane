@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/auth"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
 func TestRestoreHandlerRejectsLegacyDiscardConfirmationField(t *testing.T) {
@@ -148,6 +149,104 @@ func TestRestoreHandlerMapsOperatorInterventionGateToRecoveryRequired(t *testing
 	}
 }
 
+func TestRestoreHandlerBlocksUndrainedWritersBeforeIntake(t *testing.T) {
+	now := namespaceBindingHandlerTestNow()
+	tests := []struct {
+		name    string
+		exports []sessionstate.ExportSession
+		mounts  []sessionstate.WorkloadMountBinding
+	}{
+		{
+			name:    "active read write export",
+			exports: []sessionstate.ExportSession{restoreHTTPExportFixture(now, "export_rw_active", sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(time.Hour))},
+		},
+		{
+			name:   "releasing read write mount",
+			mounts: []sessionstate.WorkloadMountBinding{restoreHTTPMountFixture(now, "wmb_releasing", false, sessionstate.MountStatusReleasing, now.Add(time.Hour), nil, nil)},
+		},
+		{
+			name:   "stale read write mount",
+			mounts: []sessionstate.WorkloadMountBinding{restoreHTTPMountFixture(now, "wmb_stale", false, sessionstate.MountStatusActive, now.Add(-time.Minute), nil, nil)},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeRestoreHTTPStore(now)
+			store.exports = tt.exports
+			store.mounts = tt.mounts
+			handler := restoreHandlerForTest(store, func() string { return "op_restore" }, func() time.Time { return now })
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001"}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+			}
+			env := decodeErrorEnvelope(t, rec.Body.Bytes())
+			if env.Error.Code != CodeFileLibraryOperationPending || !env.Error.Retryable {
+				t.Fatalf("error = %#v, want retryable FILE_LIBRARY_OPERATION_PENDING", env.Error)
+			}
+			if store.restoreIntakeCalls != 0 || store.createCalls != 0 {
+				t.Fatalf("intake calls restore/create = %d/%d, want writer gate before operation intake", store.restoreIntakeCalls, store.createCalls)
+			}
+			if store.exportSessionCalls != 1 || store.mountSessionCalls != 1 {
+				t.Fatalf("session calls exports/mounts = %d/%d, want both session readers", store.exportSessionCalls, store.mountSessionCalls)
+			}
+			assertBlockingOperationErrorProductSafe(t, rec.Body.String(), env, false)
+		})
+	}
+}
+
+func TestRestoreHandlerAllowsReadOnlyAndDrainedTerminalSessions(t *testing.T) {
+	now := namespaceBindingHandlerTestNow()
+	confirmed := now.Add(-time.Minute)
+	tests := []struct {
+		name    string
+		exports []sessionstate.ExportSession
+		mounts  []sessionstate.WorkloadMountBinding
+	}{
+		{
+			name: "read only sessions",
+			exports: []sessionstate.ExportSession{
+				restoreHTTPExportFixture(now, "export_ro_active", sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive, now.Add(time.Hour)),
+			},
+			mounts: []sessionstate.WorkloadMountBinding{
+				restoreHTTPMountFixture(now, "wmb_ro_active", true, sessionstate.MountStatusActive, now.Add(time.Hour), nil, nil),
+			},
+		},
+		{
+			name: "released mount confirmed unmounted",
+			mounts: []sessionstate.WorkloadMountBinding{
+				restoreHTTPMountFixture(now, "wmb_released", false, sessionstate.MountStatusReleased, now.Add(-time.Hour), &confirmed, nil),
+			},
+		},
+		{
+			name: "revoked mount unable to write",
+			mounts: []sessionstate.WorkloadMountBinding{
+				restoreHTTPMountFixture(now, "wmb_revoked", false, sessionstate.MountStatusRevoked, now.Add(-time.Hour), nil, &confirmed),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeRestoreHTTPStore(now)
+			store.exports = tt.exports
+			store.mounts = tt.mounts
+			handler := restoreHandlerForTest(store, func() string { return "op_restore" }, func() time.Time { return now })
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, restoreRequest(`{"save_point_id":"sp_001"}`, "repo_alpha01", "ns_alpha01", "idem_restore"))
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
+			}
+			if store.restoreIntakeCalls != 1 || store.createCalls != 1 {
+				t.Fatalf("intake calls restore/create = %d/%d, want accepted restore", store.restoreIntakeCalls, store.createCalls)
+			}
+		})
+	}
+}
+
 func TestInternalAPIShellServesRestore(t *testing.T) {
 	now := namespaceBindingHandlerTestNow()
 	store := newFakeRestoreHTTPStore(now)
@@ -183,6 +282,47 @@ func TestRestoreHandlerSourceDoesNotCallPreviewOrRunHandlers(t *testing.T) {
 		"restoreAdmit",
 		"RestoreAdmitResponse",
 	})
+}
+
+func restoreHTTPExportFixture(now time.Time, id string, mode sessionstate.AccessMode, status sessionstate.ExportStatus, expiresAt time.Time) sessionstate.ExportSession {
+	heartbeatExpiresAt := now.Add(time.Minute)
+	return sessionstate.ExportSession{
+		ID:                        id,
+		NamespaceID:               "ns_alpha01",
+		RepoID:                    "repo_alpha01",
+		Mode:                      mode,
+		Status:                    status,
+		ExpiresAt:                 expiresAt,
+		ActiveRequestCount:        1,
+		ActiveWriteCount:          restoreHTTPActiveWriteCount(mode),
+		LastObservedAt:            &now,
+		LastGatewayHeartbeatAt:    &now,
+		GatewayHeartbeatExpiresAt: &heartbeatExpiresAt,
+		CreatedAt:                 now.Add(-time.Hour),
+		UpdatedAt:                 now,
+	}
+}
+
+func restoreHTTPActiveWriteCount(mode sessionstate.AccessMode) int {
+	if mode == sessionstate.AccessModeReadWrite {
+		return 1
+	}
+	return 0
+}
+
+func restoreHTTPMountFixture(now time.Time, id string, readOnly bool, status sessionstate.MountStatus, leaseExpiresAt time.Time, confirmedUnmountedAt, unableToWriteAt *time.Time) sessionstate.WorkloadMountBinding {
+	return sessionstate.WorkloadMountBinding{
+		ID:                   id,
+		NamespaceID:          "ns_alpha01",
+		RepoID:               "repo_alpha01",
+		ReadOnly:             readOnly,
+		Status:               status,
+		LeaseExpiresAt:       leaseExpiresAt,
+		ConfirmedUnmountedAt: confirmedUnmountedAt,
+		UnableToWriteAt:      unableToWriteAt,
+		CreatedAt:            now.Add(-time.Hour),
+		UpdatedAt:            now,
+	}
 }
 
 func assertGoFileDoesNotContain(t *testing.T, path string, forbidden []string) {

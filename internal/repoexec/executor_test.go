@@ -1650,6 +1650,12 @@ func (store *fakeRepoCreateStore) MarkRestoreWriterFencedWithLease(_ context.Con
 	return fence, store.operation, nil
 }
 
+func (store *fakeRepoCreateStore) MarkRestoreWriterDrainPendingWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time) (operations.OperationRecord, error) {
+	store.operation = record.Record()
+	store.operation.LeaseExpiresAt = &now
+	return store.operation, nil
+}
+
 func (store *fakeRepoCreateStore) CommitRestoreSucceededWithLease(_ context.Context, record operations.SanitizedOperationRecord, _ string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	store.operation = record.Record()
 	store.releaseWriterFence(store.operation.SessionFenceID, now)

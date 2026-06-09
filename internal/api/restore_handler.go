@@ -15,21 +15,23 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 )
 
 type RestoreHandlerConfig struct {
-	RepoReader        RepoReader
-	NamespaceReader   NamespaceReader
-	BindingReader     NamespaceVolumeBindingReader
-	FenceReader       RepoFenceReader
-	MutationGate      RepoJVSMutationGateStatusReader
-	IntakeStore       RestoreOperationIntakeStore
-	IntakeLookupStore OperationIdempotencyLookupStore
-	PrincipalResolver PrincipalResolver
-	AllowedCallers    AllowedCallerPolicy
-	OperationID       OperationIDGenerator
-	Now               func() time.Time
-	AuditSink         audit.Sink
+	RepoReader         RepoReader
+	NamespaceReader    NamespaceReader
+	BindingReader      NamespaceVolumeBindingReader
+	FenceReader        RepoFenceReader
+	MutationGate       RepoJVSMutationGateStatusReader
+	SessionStateReader SavePointSessionStateReader
+	IntakeStore        RestoreOperationIntakeStore
+	IntakeLookupStore  OperationIdempotencyLookupStore
+	PrincipalResolver  PrincipalResolver
+	AllowedCallers     AllowedCallerPolicy
+	OperationID        OperationIDGenerator
+	Now                func() time.Time
+	AuditSink          audit.Sink
 }
 
 type restoreRequestDTO struct {
@@ -55,6 +57,12 @@ func RestoreHandler(config RestoreHandlerConfig) http.Handler {
 			mutationGate = typed
 		}
 	}
+	sessionReader := config.SessionStateReader
+	if sessionReader == nil {
+		if typed, ok := config.IntakeStore.(SavePointSessionStateReader); ok {
+			sessionReader = typed
+		}
+	}
 	leaf := restoreLeafHandler{
 		route:           route,
 		repoReader:      config.RepoReader,
@@ -62,6 +70,7 @@ func RestoreHandler(config RestoreHandlerConfig) http.Handler {
 		bindingReader:   config.BindingReader,
 		fenceReader:     config.FenceReader,
 		mutationGate:    mutationGate,
+		sessionReader:   sessionReader,
 		intakeStore:     config.IntakeStore,
 		lookupStore:     lookupStore,
 		operationID:     config.OperationID,
@@ -93,6 +102,7 @@ type restoreLeafHandler struct {
 	bindingReader   NamespaceVolumeBindingReader
 	fenceReader     RepoFenceReader
 	mutationGate    RepoJVSMutationGateStatusReader
+	sessionReader   SavePointSessionStateReader
 	intakeStore     RestoreOperationIntakeStore
 	lookupStore     OperationIdempotencyLookupStore
 	operationID     OperationIDGenerator
@@ -125,7 +135,7 @@ func (handler restoreLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		writeValidationErrorWithAudit(w, r, handler.route, requestContext, CodeInvalidID, http.StatusBadRequest, "invalid namespace id", []string{"invalid_namespace_id"}, handler.sink)
 		return
 	}
-	if handler.intakeStore == nil || handler.lookupStore == nil || handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.fenceReader == nil || handler.mutationGate == nil {
+	if handler.intakeStore == nil || handler.lookupStore == nil || handler.repoReader == nil || handler.namespaceReader == nil || handler.bindingReader == nil || handler.fenceReader == nil || handler.mutationGate == nil || handler.sessionReader == nil {
 		writeRestoreError(w, r, http.StatusInternalServerError, CodeInternalError, "internal server error", false)
 		return
 	}
@@ -157,6 +167,9 @@ func (handler restoreLeafHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	now := time.Now().UTC()
 	if handler.now != nil {
 		now = handler.now()
+	}
+	if !handler.checkWriterDrainGate(w, r, namespaceID, repoID, now) {
+		return
 	}
 	envelope, intakeErr := CreateOrReuseRestoreOperationIntake(r.Context(), handler.intakeStore, OperationIntakeRequest{
 		RequestContext:      requestContext,
@@ -248,6 +261,35 @@ func (handler restoreLeafHandler) checkJVSMutationGate(w http.ResponseWriter, r 
 		return false
 	}
 	return true
+}
+
+func (handler restoreLeafHandler) checkWriterDrainGate(w http.ResponseWriter, r *http.Request, namespaceID, repoID string, now time.Time) bool {
+	exports, err := handler.sessionReader.ListExportSessionsByRepo(r.Context(), repoID)
+	if err != nil {
+		writeRestoreError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return false
+	}
+	mounts, err := handler.sessionReader.ListWorkloadMountBindingsByRepo(r.Context(), repoID)
+	if err != nil {
+		writeRestoreError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return false
+	}
+	decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{
+		NamespaceID:    namespaceID,
+		RepoID:         repoID,
+		Now:            now,
+		ExportSessions: exports,
+		Mounts:         mounts,
+	})
+	if decision.Allowed {
+		return true
+	}
+	if decision.ErrorFamily == sessionstate.ErrorFamilyInternalError {
+		writeRestoreError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
+		return false
+	}
+	writeSavePointWriterDrainGateError(w, r, decision)
+	return false
 }
 
 func decodeRestoreRequest(r *http.Request) (restoreRequestDTO, error) {

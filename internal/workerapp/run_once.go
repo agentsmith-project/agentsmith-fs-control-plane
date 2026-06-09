@@ -1152,6 +1152,10 @@ func (scoped operationRecoveryStore) MarkRestoreWriterFencedWithLease(ctx contex
 	return scoped.store.MarkRestoreWriterFencedWithLease(ctx, fence, record, owner, now)
 }
 
+func (scoped operationRecoveryStore) MarkRestoreWriterDrainPendingWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	return scoped.store.MarkRestoreWriterDrainPendingWithLease(ctx, record, owner, now)
+}
+
 func (scoped operationRecoveryStore) CommitRestoreSucceededWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	return scoped.store.CommitRestoreSucceededWithLease(ctx, record, owner, now, event)
 }
