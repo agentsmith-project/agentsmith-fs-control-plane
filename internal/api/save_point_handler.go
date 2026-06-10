@@ -245,9 +245,6 @@ func (handler savePointLeafHandler) serveCreate(w http.ResponseWriter, r *http.R
 	if handler.now != nil {
 		now = handler.now()
 	}
-	if !handler.checkWriterDrainGate(w, r, namespaceID, repoID, now) {
-		return
-	}
 	envelope, intakeErr := CreateOrReuseOperationIntake(r.Context(), OperationIntakeConfig{Store: handler.intakeStore}, OperationIntakeRequest{
 		RequestContext:      requestContext,
 		Route:               route,
@@ -355,39 +352,6 @@ func (handler savePointLeafHandler) checkHistoryReadGate(w http.ResponseWriter, 
 		return false
 	}
 	return true
-}
-
-func (handler savePointLeafHandler) checkWriterDrainGate(w http.ResponseWriter, r *http.Request, namespaceID, repoID string, now time.Time) bool {
-	if handler.sessionReader == nil {
-		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
-		return false
-	}
-	exports, err := handler.sessionReader.ListExportSessionsByRepo(r.Context(), repoID)
-	if err != nil {
-		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
-		return false
-	}
-	mounts, err := handler.sessionReader.ListWorkloadMountBindingsByRepo(r.Context(), repoID)
-	if err != nil {
-		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
-		return false
-	}
-	decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{
-		NamespaceID:    namespaceID,
-		RepoID:         repoID,
-		Now:            now,
-		ExportSessions: exports,
-		Mounts:         mounts,
-	})
-	if decision.Allowed {
-		return true
-	}
-	if decision.ErrorFamily == sessionstate.ErrorFamilyInternalError {
-		writeSavePointError(w, r, http.StatusServiceUnavailable, CodeStorageUnavailable, "durable metadata store is unavailable", true)
-		return false
-	}
-	writeSavePointWriterDrainGateError(w, r, decision)
-	return false
 }
 
 func writeSavePointWriterDrainGateError(w http.ResponseWriter, r *http.Request, decision sessionstate.Decision) {

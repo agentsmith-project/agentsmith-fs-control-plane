@@ -288,38 +288,40 @@ func TestSavePointCreateDeniesArchivedAndLifecycleFence(t *testing.T) {
 	}
 }
 
-func TestSavePointCreateBlocksUndrainedWriterBeforeIntake(t *testing.T) {
+func TestSavePointCreateAcceptsUndrainedWritersForExecutorDrain(t *testing.T) {
 	now := fixedNamespaceNow()
 	for _, tt := range []struct {
-		name  string
-		mount sessionstate.WorkloadMountBinding
+		name    string
+		exports []sessionstate.ExportSession
+		mounts  []sessionstate.WorkloadMountBinding
 	}{
-		{name: "active", mount: savePointMountFixture(now, false, sessionstate.MountStatusActive, now.Add(time.Hour), nil, nil)},
-		{name: "releasing", mount: savePointMountFixture(now, false, sessionstate.MountStatusReleasing, now.Add(time.Hour), nil, nil)},
-		{name: "stale", mount: savePointMountFixture(now, false, sessionstate.MountStatusActive, now.Add(-time.Hour), nil, nil)},
+		{name: "active read-write export", exports: []sessionstate.ExportSession{savePointExportFixture(now, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(time.Hour))}},
+		{name: "stale read-write export", exports: []sessionstate.ExportSession{savePointExportFixture(now, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(-time.Hour))}},
+		{name: "active read-write mount", mounts: []sessionstate.WorkloadMountBinding{savePointMountFixture(now, false, sessionstate.MountStatusActive, now.Add(time.Hour), nil, nil)}},
+		{name: "stale read-write mount", mounts: []sessionstate.WorkloadMountBinding{savePointMountFixture(now, false, sessionstate.MountStatusActive, now.Add(-time.Hour), nil, nil)}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			intake := &fakeOperationIntakeStore{}
 			sessionReader := &fakeSavePointSessionStateReader{
-				mounts: []sessionstate.WorkloadMountBinding{tt.mount},
+				exports: tt.exports,
+				mounts:  tt.mounts,
 			}
 			handler := savePointTestHandlerWithSessions(intake, nil, &fakeRepoJVSMutationGateReader{}, sessionReader, resources.RepoStatusActive, nil)
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, savePointRequest(http.MethodPost, "/internal/v1/repos/repo_123/save-points", `{"message":"checkpoint"}`, "ns_123"))
 
-			if rec.Code != http.StatusConflict {
-				t.Fatalf("status = %d body = %s, want 409", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d body = %s, want 202", rec.Code, rec.Body.String())
 			}
-			env := decodeErrorEnvelope(t, rec.Body.Bytes())
-			if env.Error.Code != CodeFileLibraryOperationPending || !env.Error.Retryable {
-				t.Fatalf("error = %#v, want retryable %s", env.Error, CodeFileLibraryOperationPending)
+			if intake.calls != 1 {
+				t.Fatalf("intake calls = %d, want create operation", intake.calls)
 			}
-			if intake.calls != 0 {
-				t.Fatalf("intake calls = %d, want blocked before operation intake", intake.calls)
+			if intake.spec.Phase != operations.OperationPhaseSavePointCreateValidate || intake.spec.RepoID != "repo_123" {
+				t.Fatalf("intake spec = %#v, want save point validate operation for repo_123", intake.spec)
 			}
-			if sessionReader.exportCalls != 1 || sessionReader.mountCalls != 1 {
-				t.Fatalf("session calls export/mount = %d/%d, want 1/1", sessionReader.exportCalls, sessionReader.mountCalls)
+			if sessionReader.exportCalls != 0 || sessionReader.mountCalls != 0 {
+				t.Fatalf("session calls export/mount = %d/%d, want executor-only writer drain", sessionReader.exportCalls, sessionReader.mountCalls)
 			}
 			assertSavePointResponseDoesNotLeak(t, rec.Body.String())
 		})
