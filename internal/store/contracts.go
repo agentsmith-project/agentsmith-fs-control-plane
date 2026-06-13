@@ -212,6 +212,13 @@ type RepoCreateOperationCommitStore interface {
 	CommitRepoCreateFailedWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, releaseFenceID string) (operations.OperationRecord, error)
 }
 
+// RepoCreateOperationProgressStore owns non-terminal repo_create progress writes.
+// Retryable metadata visibility gaps must stay running and expire the current
+// lease instead of being folded into terminal product validation failure.
+type RepoCreateOperationProgressStore interface {
+	MarkRepoCreateMetadataReadPendingWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error)
+}
+
 type RepoCreateOperationMetadataReader interface {
 	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
 	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
@@ -229,6 +236,7 @@ type RepoCreateOperationRecoveryStore interface {
 	ListRepoCreateOperationsForRecovery(ctx context.Context, now time.Time, limit int) ([]operations.OperationRecord, error)
 	AcquireRepoCreateOperationLease(ctx context.Context, operationID string, request operations.LeaseRequest) (operations.OperationRecord, error)
 	RepoCreateOperationCommitStore
+	RepoCreateOperationProgressStore
 	RepoCreateOperationMetadataReader
 }
 

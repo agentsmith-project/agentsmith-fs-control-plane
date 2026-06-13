@@ -2,6 +2,7 @@ package repoexec
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -19,6 +20,8 @@ import (
 )
 
 const durableCommitTimeout = 10 * time.Second
+
+const repoCreateMetadataReadPendingCode = "REPO_CREATE_METADATA_READ_PENDING"
 
 type AuditEventIDGenerator func() string
 
@@ -47,6 +50,7 @@ type Config struct {
 
 type repoCreateStore interface {
 	store.RepoCreateOperationCommitStore
+	store.RepoCreateOperationProgressStore
 	GetNamespace(ctx context.Context, namespaceID string) (resources.Namespace, error)
 	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
 	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
@@ -144,10 +148,18 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 
 	metadata, roots, err := executor.loadMetadata(ctx, record, now)
 	if err != nil {
-		if hasSameOpHeldFence {
-			return executor.commitIntervention(ctx, record, now, "REPO_CREATE_VALIDATION_FAILED_WITH_FENCE", "repo create validation failed with held fence", existingHeldFence.ID, nil)
+		var metadataErr repoCreateMetadataError
+		if !errors.As(err, &metadataErr) {
+			metadataErr = retryableMetadataError("metadata_read_unavailable", "metadata", nil)
 		}
-		return executor.commitFailed(ctx, record, now, "REPO_CREATE_VALIDATION_FAILED", "repo create validation failed", "")
+		details := metadataErr.operationDetails(record)
+		if metadataErr.retryable {
+			return executor.markMetadataReadPending(ctx, record, now, details)
+		}
+		if hasSameOpHeldFence {
+			return executor.commitIntervention(ctx, record, now, "REPO_CREATE_VALIDATION_FAILED_WITH_FENCE", "repo create validation failed with held fence", existingHeldFence.ID, details)
+		}
+		return executor.commitFailedWithDetails(ctx, record, now, "REPO_CREATE_VALIDATION_FAILED", "repo create validation failed", "", details)
 	}
 
 	existingFence, hasSameOpFence := sameOperationActiveFence(record, held)
@@ -231,33 +243,101 @@ type repoMetadata struct {
 	volume    resources.Volume
 }
 
+type repoCreateMetadataError struct {
+	reason    string
+	stage     string
+	retryable bool
+	details   map[string]any
+}
+
+func terminalMetadataError(reason, stage string, details map[string]any) repoCreateMetadataError {
+	return repoCreateMetadataError{reason: reason, stage: stage, details: details}
+}
+
+func retryableMetadataError(reason, stage string, details map[string]any) repoCreateMetadataError {
+	return repoCreateMetadataError{reason: reason, stage: stage, retryable: true, details: details}
+}
+
+func (err repoCreateMetadataError) Error() string {
+	if err.retryable {
+		return "repo create metadata read unavailable"
+	}
+	return "repo create metadata validation failed"
+}
+
+func (err repoCreateMetadataError) operationDetails(record operations.OperationRecord) map[string]any {
+	details := map[string]any{"repo_id": record.RepoID}
+	if err.retryable {
+		details["retry_reason"] = err.reason
+	} else {
+		details["validation_reason"] = err.reason
+	}
+	if strings.TrimSpace(err.stage) != "" {
+		details["metadata_stage"] = err.stage
+	}
+	for key, value := range err.details {
+		details[key] = value
+	}
+	return details
+}
+
 func (executor *Executor) loadMetadata(ctx context.Context, record operations.OperationRecord, now time.Time) (repoMetadata, pathresolver.RepoRootPaths, error) {
 	namespace, err := executor.store.GetNamespace(ctx, record.NamespaceID)
-	if err != nil || namespace.Status != resources.NamespaceStatusActive {
-		return repoMetadata{}, pathresolver.RepoRootPaths{}, errors.New("invalid namespace")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("namespace_missing", "namespace", nil)
+		}
+		return repoMetadata{}, pathresolver.RepoRootPaths{}, retryableMetadataError("namespace_read_unavailable", "namespace", nil)
+	}
+	if namespace.Status != resources.NamespaceStatusActive {
+		return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("namespace_inactive", "namespace", nil)
 	}
 	binding, err := executor.store.GetNamespaceVolumeBinding(ctx, record.NamespaceID)
-	if err != nil || binding.Status != resources.NamespaceStatusActive {
-		return repoMetadata{}, pathresolver.RepoRootPaths{}, errors.New("invalid namespace volume binding")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("binding_missing", "namespace_volume_binding", nil)
+		}
+		return repoMetadata{}, pathresolver.RepoRootPaths{}, retryableMetadataError("binding_read_unavailable", "namespace_volume_binding", nil)
+	}
+	if binding.Status != resources.NamespaceStatusActive {
+		return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("binding_inactive", "namespace_volume_binding", map[string]any{"volume_id": binding.DefaultVolumeID})
 	}
 	volume, err := executor.store.GetVolume(ctx, binding.DefaultVolumeID)
-	if err != nil || volume.Status != resources.VolumeStatusActive || volume.Capabilities["jvs_external_control_root"] != true {
-		return repoMetadata{}, pathresolver.RepoRootPaths{}, errors.New("invalid volume")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("volume_missing", "volume", map[string]any{"volume_id": binding.DefaultVolumeID})
+		}
+		return repoMetadata{}, pathresolver.RepoRootPaths{}, retryableMetadataError("volume_read_unavailable", "volume", map[string]any{"volume_id": binding.DefaultVolumeID})
+	}
+	if volume.Status != resources.VolumeStatusActive {
+		return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("volume_inactive", "volume", map[string]any{"volume_id": volume.ID})
+	}
+	if volume.Capabilities["jvs_external_control_root"] != true {
+		return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("volume_jvs_capability_disabled", "volume", map[string]any{"volume_id": volume.ID})
 	}
 	root, ok := executor.volumeRoots[volume.ID]
 	if !ok {
-		return repoMetadata{}, pathresolver.RepoRootPaths{}, errors.New("missing volume root")
+		return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("volume_root_config_missing", "volume_root", map[string]any{"volume_id": volume.ID})
 	}
 	roots, err := pathresolver.ResolveRepoRootPaths(root, record.NamespaceID, record.RepoID)
 	if err != nil {
-		return repoMetadata{}, pathresolver.RepoRootPaths{}, err
+		return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("volume_root_config_invalid", "volume_root", map[string]any{"volume_id": volume.ID})
 	}
 	return repoMetadata{namespace: namespace, binding: binding, volume: volume}, roots, nil
 }
 
 func (executor *Executor) commitFailed(ctx context.Context, record operations.OperationRecord, now time.Time, code, message, releaseFenceID string) error {
+	return executor.commitFailedWithDetails(ctx, record, now, code, message, releaseFenceID, nil)
+}
+
+func (executor *Executor) commitFailedWithDetails(ctx context.Context, record operations.OperationRecord, now time.Time, code, message, releaseFenceID string, details map[string]any) error {
 	operation := failedOperation(record, now, operations.OperationStateFailed, code, message)
-	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "repo_create_failed", map[string]any{"repo_id": record.RepoID})
+	operation.VerificationResult = mergeStringAnyMap(asStringAnyMap(operation.VerificationResult), details)
+	if operation.Error != nil {
+		operation.Error.Details = mergeStringAnyMap(asStringAnyMap(operation.Error.Details), details)
+	}
+	eventDetails := mergeStringAnyMap(map[string]any{"repo_id": record.RepoID}, details)
+	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "repo_create_failed", eventDetails)
 	if err != nil {
 		return err
 	}
@@ -269,9 +349,34 @@ func (executor *Executor) commitFailed(ctx context.Context, record operations.Op
 	return nil
 }
 
+func (executor *Executor) markMetadataReadPending(ctx context.Context, record operations.OperationRecord, now time.Time, details map[string]any) error {
+	operation := record
+	operation.State = operations.OperationStateRunning
+	operation.Phase = operations.OperationPhaseRepoCreateValidate
+	operation.ExternalResourceIDs = map[string]string{}
+	operation.JVSJSONOutput = nil
+	operation.VerificationResult = details
+	operation.FinishedAt = nil
+	operation.Error = &operations.OperationError{
+		Code:          repoCreateMetadataReadPendingCode,
+		Message:       "repo create metadata read is pending",
+		Retryable:     true,
+		CorrelationID: record.CorrelationID,
+		OperationID:   record.ID,
+		Details:       details,
+	}
+	if _, err := executor.store.MarkRepoCreateMetadataReadPendingWithLease(ctx, operation.SanitizedForPersistence(), executor.owner, now); err != nil {
+		return repoCreateCommitError("repo create metadata read pending update failed", err)
+	}
+	return nil
+}
+
 func (executor *Executor) commitIntervention(ctx context.Context, record operations.OperationRecord, now time.Time, code, message, fenceID string, details map[string]any) error {
 	operation := failedOperation(record, now, operations.OperationStateOperatorInterventionRequired, code, message)
 	operation.VerificationResult = details
+	if operation.Error != nil {
+		operation.Error.Details = mergeStringAnyMap(asStringAnyMap(operation.Error.Details), details)
+	}
 	attachJVSErrorDetails(&operation, details)
 	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "repo_create_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
 	if err != nil {

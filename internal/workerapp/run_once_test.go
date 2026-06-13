@@ -4058,6 +4058,19 @@ func (store *fakeWorkerAppStore) CommitRepoCreateFailedWithLease(_ context.Conte
 	return operation, nil
 }
 
+func (store *fakeWorkerAppStore) MarkRepoCreateMetadataReadPendingWithLease(_ context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	operation := record.Record()
+	existing, ok := store.records[operation.ID]
+	if !ok || existing.State != operations.OperationStateRunning || existing.LeaseOwner != owner || existing.LeaseExpiresAt == nil || !existing.LeaseExpiresAt.After(now) {
+		return operations.OperationRecord{}, operations.ErrLeaseUnavailable
+	}
+	operation.LeaseOwner = existing.LeaseOwner
+	operation.LeaseExpiresAt = &now
+	store.records[operation.ID] = operation
+	store.operation = operation
+	return operation, nil
+}
+
 func (store *fakeWorkerAppStore) CommitRepoLifecycleSucceededWithLease(_ context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, _ string, _ time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
 	operation := record.Record()
 	operation.LeaseOwner = ""

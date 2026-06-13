@@ -1096,6 +1096,10 @@ func (scoped operationRecoveryStore) CommitRepoCreateFailedWithLease(ctx context
 	return scoped.store.CommitRepoCreateFailedWithLease(ctx, record, owner, now, event, releaseFenceID)
 }
 
+func (scoped operationRecoveryStore) MarkRepoCreateMetadataReadPendingWithLease(ctx context.Context, record operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	return scoped.store.MarkRepoCreateMetadataReadPendingWithLease(ctx, record, owner, now)
+}
+
 func (scoped operationRecoveryStore) CommitRepoLifecycleSucceededWithLease(ctx context.Context, repo resources.Repo, record operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
 	return scoped.store.CommitRepoLifecycleSucceededWithLease(ctx, repo, record, owner, now, event, fenceID)
 }

@@ -83,6 +83,27 @@ func (store *Store) CommitRepoCreateFailedWithLease(ctx context.Context, sanitiz
 	return got, nil
 }
 
+func (store *Store) MarkRepoCreateMetadataReadPendingWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
+	record := sanitized.Record()
+	if err := validateRepoCreateMetadataReadPendingRecord(record); err != nil {
+		return operations.OperationRecord{}, err
+	}
+	operationArgs, err := operationLeaseFencedUpdateArgs(record, owner, now)
+	if err != nil {
+		return operations.OperationRecord{}, err
+	}
+	args := append(operationArgs, repoCreateFailureStoredPredicateArgs(record)...)
+	row := store.exec.QueryRowContext(ctx, repoCreateMetadataReadPendingWithLeaseSQL(), args...)
+	got, err := scanOperation(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return operations.OperationRecord{}, operationLeaseUnavailable("repo create metadata read pending update", record.ID, err)
+		}
+		return operations.OperationRecord{}, err
+	}
+	return got, nil
+}
+
 func validateRepoCreateSuccessRecord(repo resources.Repo, record operations.OperationRecord) error {
 	if record.Type != operations.OperationRepoCreate {
 		return operationLeaseInvalidRequest("operation_type", "operation record must be repo_create")
@@ -129,6 +150,31 @@ func validateRepoCreateFailureRecord(record operations.OperationRecord) error {
 	}
 	if record.Error == nil {
 		return operationLeaseInvalidRequest("error", "repo create failure requires sanitized operation error")
+	}
+	return nil
+}
+
+func validateRepoCreateMetadataReadPendingRecord(record operations.OperationRecord) error {
+	if record.Type != operations.OperationRepoCreate {
+		return operationLeaseInvalidRequest("operation_type", "operation record must be repo_create")
+	}
+	if record.State != operations.OperationStateRunning {
+		return operationLeaseInvalidRequest("operation_state", "repo create metadata read pending update requires running operation")
+	}
+	if record.Phase != operations.OperationPhaseRepoCreateValidate {
+		return operationLeaseInvalidRequest("phase", "repo create metadata read pending update must stay in validate phase")
+	}
+	if strings.TrimSpace(record.NamespaceID) == "" || strings.TrimSpace(record.RepoID) == "" {
+		return operationLeaseInvalidRequest("resource", "repo create metadata read pending update requires namespace and repo ids")
+	}
+	if record.Resource.Type != "repo" || record.Resource.ID != record.RepoID {
+		return operationLeaseInvalidRequest("resource", "operation resource must match target repo")
+	}
+	if record.FinishedAt != nil {
+		return operationLeaseInvalidRequest("finished_at", "repo create metadata read pending update must not finish operation")
+	}
+	if record.Error == nil || record.Error.Code != "REPO_CREATE_METADATA_READ_PENDING" || !record.Error.Retryable {
+		return operationLeaseInvalidRequest("error", "repo create metadata read pending update requires retryable metadata read error")
 	}
 	return nil
 }
@@ -245,6 +291,46 @@ func repoCreateFailureCommitWithLeaseSQL() string {
 		"SELECT " + placeholders(21, len(auditOutboxColumns)) + " FROM updated_operation " +
 		"RETURNING audit_event_id" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
+}
+
+func repoCreateMetadataReadPendingWithLeaseSQL() string {
+	return "WITH eligible_operation AS (" +
+		"SELECT operation_id FROM operations " +
+		"WHERE operation_id = $12 " +
+		"AND operation_state = 'running' " +
+		"AND lease_owner = $13 " +
+		"AND lease_expires_at IS NOT NULL " +
+		"AND lease_expires_at > $11 " +
+		"AND operation_type = 'repo_create' " +
+		"AND phase = 'validate_repo_create' " +
+		"AND namespace_id = $14 " +
+		"AND repo_id = $15 " +
+		"AND resource_type = 'repo' " +
+		"AND resource_id = $15 " +
+		"AND caller_service = $16 " +
+		"AND correlation_id = $17 " +
+		"AND authorized_actor_type = $18 " +
+		"AND authorized_actor_id = $19 " +
+		"FOR UPDATE" +
+		"), updated_operation AS (" +
+		"UPDATE operations SET " +
+		"operation_state = $1, " +
+		"phase = $2, " +
+		"lease_owner = operations.lease_owner, " +
+		"lease_expires_at = $11, " +
+		"external_resource_ids = $3, " +
+		"input_summary = $4, " +
+		"jvs_json_output = $5, " +
+		"verification_result = $6, " +
+		"compensation_status = $7, " +
+		"error_json = $8, " +
+		"started_at = COALESCE(operations.started_at, $9, $11), " +
+		"finished_at = NULL, " +
+		"updated_at = $11 " +
+		"FROM eligible_operation " +
+		"WHERE operations.operation_id = eligible_operation.operation_id " +
+		"RETURNING " + operationReturningColumnsSQL() +
+		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation"
 }
 
 func operationLeaseFencedUpdateSetSQL() string {

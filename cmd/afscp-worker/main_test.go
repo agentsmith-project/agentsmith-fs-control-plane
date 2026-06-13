@@ -635,6 +635,10 @@ func (store *cmdWorkerAppStore) CommitRepoCreateFailedWithLease(context.Context,
 	return operations.OperationRecord{}, errors.New("unexpected commit")
 }
 
+func (store *cmdWorkerAppStore) MarkRepoCreateMetadataReadPendingWithLease(context.Context, operations.SanitizedOperationRecord, string, time.Time) (operations.OperationRecord, error) {
+	return operations.OperationRecord{}, errors.New("unexpected mark")
+}
+
 func (store *cmdWorkerAppStore) CommitRepoLifecycleSucceededWithLease(context.Context, resources.Repo, operations.SanitizedOperationRecord, string, time.Time, audit.Event, string) (resources.Repo, operations.OperationRecord, error) {
 	return resources.Repo{}, operations.OperationRecord{}, errors.New("unexpected commit")
 }

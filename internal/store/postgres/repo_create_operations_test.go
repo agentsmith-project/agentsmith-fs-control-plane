@@ -241,6 +241,51 @@ func TestCommitRepoCreateFailedWithLeaseCanReleaseOrKeepFenceAtomically(t *testi
 	}
 }
 
+func TestMarkRepoCreateMetadataReadPendingExpiresLeaseWithoutAudit(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	record := repoCreateRunningRecord(now)
+	record.Error = &operations.OperationError{
+		Code:          "REPO_CREATE_METADATA_READ_PENDING",
+		Message:       "repo create metadata read is pending",
+		Retryable:     true,
+		CorrelationID: record.CorrelationID,
+		OperationID:   record.ID,
+		Details:       map[string]any{"repo_id": record.RepoID, "retry_reason": "volume_read_unavailable", "volume_id": "vol_123"},
+	}
+	record.VerificationResult = map[string]any{"repo_id": record.RepoID, "retry_reason": "volume_read_unavailable", "volume_id": "vol_123"}
+	returned := record
+	returned.LeaseExpiresAt = &now
+	values := operationRowValues(returned)
+	values[25] = mustMarshalJSONForTest(returned.VerificationResult)
+	values[27] = mustMarshalJSONForTest(returned.Error)
+	exec := &fakeExecutor{row: fakeRow{values: values}}
+	st := &Store{exec: exec}
+
+	got, err := st.MarkRepoCreateMetadataReadPendingWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now)
+	if err != nil {
+		t.Fatalf("MarkRepoCreateMetadataReadPendingWithLease: %v", err)
+	}
+
+	if got.State != operations.OperationStateRunning || got.Error == nil || got.Error.Code != "REPO_CREATE_METADATA_READ_PENDING" || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(now) {
+		t.Fatalf("operation = %#v, want running metadata-read pending with expired lease", got)
+	}
+	assertSQLContainsInOrder(t, exec.query,
+		"WITH eligible_operation AS",
+		"operation_state = 'running'",
+		"operation_type = 'repo_create'",
+		"phase = 'validate_repo_create'",
+		"FOR UPDATE",
+		"UPDATE operations SET",
+		"operation_state = $1",
+		"lease_owner = operations.lease_owner",
+		"lease_expires_at = $11",
+		"finished_at = NULL",
+	)
+	if strings.Contains(exec.query, "audit_outbox") {
+		t.Fatalf("metadata read pending update must not write audit outbox: %s", exec.query)
+	}
+}
+
 func repoCreateRepoFixture(now time.Time) resources.Repo {
 	return resources.Repo{
 		ID:                  "repo_alpha01",
