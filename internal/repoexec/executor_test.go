@@ -872,6 +872,63 @@ func TestExecutorVolumeRootConfigMissingIncludesSafeConfiguredKeys(t *testing.T)
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
+func TestExecutorVolumeRootLookupUsesCanonicalConfiguredVolumeID(t *testing.T) {
+	now := repoExecNow()
+	volumeID := "vol_agentsmith_online_78b_ext"
+	volumeRoot := "/data/afscp/volumes/default"
+	store := newFakeStore()
+	store.binding.DefaultVolumeID = volumeID
+	store.volume.ID = volumeID + "\n"
+	store.volumeRoots = map[string]string{volumeID: volumeRoot}
+	runner := &fakeJVSRunner{initSummary: jvsrunner.InitSummary{RepoID: "jvs_repo_alpha", Workspace: "main"}, doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"}}
+	executor := newTestExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), repoCreateLeasedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if store.operation.Error != nil && store.operation.Error.Details["validation_reason"] == "volume_root_config_missing" {
+		t.Fatalf("operation = %#v, must not report missing volume root for configured id %q", store.operation, volumeID)
+	}
+	if store.operation.State != operations.OperationStateSucceeded {
+		t.Fatalf("operation = %#v, want success with configured volume root", store.operation)
+	}
+	if !strings.HasPrefix(runner.controlRoot, volumeRoot+"/") || !strings.HasPrefix(runner.payloadRoot, volumeRoot+"/") {
+		t.Fatalf("jvs roots = control %q payload %q, want resolved under configured volume root", runner.controlRoot, runner.payloadRoot)
+	}
+}
+
+func TestExecutorVolumeRootLookupReportsInvalidWhenConfiguredRootValueIsInvalid(t *testing.T) {
+	now := repoExecNow()
+	volumeID := "vol_agentsmith_online_78b_ext"
+	store := newFakeStore()
+	store.binding.DefaultVolumeID = volumeID
+	store.volume.ID = volumeID + "\n"
+	store.volumeRoots = map[string]string{volumeID: "/data/afscp/volumes/default"}
+	runner := &fakeJVSRunner{}
+	executor := newTestExecutor(t, store, runner, now)
+	executor.volumeRoots[volumeID] = ""
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), repoCreateLeasedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if len(runner.calls) != 0 || store.createFenceCalls != 0 {
+		t.Fatalf("JVS/fence calls = %#v/%d, want none", runner.calls, store.createFenceCalls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil {
+		t.Fatalf("operation = %#v, want terminal validation failure", store.operation)
+	}
+	details := store.operation.Error.Details
+	if details["validation_reason"] != "volume_root_config_invalid" || details["metadata_stage"] != "volume_root" || details["volume_id"] != volumeID {
+		t.Fatalf("operation error details = %#v, want invalid root facts", details)
+	}
+	if _, exists := details["configured_volume_root_ids"]; exists {
+		t.Fatalf("operation error details = %#v, invalid root must not be mislabeled as missing", details)
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+}
+
 func TestExecutorRetryableMetadataReadPendingDoesNotTerminalFail(t *testing.T) {
 	now := repoExecNow()
 	tests := []struct {

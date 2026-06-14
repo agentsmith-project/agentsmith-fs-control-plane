@@ -88,13 +88,17 @@ func NewExecutor(config Config) (*Executor, error) {
 	}
 	roots := map[string]string{}
 	for volumeID, root := range config.VolumeRoots {
-		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
+		canonicalVolumeID, ok := canonicalVolumeRootID(volumeID)
+		if !ok {
 			return nil, errors.New("repo create volume root config is invalid")
 		}
 		if err := validateVolumeRoot(root); err != nil {
 			return nil, errors.New("repo create volume root config is invalid")
 		}
-		roots[volumeID] = root
+		if _, exists := roots[canonicalVolumeID]; exists {
+			return nil, errors.New("repo create volume root config is invalid")
+		}
+		roots[canonicalVolumeID] = root
 	}
 	return &Executor{store: config.Store, jvs: config.JVSRunner, owner: config.Owner, now: config.Now, clock: config.Clock, auditEventID: config.AuditEventID, volumeRoots: roots}, nil
 }
@@ -355,6 +359,30 @@ func safeConfiguredVolumeRootIDs(roots map[string]string) []string {
 	return safeConfiguredVolumeRootIDsFromSlice(ids)
 }
 
+func configuredVolumeRoot(roots map[string]string, volumeID string) (string, bool) {
+	canonicalVolumeID, ok := canonicalVolumeRootID(volumeID)
+	if !ok {
+		return "", false
+	}
+	if root, ok := roots[canonicalVolumeID]; ok {
+		return root, true
+	}
+	for configuredVolumeID, root := range roots {
+		if canonicalConfiguredVolumeID, ok := canonicalVolumeRootID(configuredVolumeID); ok && canonicalConfiguredVolumeID == canonicalVolumeID {
+			return root, true
+		}
+	}
+	return "", false
+}
+
+func canonicalVolumeRootID(volumeID string) (string, bool) {
+	canonicalVolumeID := strings.TrimSpace(volumeID)
+	if err := pathresolver.ValidateID(pathresolver.VolumeID, canonicalVolumeID); err != nil {
+		return "", false
+	}
+	return canonicalVolumeID, true
+}
+
 func safeConfiguredVolumeRootIDsFromValue(value any) ([]string, bool) {
 	switch typed := value.(type) {
 	case []string:
@@ -378,15 +406,15 @@ func safeConfiguredVolumeRootIDsFromSlice(ids []string) []string {
 	safeIDs := make([]string, 0, len(ids))
 	seen := map[string]struct{}{}
 	for _, volumeID := range ids {
-		volumeID = strings.TrimSpace(volumeID)
-		if _, exists := seen[volumeID]; exists {
+		canonicalVolumeID, ok := canonicalVolumeRootID(volumeID)
+		if !ok {
 			continue
 		}
-		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
+		if _, exists := seen[canonicalVolumeID]; exists {
 			continue
 		}
-		seen[volumeID] = struct{}{}
-		safeIDs = append(safeIDs, volumeID)
+		seen[canonicalVolumeID] = struct{}{}
+		safeIDs = append(safeIDs, canonicalVolumeID)
 	}
 	sort.Strings(safeIDs)
 	return safeIDs
@@ -439,7 +467,7 @@ func (executor *Executor) loadMetadata(ctx context.Context, record operations.Op
 	if volume.Capabilities["jvs_external_control_root"] != true {
 		return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("volume_jvs_capability_disabled", "volume", map[string]any{"volume_id": volume.ID})
 	}
-	root, ok := executor.volumeRoots[volume.ID]
+	root, ok := configuredVolumeRoot(executor.volumeRoots, volume.ID)
 	if !ok {
 		return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("volume_root_config_missing", "volume_root", map[string]any{"volume_id": volume.ID, "configured_volume_root_ids": safeConfiguredVolumeRootIDs(executor.volumeRoots)})
 	}
