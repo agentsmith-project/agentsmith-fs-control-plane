@@ -903,6 +903,73 @@ func TestRunOnceRepoCreateEnabledClaimsThroughRepoExecutor(t *testing.T) {
 	}
 }
 
+func TestRunOnceRepoCreateUsesRenderedVolumeRootsForConfiguredVolumeID(t *testing.T) {
+	now := workerAppNow()
+	volumeID := "vol_agentsmith_airgap_78b_ext"
+	volumeRoot := "/srv/afscp/volumes/" + volumeID
+	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
+	store := newWorkerAppStore(repoRecord)
+	store.binding = resources.NamespaceVolumeBinding{
+		NamespaceID:       "ns_alpha01",
+		DefaultVolumeID:   volumeID,
+		AllowedCallers:    []resources.AllowedCaller{{CallerService: "product-caller", Roles: []resources.CallerRole{resources.CallerRoleRepoAdmin}}},
+		QuotaBytesDefault: 4096,
+		ExportPolicy:      map[string]any{"webdav_enabled": true, "max_session_seconds": float64(3600)},
+		LifecyclePolicy:   map[string]any{"tombstone_retention_seconds": float64(604800), "purge_requires_lifecycle_admin": true, "break_glass_purge_enabled": false},
+		MountPolicy:       map[string]any{"workload_mount_enabled": true, "workload_mount_requires_external_control_root": true, "allow_privileged_workload": false},
+		TemplatePolicy:    map[string]any{"namespace_templates_enabled": true, "cross_namespace_clone_enabled": false},
+		Status:            resources.NamespaceStatusActive,
+		CreatedAt:         now.Add(-time.Hour),
+		UpdatedAt:         now,
+	}
+	store.volume = resources.Volume{
+		ID:             volumeID,
+		Backend:        resources.VolumeBackendJuiceFS,
+		IsolationClass: resources.VolumeIsolationShared,
+		Status:         resources.VolumeStatusActive,
+		Capabilities:   map[string]any{"webdav_export": true, "workload_mount": true, "jvs_external_control_root": true, "directory_quota": false},
+		CreatedAt:      now.Add(-time.Hour),
+		UpdatedAt:      now,
+	}
+	jvs := &workerAppFakeJVSRunner{
+		initSummary:   jvsrunner.InitSummary{RepoID: "jvs_repo_alpha", Workspace: "main"},
+		doctorSummary: jvsrunner.DoctorSummary{RepoID: "jvs_repo_alpha", Healthy: true, Workspace: "main"},
+	}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoConfigSource(config.MapSource{
+			"AFSCP_VOLUME_ROOTS": " " + volumeID + "=" + volumeRoot + " ",
+		}),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_repo" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.Summary().Operation.Claimed != 1 || store.operation.State != operations.OperationStateSucceeded {
+		t.Fatalf("summary/operation = %#v/%#v, want repo_create success", result.Summary().Operation, store.operation)
+	}
+	if store.repo.VolumeID != volumeID {
+		t.Fatalf("repo volume id = %q, want %q", store.repo.VolumeID, volumeID)
+	}
+	if !strings.HasPrefix(jvs.controlRoot, volumeRoot+"/") || !strings.HasPrefix(jvs.payloadRoot, volumeRoot+"/") {
+		t.Fatalf("jvs roots = control %q payload %q, want resolved under configured volume root", jvs.controlRoot, jvs.payloadRoot)
+	}
+	if store.operation.Error != nil && store.operation.Error.Code == "REPO_CREATE_VALIDATION_FAILED" {
+		t.Fatalf("operation = %#v, must not fail with volume_root_config_missing", store.operation)
+	}
+}
+
 func TestRunOnceRepoCreateEnabledMetadataReadPendingCannotBypassDetails(t *testing.T) {
 	now := workerAppNow()
 	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
@@ -4336,6 +4403,9 @@ func (store *fakeWorkerAppStore) GetNamespace(context.Context, string) (resource
 }
 
 func (store *fakeWorkerAppStore) GetNamespaceVolumeBinding(context.Context, string) (resources.NamespaceVolumeBinding, error) {
+	if store.binding.NamespaceID != "" {
+		return store.binding, nil
+	}
 	return resources.NamespaceVolumeBinding{
 		NamespaceID:       "ns_alpha01",
 		DefaultVolumeID:   "vol_123",
@@ -4354,6 +4424,9 @@ func (store *fakeWorkerAppStore) GetNamespaceVolumeBinding(context.Context, stri
 func (store *fakeWorkerAppStore) GetVolume(context.Context, string) (resources.Volume, error) {
 	if store.volumeReadErr != nil {
 		return resources.Volume{}, store.volumeReadErr
+	}
+	if store.volume.ID != "" {
+		return store.volume, nil
 	}
 	return resources.Volume{ID: "vol_123", Backend: resources.VolumeBackendJuiceFS, IsolationClass: resources.VolumeIsolationShared, Status: resources.VolumeStatusActive, Capabilities: map[string]any{"webdav_export": true, "workload_mount": true, "jvs_external_control_root": true, "directory_quota": false}, CreatedAt: workerAppNow().Add(-time.Hour), UpdatedAt: workerAppNow()}, nil
 }

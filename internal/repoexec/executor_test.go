@@ -827,9 +827,49 @@ func TestExecutorPreJVSValidationFailureFailsWithoutJVSOrFenceLeak(t *testing.T)
 			if tt.wantVolumeID != "" && (verification["volume_id"] != tt.wantVolumeID || store.auditEvents[0].Details["volume_id"] != tt.wantVolumeID) {
 				t.Fatalf("metadata evidence = %#v/%#v, want volume_id %q", verification, store.auditEvents[0].Details, tt.wantVolumeID)
 			}
+			if tt.wantReason == "volume_root_config_missing" {
+				if got := fmt.Sprint(store.operation.Error.Details["configured_volume_root_ids"]); got != "[]" {
+					t.Fatalf("configured root ids = %#v, want empty safe list for missing root map", store.operation.Error.Details["configured_volume_root_ids"])
+				}
+			}
 			assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 		})
 	}
+}
+
+func TestExecutorVolumeRootConfigMissingIncludesSafeConfiguredKeys(t *testing.T) {
+	now := repoExecNow()
+	store := newFakeStore()
+	store.binding.DefaultVolumeID = "vol_agentsmith_airgap_78b_ext"
+	store.volume.ID = "vol_agentsmith_airgap_78b_ext"
+	store.volumeRoots = map[string]string{"vol_other-1": "/srv/afscp/volumes/secret-root"}
+	runner := &fakeJVSRunner{}
+	executor := newTestExecutor(t, store, runner, now)
+
+	if err := executor.ExecuteOperationRecovery(context.Background(), repoCreateLeasedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+		t.Fatalf("ExecuteOperationRecovery: %v", err)
+	}
+
+	if len(runner.calls) != 0 || store.createFenceCalls != 0 {
+		t.Fatalf("JVS/fence calls = %#v/%d, want none", runner.calls, store.createFenceCalls)
+	}
+	if store.operation.State != operations.OperationStateFailed || store.operation.Error == nil || store.operation.Error.Code != "REPO_CREATE_VALIDATION_FAILED" {
+		t.Fatalf("operation = %#v, want terminal validation failure", store.operation)
+	}
+	details := store.operation.Error.Details
+	if details["validation_reason"] != "volume_root_config_missing" || details["metadata_stage"] != "volume_root" || details["volume_id"] != "vol_agentsmith_airgap_78b_ext" {
+		t.Fatalf("operation error details = %#v, want missing root facts", details)
+	}
+	if got := fmt.Sprint(details["configured_volume_root_ids"]); got != "[vol_other-1]" {
+		t.Fatalf("configured root ids = %#v, want safe configured key only", details["configured_volume_root_ids"])
+	}
+	for _, evidence := range []any{details, store.operation.VerificationResult, store.auditEvents[0].Details} {
+		rendered := fmt.Sprint(evidence)
+		if strings.Contains(rendered, "/srv/afscp") || strings.Contains(rendered, "secret-root") {
+			t.Fatalf("metadata evidence leaked root path: %#v", evidence)
+		}
+	}
+	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
 func TestExecutorRetryableMetadataReadPendingDoesNotTerminalFail(t *testing.T) {

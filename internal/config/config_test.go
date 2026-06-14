@@ -738,6 +738,29 @@ func TestLoadRepoCreateRecoveryParsesValidConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRepoCreateRecoveryParsesRenderedVolumeRootsWithUnderscoresAndHyphens(t *testing.T) {
+	cfg, err := Load(MapSource{
+		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",
+		"AFSCP_POSTGRES_DSN":                      "postgres://user:password@db/afscp",
+		"AFSCP_WORKER_OWNER":                      "worker-a",
+		"AFSCP_REPO_CREATE_RECOVERY_ENABLED":      "true",
+		"AFSCP_JVS_BINARY_PATH":                   "/opt/afscp/bin/jvs",
+		"AFSCP_JVS_BINARY_SHA256":                 acceptedJVSBinarySHA256,
+		"AFSCP_JVS_CWD":                           "/var/lib/afscp/jvs-cwd",
+		"AFSCP_VOLUME_ROOTS":                      " vol_agentsmith_airgap_78b_ext=/srv/afscp/volumes/vol_agentsmith_airgap_78b_ext, vol_agentsmith-airgap-78b-ext=/srv/afscp/volumes/vol_agentsmith-airgap-78b-ext ",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	roots := cfg.Worker.OperationRecovery.RepoCreate.VolumeRoots
+	if got := roots["vol_agentsmith_airgap_78b_ext"]; got != "/srv/afscp/volumes/vol_agentsmith_airgap_78b_ext" {
+		t.Fatalf("underscore volume root = %q in %#v", got, roots)
+	}
+	if got := roots["vol_agentsmith-airgap-78b-ext"]; got != "/srv/afscp/volumes/vol_agentsmith-airgap-78b-ext" {
+		t.Fatalf("hyphen volume root = %q in %#v", got, roots)
+	}
+}
+
 func TestLoadRepoLifecycleRecoveryRequiresExplicitConfigWhenEnabled(t *testing.T) {
 	_, err := Load(MapSource{
 		"AFSCP_WORKER_OPERATION_RECOVERY_ENABLED": "true",

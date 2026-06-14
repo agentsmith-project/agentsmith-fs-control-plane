@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -263,8 +264,16 @@ func (err repoCreateMetadataError) operationDetails(record operations.OperationR
 	}
 	details["metadata_stage"] = err.stage
 	for key, value := range err.details {
-		if key == "volume_id" && strings.TrimSpace(fmt.Sprint(value)) != "" {
+		switch key {
+		case "volume_id":
+			if strings.TrimSpace(fmt.Sprint(value)) == "" {
+				continue
+			}
 			details[key] = value
+		case "configured_volume_root_ids":
+			if ids, ok := value.([]string); ok {
+				details[key] = safeConfiguredVolumeRootIDsFromSlice(ids)
+			}
 		}
 	}
 	return details
@@ -331,7 +340,37 @@ func safeMetadataDetails(details map[string]any) map[string]any {
 	if volumeID, ok := details["volume_id"].(string); ok && strings.TrimSpace(volumeID) != "" {
 		out["volume_id"] = strings.TrimSpace(volumeID)
 	}
+	if ids, ok := details["configured_volume_root_ids"].([]string); ok {
+		safeIDs := safeConfiguredVolumeRootIDsFromSlice(ids)
+		out["configured_volume_root_ids"] = safeIDs
+	}
 	return out
+}
+
+func safeConfiguredVolumeRootIDs(roots map[string]string) []string {
+	ids := make([]string, 0, len(roots))
+	for volumeID := range roots {
+		ids = append(ids, volumeID)
+	}
+	return safeConfiguredVolumeRootIDsFromSlice(ids)
+}
+
+func safeConfiguredVolumeRootIDsFromSlice(ids []string) []string {
+	safeIDs := make([]string, 0, len(ids))
+	seen := map[string]struct{}{}
+	for _, volumeID := range ids {
+		volumeID = strings.TrimSpace(volumeID)
+		if _, exists := seen[volumeID]; exists {
+			continue
+		}
+		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
+			continue
+		}
+		seen[volumeID] = struct{}{}
+		safeIDs = append(safeIDs, volumeID)
+	}
+	sort.Strings(safeIDs)
+	return safeIDs
 }
 
 func safeMetadataToken(value string) bool {
@@ -383,7 +422,7 @@ func (executor *Executor) loadMetadata(ctx context.Context, record operations.Op
 	}
 	root, ok := executor.volumeRoots[volume.ID]
 	if !ok {
-		return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("volume_root_config_missing", "volume_root", map[string]any{"volume_id": volume.ID})
+		return repoMetadata{}, pathresolver.RepoRootPaths{}, terminalMetadataError("volume_root_config_missing", "volume_root", map[string]any{"volume_id": volume.ID, "configured_volume_root_ids": safeConfiguredVolumeRootIDs(executor.volumeRoots)})
 	}
 	roots, err := pathresolver.ResolveRepoRootPaths(root, record.NamespaceID, record.RepoID)
 	if err != nil {
