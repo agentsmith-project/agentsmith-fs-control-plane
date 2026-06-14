@@ -1675,6 +1675,97 @@ func TestCommitOperationWithLeaseRejectsInvalidRequestBeforeSQL(t *testing.T) {
 	}
 }
 
+func TestCommitOperationWithLeaseRejectsRepoCreateTerminalValidationFailure(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	baseRecord := func(code string, state operations.OperationState, details map[string]any, verification any) operations.OperationRecord {
+		record := operationFixture(now.Add(-time.Hour))
+		record.Type = operations.OperationRepoCreate
+		record.State = state
+		record.Phase = operations.OperationPhaseRepoCreateValidate
+		record.NamespaceID = "ns_52e954c0c2a77d8ea7f8500671b13aba1bd9cb2b"
+		record.RepoID = "repo_flib_4e0a6e273f9d"
+		record.Resource = operations.ResourceRef{Type: "repo", ID: record.RepoID}
+		record.FinishedAt = &now
+		record.Error = &operations.OperationError{
+			Code:          code,
+			Message:       "repo create validation failed",
+			Retryable:     false,
+			CorrelationID: record.CorrelationID,
+			OperationID:   record.ID,
+			Details:       details,
+		}
+		record.VerificationResult = verification
+		return record
+	}
+	eventFor := func(record operations.OperationRecord, details map[string]any) audit.Event {
+		return audit.NewEvent(audit.Event{
+			EventID:         "audit-repo-create",
+			Type:            audit.EventTypeRepoCreate,
+			Time:            now,
+			CallerService:   record.CallerService,
+			AuthorizedActor: audit.Actor{Type: record.AuthorizedActor.Type, ID: record.AuthorizedActor.ID},
+			CorrelationID:   record.CorrelationID,
+			OperationID:     record.ID,
+			Resource:        audit.Resource{Type: "repo", ID: record.RepoID, NamespaceID: record.NamespaceID},
+			Outcome:         audit.OutcomeFailed,
+			Reason:          "repo_create_failed",
+			Details:         details,
+		})
+	}
+
+	validDetails := map[string]any{
+		"repo_id":           "repo_flib_4e0a6e273f9d",
+		"validation_reason": "volume_inactive",
+		"metadata_stage":    "volume",
+		"volume_id":         "vol_agentsmith_online_78b_ext",
+	}
+	tests := []struct {
+		name         string
+		code         string
+		state        operations.OperationState
+		details      map[string]any
+		verification any
+	}{
+		{
+			name:         "live stripped validation evidence",
+			code:         repoCreateValidationFailedCode,
+			state:        operations.OperationStateFailed,
+			details:      map[string]any{"repo_id": "repo_flib_4e0a6e273f9d"},
+			verification: nil,
+		},
+		{
+			name:         "valid validation evidence still must use typed boundary",
+			code:         repoCreateValidationFailedCode,
+			state:        operations.OperationStateFailed,
+			details:      validDetails,
+			verification: validDetails,
+		},
+		{
+			name:         "with fence validation evidence still must use typed boundary",
+			code:         repoCreateValidationFailedWithFenceCode,
+			state:        operations.OperationStateOperatorInterventionRequired,
+			details:      validDetails,
+			verification: validDetails,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := baseRecord(tt.code, tt.state, tt.details, tt.verification)
+			exec := &fakeExecutor{}
+			st := &Store{exec: exec}
+
+			_, err := st.CommitOperationWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, eventFor(record, tt.details))
+			if !errors.Is(err, operations.ErrInvalidLeaseRequest) {
+				t.Fatalf("CommitOperationWithLease error = %v, want ErrInvalidLeaseRequest", err)
+			}
+			if exec.query != "" {
+				t.Fatalf("issued SQL for repo_create terminal validation generic commit: %s", exec.query)
+			}
+		})
+	}
+}
+
 func TestCommitOperationWithLeaseNoRowsWrapsLeaseUnavailable(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	record := operationFixture(now.Add(-time.Hour))

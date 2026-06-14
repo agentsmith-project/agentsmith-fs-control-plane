@@ -622,6 +622,9 @@ func (store *Store) UpdateOperationWithLease(ctx context.Context, sanitized oper
 
 func (store *Store) CommitOperationWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	record := sanitized.Record()
+	if record.Type == operations.OperationRepoCreate && record.Error != nil && repoCreateTerminalValidationCode(record.Error.Code) {
+		return operations.OperationRecord{}, operationLeaseInvalidRequest("operation_type", "repo_create validation failures must use repo_create typed commit")
+	}
 	operationID := strings.TrimSpace(record.ID)
 	if strings.TrimSpace(event.OperationID) == "" {
 		return operations.OperationRecord{}, auditOutboxInvalidRequest("operation_id", "missing audit operation id")
