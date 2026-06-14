@@ -331,6 +331,154 @@ func TestCommitRepoCreateValidationFailureRequiresMetadataDetails(t *testing.T) 
 	}
 }
 
+func TestCommitRepoCreateVolumeRootConfigMissingPersistsConfiguredRootIDs(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name          string
+		configuredIDs []string
+	}{
+		{name: "empty configured roots", configuredIDs: []string{}},
+		{name: "valid configured roots", configuredIDs: []string{"vol_other-1", "vol_other_2"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			record := repoCreateRunningRecord(now)
+			record.State = operations.OperationStateFailed
+			record.Phase = operations.OperationPhaseRepoCreateValidate
+			record.FinishedAt = &now
+			configuredIDs := make([]string, len(tt.configuredIDs))
+			copy(configuredIDs, tt.configuredIDs)
+			details := map[string]any{
+				"repo_id":                    record.RepoID,
+				"validation_reason":          "volume_root_config_missing",
+				"metadata_stage":             "volume_root",
+				"volume_id":                  "vol_missing01",
+				"configured_volume_root_ids": configuredIDs,
+			}
+			record.Error = &operations.OperationError{Code: repoCreateValidationFailedCode, Message: "repo create validation failed", Retryable: false, CorrelationID: record.CorrelationID, OperationID: record.ID, Details: details}
+			record.VerificationResult = details
+			event := audit.NewEvent(audit.Event{
+				EventID:         "audit-repo",
+				Type:            audit.EventTypeRepoCreate,
+				Time:            now,
+				CallerService:   record.CallerService,
+				AuthorizedActor: audit.Actor{Type: record.AuthorizedActor.Type, ID: record.AuthorizedActor.ID},
+				CorrelationID:   record.CorrelationID,
+				OperationID:     record.ID,
+				Resource:        audit.Resource{Type: "repo", ID: record.RepoID, NamespaceID: record.NamespaceID},
+				Outcome:         audit.OutcomeFailed,
+				Reason:          "repo_create_failed",
+				Details:         details,
+			})
+			returned := record.SanitizedForPersistence().Record()
+			values := operationRowValues(returned)
+			values[25] = mustMarshalJSONForTest(returned.VerificationResult)
+			values[27] = mustMarshalJSONForTest(returned.Error)
+			exec := &fakeExecutor{row: fakeRow{values: values}}
+			st := &Store{exec: exec}
+
+			if _, err := st.CommitRepoCreateFailedWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, event, ""); err != nil {
+				t.Fatalf("CommitRepoCreateFailedWithLease: %v", err)
+			}
+
+			assertJSONConfiguredRootIDs(t, mustJSONMap(t, exec.args[5]), tt.configuredIDs)
+			errorJSON := mustJSONMap(t, exec.args[7])
+			errorDetails, ok := errorJSON["details"].(map[string]any)
+			if !ok {
+				t.Fatalf("error_json details = %#v, want object", errorJSON["details"])
+			}
+			assertJSONConfiguredRootIDs(t, errorDetails, tt.configuredIDs)
+			auditPayload := mustJSONMap(t, exec.args[23])
+			auditDetails, ok := auditPayload["details"].(map[string]any)
+			if !ok {
+				t.Fatalf("audit payload details = %#v, want object", auditPayload["details"])
+			}
+			assertJSONConfiguredRootIDs(t, auditDetails, tt.configuredIDs)
+		})
+	}
+}
+
+func TestCommitRepoCreateVolumeRootConfigMissingRequiresConfiguredRootIDs(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	baseDetails := func(record operations.OperationRecord) map[string]any {
+		return map[string]any{
+			"repo_id":                    record.RepoID,
+			"validation_reason":          "volume_root_config_missing",
+			"metadata_stage":             "volume_root",
+			"volume_id":                  "vol_missing01",
+			"configured_volume_root_ids": []string{"vol_other-1"},
+		}
+	}
+	baseRecord := func() operations.OperationRecord {
+		record := repoCreateRunningRecord(now)
+		record.State = operations.OperationStateFailed
+		record.Phase = operations.OperationPhaseRepoCreateValidate
+		record.FinishedAt = &now
+		details := baseDetails(record)
+		record.Error = &operations.OperationError{Code: repoCreateValidationFailedCode, Message: "repo create validation failed", Retryable: false, CorrelationID: record.CorrelationID, OperationID: record.ID, Details: details}
+		record.VerificationResult = details
+		return record
+	}
+	baseEvent := func(record operations.OperationRecord, details map[string]any) audit.Event {
+		return audit.NewEvent(audit.Event{
+			EventID:         "audit-repo",
+			Type:            audit.EventTypeRepoCreate,
+			Time:            now,
+			CallerService:   record.CallerService,
+			AuthorizedActor: audit.Actor{Type: record.AuthorizedActor.Type, ID: record.AuthorizedActor.ID},
+			CorrelationID:   record.CorrelationID,
+			OperationID:     record.ID,
+			Resource:        audit.Resource{Type: "repo", ID: record.RepoID, NamespaceID: record.NamespaceID},
+			Outcome:         audit.OutcomeFailed,
+			Reason:          "repo_create_failed",
+			Details:         details,
+		})
+	}
+
+	for _, tt := range []struct {
+		name string
+		edit func(*operations.OperationRecord, *audit.Event)
+	}{
+		{name: "missing error configured ids", edit: func(record *operations.OperationRecord, _ *audit.Event) {
+			delete(record.Error.Details, "configured_volume_root_ids")
+		}},
+		{name: "missing verification configured ids", edit: func(record *operations.OperationRecord, _ *audit.Event) {
+			verification := baseDetails(*record)
+			delete(verification, "configured_volume_root_ids")
+			record.VerificationResult = verification
+		}},
+		{name: "missing audit configured ids", edit: func(_ *operations.OperationRecord, event *audit.Event) {
+			delete(event.Details, "configured_volume_root_ids")
+		}},
+		{name: "invalid error configured id", edit: func(record *operations.OperationRecord, _ *audit.Event) {
+			record.Error.Details["configured_volume_root_ids"] = []string{"vol_good01", "bad_volume"}
+		}},
+		{name: "invalid verification configured id", edit: func(record *operations.OperationRecord, _ *audit.Event) {
+			verification := baseDetails(*record)
+			verification["configured_volume_root_ids"] = []string{"vol_good01", "vol_bad/path"}
+			record.VerificationResult = verification
+		}},
+		{name: "invalid audit configured id", edit: func(_ *operations.OperationRecord, event *audit.Event) {
+			event.Details["configured_volume_root_ids"] = []string{"vol_good01", "vol_bad path"}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			record := baseRecord()
+			event := baseEvent(record, baseDetails(record))
+			tt.edit(&record, &event)
+			exec := &fakeExecutor{}
+			st := &Store{exec: exec}
+
+			_, err := st.CommitRepoCreateFailedWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, event, "")
+			if !errors.Is(err, operations.ErrInvalidLeaseRequest) {
+				t.Fatalf("CommitRepoCreateFailedWithLease error = %v, want ErrInvalidLeaseRequest", err)
+			}
+			if exec.query != "" {
+				t.Fatalf("issued SQL for invalid request: %s", exec.query)
+			}
+		})
+	}
+}
+
 func TestMarkRepoCreateMetadataReadPendingExpiresLeaseWithoutAudit(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	record := repoCreateRunningRecord(now)
@@ -496,4 +644,28 @@ func repoCreateAuditEvent(eventID, operationID, repoID string, now time.Time, ou
 		Reason:          "repo_create_committed",
 		Details:         map[string]any{"repo_id": repoID, "volume_id": "vol_123"},
 	})
+}
+
+func assertJSONConfiguredRootIDs(t *testing.T, details map[string]any, want []string) {
+	t.Helper()
+	raw, ok := details["configured_volume_root_ids"].([]any)
+	if !ok {
+		t.Fatalf("configured_volume_root_ids = %#v, want JSON array", details["configured_volume_root_ids"])
+	}
+	got := make([]string, len(raw))
+	for idx, value := range raw {
+		id, ok := value.(string)
+		if !ok {
+			t.Fatalf("configured_volume_root_ids[%d] = %#v, want string", idx, value)
+		}
+		got[idx] = id
+	}
+	if len(got) != len(want) {
+		t.Fatalf("configured_volume_root_ids = %#v, want %#v", got, want)
+	}
+	for idx := range want {
+		if got[idx] != want[idx] {
+			t.Fatalf("configured_volume_root_ids = %#v, want %#v", got, want)
+		}
+	}
 }

@@ -271,7 +271,7 @@ func (err repoCreateMetadataError) operationDetails(record operations.OperationR
 			}
 			details[key] = value
 		case "configured_volume_root_ids":
-			if ids, ok := value.([]string); ok {
+			if ids, ok := safeConfiguredVolumeRootIDsFromValue(value); ok {
 				details[key] = safeConfiguredVolumeRootIDsFromSlice(ids)
 			}
 		}
@@ -340,7 +340,7 @@ func safeMetadataDetails(details map[string]any) map[string]any {
 	if volumeID, ok := details["volume_id"].(string); ok && strings.TrimSpace(volumeID) != "" {
 		out["volume_id"] = strings.TrimSpace(volumeID)
 	}
-	if ids, ok := details["configured_volume_root_ids"].([]string); ok {
+	if ids, ok := safeConfiguredVolumeRootIDsFromValue(details["configured_volume_root_ids"]); ok {
 		safeIDs := safeConfiguredVolumeRootIDsFromSlice(ids)
 		out["configured_volume_root_ids"] = safeIDs
 	}
@@ -353,6 +353,25 @@ func safeConfiguredVolumeRootIDs(roots map[string]string) []string {
 		ids = append(ids, volumeID)
 	}
 	return safeConfiguredVolumeRootIDsFromSlice(ids)
+}
+
+func safeConfiguredVolumeRootIDsFromValue(value any) ([]string, bool) {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...), true
+	case []any:
+		ids := make([]string, 0, len(typed))
+		for _, item := range typed {
+			id, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			ids = append(ids, id)
+		}
+		return ids, true
+	default:
+		return nil, false
+	}
 }
 
 func safeConfiguredVolumeRootIDsFromSlice(ids []string) []string {

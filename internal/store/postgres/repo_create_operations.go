@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -257,7 +258,8 @@ func validateRepoCreateMetadataDetails(record operations.OperationRecord, field 
 	if got := detailString(details, "repo_id"); got != record.RepoID {
 		return operationLeaseInvalidRequest(field, "repo create metadata evidence requires target repo id")
 	}
-	if !safeRepoCreateMetadataToken(detailString(details, reasonKey)) {
+	reason := detailString(details, reasonKey)
+	if !safeRepoCreateMetadataToken(reason) {
 		return operationLeaseInvalidRequest(field, "repo create metadata evidence requires safe reason")
 	}
 	if !safeRepoCreateMetadataToken(detailString(details, "metadata_stage")) {
@@ -266,6 +268,11 @@ func validateRepoCreateMetadataDetails(record operations.OperationRecord, field 
 	if volumeID := detailString(details, "volume_id"); volumeID != "" {
 		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
 			return operationLeaseInvalidRequest(field, "repo create metadata evidence volume id is invalid")
+		}
+	}
+	if reasonKey == "validation_reason" && reason == "volume_root_config_missing" {
+		if _, ok := detailConfiguredVolumeRootIDs(details); !ok {
+			return operationLeaseInvalidRequest(field, "repo create missing volume root evidence requires configured volume root ids")
 		}
 	}
 	return nil
@@ -284,12 +291,70 @@ func validateRepoCreateMetadataDetailMatch(field string, source, target map[stri
 			return operationLeaseInvalidRequest(field, "repo create metadata evidence volume id must match operation error")
 		}
 	}
+	if detailString(source, reasonKey) == "volume_root_config_missing" || detailString(target, reasonKey) == "volume_root_config_missing" {
+		sourceIDs, sourceOK := detailConfiguredVolumeRootIDs(source)
+		targetIDs, targetOK := detailConfiguredVolumeRootIDs(target)
+		if !sourceOK || !targetOK || !stringSlicesEqual(sourceIDs, targetIDs) {
+			return operationLeaseInvalidRequest(field, "repo create metadata evidence configured volume root ids must match operation error")
+		}
+	}
 	return nil
 }
 
 func detailString(details map[string]any, key string) string {
 	value, _ := details[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func detailConfiguredVolumeRootIDs(details map[string]any) ([]string, bool) {
+	raw, ok := details["configured_volume_root_ids"]
+	if !ok {
+		return nil, false
+	}
+	var ids []string
+	switch typed := raw.(type) {
+	case []string:
+		ids = append(ids, typed...)
+	case []any:
+		ids = make([]string, 0, len(typed))
+		for _, value := range typed {
+			id, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			ids = append(ids, id)
+		}
+	default:
+		return nil, false
+	}
+
+	normalized := make([]string, 0, len(ids))
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if err := pathresolver.ValidateID(pathresolver.VolumeID, id); err != nil {
+			return nil, false
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalized = append(normalized, id)
+	}
+	sort.Strings(normalized)
+	return normalized, true
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for idx := range left {
+		if left[idx] != right[idx] {
+			return false
+		}
+	}
+	return true
 }
 
 func safeRepoCreateMetadataToken(value string) bool {
