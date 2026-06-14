@@ -22,6 +22,8 @@ not implement a store adapter, endpoint handler, or storage-side action.
 - `0006_save_point_repo_busy_terminalization.sql`: terminalizes legacy save
   point create operations that were left in operator intervention for JVS
   `E_REPO_BUSY`, preserving a complete retryable operation error envelope.
+- `0008_repo_create_validation_evidence_check.sql`: adds the durable
+  repo_create terminal validation evidence invariant for new operation writes.
 
 ## Contract
 

@@ -455,12 +455,33 @@ func repoCreateFailureCommitWithLeaseSQL() string {
 		"FROM eligible_operation " +
 		"WHERE operations.operation_id = eligible_operation.operation_id " +
 		"AND ($20 = '' OR EXISTS (SELECT 1 FROM released_fence)) " +
+		"AND " + repoCreateTerminalValidationEvidencePredicateSQL("$15", "$6", "$8") + " " +
 		"RETURNING " + operationReturningColumnsSQL() +
 		"), inserted_audit AS (" +
 		"INSERT INTO audit_outbox (" + stringsJoin(auditOutboxColumns) + ") " +
 		"SELECT " + placeholders(21, len(auditOutboxColumns)) + " FROM updated_operation " +
 		"RETURNING audit_event_id" +
 		") SELECT " + strings.Join(operationSelectColumns, ", ") + " FROM updated_operation WHERE EXISTS (SELECT 1 FROM inserted_audit)"
+}
+
+func repoCreateTerminalValidationEvidencePredicateSQL(repoIDExpr, verificationExpr, errorExpr string) string {
+	verification := verificationExpr + "::jsonb"
+	errorJSON := errorExpr + "::jsonb"
+	return "(" +
+		"COALESCE(" + errorJSON + "->>'code', '') NOT IN ('" + repoCreateValidationFailedCode + "','" + repoCreateValidationFailedWithFenceCode + "') OR COALESCE((" +
+		"jsonb_typeof(" + errorJSON + ") = 'object' " +
+		"AND jsonb_typeof(" + errorJSON + "->'details') = 'object' " +
+		"AND jsonb_typeof(" + verification + ") = 'object' " +
+		"AND btrim(" + errorJSON + "#>>'{details,repo_id}') = " + repoIDExpr + " " +
+		"AND btrim(" + verification + "->>'repo_id') = " + repoIDExpr + " " +
+		"AND btrim(" + errorJSON + "#>>'{details,validation_reason}') ~ '^[a-z0-9_]+$' " +
+		"AND btrim(" + errorJSON + "#>>'{details,metadata_stage}') ~ '^[a-z0-9_]+$' " +
+		"AND btrim(" + verification + "->>'validation_reason') = btrim(" + errorJSON + "#>>'{details,validation_reason}') " +
+		"AND btrim(" + verification + "->>'metadata_stage') = btrim(" + errorJSON + "#>>'{details,metadata_stage}') " +
+		"AND ((NULLIF(btrim(" + errorJSON + "#>>'{details,volume_id}'), '') IS NULL AND NULLIF(btrim(" + verification + "->>'volume_id'), '') IS NULL) OR btrim(" + verification + "->>'volume_id') = btrim(" + errorJSON + "#>>'{details,volume_id}')) " +
+		"AND (btrim(" + errorJSON + "#>>'{details,validation_reason}') <> 'volume_root_config_missing' OR (" + errorJSON + "#>'{details,configured_volume_root_ids}' IS NOT NULL AND " + verification + "->'configured_volume_root_ids' = " + errorJSON + "#>'{details,configured_volume_root_ids}'))" +
+		"), false)" +
+		")"
 }
 
 func repoCreateMetadataReadPendingWithLeaseSQL() string {

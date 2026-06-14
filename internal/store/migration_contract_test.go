@@ -98,6 +98,28 @@ func TestPostgreSQLMigrationContractDefinesPersistencePrimitives(t *testing.T) {
 		)
 	})
 
+	t.Run("repo create terminal validation requires durable evidence", func(t *testing.T) {
+		contract.requireRawFragments(t,
+			"operations_repo_create_terminal_validation_evidence_check",
+			"operation_type = 'repo_create'",
+			"phase = 'validate_repo_create'",
+			"operation_state in ('failed', 'operator_intervention_required')",
+			"'repo_create_validation_failed'",
+			"'repo_create_validation_failed_with_fence'",
+			"jsonb_typeof(error_json->'details') = 'object'",
+			"jsonb_typeof(verification_result) = 'object'",
+			"btrim(error_json#>>'{details,repo_id}') = repo_id",
+			"btrim(verification_result->>'repo_id') = repo_id",
+			"btrim(error_json#>>'{details,validation_reason}') ~ '^[a-z0-9_]+$'",
+			"btrim(error_json#>>'{details,metadata_stage}') ~ '^[a-z0-9_]+$'",
+			"btrim(verification_result->>'validation_reason') = btrim(error_json#>>'{details,validation_reason}')",
+			"btrim(verification_result->>'metadata_stage') = btrim(error_json#>>'{details,metadata_stage}')",
+			"volume_root_config_missing",
+			"configured_volume_root_ids",
+			") not valid",
+		)
+	})
+
 	t.Run("audit outbox table", func(t *testing.T) {
 		table := contract.requireTable(t, "audit_outbox")
 

@@ -231,6 +231,10 @@ func TestCommitRepoCreateFailedWithLeaseCanReleaseOrKeepFenceAtomically(t *testi
 				"FROM eligible_operation",
 				"operations.operation_id = eligible_operation.operation_id",
 				"($20 = '' OR EXISTS (SELECT 1 FROM released_fence))",
+				"jsonb_typeof($8::jsonb->'details') = 'object'",
+				"jsonb_typeof($6::jsonb) = 'object'",
+				"btrim($8::jsonb#>>'{details,validation_reason}') ~ '^[a-z0-9_]+$'",
+				"btrim($8::jsonb#>>'{details,metadata_stage}') ~ '^[a-z0-9_]+$'",
 				"), inserted_audit AS (",
 				"INSERT INTO audit_outbox",
 			)
@@ -276,6 +280,11 @@ func TestCommitRepoCreateValidationFailureRequiresMetadataDetails(t *testing.T) 
 		name string
 		edit func(*operations.OperationRecord, *audit.Event)
 	}{
+		{name: "live stripped repo id only", edit: func(record *operations.OperationRecord, event *audit.Event) {
+			record.Error.Details = map[string]any{"repo_id": record.RepoID}
+			record.VerificationResult = nil
+			event.Details = map[string]any{"repo_id": record.RepoID}
+		}},
 		{name: "missing error reason", edit: func(record *operations.OperationRecord, _ *audit.Event) {
 			record.Error.Details = map[string]any{"repo_id": record.RepoID, "metadata_stage": "volume", "volume_id": "vol_123"}
 		}},
