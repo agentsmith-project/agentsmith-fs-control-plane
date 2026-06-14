@@ -10,7 +10,14 @@ import (
 
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/audit"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/operations"
+	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/pathresolver"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
+)
+
+const (
+	repoCreateValidationFailedCode          = "REPO_CREATE_VALIDATION_FAILED"
+	repoCreateValidationFailedWithFenceCode = "REPO_CREATE_VALIDATION_FAILED_WITH_FENCE"
+	repoCreateMetadataReadPendingCode       = "REPO_CREATE_METADATA_READ_PENDING"
 )
 
 func (store *Store) CommitRepoCreateSucceededWithLease(ctx context.Context, repo resources.Repo, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event, fenceID string) (resources.Repo, operations.OperationRecord, error) {
@@ -151,6 +158,11 @@ func validateRepoCreateFailureRecord(record operations.OperationRecord) error {
 	if record.Error == nil {
 		return operationLeaseInvalidRequest("error", "repo create failure requires sanitized operation error")
 	}
+	if repoCreateTerminalValidationCode(record.Error.Code) {
+		if err := validateRepoCreateMetadataEvidence(record, "validation_reason", true); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -173,8 +185,11 @@ func validateRepoCreateMetadataReadPendingRecord(record operations.OperationReco
 	if record.FinishedAt != nil {
 		return operationLeaseInvalidRequest("finished_at", "repo create metadata read pending update must not finish operation")
 	}
-	if record.Error == nil || record.Error.Code != "REPO_CREATE_METADATA_READ_PENDING" || !record.Error.Retryable {
+	if record.Error == nil || record.Error.Code != repoCreateMetadataReadPendingCode || !record.Error.Retryable {
 		return operationLeaseInvalidRequest("error", "repo create metadata read pending update requires retryable metadata read error")
+	}
+	if err := validateRepoCreateMetadataEvidence(record, "retry_reason", false); err != nil {
+		return err
 	}
 	return nil
 }
@@ -197,7 +212,97 @@ func validateRepoCreateAuditEvent(repo resources.Repo, record operations.Operati
 
 func validateRepoCreateFailureAuditEvent(record operations.OperationRecord, event audit.Event) error {
 	repo := resources.Repo{ID: record.RepoID, NamespaceID: record.NamespaceID}
-	return validateRepoCreateAuditEvent(repo, record, event, audit.OutcomeFailed)
+	if err := validateRepoCreateAuditEvent(repo, record, event, audit.OutcomeFailed); err != nil {
+		return err
+	}
+	if record.Error != nil && repoCreateTerminalValidationCode(record.Error.Code) {
+		if err := validateRepoCreateMetadataDetails(record, "audit_details", event.Details, "validation_reason"); err != nil {
+			return err
+		}
+		if err := validateRepoCreateMetadataDetailMatch("audit_details", record.Error.Details, event.Details, "validation_reason"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func repoCreateTerminalValidationCode(code string) bool {
+	return code == repoCreateValidationFailedCode || code == repoCreateValidationFailedWithFenceCode
+}
+
+func validateRepoCreateMetadataEvidence(record operations.OperationRecord, reasonKey string, terminal bool) error {
+	if record.Error == nil {
+		return operationLeaseInvalidRequest("error", "repo create metadata evidence requires operation error")
+	}
+	if terminal && record.Error.Retryable {
+		return operationLeaseInvalidRequest("error", "repo create terminal validation failure must not be retryable")
+	}
+	if err := validateRepoCreateMetadataDetails(record, "error_details", record.Error.Details, reasonKey); err != nil {
+		return err
+	}
+	verification, ok := record.VerificationResult.(map[string]any)
+	if !ok || verification == nil {
+		return operationLeaseInvalidRequest("verification_result", "repo create metadata evidence requires verification details")
+	}
+	if err := validateRepoCreateMetadataDetails(record, "verification_result", verification, reasonKey); err != nil {
+		return err
+	}
+	return validateRepoCreateMetadataDetailMatch("verification_result", record.Error.Details, verification, reasonKey)
+}
+
+func validateRepoCreateMetadataDetails(record operations.OperationRecord, field string, details map[string]any, reasonKey string) error {
+	if details == nil {
+		return operationLeaseInvalidRequest(field, "repo create metadata evidence details are required")
+	}
+	if got := detailString(details, "repo_id"); got != record.RepoID {
+		return operationLeaseInvalidRequest(field, "repo create metadata evidence requires target repo id")
+	}
+	if !safeRepoCreateMetadataToken(detailString(details, reasonKey)) {
+		return operationLeaseInvalidRequest(field, "repo create metadata evidence requires safe reason")
+	}
+	if !safeRepoCreateMetadataToken(detailString(details, "metadata_stage")) {
+		return operationLeaseInvalidRequest(field, "repo create metadata evidence requires safe metadata stage")
+	}
+	if volumeID := detailString(details, "volume_id"); volumeID != "" {
+		if err := pathresolver.ValidateID(pathresolver.VolumeID, volumeID); err != nil {
+			return operationLeaseInvalidRequest(field, "repo create metadata evidence volume id is invalid")
+		}
+	}
+	return nil
+}
+
+func validateRepoCreateMetadataDetailMatch(field string, source, target map[string]any, reasonKey string) error {
+	for _, key := range []string{reasonKey, "metadata_stage"} {
+		if detailString(source, key) != detailString(target, key) {
+			return operationLeaseInvalidRequest(field, "repo create metadata evidence details must match operation error")
+		}
+	}
+	sourceVolumeID := detailString(source, "volume_id")
+	targetVolumeID := detailString(target, "volume_id")
+	if sourceVolumeID != "" || targetVolumeID != "" {
+		if sourceVolumeID != targetVolumeID {
+			return operationLeaseInvalidRequest(field, "repo create metadata evidence volume id must match operation error")
+		}
+	}
+	return nil
+}
+
+func detailString(details map[string]any, key string) string {
+	value, _ := details[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func safeRepoCreateMetadataToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char == '_' || (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func repoCreateStoredPredicateArgs(record operations.OperationRecord) []any {

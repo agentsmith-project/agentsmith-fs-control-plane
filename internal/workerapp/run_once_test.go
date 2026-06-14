@@ -903,6 +903,54 @@ func TestRunOnceRepoCreateEnabledClaimsThroughRepoExecutor(t *testing.T) {
 	}
 }
 
+func TestRunOnceRepoCreateEnabledMetadataReadPendingCannotBypassDetails(t *testing.T) {
+	now := workerAppNow()
+	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
+	store := newWorkerAppStore(repoRecord)
+	store.volumeReadErr = errors.New("temporary volume metadata visibility gap: /srv/afscp/secret")
+	jvs := &workerAppFakeJVSRunner{}
+	runner, err := NewRunOnceRunner(Options{
+		Source: workerAppRepoConfigSource(nil),
+		StoreFactory: func(context.Context, string) (StoreHandle, error) {
+			return StoreHandle{Store: store}, nil
+		},
+		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+			return jvs, nil
+		},
+		Clock:        func() time.Time { return now },
+		AuditEventID: func() string { return "evt_repo" },
+	})
+	if err != nil {
+		t.Fatalf("NewRunOnceRunner: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	summary := result.Summary().Operation
+	if summary.Claimed != 1 || summary.Failed != 0 || summary.Unsupported != 0 || summary.Manual != 0 {
+		t.Fatalf("summary = %#v, want repo_create claimed into retryable pending", summary)
+	}
+	got := store.records[repoRecord.ID]
+	if got.State != operations.OperationStateRunning || got.Phase != operations.OperationPhaseRepoCreateValidate || got.Error == nil || got.Error.Code != "REPO_CREATE_METADATA_READ_PENDING" || !got.Error.Retryable {
+		t.Fatalf("repo_create record = %#v, want retryable metadata read pending", got)
+	}
+	if got.Error.Details["retry_reason"] != "volume_read_unavailable" || got.Error.Details["metadata_stage"] != "volume" || got.Error.Details["volume_id"] != "vol_123" {
+		t.Fatalf("repo_create error details = %#v, want metadata retry evidence", got.Error.Details)
+	}
+	verification, ok := got.VerificationResult.(map[string]any)
+	if !ok || verification["retry_reason"] != "volume_read_unavailable" || verification["metadata_stage"] != "volume" || verification["volume_id"] != "vol_123" {
+		t.Fatalf("repo_create verification = %#v, want metadata retry evidence", got.VerificationResult)
+	}
+	if got.LeaseOwner != "worker-a" || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(now) {
+		t.Fatalf("repo_create lease = %q/%v, want expired running lease owned by worker", got.LeaseOwner, got.LeaseExpiresAt)
+	}
+	if len(jvs.calls) != 0 || len(store.auditEvents) != 0 || store.repo.ID != "" || store.releasedFenceID != "" {
+		t.Fatalf("jvs/audit/repo/fence = %#v/%#v/%#v/%q, want no side effects", jvs.calls, store.auditEvents, store.repo, store.releasedFenceID)
+	}
+}
+
 func TestRunOnceRepoLifecycleDisabledScansAndPersistsUnsupportedInterventions(t *testing.T) {
 	now := workerAppNow()
 	archiveRecord := workerAppRepoLifecycleOperationRecord("op_archive", operations.OperationRepoArchive, now)

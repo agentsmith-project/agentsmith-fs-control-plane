@@ -241,6 +241,96 @@ func TestCommitRepoCreateFailedWithLeaseCanReleaseOrKeepFenceAtomically(t *testi
 	}
 }
 
+func TestCommitRepoCreateValidationFailureRequiresMetadataDetails(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	validDetails := func(record operations.OperationRecord) map[string]any {
+		return map[string]any{"repo_id": record.RepoID, "validation_reason": "volume_inactive", "metadata_stage": "volume", "volume_id": "vol_123"}
+	}
+	validEvent := func(record operations.OperationRecord, details map[string]any) audit.Event {
+		return audit.NewEvent(audit.Event{
+			EventID:         "audit-repo",
+			Type:            audit.EventTypeRepoCreate,
+			Time:            now,
+			CallerService:   record.CallerService,
+			AuthorizedActor: audit.Actor{Type: record.AuthorizedActor.Type, ID: record.AuthorizedActor.ID},
+			CorrelationID:   record.CorrelationID,
+			OperationID:     record.ID,
+			Resource:        audit.Resource{Type: "repo", ID: record.RepoID, NamespaceID: record.NamespaceID},
+			Outcome:         audit.OutcomeFailed,
+			Reason:          "repo_create_failed",
+			Details:         details,
+		})
+	}
+	validRecord := func() operations.OperationRecord {
+		record := repoCreateRunningRecord(now)
+		record.State = operations.OperationStateFailed
+		record.Phase = operations.OperationPhaseRepoCreateValidate
+		record.FinishedAt = &now
+		details := validDetails(record)
+		record.Error = &operations.OperationError{Code: repoCreateValidationFailedCode, Message: "repo create validation failed", Retryable: false, CorrelationID: record.CorrelationID, OperationID: record.ID, Details: details}
+		record.VerificationResult = details
+		return record
+	}
+
+	for _, tt := range []struct {
+		name string
+		edit func(*operations.OperationRecord, *audit.Event)
+	}{
+		{name: "missing error reason", edit: func(record *operations.OperationRecord, _ *audit.Event) {
+			record.Error.Details = map[string]any{"repo_id": record.RepoID, "metadata_stage": "volume", "volume_id": "vol_123"}
+		}},
+		{name: "missing error stage", edit: func(record *operations.OperationRecord, _ *audit.Event) {
+			record.Error.Details = map[string]any{"repo_id": record.RepoID, "validation_reason": "volume_inactive", "volume_id": "vol_123"}
+		}},
+		{name: "missing verification", edit: func(record *operations.OperationRecord, _ *audit.Event) {
+			record.VerificationResult = nil
+		}},
+		{name: "mismatched verification stage", edit: func(record *operations.OperationRecord, _ *audit.Event) {
+			record.VerificationResult = map[string]any{"repo_id": record.RepoID, "validation_reason": "volume_inactive", "metadata_stage": "namespace", "volume_id": "vol_123"}
+		}},
+		{name: "missing audit stage", edit: func(_ *operations.OperationRecord, event *audit.Event) {
+			event.Details = map[string]any{"repo_id": event.Resource.ID, "validation_reason": "volume_inactive", "volume_id": "vol_123"}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			record := validRecord()
+			event := validEvent(record, validDetails(record))
+			tt.edit(&record, &event)
+			exec := &fakeExecutor{}
+			st := &Store{exec: exec}
+
+			_, err := st.CommitRepoCreateFailedWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, event, "")
+			if !errors.Is(err, operations.ErrInvalidLeaseRequest) {
+				t.Fatalf("CommitRepoCreateFailedWithLease error = %v, want ErrInvalidLeaseRequest", err)
+			}
+			if exec.query != "" {
+				t.Fatalf("issued SQL for invalid request: %s", exec.query)
+			}
+		})
+	}
+
+	record := validRecord()
+	event := validEvent(record, validDetails(record))
+	returned := record.SanitizedForPersistence().Record()
+	values := operationRowValues(returned)
+	values[25] = mustMarshalJSONForTest(returned.VerificationResult)
+	values[27] = mustMarshalJSONForTest(returned.Error)
+	exec := &fakeExecutor{row: fakeRow{values: values}}
+	st := &Store{exec: exec}
+
+	got, err := st.CommitRepoCreateFailedWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, event, "")
+	if err != nil {
+		t.Fatalf("CommitRepoCreateFailedWithLease valid validation failure: %v", err)
+	}
+	if got.Error == nil || got.Error.Details["validation_reason"] != "volume_inactive" || got.Error.Details["metadata_stage"] != "volume" || got.Error.Details["volume_id"] != "vol_123" {
+		t.Fatalf("operation error details = %#v, want persisted validation metadata evidence", got.Error)
+	}
+	verification, ok := got.VerificationResult.(map[string]any)
+	if !ok || verification["validation_reason"] != "volume_inactive" || verification["metadata_stage"] != "volume" || verification["volume_id"] != "vol_123" {
+		t.Fatalf("verification = %#v, want persisted validation metadata evidence", got.VerificationResult)
+	}
+}
+
 func TestMarkRepoCreateMetadataReadPendingExpiresLeaseWithoutAudit(t *testing.T) {
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	record := repoCreateRunningRecord(now)
@@ -250,9 +340,9 @@ func TestMarkRepoCreateMetadataReadPendingExpiresLeaseWithoutAudit(t *testing.T)
 		Retryable:     true,
 		CorrelationID: record.CorrelationID,
 		OperationID:   record.ID,
-		Details:       map[string]any{"repo_id": record.RepoID, "retry_reason": "volume_read_unavailable", "volume_id": "vol_123"},
+		Details:       map[string]any{"repo_id": record.RepoID, "retry_reason": "volume_read_unavailable", "metadata_stage": "volume", "volume_id": "vol_123"},
 	}
-	record.VerificationResult = map[string]any{"repo_id": record.RepoID, "retry_reason": "volume_read_unavailable", "volume_id": "vol_123"}
+	record.VerificationResult = map[string]any{"repo_id": record.RepoID, "retry_reason": "volume_read_unavailable", "metadata_stage": "volume", "volume_id": "vol_123"}
 	returned := record
 	returned.LeaseExpiresAt = &now
 	values := operationRowValues(returned)
@@ -269,6 +359,9 @@ func TestMarkRepoCreateMetadataReadPendingExpiresLeaseWithoutAudit(t *testing.T)
 	if got.State != operations.OperationStateRunning || got.Error == nil || got.Error.Code != "REPO_CREATE_METADATA_READ_PENDING" || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(now) {
 		t.Fatalf("operation = %#v, want running metadata-read pending with expired lease", got)
 	}
+	if got.Error.Details["retry_reason"] != "volume_read_unavailable" || got.Error.Details["metadata_stage"] != "volume" || got.Error.Details["volume_id"] != "vol_123" {
+		t.Fatalf("operation error details = %#v, want persisted metadata read evidence", got.Error.Details)
+	}
 	assertSQLContainsInOrder(t, exec.query,
 		"WITH eligible_operation AS",
 		"operation_state = 'running'",
@@ -283,6 +376,55 @@ func TestMarkRepoCreateMetadataReadPendingExpiresLeaseWithoutAudit(t *testing.T)
 	)
 	if strings.Contains(exec.query, "audit_outbox") {
 		t.Fatalf("metadata read pending update must not write audit outbox: %s", exec.query)
+	}
+}
+
+func TestMarkRepoCreateMetadataReadPendingRequiresMetadataDetails(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	validRecord := func() operations.OperationRecord {
+		record := repoCreateRunningRecord(now)
+		record.Error = &operations.OperationError{
+			Code:          repoCreateMetadataReadPendingCode,
+			Message:       "repo create metadata read is pending",
+			Retryable:     true,
+			CorrelationID: record.CorrelationID,
+			OperationID:   record.ID,
+			Details:       map[string]any{"repo_id": record.RepoID, "retry_reason": "volume_read_unavailable", "metadata_stage": "volume", "volume_id": "vol_123"},
+		}
+		record.VerificationResult = map[string]any{"repo_id": record.RepoID, "retry_reason": "volume_read_unavailable", "metadata_stage": "volume", "volume_id": "vol_123"}
+		return record
+	}
+	for _, tt := range []struct {
+		name string
+		edit func(*operations.OperationRecord)
+	}{
+		{name: "missing retry reason", edit: func(record *operations.OperationRecord) {
+			record.Error.Details = map[string]any{"repo_id": record.RepoID, "metadata_stage": "volume", "volume_id": "vol_123"}
+		}},
+		{name: "missing metadata stage", edit: func(record *operations.OperationRecord) {
+			record.Error.Details = map[string]any{"repo_id": record.RepoID, "retry_reason": "volume_read_unavailable", "volume_id": "vol_123"}
+		}},
+		{name: "missing verification", edit: func(record *operations.OperationRecord) {
+			record.VerificationResult = nil
+		}},
+		{name: "mismatched verification reason", edit: func(record *operations.OperationRecord) {
+			record.VerificationResult = map[string]any{"repo_id": record.RepoID, "retry_reason": "namespace_read_unavailable", "metadata_stage": "volume", "volume_id": "vol_123"}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			record := validRecord()
+			tt.edit(&record)
+			exec := &fakeExecutor{}
+			st := &Store{exec: exec}
+
+			_, err := st.MarkRepoCreateMetadataReadPendingWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now)
+			if !errors.Is(err, operations.ErrInvalidLeaseRequest) {
+				t.Fatalf("MarkRepoCreateMetadataReadPendingWithLease error = %v, want ErrInvalidLeaseRequest", err)
+			}
+			if exec.query != "" {
+				t.Fatalf("issued SQL for invalid request: %s", exec.query)
+			}
+		})
 	}
 }
 

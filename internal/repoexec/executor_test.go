@@ -774,6 +774,7 @@ func TestExecutorPreJVSValidationFailureFailsWithoutJVSOrFenceLeak(t *testing.T)
 		name         string
 		edit         func(*fakeRepoCreateStore)
 		wantReason   string
+		wantStage    string
 		wantVolumeID string
 	}{
 		{name: "inactive namespace", edit: func(store *fakeRepoCreateStore) {
@@ -781,12 +782,12 @@ func TestExecutorPreJVSValidationFailureFailsWithoutJVSOrFenceLeak(t *testing.T)
 			disabledAt := now
 			store.namespace.DisabledAt = &disabledAt
 			store.namespace.DisabledReason = "disabled"
-		}, wantReason: "namespace_inactive"},
-		{name: "missing namespace", edit: func(store *fakeRepoCreateStore) { store.namespaceErr = sql.ErrNoRows }, wantReason: "namespace_missing"},
-		{name: "inactive binding", edit: func(store *fakeRepoCreateStore) { store.binding.Status = resources.NamespaceStatusDisabled }, wantReason: "binding_inactive", wantVolumeID: "vol_123"},
-		{name: "inactive volume", edit: func(store *fakeRepoCreateStore) { store.volume.Status = resources.VolumeStatusDisabled }, wantReason: "volume_inactive", wantVolumeID: "vol_123"},
-		{name: "missing capability", edit: func(store *fakeRepoCreateStore) { store.volume.Capabilities["jvs_external_control_root"] = false }, wantReason: "volume_jvs_capability_disabled", wantVolumeID: "vol_123"},
-		{name: "missing volume root", edit: func(store *fakeRepoCreateStore) { store.volumeRoots = map[string]string{} }, wantReason: "volume_root_config_missing", wantVolumeID: "vol_123"},
+		}, wantReason: "namespace_inactive", wantStage: "namespace"},
+		{name: "missing namespace", edit: func(store *fakeRepoCreateStore) { store.namespaceErr = sql.ErrNoRows }, wantReason: "namespace_missing", wantStage: "namespace"},
+		{name: "inactive binding", edit: func(store *fakeRepoCreateStore) { store.binding.Status = resources.NamespaceStatusDisabled }, wantReason: "binding_inactive", wantStage: "namespace_volume_binding", wantVolumeID: "vol_123"},
+		{name: "inactive volume", edit: func(store *fakeRepoCreateStore) { store.volume.Status = resources.VolumeStatusDisabled }, wantReason: "volume_inactive", wantStage: "volume", wantVolumeID: "vol_123"},
+		{name: "missing capability", edit: func(store *fakeRepoCreateStore) { store.volume.Capabilities["jvs_external_control_root"] = false }, wantReason: "volume_jvs_capability_disabled", wantStage: "volume", wantVolumeID: "vol_123"},
+		{name: "missing volume root", edit: func(store *fakeRepoCreateStore) { store.volumeRoots = map[string]string{} }, wantReason: "volume_root_config_missing", wantStage: "volume_root", wantVolumeID: "vol_123"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -810,8 +811,21 @@ func TestExecutorPreJVSValidationFailureFailsWithoutJVSOrFenceLeak(t *testing.T)
 			if store.operation.Error.Details["validation_reason"] != tt.wantReason {
 				t.Fatalf("operation error details = %#v, want validation_reason %q", store.operation.Error.Details, tt.wantReason)
 			}
+			if store.operation.Error.Details["metadata_stage"] != tt.wantStage {
+				t.Fatalf("operation error details = %#v, want metadata_stage %q", store.operation.Error.Details, tt.wantStage)
+			}
+			verification, ok := store.operation.VerificationResult.(map[string]any)
+			if !ok || verification["validation_reason"] != tt.wantReason || verification["metadata_stage"] != tt.wantStage {
+				t.Fatalf("operation verification = %#v, want terminal metadata evidence", store.operation.VerificationResult)
+			}
+			if len(store.auditEvents) != 1 || store.auditEvents[0].Details["validation_reason"] != tt.wantReason || store.auditEvents[0].Details["metadata_stage"] != tt.wantStage {
+				t.Fatalf("audit events = %#v, want terminal metadata evidence", store.auditEvents)
+			}
 			if tt.wantVolumeID != "" && store.operation.Error.Details["volume_id"] != tt.wantVolumeID {
 				t.Fatalf("operation error details = %#v, want volume_id %q", store.operation.Error.Details, tt.wantVolumeID)
+			}
+			if tt.wantVolumeID != "" && (verification["volume_id"] != tt.wantVolumeID || store.auditEvents[0].Details["volume_id"] != tt.wantVolumeID) {
+				t.Fatalf("metadata evidence = %#v/%#v, want volume_id %q", verification, store.auditEvents[0].Details, tt.wantVolumeID)
 			}
 			assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 		})
@@ -820,33 +834,61 @@ func TestExecutorPreJVSValidationFailureFailsWithoutJVSOrFenceLeak(t *testing.T)
 
 func TestExecutorRetryableMetadataReadPendingDoesNotTerminalFail(t *testing.T) {
 	now := repoExecNow()
-	store := newFakeStore()
-	store.volumeErr = errors.New("temporary metadata store read failed: /srv/afscp/secret")
-	runner := &fakeJVSRunner{}
-	executor := newTestExecutor(t, store, runner, now)
+	tests := []struct {
+		name         string
+		edit         func(*fakeRepoCreateStore)
+		wantReason   string
+		wantStage    string
+		wantVolumeID string
+	}{
+		{name: "namespace read unavailable", edit: func(store *fakeRepoCreateStore) {
+			store.namespaceErr = errors.New("temporary metadata store read failed: /srv/afscp/secret")
+		}, wantReason: "namespace_read_unavailable", wantStage: "namespace"},
+		{name: "binding read unavailable", edit: func(store *fakeRepoCreateStore) {
+			store.bindingErr = errors.New("temporary binding visibility gap")
+		}, wantReason: "binding_read_unavailable", wantStage: "namespace_volume_binding"},
+		{name: "volume read unavailable", edit: func(store *fakeRepoCreateStore) {
+			store.volumeErr = errors.New("temporary volume store read failed: /srv/afscp/secret")
+		}, wantReason: "volume_read_unavailable", wantStage: "volume", wantVolumeID: "vol_123"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			tt.edit(store)
+			runner := &fakeJVSRunner{}
+			executor := newTestExecutor(t, store, runner, now)
 
-	if err := executor.ExecuteOperationRecovery(context.Background(), repoCreateLeasedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
-		t.Fatalf("ExecuteOperationRecovery: %v", err)
+			if err := executor.ExecuteOperationRecovery(context.Background(), repoCreateLeasedRecord(now, 1), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable}); err != nil {
+				t.Fatalf("ExecuteOperationRecovery: %v", err)
+			}
+			if len(runner.calls) != 0 || store.createFenceCalls != 0 {
+				t.Fatalf("JVS/fence calls = %#v/%d, want none", runner.calls, store.createFenceCalls)
+			}
+			if store.operation.State != operations.OperationStateRunning || store.operation.Phase != operations.OperationPhaseRepoCreateValidate {
+				t.Fatalf("operation = %#v, want running validate retry", store.operation)
+			}
+			if store.operation.Error == nil || store.operation.Error.Code != repoCreateMetadataReadPendingCode || !store.operation.Error.Retryable {
+				t.Fatalf("operation error = %#v, want retryable metadata read pending", store.operation.Error)
+			}
+			if store.operation.Error.Details["retry_reason"] != tt.wantReason || store.operation.Error.Details["metadata_stage"] != tt.wantStage {
+				t.Fatalf("operation error details = %#v, want redacted metadata retry facts", store.operation.Error.Details)
+			}
+			verification, ok := store.operation.VerificationResult.(map[string]any)
+			if !ok || verification["retry_reason"] != tt.wantReason || verification["metadata_stage"] != tt.wantStage {
+				t.Fatalf("operation verification = %#v, want metadata retry facts", store.operation.VerificationResult)
+			}
+			if tt.wantVolumeID != "" && (store.operation.Error.Details["volume_id"] != tt.wantVolumeID || verification["volume_id"] != tt.wantVolumeID) {
+				t.Fatalf("operation evidence = %#v/%#v, want volume_id %q", store.operation.Error.Details, verification, tt.wantVolumeID)
+			}
+			if store.operation.FinishedAt != nil || store.operation.LeaseExpiresAt == nil || !store.operation.LeaseExpiresAt.Equal(now) {
+				t.Fatalf("operation lease/finish = %v/%v, want expired running lease and no finish", store.operation.LeaseExpiresAt, store.operation.FinishedAt)
+			}
+			if len(store.auditEvents) != 0 || store.releasedFenceID != "" {
+				t.Fatalf("audit/release = %#v/%q, want no terminal audit or fence release", store.auditEvents, store.releasedFenceID)
+			}
+			assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+		})
 	}
-	if len(runner.calls) != 0 || store.createFenceCalls != 0 {
-		t.Fatalf("JVS/fence calls = %#v/%d, want none", runner.calls, store.createFenceCalls)
-	}
-	if store.operation.State != operations.OperationStateRunning || store.operation.Phase != operations.OperationPhaseRepoCreateValidate {
-		t.Fatalf("operation = %#v, want running validate retry", store.operation)
-	}
-	if store.operation.Error == nil || store.operation.Error.Code != repoCreateMetadataReadPendingCode || !store.operation.Error.Retryable {
-		t.Fatalf("operation error = %#v, want retryable metadata read pending", store.operation.Error)
-	}
-	if store.operation.Error.Details["retry_reason"] != "volume_read_unavailable" || store.operation.Error.Details["metadata_stage"] != "volume" || store.operation.Error.Details["volume_id"] != "vol_123" {
-		t.Fatalf("operation error details = %#v, want redacted metadata retry facts", store.operation.Error.Details)
-	}
-	if store.operation.FinishedAt != nil || store.operation.LeaseExpiresAt == nil || !store.operation.LeaseExpiresAt.Equal(now) {
-		t.Fatalf("operation lease/finish = %v/%v, want expired running lease and no finish", store.operation.LeaseExpiresAt, store.operation.FinishedAt)
-	}
-	if len(store.auditEvents) != 0 || store.releasedFenceID != "" {
-		t.Fatalf("audit/release = %#v/%q, want no terminal audit or fence release", store.auditEvents, store.releasedFenceID)
-	}
-	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
 func TestExecutorMetadataFailureWithSameOperationFenceRequiresIntervention(t *testing.T) {
@@ -869,8 +911,15 @@ func TestExecutorMetadataFailureWithSameOperationFenceRequiresIntervention(t *te
 	if store.operation.Error == nil || store.operation.Error.Code != "REPO_CREATE_VALIDATION_FAILED_WITH_FENCE" {
 		t.Fatalf("operation error = %#v, want validation failure with fence", store.operation.Error)
 	}
-	if store.operation.Error.Details["validation_reason"] != "volume_inactive" || store.operation.Error.Details["volume_id"] != "vol_123" {
+	if store.operation.Error.Details["validation_reason"] != "volume_inactive" || store.operation.Error.Details["metadata_stage"] != "volume" || store.operation.Error.Details["volume_id"] != "vol_123" {
 		t.Fatalf("operation error details = %#v, want redacted terminal reason with volume", store.operation.Error.Details)
+	}
+	verification, ok := store.operation.VerificationResult.(map[string]any)
+	if !ok || verification["validation_reason"] != "volume_inactive" || verification["metadata_stage"] != "volume" || verification["volume_id"] != "vol_123" {
+		t.Fatalf("operation verification = %#v, want terminal metadata evidence", store.operation.VerificationResult)
+	}
+	if len(store.auditEvents) != 1 || store.auditEvents[0].Details["validation_reason"] != "volume_inactive" || store.auditEvents[0].Details["metadata_stage"] != "volume" || store.auditEvents[0].Details["volume_id"] != "vol_123" {
+		t.Fatalf("audit events = %#v, want terminal metadata evidence", store.auditEvents)
 	}
 	if store.releasedFenceID != "" {
 		t.Fatalf("released fence = %q, want kept fence", store.releasedFenceID)

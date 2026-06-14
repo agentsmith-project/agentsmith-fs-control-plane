@@ -148,18 +148,7 @@ func (executor *Executor) ExecuteOperationRecovery(ctx context.Context, record o
 
 	metadata, roots, err := executor.loadMetadata(ctx, record, now)
 	if err != nil {
-		var metadataErr repoCreateMetadataError
-		if !errors.As(err, &metadataErr) {
-			metadataErr = retryableMetadataError("metadata_read_unavailable", "metadata", nil)
-		}
-		details := metadataErr.operationDetails(record)
-		if metadataErr.retryable {
-			return executor.markMetadataReadPending(ctx, record, now, details)
-		}
-		if hasSameOpHeldFence {
-			return executor.commitIntervention(ctx, record, now, "REPO_CREATE_VALIDATION_FAILED_WITH_FENCE", "repo create validation failed with held fence", existingHeldFence.ID, details)
-		}
-		return executor.commitFailedWithDetails(ctx, record, now, "REPO_CREATE_VALIDATION_FAILED", "repo create validation failed", "", details)
+		return executor.commitMetadataFailure(ctx, record, now, err, existingHeldFence, hasSameOpHeldFence)
 	}
 
 	existingFence, hasSameOpFence := sameOperationActiveFence(record, held)
@@ -272,13 +261,90 @@ func (err repoCreateMetadataError) operationDetails(record operations.OperationR
 	} else {
 		details["validation_reason"] = err.reason
 	}
-	if strings.TrimSpace(err.stage) != "" {
-		details["metadata_stage"] = err.stage
-	}
+	details["metadata_stage"] = err.stage
 	for key, value := range err.details {
-		details[key] = value
+		if key == "volume_id" && strings.TrimSpace(fmt.Sprint(value)) != "" {
+			details[key] = value
+		}
 	}
 	return details
+}
+
+func (executor *Executor) commitMetadataFailure(ctx context.Context, record operations.OperationRecord, now time.Time, cause error, existingHeldFence fences.Fence, hasSameOpHeldFence bool) error {
+	metadataErr := normalizedMetadataFailure(cause)
+	details := metadataErr.operationDetails(record)
+	if metadataErr.retryable {
+		return executor.markMetadataReadPending(ctx, record, now, details)
+	}
+	if hasSameOpHeldFence {
+		return executor.commitIntervention(ctx, record, now, "REPO_CREATE_VALIDATION_FAILED_WITH_FENCE", "repo create validation failed with held fence", existingHeldFence.ID, details)
+	}
+	return executor.commitFailedWithDetails(ctx, record, now, "REPO_CREATE_VALIDATION_FAILED", "repo create validation failed", "", details)
+}
+
+func normalizedMetadataFailure(cause error) repoCreateMetadataError {
+	var metadataErr repoCreateMetadataError
+	if !errors.As(cause, &metadataErr) {
+		return retryableMetadataError("metadata_read_unavailable", "metadata", nil)
+	}
+	metadataErr.reason = strings.TrimSpace(metadataErr.reason)
+	metadataErr.stage = strings.TrimSpace(metadataErr.stage)
+	metadataErr.details = safeMetadataDetails(metadataErr.details)
+	if metadataErr.retryable {
+		if !safeMetadataToken(metadataErr.reason) {
+			metadataErr.reason = "metadata_read_unavailable"
+		}
+		if !safeMetadataToken(metadataErr.stage) {
+			metadataErr.stage = "metadata"
+		}
+		return metadataErr
+	}
+	if knownTerminalMetadataFailure(metadataErr.reason, metadataErr.stage) {
+		return metadataErr
+	}
+	if safeMetadataToken(metadataErr.stage) {
+		return retryableMetadataError("metadata_read_unavailable", metadataErr.stage, metadataErr.details)
+	}
+	return retryableMetadataError("metadata_read_unavailable", "metadata", metadataErr.details)
+}
+
+func knownTerminalMetadataFailure(reason, stage string) bool {
+	switch reason {
+	case "namespace_missing", "namespace_inactive":
+		return stage == "namespace"
+	case "binding_missing", "binding_inactive":
+		return stage == "namespace_volume_binding"
+	case "volume_missing", "volume_inactive", "volume_jvs_capability_disabled":
+		return stage == "volume"
+	case "volume_root_config_missing", "volume_root_config_invalid":
+		return stage == "volume_root"
+	default:
+		return false
+	}
+}
+
+func safeMetadataDetails(details map[string]any) map[string]any {
+	out := map[string]any{}
+	if details == nil {
+		return out
+	}
+	if volumeID, ok := details["volume_id"].(string); ok && strings.TrimSpace(volumeID) != "" {
+		out["volume_id"] = strings.TrimSpace(volumeID)
+	}
+	return out
+}
+
+func safeMetadataToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char == '_' || (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (executor *Executor) loadMetadata(ctx context.Context, record operations.OperationRecord, now time.Time) (repoMetadata, pathresolver.RepoRootPaths, error) {
@@ -378,7 +444,12 @@ func (executor *Executor) commitIntervention(ctx context.Context, record operati
 		operation.Error.Details = mergeStringAnyMap(asStringAnyMap(operation.Error.Details), details)
 	}
 	attachJVSErrorDetails(&operation, details)
-	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "repo_create_operator_intervention_required", map[string]any{"repo_id": record.RepoID})
+	eventDetails := map[string]any{"repo_id": record.RepoID}
+	if code == "REPO_CREATE_VALIDATION_FAILED_WITH_FENCE" {
+		eventDetails = mergeStringAnyMap(eventDetails, details)
+		eventDetails["repo_id"] = record.RepoID
+	}
+	event, err := executor.auditEvent(operation, now, audit.OutcomeFailed, "repo_create_operator_intervention_required", eventDetails)
 	if err != nil {
 		return err
 	}
