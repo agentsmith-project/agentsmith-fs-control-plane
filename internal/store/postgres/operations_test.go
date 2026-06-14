@@ -294,6 +294,84 @@ func TestUpdateOperationReturnsNoRowsWhenOperationDoesNotExist(t *testing.T) {
 	}
 }
 
+func TestGenericOperationWritersRejectRepoCreateTerminalValidationFailure(t *testing.T) {
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	baseRecord := func() operations.OperationRecord {
+		record := operationFixture(now.Add(-time.Hour))
+		record.Type = operations.OperationRepoCreate
+		record.State = operations.OperationStateFailed
+		record.Phase = operations.OperationPhaseRepoCreateValidate
+		record.NamespaceID = "ns_52e954c0c2a77d8ea7f8500671b13aba1bd9cb2b"
+		record.RepoID = "repo_flib_8098c4f7d7e4"
+		record.Resource = operations.ResourceRef{Type: "repo", ID: record.RepoID}
+		record.FinishedAt = &now
+		details := map[string]any{
+			"repo_id":           record.RepoID,
+			"validation_reason": "volume_root_config_missing",
+			"metadata_stage":    "volume_root",
+			"volume_id":         "vol_agentsmith_online_78b_ext",
+		}
+		record.Error = &operations.OperationError{
+			Code:          repoCreateValidationFailedCode,
+			Message:       "repo create validation failed",
+			Retryable:     false,
+			CorrelationID: record.CorrelationID,
+			OperationID:   record.ID,
+			Details:       details,
+		}
+		record.VerificationResult = details
+		return record
+	}
+	eventFor := func(record operations.OperationRecord) audit.Event {
+		return audit.NewEvent(audit.Event{
+			EventID:         "audit-repo-create",
+			Type:            audit.EventTypeRepoCreate,
+			Time:            now,
+			CallerService:   record.CallerService,
+			AuthorizedActor: audit.Actor{Type: record.AuthorizedActor.Type, ID: record.AuthorizedActor.ID},
+			CorrelationID:   record.CorrelationID,
+			OperationID:     record.ID,
+			Resource:        audit.Resource{Type: "repo", ID: record.RepoID, NamespaceID: record.NamespaceID},
+			Outcome:         audit.OutcomeFailed,
+			Reason:          "repo_create_failed",
+			Details:         record.Error.Details,
+		})
+	}
+
+	tests := []struct {
+		name string
+		call func(*Store, operations.OperationRecord) error
+	}{
+		{name: "create", call: func(st *Store, record operations.OperationRecord) error {
+			return st.CreateOperation(context.Background(), record.SanitizedForPersistence())
+		}},
+		{name: "update", call: func(st *Store, record operations.OperationRecord) error {
+			return st.UpdateOperation(context.Background(), record.SanitizedForPersistence())
+		}},
+		{name: "lease update", call: func(st *Store, record operations.OperationRecord) error {
+			_, err := st.UpdateOperationWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now)
+			return err
+		}},
+		{name: "commit", call: func(st *Store, record operations.OperationRecord) error {
+			_, err := st.CommitOperationWithLease(context.Background(), record.SanitizedForPersistence(), "worker-a", now, eventFor(record))
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{rowsAffected: 1}
+			st := &Store{exec: exec, clock: func() time.Time { return now }}
+			err := tt.call(st, baseRecord())
+			if !errors.Is(err, operations.ErrInvalidLeaseRequest) {
+				t.Fatalf("%s error = %v, want ErrInvalidLeaseRequest", tt.name, err)
+			}
+			if exec.query != "" {
+				t.Fatalf("%s issued SQL for repo_create terminal validation generic write: %s", tt.name, exec.query)
+			}
+		})
+	}
+}
+
 func TestGetOperationScansFullRecord(t *testing.T) {
 	createdAt := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
 	startedAt := createdAt.Add(time.Minute)

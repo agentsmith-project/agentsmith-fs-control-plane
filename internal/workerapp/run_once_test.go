@@ -905,8 +905,8 @@ func TestRunOnceRepoCreateEnabledClaimsThroughRepoExecutor(t *testing.T) {
 
 func TestRunOnceRepoCreateUsesRenderedVolumeRootsForConfiguredVolumeID(t *testing.T) {
 	now := workerAppNow()
-	volumeID := "vol_agentsmith_airgap_78b_ext"
-	volumeRoot := "/srv/afscp/volumes/" + volumeID
+	volumeID := "vol_agentsmith_online_78b_ext"
+	volumeRoot := "/data/afscp/volumes/default"
 	repoRecord := workerAppRepoCreateOperationRecord("op_repo", now)
 	store := newWorkerAppStore(repoRecord)
 	store.binding = resources.NamespaceVolumeBinding{

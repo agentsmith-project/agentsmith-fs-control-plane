@@ -58,6 +58,9 @@ func operationReturningColumnsSQL() string {
 
 func (store *Store) CreateOperation(ctx context.Context, sanitized operations.SanitizedOperationRecord) error {
 	record := sanitized.Record()
+	if err := rejectGenericRepoCreateTerminalValidation(record); err != nil {
+		return err
+	}
 	args, err := operationInsertArgs(record)
 	if err != nil {
 		return err
@@ -68,6 +71,9 @@ func (store *Store) CreateOperation(ctx context.Context, sanitized operations.Sa
 
 func (store *Store) UpdateOperation(ctx context.Context, sanitized operations.SanitizedOperationRecord) error {
 	record := sanitized.Record()
+	if err := rejectGenericRepoCreateTerminalValidation(record); err != nil {
+		return err
+	}
 	args, err := operationUpdateArgs(record, store.now())
 	if err != nil {
 		return err
@@ -605,6 +611,9 @@ func (store *Store) RenewOperationLease(ctx context.Context, operationID string,
 
 func (store *Store) UpdateOperationWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time) (operations.OperationRecord, error) {
 	record := sanitized.Record()
+	if err := rejectGenericRepoCreateTerminalValidation(record); err != nil {
+		return operations.OperationRecord{}, err
+	}
 	args, err := operationLeaseFencedUpdateArgs(record, owner, now)
 	if err != nil {
 		return operations.OperationRecord{}, err
@@ -622,8 +631,8 @@ func (store *Store) UpdateOperationWithLease(ctx context.Context, sanitized oper
 
 func (store *Store) CommitOperationWithLease(ctx context.Context, sanitized operations.SanitizedOperationRecord, owner string, now time.Time, event audit.Event) (operations.OperationRecord, error) {
 	record := sanitized.Record()
-	if record.Type == operations.OperationRepoCreate && record.Error != nil && repoCreateTerminalValidationCode(record.Error.Code) {
-		return operations.OperationRecord{}, operationLeaseInvalidRequest("operation_type", "repo_create validation failures must use repo_create typed commit")
+	if err := rejectGenericRepoCreateTerminalValidation(record); err != nil {
+		return operations.OperationRecord{}, err
 	}
 	operationID := strings.TrimSpace(record.ID)
 	if strings.TrimSpace(event.OperationID) == "" {
@@ -652,6 +661,16 @@ func (store *Store) CommitOperationWithLease(ctx context.Context, sanitized oper
 		return operations.OperationRecord{}, err
 	}
 	return updated, nil
+}
+
+func rejectGenericRepoCreateTerminalValidation(record operations.OperationRecord) error {
+	if record.Type != operations.OperationRepoCreate || record.Error == nil {
+		return nil
+	}
+	if !repoCreateTerminalValidationCode(record.Error.Code) {
+		return nil
+	}
+	return operationLeaseInvalidRequest("operation_type", "repo_create validation failures must use repo_create typed commit")
 }
 
 func (store *Store) CreateOrReuseOperation(ctx context.Context, spec operations.QueuedOperationSpec) (operations.IdempotencyResolution, error) {

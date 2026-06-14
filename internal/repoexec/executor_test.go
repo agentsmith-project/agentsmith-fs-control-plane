@@ -831,6 +831,12 @@ func TestExecutorPreJVSValidationFailureFailsWithoutJVSOrFenceLeak(t *testing.T)
 				if got := fmt.Sprint(store.operation.Error.Details["configured_volume_root_ids"]); got != "[]" {
 					t.Fatalf("configured root ids = %#v, want empty safe list for missing root map", store.operation.Error.Details["configured_volume_root_ids"])
 				}
+				if got := fmt.Sprint(verification["configured_volume_root_ids"]); got != "[]" {
+					t.Fatalf("verification configured root ids = %#v, want empty safe list for missing root map", verification["configured_volume_root_ids"])
+				}
+				if got := fmt.Sprint(store.auditEvents[0].Details["configured_volume_root_ids"]); got != "[]" {
+					t.Fatalf("audit configured root ids = %#v, want empty safe list for missing root map", store.auditEvents[0].Details["configured_volume_root_ids"])
+				}
 			}
 			assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 		})
@@ -862,6 +868,16 @@ func TestExecutorVolumeRootConfigMissingIncludesSafeConfiguredKeys(t *testing.T)
 	}
 	if got := fmt.Sprint(details["configured_volume_root_ids"]); got != "[vol_other-1]" {
 		t.Fatalf("configured root ids = %#v, want safe configured key only", details["configured_volume_root_ids"])
+	}
+	verification, ok := store.operation.VerificationResult.(map[string]any)
+	if !ok {
+		t.Fatalf("verification = %#v, want metadata details", store.operation.VerificationResult)
+	}
+	if got := fmt.Sprint(verification["configured_volume_root_ids"]); got != "[vol_other-1]" {
+		t.Fatalf("verification configured root ids = %#v, want safe configured key only", verification["configured_volume_root_ids"])
+	}
+	if got := fmt.Sprint(store.auditEvents[0].Details["configured_volume_root_ids"]); got != "[vol_other-1]" {
+		t.Fatalf("audit configured root ids = %#v, want safe configured key only", store.auditEvents[0].Details["configured_volume_root_ids"])
 	}
 	for _, evidence := range []any{details, store.operation.VerificationResult, store.auditEvents[0].Details} {
 		rendered := fmt.Sprint(evidence)
