@@ -238,6 +238,41 @@ func TestReadOnlyPropfindWorkspaceArtifactsChildReturnsMultiStatus(t *testing.T)
 	}
 }
 
+func TestReadOnlyExportReflectsLivePayloadWorkspaceMutations(t *testing.T) {
+	env := newGatewayTestEnv(t, sessionstate.AccessModeReadOnly, sessionstate.ExportStatusActive)
+	env.writePayload(t, "workspace/live.txt", "v1")
+	env.writePayload(t, "workspace/.artifacts/live.txt", "artifact-v1")
+
+	workspaceListing := env.propfind(t, "/e/"+testExportID+"/workspace/")
+	if workspaceListing.Code != http.StatusMultiStatus {
+		t.Fatalf("workspace PROPFIND status = %d, want 207, body %q", workspaceListing.Code, workspaceListing.Body.String())
+	}
+	if body := workspaceListing.Body.String(); !strings.Contains(body, "workspace/live.txt") || !strings.Contains(body, "workspace/.artifacts") {
+		t.Fatalf("workspace PROPFIND body = %q, want live workspace entries", body)
+	}
+	artifactsListing := env.propfind(t, "/e/"+testExportID+"/workspace/.artifacts/")
+	if artifactsListing.Code != http.StatusMultiStatus {
+		t.Fatalf("artifacts PROPFIND status = %d, want 207, body %q", artifactsListing.Code, artifactsListing.Body.String())
+	}
+	if body := artifactsListing.Body.String(); !strings.Contains(body, "workspace/.artifacts/live.txt") {
+		t.Fatalf("artifacts PROPFIND body = %q, want live artifact entry", body)
+	}
+
+	if got := env.request(http.MethodGet, "/e/"+testExportID+"/workspace/live.txt", nil, ""); got.Code != http.StatusOK || got.Body.String() != "v1" {
+		t.Fatalf("initial GET status/body = %d/%q, want 200/v1", got.Code, got.Body.String())
+	}
+	env.writePayload(t, "workspace/live.txt", "v2")
+	if got := env.request(http.MethodGet, "/e/"+testExportID+"/workspace/live.txt", nil, ""); got.Code != http.StatusOK || got.Body.String() != "v2" {
+		t.Fatalf("updated GET status/body = %d/%q, want 200/v2", got.Code, got.Body.String())
+	}
+	if err := os.Remove(filepath.Join(env.payloadRoot, "workspace", "live.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.request(http.MethodGet, "/e/"+testExportID+"/workspace/live.txt", nil, ""); got.Code != http.StatusNotFound {
+		t.Fatalf("deleted GET status = %d, want 404, body %q", got.Code, got.Body.String())
+	}
+}
+
 func TestReadWritePutGetAndCopyMoveDestinationPolicy(t *testing.T) {
 	env := newGatewayTestEnv(t, sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive)
 	if err := os.MkdirAll(filepath.Join(env.payloadRoot, "docs"), 0o755); err != nil {
@@ -1051,6 +1086,16 @@ func (env *gatewayTestEnv) request(method, target string, body io.Reader, destin
 	if destination != "" {
 		req.Header.Set("Destination", destination)
 	}
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func (env *gatewayTestEnv) propfind(t *testing.T, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("PROPFIND", "http://files.example.test"+target, nil)
+	req.SetBasicAuth(testExportID, testPassword)
+	req.Header.Set("Depth", "1")
 	rec := httptest.NewRecorder()
 	env.handler.ServeHTTP(rec, req)
 	return rec
