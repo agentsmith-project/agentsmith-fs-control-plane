@@ -1477,57 +1477,88 @@ func TestRunOnceSavePointCreateEnabledClaimsThroughSavePointExecutor(t *testing.
 	}
 }
 
-func TestRunOnceSavePointCreateWriterDrainPendingStaysRunning(t *testing.T) {
+func TestRunOnceSavePointCreateBypassesRestoreWriterGate(t *testing.T) {
 	now := workerAppNow()
-	record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
-	store := newWorkerAppStore(record)
-	store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
-	store.mounts = []sessionstate.WorkloadMountBinding{{
-		ID:             "wmb_writer",
-		NamespaceID:    record.NamespaceID,
-		RepoID:         record.RepoID,
-		Status:         sessionstate.MountStatusReleasing,
-		ReadOnly:       false,
-		LeaseExpiresAt: now.Add(time.Hour),
-		CreatedAt:      now.Add(-time.Minute),
-		UpdatedAt:      now,
-	}}
-	jvs := &workerAppFakeJVSRunner{}
-	runner, err := NewRunOnceRunner(Options{
-		Source: workerAppSavePointConfigSource(nil),
-		StoreFactory: func(context.Context, string) (StoreHandle, error) {
-			return StoreHandle{Store: store}, nil
+	tests := []struct {
+		name string
+		edit func(*fakeWorkerAppStore, operations.OperationRecord)
+	}{
+		{
+			name: "active rw export",
+			edit: func(store *fakeWorkerAppStore, _ operations.OperationRecord) {
+				store.exports = []sessionstate.ExportSession{workerAppFreshExportSession(now, "export_active", sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(time.Hour))}
+			},
 		},
-		JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
-			return jvs, nil
+		{
+			name: "active workload mount",
+			edit: func(store *fakeWorkerAppStore, record operations.OperationRecord) {
+				store.mounts = []sessionstate.WorkloadMountBinding{workerAppWriterMountBinding(now, record, sessionstate.MountStatusActive)}
+			},
 		},
-		Clock:        func() time.Time { return now },
-		AuditEventID: func() string { return "evt_savepoint" },
-	})
-	if err != nil {
-		t.Fatalf("NewRunOnceRunner: %v", err)
+		{
+			name: "releasing workload mount",
+			edit: func(store *fakeWorkerAppStore, record operations.OperationRecord) {
+				store.mounts = []sessionstate.WorkloadMountBinding{workerAppWriterMountBinding(now, record, sessionstate.MountStatusReleasing)}
+			},
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := workerAppSavePointCreateOperationRecord("op_savepoint", now)
+			store := newWorkerAppStore(record)
+			store.repo = workerAppRepoLifecycleResource(now, resources.RepoStatusActive)
+			tt.edit(store, record)
+			if decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{NamespaceID: record.NamespaceID, RepoID: record.RepoID, Now: now, ExportSessions: store.exports, Mounts: store.mounts}); decision.Allowed {
+				t.Fatalf("test fixture writer gate decision = %#v, want denied", decision)
+			}
+			jvs := &workerAppFakeJVSRunner{
+				directSaveSummary: jvsrunner.DirectSaveSummary{
+					SavePointID:   "sp_after",
+					HistoryHeadID: "sp_after",
+					CreatedAt:     "2026-05-05T12:00:00Z",
+				},
+			}
+			runner, err := NewRunOnceRunner(Options{
+				Source: workerAppSavePointConfigSource(nil),
+				StoreFactory: func(context.Context, string) (StoreHandle, error) {
+					return StoreHandle{Store: store}, nil
+				},
+				JVSRunnerFactory: func(config.WorkerRepoCreateRecoveryConfig) (repoexec.JVSRunner, error) {
+					return jvs, nil
+				},
+				Clock:        func() time.Time { return now },
+				AuditEventID: func() string { return "evt_savepoint" },
+			})
+			if err != nil {
+				t.Fatalf("NewRunOnceRunner: %v", err)
+			}
 
-	result, err := runner.RunOnce(context.Background())
-	if err != nil {
-		t.Fatalf("RunOnce: %v", err)
-	}
-	summary := result.Summary().Operation
-	if summary.Claimed != 1 || summary.Reclaimed != 0 || summary.Manual != 0 || summary.Failed != 0 || summary.Unsupported != 0 {
-		t.Fatalf("summary = %#v, want claimed pending writer drain", summary)
-	}
-	if len(jvs.calls) != 0 {
-		t.Fatalf("jvs calls = %#v, want writer drain gate before DirectSave", jvs.calls)
-	}
-	got := store.records[record.ID]
-	if got.State != operations.OperationStateRunning || got.Phase != operations.OperationPhaseSavePointCreateValidate || got.Error == nil || got.Error.Code != "SAVE_POINT_WRITER_DRAIN_PENDING" || !got.Error.Retryable {
-		t.Fatalf("operation = %#v, want running retryable writer drain pending", got)
-	}
-	if got.FinishedAt != nil || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(now) {
-		t.Fatalf("operation lease/finish = %v/%v, want expired running lease and no finish", got.LeaseExpiresAt, got.FinishedAt)
-	}
-	if len(store.auditEvents) != 0 {
-		t.Fatalf("audit events = %#v, want no terminal audit while pending", store.auditEvents)
+			result, err := runner.RunOnce(context.Background())
+			if err != nil {
+				t.Fatalf("RunOnce: %v", err)
+			}
+			summary := result.Summary().Operation
+			if summary.Claimed != 1 || summary.Reclaimed != 0 || summary.Manual != 0 || summary.Failed != 0 || summary.Unsupported != 0 {
+				t.Fatalf("summary = %#v, want claimed direct save", summary)
+			}
+			if store.listExportSessionCalls != 0 || store.listMountSessionCalls != 0 {
+				t.Fatalf("session state calls export/mount = %d/%d, want no restore writer gate for save point", store.listExportSessionCalls, store.listMountSessionCalls)
+			}
+			if strings.Join(jvs.calls, ",") != "direct_save,direct_list" {
+				t.Fatalf("jvs calls = %#v, want direct_save,direct_list", jvs.calls)
+			}
+			got := store.records[record.ID]
+			if got.State != operations.OperationStateSucceeded || got.Phase != operations.OperationPhaseSavePointCreateCommitted {
+				t.Fatalf("operation = %#v, want succeeded save_point_create_committed", got)
+			}
+			resultDetails := got.VerificationResult.(map[string]any)
+			if resultDetails["save_point_id"] != "sp_after" || resultDetails["history_visible"] != true || resultDetails["history_head_id"] != "sp_after" {
+				t.Fatalf("verification = %#v, want direct list-visible save point", resultDetails)
+			}
+			if len(store.auditEvents) != 1 || store.auditEvents[0].Type != audit.EventTypeSavePointCreate || store.auditEvents[0].Outcome != audit.OutcomeSucceeded || store.auditEvents[0].Reason != "save_point_create_committed" {
+				t.Fatalf("audit events = %#v, want succeeded save_point_create_committed event", store.auditEvents)
+			}
+		})
 	}
 }
 
@@ -3089,6 +3120,19 @@ func workerAppFreshExportSession(now time.Time, exportID string, mode sessionsta
 	}
 }
 
+func workerAppWriterMountBinding(now time.Time, record operations.OperationRecord, status sessionstate.MountStatus) sessionstate.WorkloadMountBinding {
+	return sessionstate.WorkloadMountBinding{
+		ID:             "wmb_writer",
+		NamespaceID:    record.NamespaceID,
+		RepoID:         record.RepoID,
+		Status:         status,
+		ReadOnly:       false,
+		LeaseExpiresAt: now.Add(time.Hour),
+		CreatedAt:      now.Add(-time.Minute),
+		UpdatedAt:      now,
+	}
+}
+
 func workerAppExportAccessSession(now time.Time, exportID string, status sessionstate.ExportStatus, expiresAt time.Time) exportaccess.Session {
 	return exportaccess.Session{
 		ID:                     exportID,
@@ -3254,6 +3298,8 @@ type fakeWorkerAppStore struct {
 	binding                              resources.NamespaceVolumeBinding
 	exports                              []sessionstate.ExportSession
 	mounts                               []sessionstate.WorkloadMountBinding
+	listExportSessionCalls               int
+	listMountSessionCalls                int
 	operation                            operations.OperationRecord
 	auditEvents                          []audit.Event
 	fences                               []fences.Fence
@@ -4441,10 +4487,12 @@ func (store *fakeWorkerAppStore) CreateRepoFence(_ context.Context, fence fences
 }
 
 func (store *fakeWorkerAppStore) ListExportSessionsByRepo(context.Context, string) ([]sessionstate.ExportSession, error) {
+	store.listExportSessionCalls++
 	return store.exports, nil
 }
 
 func (store *fakeWorkerAppStore) ListWorkloadMountBindingsByRepo(context.Context, string) ([]sessionstate.WorkloadMountBinding, error) {
+	store.listMountSessionCalls++
 	return store.mounts, nil
 }
 
