@@ -327,7 +327,6 @@ type SavePointCreateOperationMetadataReader interface {
 	GetNamespaceVolumeBinding(ctx context.Context, namespaceID string) (resources.NamespaceVolumeBinding, error)
 	GetVolume(ctx context.Context, volumeID string) (resources.Volume, error)
 	ListHeldRepoFences(ctx context.Context, repoID string) ([]fences.Fence, error)
-	RepoSessionStateReader
 }
 
 type SavePointCreateRecoveryCapabilityReader interface {

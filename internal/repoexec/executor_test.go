@@ -243,47 +243,63 @@ func TestSavePointExecutorRequiresDirectListEvidenceToMatchDirectSaveSummary(t *
 	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
-func TestSavePointExecutorBlocksUndrainedWriterBeforeDirectSave(t *testing.T) {
+func TestSavePointExecutorSavesWithActiveRestoreWriterSessions(t *testing.T) {
 	now := repoExecNow()
-	store := newFakeStore()
-	store.repo = activeRepoResource(now)
-	store.mounts = []sessionstate.WorkloadMountBinding{
-		savePointRepoExecMountFixture(now, false, sessionstate.MountStatusReleasing, nil, nil),
+	tests := []struct {
+		name string
+		edit func(*fakeRepoCreateStore)
+	}{
+		{
+			name: "active rw export",
+			edit: func(store *fakeRepoCreateStore) {
+				store.exports = []sessionstate.ExportSession{freshExportSession(now, "export_alpha", sessionstate.AccessModeReadWrite, sessionstate.ExportStatusActive, now.Add(time.Hour))}
+			},
+		},
+		{
+			name: "active workload mount",
+			edit: func(store *fakeRepoCreateStore) {
+				store.mounts = []sessionstate.WorkloadMountBinding{
+					savePointRepoExecMountFixture(now, false, sessionstate.MountStatusActive, nil, nil),
+				}
+			},
+		},
 	}
-	if decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Now: now, Mounts: store.mounts}); decision.Allowed {
-		t.Fatalf("test fixture writer gate decision = %#v, want denied", decision)
-	}
-	runner := &fakeJVSRunner{
-		directSaveSummary: jvsrunner.DirectSaveSummary{SavePointID: "sp_after", HistoryHeadID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
-	}
-	executor := newTestSavePointExecutor(t, store, runner, now)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.repo = activeRepoResource(now)
+			tt.edit(store)
+			if decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{NamespaceID: "ns_alpha01", RepoID: "repo_alpha01", Now: now, ExportSessions: store.exports, Mounts: store.mounts}); decision.Allowed {
+				t.Fatalf("test fixture writer gate decision = %#v, want denied", decision)
+			}
+			runner := &fakeJVSRunner{
+				directSaveSummary: jvsrunner.DirectSaveSummary{SavePointID: "sp_after", HistoryHeadID: "sp_after", Message: "checkpoint", CreatedAt: "2026-05-05T12:00:00Z"},
+			}
+			executor := newTestSavePointExecutor(t, store, runner, now)
 
-	err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
-	if err != nil {
-		t.Fatalf("ExecuteOperationRecovery error = %v, want pending marker without recovery error", err)
+			err := executor.ExecuteOperationRecovery(context.Background(), savePointLeasedRecord(now, operations.OperationPhaseSavePointCreateValidate), recovery.RecoveryPlan{Action: recovery.RecoveryActionClaimable})
+			if err != nil {
+				t.Fatalf("ExecuteOperationRecovery error = %v, want direct save success", err)
+			}
+			if store.listExportSessionCalls != 0 || store.listMountSessionCalls != 0 {
+				t.Fatalf("session state calls export/mount = %d/%d, want no restore writer gate for save point", store.listExportSessionCalls, store.listMountSessionCalls)
+			}
+			if strings.Join(runner.calls, ",") != "direct_save,direct_list" {
+				t.Fatalf("JVS calls = %#v, want direct_save,direct_list", runner.calls)
+			}
+			if store.operation.State != operations.OperationStateSucceeded || store.operation.Phase != operations.OperationPhaseSavePointCreateCommitted {
+				t.Fatalf("operation = %#v, want succeeded committed", store.operation)
+			}
+			result := store.operation.VerificationResult.(map[string]any)
+			if result["save_point_id"] != "sp_after" || result["history_visible"] != true || result["history_head_id"] != "sp_after" {
+				t.Fatalf("verification = %#v, want direct list-visible save point", result)
+			}
+			if len(store.auditEvents) != 1 || store.auditEvents[0].Reason != "save_point_create_committed" {
+				t.Fatalf("audit events = %#v, want committed save point audit", store.auditEvents)
+			}
+			assertNoRepoExecLeak(t, store.operation, store.auditEvents)
+		})
 	}
-	if store.listExportSessionCalls != 1 || store.listMountSessionCalls != 1 {
-		t.Fatalf("session state calls export/mount = %d/%d, want 1/1", store.listExportSessionCalls, store.listMountSessionCalls)
-	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("JVS calls = %#v, want writer drain gate before DirectSave", runner.calls)
-	}
-	if store.operation.State != operations.OperationStateRunning || store.operation.Phase != operations.OperationPhaseSavePointCreateValidate || store.operation.Error == nil || store.operation.Error.Code != "SAVE_POINT_WRITER_DRAIN_PENDING" || !store.operation.Error.Retryable {
-		t.Fatalf("operation = %#v, want running writer-drain pending", store.operation)
-	}
-	if store.operation.FinishedAt != nil || store.operation.LeaseExpiresAt == nil || !store.operation.LeaseExpiresAt.Equal(now) {
-		t.Fatalf("operation lease/finish = %v/%v, want lease expired at now and no finish", store.operation.LeaseExpiresAt, store.operation.FinishedAt)
-	}
-	if got := store.operation.VerificationResult.(map[string]any)["writer_drain_status"]; got != "pending" {
-		t.Fatalf("verification = %#v, want writer_drain_status pending", store.operation.VerificationResult)
-	}
-	if got := store.operation.VerificationResult.(map[string]any)["writer_gate_error_family"]; got == "" {
-		t.Fatalf("verification = %#v, want writer_gate_error_family", store.operation.VerificationResult)
-	}
-	if len(store.auditEvents) != 0 {
-		t.Fatalf("audit events = %#v, want no terminal audit for pending writer drain", store.auditEvents)
-	}
-	assertNoRepoExecLeak(t, store.operation, store.auditEvents)
 }
 
 func TestSavePointExecutorReclaimsWriterDrainPendingAfterDrain(t *testing.T) {

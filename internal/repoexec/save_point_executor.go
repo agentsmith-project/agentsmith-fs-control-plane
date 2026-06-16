@@ -15,7 +15,6 @@ import (
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/recovery"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/repoaccess"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/resources"
-	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/sessionstate"
 	"github.com/agentsmith-project/agentsmith-fs-control-plane/internal/store"
 )
 
@@ -40,8 +39,7 @@ type SavePointJVSRunner interface {
 }
 
 const (
-	savePointWriterDrainPendingCode     = "SAVE_POINT_WRITER_DRAIN_PENDING"
-	savePointWriterDrainUnavailableCode = "SAVE_POINT_WRITER_DRAIN_UNAVAILABLE"
+	savePointWriterDrainPendingCode = "SAVE_POINT_WRITER_DRAIN_PENDING"
 )
 
 type SavePointExecutor struct {
@@ -134,13 +132,6 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 	if err := executor.validateMetadata(ctx, record, repo); err != nil {
 		return executor.commitSavePointFailed(ctx, record, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed")
 	}
-	writerDrainAllowed, err := executor.checkWriterDrainGate(ctx, record, now)
-	if err != nil {
-		return err
-	}
-	if !writerDrainAllowed {
-		return nil
-	}
 	target, err := executor.directTarget(repo)
 	if err != nil {
 		return executor.commitSavePointIntervention(ctx, record, "SAVE_POINT_VALIDATION_FAILED", "save point validation failed", nil)
@@ -170,31 +161,6 @@ func (executor *SavePointExecutor) ExecuteOperationRecovery(ctx context.Context,
 		return executor.commitSavePointIntervention(ctx, record, "SAVE_POINT_VISIBILITY_UNCERTAIN", "save point visibility is uncertain", details)
 	}
 	return executor.commitSavePointSuccess(ctx, record, savePointFromDirectSaveSummary(saved, message), message, false, false, false, saved.CloneEvidence, visibility)
-}
-
-func (executor *SavePointExecutor) checkWriterDrainGate(ctx context.Context, record operations.OperationRecord, now time.Time) (bool, error) {
-	exports, err := executor.store.ListExportSessionsByRepo(ctx, record.RepoID)
-	if err != nil {
-		return false, executor.commitSavePointFailedWithDetails(ctx, record, savePointWriterDrainUnavailableCode, "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
-	}
-	mounts, err := executor.store.ListWorkloadMountBindingsByRepo(ctx, record.RepoID)
-	if err != nil {
-		return false, executor.commitSavePointFailedWithDetails(ctx, record, savePointWriterDrainUnavailableCode, "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
-	}
-	decision := sessionstate.RestoreWriterGate(sessionstate.GateRequest{
-		NamespaceID:    record.NamespaceID,
-		RepoID:         record.RepoID,
-		Now:            now,
-		ExportSessions: exports,
-		Mounts:         mounts,
-	})
-	if decision.Allowed {
-		return true, nil
-	}
-	if decision.ErrorFamily == sessionstate.ErrorFamilyInternalError {
-		return false, executor.commitSavePointFailedWithDetails(ctx, record, savePointWriterDrainUnavailableCode, "save point writer drain validation failed", true, savePointWriterDrainUnavailableDetails())
-	}
-	return false, executor.markSavePointWriterDrainPending(ctx, record, now, savePointWriterDrainPendingDetails(decision))
 }
 
 func (executor *SavePointExecutor) validateMetadata(ctx context.Context, record operations.OperationRecord, repo resources.Repo) error {
@@ -359,28 +325,12 @@ func savePointFailedOperation(record operations.OperationRecord, now time.Time, 
 	return operation
 }
 
-func savePointWriterDrainPendingDetails(decision sessionstate.Decision) map[string]any {
-	details := map[string]any{
-		"writer_drain_status":      "pending",
-		"writer_drain_reason":      decision.ErrorFamily.String(),
-		"writer_gate_error_family": decision.ErrorFamily.String(),
-	}
-	if strings.TrimSpace(decision.BlockingKind) != "" {
-		details["blocking_session_kind"] = decision.BlockingKind
-	}
-	return details
-}
-
 func savePointJVSDirectSavePendingDetails(reason string, err error) map[string]any {
 	return withJVSErrorDetails(map[string]any{
 		"writer_drain_status": "pending",
 		"writer_drain_reason": reason,
 		"writer_drain_source": "jvs_direct_save",
 	}, err)
-}
-
-func savePointWriterDrainUnavailableDetails() map[string]any {
-	return map[string]any{"writer_drain_status": "unknown"}
 }
 
 func jvsDirectSavePendingReason(err error) (string, bool) {
